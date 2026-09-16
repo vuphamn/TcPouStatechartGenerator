@@ -1,0 +1,11 @@
+﻿<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <OutputName>TcPouStatechartGeneratorSetup</OutputName>
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <PublishDir>$(MSBuildThisFileDirectory)..\TcPouStatechartGenerator\bin\Release\net8.0-windows\win-x64\publish\</PublishDir>
+    <DefineConstants>PublishDir=$(PublishDir)</DefineConstants>
+  </PropertyGroup>
+</Project>

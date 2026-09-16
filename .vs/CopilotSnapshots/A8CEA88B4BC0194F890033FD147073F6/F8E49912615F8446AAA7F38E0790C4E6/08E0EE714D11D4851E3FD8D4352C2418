@@ -1,0 +1,1376 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using System.Xml.Linq;
+
+namespace TcPouStatechartGenerator
+{
+    internal static class Program
+    {
+        // Default for Option A (collapse error-sink edges). When true: after hoisting an
+        // error-sink state out of its composite, collapse all of that composite's internal
+        // edges targeting the error state into a SINGLE composite-border edge (e.g.
+        // KMotorVFDEnabled --> ERROR), trading away the per-state guard labels for a much
+        // cleaner diagram. When false (Option B): keep every individual guarded edge.
+        // The GUI checkbox overrides this per run via the Generate() parameter.
+        public const bool DefaultCollapseErrorSinkEdges = true;
+
+        // Label placed on the single collapsed border edge to warn that per-state guard
+        // conditions were dropped (Option A).
+        private const string CollapsedEdgeWarningLabel = "hasErrors [collapsed]";
+
+        private static string stateVarName = "machineState"; // default, overridden by doState() detection
+
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            string tcDut = null, tcPou = null;
+            foreach (string a in args)
+            {
+                if (a.EndsWith(".TcDUT", StringComparison.OrdinalIgnoreCase)) tcDut = a;
+                else if (a.EndsWith(".TcPOU", StringComparison.OrdinalIgnoreCase)) tcPou = a;
+            }
+
+            bool headless = (tcDut != null && tcPou != null) &&
+                            File.Exists(tcDut) && File.Exists(tcPou);
+            if (headless)
+            {
+                try
+                {
+                    string outPath = Generate(tcDut, tcPou, null);
+                    MessageBox.Show("Statechart written to:\n" + outPath, "TcPouStatechartGenerator",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Failed: " + ex.Message, "TcPouStatechartGenerator",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return 99;
+                }
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            using var form = new LauncherForm(tcDut, tcPou);
+            Application.Run(form);
+            return 0;
+        }
+
+        // ==================================================================
+        // Core generation pipeline
+        // ==================================================================
+        public static string Generate(string tcDutPath, string tcPouPath, string outPathOrNull,
+                                      bool collapseErrorSinkEdges = DefaultCollapseErrorSinkEdges,
+                                      bool flowchartOutput = false)
+        {
+            if (!File.Exists(tcDutPath)) throw new FileNotFoundException("States file not found", tcDutPath);
+            if (!File.Exists(tcPouPath)) throw new FileNotFoundException("POU file not found", tcPouPath);
+
+            XDocument doc = XDocument.Load(tcPouPath);
+            string doStateSt    = GetMethodSt(doc, "doState");
+            string preProcessSt = GetMethodSt(doc, "preProcess");
+            var stateDescriptions = ParseStateDescriptions(GetMethodSt(doc, "getStateDescription"));
+            if (doStateSt == null && preProcessSt == null)
+                throw new InvalidOperationException("Neither doState() nor preProcess() found in file.");
+
+
+            string pattern = @"\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b";
+
+            Match match = Regex.Match(doStateSt, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+            if (match.Success)
+            {
+                stateVarName = match.Groups[1].Value.Trim();
+                
+                if (stateVarName != "machineState" && stateVarName != "mainState")
+                {
+                    throw new InvalidOperationException($"Unexpected state variable name: {stateVarName}. Expected 'machineState' or 'mainState'.");
+                }
+            }
+
+            var transitions = new List<Transition>();
+            var states      = new HashSet<string>(StringComparer.Ordinal);
+            if (doStateSt != null)    ParseDoState(doStateSt, transitions, states);
+            if (preProcessSt != null) ParsePreProcess(preProcessSt, transitions, states);
+
+            GroupingResult groups = TryLoadUmlGrouping(doc)
+                                 ?? LoadEnumGrouping(tcDutPath)
+                                 ?? new GroupingResult();
+
+            ReorderGroupsByEnum(groups, tcDutPath);
+
+            // Requirement 1 & 2: read enum order from the .TcDUT to know (a) the machine's
+            // start state (first declared enum value) and (b) which composite is the
+            // "Enabled" composite (name ends with ENABLED) so its members / transitions can
+            // be resolved to the composite border.
+            ApplyEnumConventions(groups, tcDutPath);
+
+            // Refine each composite's start state using the transitions/conditions/rules
+            // discovered in doState() and preProcess(). The true entry (start) state of a
+            // composite is the member that outside states transition into (e.g.
+            // TABLEMANAGER_ENABLING --> TABLEMANAGER_AUTOFEED_OFF makes AUTOFEED_OFF the
+            // start of the TABLEMANAGER_ENABLED composite), not simply the first-declared
+            // enum member.
+            DetermineCompositeStartStates(transitions, groups);
+
+            // Move "error sink" states (e.g. KMOTORVFDSTATE_ERROR_DRIVE_FAULT) out of their
+            // composite to the top level. Such a state clutters the composite because nearly
+            // every substate transitions into it; hoisting the node keeps all guarded edges
+            // intact while removing it from the composite box.
+            ExtractErrorSinkStates(transitions, groups, collapseErrorSinkEdges);
+
+            string mermaid = BuildMermaid(transitions, states, groups, stateDescriptions, flowchartOutput);
+
+            string outPath = outPathOrNull ?? Path.Combine(
+                Path.GetDirectoryName(tcPouPath) ?? ".",
+                Path.GetFileNameWithoutExtension(tcPouPath) + ".statechart.md");
+            File.WriteAllText(outPath, mermaid);
+            return outPath;
+        }
+
+        private static string GetMethodSt(XDocument doc, string name)
+        {
+            var m = doc.Descendants("Method").FirstOrDefault(x => (string)x.Attribute("Name") == name);
+            return m?.Element("Implementation")?.Element("ST")?.Value;
+        }
+
+        // Parse getStateDescription() -> map each state name to its human-readable description
+        // string (the value assigned to getStateDescription under each CASE label). These are
+        // emitted as Mermaid "click" tooltips so hovering a state shows its description.
+        private static Dictionary<string, string> ParseStateDescriptions(string st)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(st)) return map;
+
+            string code = StripComments(st);
+            string[] lines = code.Replace("\r", "").Split('\n');
+            var labelRx  = new Regex(@"^\s*(?<label>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:\s*$");
+            var assignRx = new Regex(@"getStateDescription\s*:=\s*'(?<desc>[^']*)'", RegexOptions.IgnoreCase);
+
+            var pendingLabels = new List<string>();
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+                if (line.Length == 0) continue;
+
+                var am = assignRx.Match(line);
+                if (am.Success && pendingLabels.Count > 0)
+                {
+                    foreach (string lbl in pendingLabels)
+                        map[lbl] = am.Groups["desc"].Value.Trim();
+                    pendingLabels.Clear();
+                    continue;
+                }
+
+                var lm = labelRx.Match(line);
+                if (lm.Success)
+                {
+                    pendingLabels.Clear();
+                    foreach (string part in lm.Groups["label"].Value.Split(','))
+                        pendingLabels.Add(part.Trim());
+                }
+            }
+            return map;
+        }
+
+        // ==================================================================
+        // ST parsing
+        // ==================================================================
+        private static void ParseDoState(string st, List<Transition> transitions, HashSet<string> states)
+        {
+            string code = StripComments(st);
+            string[] lines = code.Replace("\r", "").Split('\n');
+            string currentState = null;
+            var ifStack = new Stack<IfFrame>();
+            var caseRx  = new Regex(@"^\s*(?<label>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:\s*(//.*)?$");
+            var assign  = new Regex(@"\b(" + stateVarName + @")\s*:=\s*(?<target>[A-Za-z_][A-Za-z0-9_\.]*)");
+            var ifRx    = new Regex(@"^\s*IF\b(?<cond>.*?)\bTHEN\b", RegexOptions.IgnoreCase);
+            var elsifRx = new Regex(@"^\s*ELSIF\b(?<cond>.*?)\bTHEN\b", RegexOptions.IgnoreCase);
+            var elseRx  = new Regex(@"^\s*ELSE\b", RegexOptions.IgnoreCase);
+            var endIfRx = new Regex(@"^\s*END_IF\b", RegexOptions.IgnoreCase);
+
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim(); if (line.Length == 0) continue;
+                var cm = caseRx.Match(line);
+                if (cm.Success && LooksLikeStateLabel(cm.Groups["label"].Value))
+                {
+                    foreach (string lbl in cm.Groups["label"].Value.Split(',').Select(s => s.Trim()))
+                    { currentState = lbl; states.Add(lbl); }
+                    ifStack.Clear(); continue;
+                }
+                var mIf = ifRx.Match(line);
+                if (mIf.Success) ifStack.Push(new IfFrame(Clean(mIf.Groups["cond"].Value)));
+                else
+                {
+                    var mEl = elsifRx.Match(line);
+                    if (mEl.Success && ifStack.Count > 0)
+                    { var t = ifStack.Pop(); t.NegatedPriorConds.Add(t.CurrentCond); t.CurrentCond = Clean(mEl.Groups["cond"].Value); ifStack.Push(t); }
+                    else if (elseRx.IsMatch(line) && ifStack.Count > 0)
+                    { var t = ifStack.Pop(); t.NegatedPriorConds.Add(t.CurrentCond); t.CurrentCond = null; ifStack.Push(t); }
+                    else if (endIfRx.IsMatch(line) && ifStack.Count > 0) ifStack.Pop();
+                }
+                foreach (Match am in assign.Matches(line))
+                {
+                    string target = am.Groups["target"].Value;
+                    if (currentState == null || target == currentState) continue;
+                    states.Add(target);
+                    transitions.Add(new Transition(currentState, target, BuildGuard(ifStack), "doState"));
+                }
+            }
+        }
+
+        private static void ParsePreProcess(string st, List<Transition> transitions, HashSet<string> states)
+        {
+            string code = StripComments(st);
+            // Normalize into logical single-line statements so multi-line "IF ... THEN"
+            // headers (THEN on its own line) collapse onto one line. Without this the inner
+            // multi-line stateVarName range guard's END_IF prematurely pops the trigger
+            // frame (bError, cmd_bDoorHasNoTarget, ...) and the reset label is lost.
+            string[] lines = ToLogicalLines(code);
+            var ifStack = new Stack<IfFrame>();
+            var ifRx    = new Regex(@"^\s*IF\b(?<cond>.*?)\bTHEN\b", RegexOptions.IgnoreCase);
+            var elsifRx = new Regex(@"^\s*ELSIF\b(?<cond>.*?)\bTHEN\b", RegexOptions.IgnoreCase);
+            var elseRx  = new Regex(@"^\s*ELSE\b", RegexOptions.IgnoreCase);
+            var endIfRx = new Regex(@"^\s*END_IF\b", RegexOptions.IgnoreCase);
+            var assign  = new Regex(@"\b(" + stateVarName + @")\s*:=\s*(?<target>[A-Za-z_][A-Za-z0-9_\.]*)");
+            // Lower/upper bounds of a "stateVarName <op> STATE" range guard.
+            var lowerRx = new Regex(@"\b(" + stateVarName + @")\s*(?<op>>=|>)\s*(?<state>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
+            var upperRx = new Regex(@"\b(" + stateVarName + @")\s*(?<op><=|<)\s*(?<state>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
+            const string Any = "AnyState";
+
+            // Each reset block lists its stateVarName <op> STATE" range bounds immediately
+            // before the assignment; capture the most recent bounds and consume them when the
+            // assignment is reached.
+            string pendingLower = null, pendingUpper = null;
+
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim(); if (line.Length == 0) continue;
+                var mIf = ifRx.Match(line);
+                if (mIf.Success) ifStack.Push(new IfFrame(Clean(mIf.Groups["cond"].Value)));
+                else
+                {
+                    var mEl = elsifRx.Match(line);
+                    if (mEl.Success && ifStack.Count > 0)
+                    { var t = ifStack.Pop(); t.NegatedPriorConds.Add(t.CurrentCond); t.CurrentCond = Clean(mEl.Groups["cond"].Value); ifStack.Push(t); }
+                    else if (elseRx.IsMatch(line) && ifStack.Count > 0)
+                    { var t = ifStack.Pop(); t.NegatedPriorConds.Add(t.CurrentCond); t.CurrentCond = null; ifStack.Push(t); }
+                    else if (endIfRx.IsMatch(line) && ifStack.Count > 0) ifStack.Pop();
+                }
+
+                // Record stateVarName range bounds discovered on this line.
+                var lo = lowerRx.Match(line);
+                if (lo.Success) pendingLower = lo.Groups["state"].Value;
+                var hi = upperRx.Match(line);
+                if (hi.Success) pendingUpper = hi.Groups["state"].Value;
+
+                foreach (Match am in assign.Matches(line))
+                {
+                    string target = am.Groups["target"].Value;
+                    states.Add(target); states.Add(Any);
+                    var tr = new Transition(Any, target, BuildResetGuard(ifStack), "preProcess")
+                    {
+                        ScopeLower = pendingLower,
+                        ScopeUpper = pendingUpper
+                    };
+                    transitions.Add(tr);
+                    // Consume the range bounds so the next reset block starts fresh.
+                    pendingLower = null; pendingUpper = null;
+                }
+            }
+        }
+
+        // Split ST code into logical single-line statements. Multi-line "IF ... THEN"
+        // headers are collapsed so the condition and THEN sit on one line. Statement
+        // boundaries are inserted after THEN, DO, semicolons, and around ELSIF/ELSE/END_IF.
+        private static string[] ToLogicalLines(string code)
+        {
+            // Flatten all newlines to spaces, then re-introduce breaks at statement keywords.
+            string flat = Regex.Replace(code, @"\s+", " ").Trim();
+            flat = Regex.Replace(flat, @"\bTHEN\b", "THEN\n", RegexOptions.IgnoreCase);
+            flat = Regex.Replace(flat, @";", ";\n");
+            flat = Regex.Replace(flat, @"\bELSIF\b", "\nELSIF", RegexOptions.IgnoreCase);
+            flat = Regex.Replace(flat, @"\bELSE\b", "\nELSE", RegexOptions.IgnoreCase);
+            flat = Regex.Replace(flat, @"\bEND_IF\b", "\nEND_IF\n", RegexOptions.IgnoreCase);
+            return flat.Split('\n');
+        }
+
+        // Build the reset label from the nearest TRIGGER condition on the IF stack, skipping
+        // stateVarName range guards (which express scope, not the trigger).
+        private static string BuildResetGuard(Stack<IfFrame> s)
+        {
+            foreach (var f in s)
+            {
+                string cond = f.CurrentCond;
+                if (cond == null) return "else";
+                if (Regex.IsMatch(cond, @"\b(" + stateVarName + @")\b", RegexOptions.IgnoreCase))
+                    continue; // scope guard, not the trigger
+                return cond;
+            }
+            return null;
+        }
+
+        private static bool LooksLikeStateLabel(string label)
+        {
+            foreach (string part in label.Split(','))
+            {
+                string p = part.Trim();
+                if (p.Length == 0 || !p.Contains('_')) return false;
+                foreach (char c in p) if (!(char.IsUpper(c) || char.IsDigit(c) || c == '_')) return false;
+            }
+            return true;
+        }
+        private static string BuildGuard(Stack<IfFrame> s)
+        { if (s.Count == 0) return null; var t = s.Peek(); return t.CurrentCond ?? "else"; }
+        private static string Clean(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            s = Regex.Replace(s, @"\s+", " ").Trim();
+            while (s.StartsWith("(") && s.EndsWith(")"))
+            {
+                int d = 0; bool ok = true;
+                for (int i = 0; i < s.Length; i++)
+                { if (s[i]=='(') d++; else if (s[i]==')') d--; if (d==0 && i < s.Length-1) { ok=false; break; } }
+                if (!ok) break; s = s.Substring(1, s.Length-2).Trim();
+            }
+            return s;
+        }
+        private static string StripComments(string s)
+        {
+            s = Regex.Replace(s, @"\(\*.*?\*\)", "", RegexOptions.Singleline);
+            s = Regex.Replace(s, @"//[^\r\n]*", "");
+            return s;
+        }
+
+        // ==================================================================
+        // Grouping: UML XML (doState_UmlSC)
+        // ==================================================================
+        private static GroupingResult TryLoadUmlGrouping(XDocument doc)
+        {
+            var uml = doc.Descendants("Method")
+                         .FirstOrDefault(m => (string)m.Attribute("Name") == "doState_UmlSC");
+            if (uml == null) return null;
+
+            var data = uml.Descendants("Data").FirstOrDefault();
+            if (data == null) return null;
+
+            var result = new GroupingResult();
+            var composites = new Dictionary<string, UmlComposite>();
+            // Composite object guid -> composite (used to resolve nesting via ContainerGuid).
+            var compositesByObject = new Dictionary<string, UmlComposite>();
+            var elemToArea = new Dictionary<string, string>();
+
+            foreach (var o in data.Descendants("o"))
+            {
+                string typ = (string)o.Attribute("t");
+                if (typ == "UMLStateChartComposite")
+                {
+                    string name = ReadStringValue(o, "ElementName");
+                    if (string.IsNullOrEmpty(name)) continue;
+                    string objectGuid    = NormalizeGuid(ReadStringValue(o, "ElementObjectGuid"));
+                    string containerGuid = NormalizeGuid(ReadStringValue(o, "ContainerGuid"));
+                    var comp = new UmlComposite
+                    {
+                        DisplayName   = ShortenCompositeName(name),
+                        FullName      = name,
+                        ObjectGuid    = objectGuid,
+                        ContainerGuid = containerGuid
+                    };
+                    if (!string.IsNullOrEmpty(objectGuid))
+                        compositesByObject[objectGuid] = comp;
+                    var areas = o.Element("l");
+                    if (areas == null) continue;
+                    foreach (var area in areas.Elements("o"))
+                    {
+                        string areaGuid = area.Elements("v")
+                                              .FirstOrDefault(v => (string)v.Attribute("n") == "Elementguid")?.Value;
+                        if (string.IsNullOrEmpty(areaGuid)) continue;
+                        composites[NormalizeGuid(areaGuid)] = comp;
+                    }
+                }
+                else if (typ == "UMLStateChartElement")
+                {
+                    string name = ReadStringValue(o, "ElementName");
+                    string area = ReadStringValue(o, "Area");
+                    if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(area)) continue;
+                    elemToArea[name] = NormalizeGuid(area);
+                }
+            }
+            if (composites.Count == 0) return null;
+
+            foreach (var kvp in elemToArea)
+            {
+                string state = kvp.Key;
+                string area  = kvp.Value;
+                if (composites.TryGetValue(area, out var comp))
+                {
+                    if (!result.Groups.TryGetValue(comp.DisplayName, out var list))
+                        result.Groups[comp.DisplayName] = list = new List<string>();
+                    list.Add(state);
+                    result.StateToGroup[state] = comp.DisplayName;
+                    if (!result.GroupFirstState.ContainsKey(comp.DisplayName))
+                        result.GroupFirstState[comp.DisplayName] = state; // provisional
+                }
+            }
+
+            // Resolve composite nesting: a composite's ContainerGuid points to the parent
+            // composite's ElementObjectGuid (all-zeros / empty => top-level).
+            const string RootGuid = "00000000-0000-0000-0000-000000000000";
+            foreach (var comp in compositesByObject.Values.Distinct())
+            {
+                if (string.IsNullOrEmpty(comp.ContainerGuid) || comp.ContainerGuid == RootGuid)
+                    continue;
+                if (compositesByObject.TryGetValue(comp.ContainerGuid, out var parent) &&
+                    !string.Equals(parent.DisplayName, comp.DisplayName, StringComparison.Ordinal))
+                {
+                    result.GroupParent[comp.DisplayName] = parent.DisplayName;
+                }
+            }
+
+            foreach (var comp in composites.Values.Distinct())
+                if (!string.IsNullOrEmpty(comp.FullName))
+                    result.CompositeToId[comp.FullName] = comp.DisplayName;
+
+            return result.Groups.Count > 0 ? result : null;
+        }
+
+        private static string ReadStringValue(XElement parent, string attrName)
+        {
+            var v = parent.Elements("v").FirstOrDefault(x => (string)x.Attribute("n") == attrName);
+            if (v == null) return null;
+            string s = v.Value?.Trim();
+            if (string.IsNullOrEmpty(s)) return null;
+            if (s.StartsWith("\"") && s.EndsWith("\"")) s = s.Substring(1, s.Length - 2);
+            return s;
+        }
+
+        private static string NormalizeGuid(string g)
+        { if (string.IsNullOrEmpty(g)) return g; return g.Trim().Trim('{', '}').ToLowerInvariant(); }
+
+        private static string ShortenCompositeName(string name)
+        {
+            string trimmed = Regex.Replace(name, @"_SEQUENCE$", "");
+            var parts = trimmed.Split('_');
+            string core = parts.Length >= 3 ? string.Join("_", parts.Skip(2)) : trimmed;
+            var pieces = core.Split('_').Where(p => p.Length > 0)
+                             .Select(p => char.ToUpper(p[0]) + p.Substring(1).ToLowerInvariant());
+            return string.Concat(pieces);
+        }
+
+        // ==================================================================
+        // Grouping: .TcDUT file
+        // ==================================================================
+        private static GroupingResult LoadEnumGrouping(string tcDutPath)
+        {
+            XDocument dut;
+            try { dut = XDocument.Load(tcDutPath); } catch { return null; }
+
+            var decl = dut.Descendants("Declaration").FirstOrDefault()?.Value;
+            if (string.IsNullOrEmpty(decl)) return null;
+
+            int typeIdx = decl.IndexOf("TYPE", StringComparison.OrdinalIgnoreCase);
+            int openParen = decl.IndexOf('(', typeIdx);
+            int closeParen = decl.LastIndexOf(')');
+            if (openParen < 0 || closeParen < 0 || closeParen <= openParen) return null;
+
+            string body = decl.Substring(openParen + 1, closeParen - openParen - 1);
+            string[] lines = body.Replace("\r", "").Split('\n');
+
+            // Enum values in declaration order.
+            var order = new List<string>();
+            foreach (string raw in lines)
+            {
+                string line = raw.Trim();
+                if (line.StartsWith(",")) line = line.Substring(1).Trim();
+                if (line.EndsWith(",")) line = line.Substring(0, line.Length - 1).Trim();
+                if (line.Length == 0) continue;
+                var m = Regex.Match(line, @"^([A-Za-z_][A-Za-z0-9_]*)");
+                if (m.Success) order.Add(m.Groups[1].Value);
+            }
+            if (order.Count == 0) return null;
+
+            var result = new GroupingResult();
+
+            // Convention: the first state(s) up to and including the state whose name ends
+            // with "ENABLING" stay top-level (e.g. *_DISABLED, *_ENABLING). Every state
+            // declared AFTER "*ENABLING" belongs to a single composite whose name ends with
+            // "Enabled". This applies when there is no doState_UmlSC() UML grouping.
+            int enablingIdx = order.FindIndex(s => s.EndsWith("ENABLING", StringComparison.Ordinal));
+            if (enablingIdx >= 0 && enablingIdx + 1 < order.Count)
+            {
+                string compositeName = DeriveEnabledCompositeName(decl, typeIdx, order);
+                var members = new List<string>();
+                result.Groups[compositeName] = members;
+                foreach (string s in order.Skip(enablingIdx + 1))
+                {
+                    members.Add(s);
+                    result.StateToGroup[s] = compositeName;
+                    if (!result.GroupFirstState.ContainsKey(compositeName))
+                        result.GroupFirstState[compositeName] = s;
+                }
+                return result;
+            }
+
+            // Fallback: no "*ENABLING" boundary -> group all states by common prefix.
+            string groupName = DeriveGroupName(order) ?? "States";
+            result.Groups[groupName] = new List<string>();
+            foreach (string s in order)
+            {
+                result.Groups[groupName].Add(s);
+                result.StateToGroup[s] = groupName;
+                if (!result.GroupFirstState.ContainsKey(groupName))
+                    result.GroupFirstState[groupName] = s;
+            }
+            return result;
+        }
+
+        // Derive the composite name (ending with "Enabled") from the enum type name,
+        // e.g. "E_KMotorVFD_States" -> "KMotorVFDEnabled".
+        private static string DeriveEnabledCompositeName(string decl, int typeIdx, List<string> order)
+        {
+            var tm = Regex.Match(decl.Substring(Math.Max(0, typeIdx)),
+                                 @"TYPE\s+([A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
+            if (tm.Success)
+            {
+                string typeName = tm.Groups[1].Value;
+                typeName = Regex.Replace(typeName, @"^E_", "", RegexOptions.IgnoreCase);
+                typeName = Regex.Replace(typeName, @"_States?$", "", RegexOptions.IgnoreCase);
+                typeName = typeName.Trim('_');
+                if (typeName.Length > 0) return typeName + "Enabled";
+            }
+            // Fallback: use the common prefix of the enum members.
+            string derived = DeriveGroupName(order);
+            return (derived ?? "Machine") + "Enabled";
+        }
+
+        private static string DeriveGroupName(List<string> cluster)
+        {
+            if (cluster.Count == 0) return null;
+            var tokLists = cluster.Select(s => s.Split('_')).ToList();
+            int minLen = tokLists.Min(t => t.Length);
+            int common = 0;
+            for (int i = 0; i < minLen; i++)
+            {
+                string t = tokLists[0][i];
+                if (tokLists.All(x => x[i] == t)) common++;
+                else break;
+            }
+            if (common < 1) return null;
+
+            int skip = Math.Min(2, common);
+            var significant = tokLists[0].Skip(skip).Take(common - skip).ToArray();
+            if (significant.Length == 0)
+            {
+                if (common < minLen) significant = new[] { tokLists[0][common] };
+                else                 significant = new[] { tokLists[0][common - 1] };
+            }
+            return string.Concat(significant.Select(p =>
+                p.Length == 0 ? "" : char.ToUpper(p[0]) + p.Substring(1).ToLowerInvariant()));
+        }
+
+        // Re-order each group's members by TcDUT declaration order; pick first & last.
+        private static void ReorderGroupsByEnum(GroupingResult groups, string tcDutPath)
+        {
+            if (groups.Groups.Count == 0) return;
+
+            XDocument dut; try { dut = XDocument.Load(tcDutPath); } catch { return; }
+            var decl = dut.Descendants("Declaration").FirstOrDefault()?.Value;
+            if (string.IsNullOrEmpty(decl)) return;
+
+            int typeIdx = decl.IndexOf("TYPE", StringComparison.OrdinalIgnoreCase);
+            int openParen = decl.IndexOf('(', typeIdx);
+            int closeParen = decl.LastIndexOf(')');
+            if (openParen < 0 || closeParen <= openParen) return;
+
+            var order = new Dictionary<string, int>(StringComparer.Ordinal);
+            int idx = 0;
+            foreach (string raw in decl.Substring(openParen + 1, closeParen - openParen - 1)
+                                       .Replace("\r", "").Split('\n'))
+            {
+                string line = raw.Trim().TrimStart(',').TrimEnd(',').Trim();
+                if (line.Length == 0) continue;
+                var m = Regex.Match(line, @"^([A-Za-z_][A-Za-z0-9_]*)");
+                if (m.Success) order[m.Groups[1].Value] = idx++;
+            }
+            if (order.Count == 0) return;
+
+            foreach (var g in groups.Groups.ToList())
+            {
+                g.Value.Sort((a, b) =>
+                {
+                    int oa = order.TryGetValue(a, out var va) ? va : int.MaxValue;
+                    int ob = order.TryGetValue(b, out var vb) ? vb : int.MaxValue;
+                    return oa.CompareTo(ob);
+                });
+                if (g.Value.Count > 0)
+                {
+                    groups.GroupFirstState[g.Key] = g.Value[0];
+                    groups.GroupLastState[g.Key]  = g.Value[g.Value.Count - 1];
+                }
+            }
+        }
+
+        // Requirement 1 & 2: apply .TcDUT enum conventions.
+        //  (1) The first state declared in the enum is the machine's start state.
+        //  (2) Every state declared AFTER the state whose name ends with "ENABLING" belongs
+        //      to the composite whose name ends with "ENABLED" (or its nested children).
+        private static void ApplyEnumConventions(GroupingResult groups, string tcDutPath)
+        {
+            var enumOrder = ReadEnumOrder(tcDutPath);
+            if (enumOrder.Count == 0) return;
+
+            groups.EnumOrder = enumOrder;
+
+            // (1) Machine start state = first declared enum value.
+            groups.MachineStartState = enumOrder[0];
+
+            // Identify the "ENABLED" composite by matching a group whose members are the
+            // enum states declared after the "*ENABLING" state.
+            int enablingIdx = enumOrder.FindIndex(s => s.EndsWith("ENABLING", StringComparison.Ordinal));
+            if (enablingIdx < 0) return;
+
+            // Candidate child states: everything after the *ENABLING state.
+            var childStates = new HashSet<string>(
+                enumOrder.Skip(enablingIdx + 1), StringComparer.Ordinal);
+            if (childStates.Count == 0) return;
+
+            // The Enabled composite is the top-level group that contains these states
+            // (directly or via nested child composites). Pick the group that owns the first
+            // child state and walk up to its top-level ancestor.
+            string firstChild = enumOrder[enablingIdx + 1];
+            if (!groups.StateToGroup.TryGetValue(firstChild, out var owningGroup)) return;
+
+            string top = owningGroup;
+            while (groups.GroupParent.TryGetValue(top, out var parent) &&
+                   groups.Groups.ContainsKey(parent))
+                top = parent;
+
+            groups.EnabledCompositeName = top;
+        }
+
+        // Resolve a preProcess reset's stateVarName range guard to the composite border it
+        // applies to. The range [lower, upper] identifies enum states that are inside a
+        // composite; the reset arrow originates from that composite's border. When bounds
+        // span multiple composites, the top-level ancestor covering them is used.
+        private static string ResolveScopeComposite(Transition t, GroupingResult groups)
+        {
+            if (groups.EnumOrder.Count == 0) return null;
+
+            // Determine the enum index window covered by the range guard. Missing bounds
+            // default to the full enum range.
+            int loIdx = t.ScopeLower != null ? groups.EnumOrder.IndexOf(t.ScopeLower) : 0;
+            int hiIdx = t.ScopeUpper != null ? groups.EnumOrder.IndexOf(t.ScopeUpper) : groups.EnumOrder.Count - 1;
+            if (loIdx < 0 || hiIdx < 0 || loIdx > hiIdx)
+            {
+                // Fall back to the Enabled composite for a machine-wide reset.
+                return groups.EnabledCompositeName;
+            }
+
+            // Collect the groups that own the in-range states (excluding the reset target so
+            // the arrow doesn't originate from its own composite).
+            var owningGroups = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = loIdx; i <= hiIdx; i++)
+            {
+                string state = groups.EnumOrder[i];
+                if (string.Equals(state, t.To, StringComparison.Ordinal)) continue;
+                if (groups.StateToGroup.TryGetValue(state, out var g))
+                    owningGroups.Add(g);
+            }
+            if (owningGroups.Count == 0) return groups.EnabledCompositeName;
+
+            // Reduce the owning groups to their lowest common ancestor composite so the reset
+            // originates from the tightest composite border that fully covers the range.
+            string lca = owningGroups.Aggregate((string)null, (acc, g) =>
+                acc == null ? g : LowestCommonAncestor(acc, g, groups));
+            return lca ?? groups.EnabledCompositeName;
+        }
+
+        // Compute the lowest common ancestor of two composites using the GroupParent chain.
+        private static string LowestCommonAncestor(string a, string b, GroupingResult groups)
+        {
+            if (string.Equals(a, b, StringComparison.Ordinal)) return a;
+
+            // Build the ancestor chain (self -> ... -> top) for 'a'.
+            var chainA = new List<string>();
+            for (string cur = a; cur != null; )
+            {
+                chainA.Add(cur);
+                cur = groups.GroupParent.TryGetValue(cur, out var p) && groups.Groups.ContainsKey(p) ? p : null;
+            }
+            var setA = new HashSet<string>(chainA, StringComparer.Ordinal);
+
+            // Walk 'b' upward until it meets a member of A's chain.
+            for (string cur = b; cur != null; )
+            {
+                if (setA.Contains(cur)) return cur;
+                cur = groups.GroupParent.TryGetValue(cur, out var p) && groups.Groups.ContainsKey(p) ? p : null;
+            }
+            return null;
+        }
+
+        // Read the enum values (in declaration order) from the .TcDUT file.
+        private static List<string> ReadEnumOrder(string tcDutPath)
+        {
+            var order = new List<string>();
+            XDocument dut; try { dut = XDocument.Load(tcDutPath); } catch { return order; }
+            var decl = dut.Descendants("Declaration").FirstOrDefault()?.Value;
+            if (string.IsNullOrEmpty(decl)) return order;
+
+            int typeIdx = decl.IndexOf("TYPE", StringComparison.OrdinalIgnoreCase);
+            int openParen = decl.IndexOf('(', typeIdx);
+            int closeParen = decl.LastIndexOf(')');
+            if (openParen < 0 || closeParen <= openParen) return order;
+
+            foreach (string raw in decl.Substring(openParen + 1, closeParen - openParen - 1)
+                                       .Replace("\r", "").Split('\n'))
+            {
+                string line = raw.Trim().TrimStart(',').TrimEnd(',').Trim();
+                if (line.Length == 0) continue;
+                var m = Regex.Match(line, @"^([A-Za-z_][A-Za-z0-9_]*)");
+                if (m.Success) order.Add(m.Groups[1].Value);
+            }
+            return order;
+        }
+
+        // Detect each composite's START state from the parsed transitions/conditions/rules.
+        // A composite's entry state is the member that states OUTSIDE the group transition
+        // into. This lets an external transition (e.g. TABLEMANAGER_ENABLING -->
+        // TABLEMANAGER_AUTOFEED_OFF) classify AUTOFEED_OFF as the start of the composite
+        // (TABLEMANAGER_ENABLED), so it later gets redirected to the composite border.
+        private static void DetermineCompositeStartStates(List<Transition> transitions, GroupingResult groups)
+        {
+            if (groups.Groups.Count == 0 || transitions.Count == 0) return;
+
+            // Count incoming transitions to each state that originate from OUTSIDE the
+            // state's own group. preProcess()/AnyState global resets are NOT counted: they
+            // target error/reset states from everywhere and would otherwise mask the real
+            // entry point (e.g. AnyState -> TABLEMANAGER_ERROR outvoting the true start).
+            var externalEntryCount = new Dictionary<string, int>(StringComparer.Ordinal);
+
+            foreach (var t in transitions)
+            {
+                if (string.IsNullOrEmpty(t.To)) continue;
+                if (!groups.StateToGroup.TryGetValue(t.To, out var dstGroup)) continue;
+
+                // Skip preProcess() global resets and pseudo AnyState sources: these are not
+                // real structural entry points into the composite.
+                if (string.Equals(t.Source, "preProcess", StringComparison.Ordinal)) continue;
+                if (string.Equals(t.From, "AnyState", StringComparison.Ordinal)) continue;
+
+                groups.StateToGroup.TryGetValue(t.From, out var srcGroup);
+                bool external = !string.Equals(srcGroup, dstGroup, StringComparison.Ordinal);
+                if (!external) continue;
+
+                // Ignore transitions coming from the group's OWN nested descendant
+                // composites (e.g. CrossTransfer/InlineTransfer -> DoordashSeq member).
+                // Those are internal loop-backs, not true external entry points, and would
+                // otherwise mask the real start state (e.g. DOOR_DASHER_START).
+                if (IsDescendantGroup(srcGroup, dstGroup, groups)) continue;
+
+                externalEntryCount.TryGetValue(t.To, out int c);
+                externalEntryCount[t.To] = c + 1;
+            }
+
+            foreach (var g in groups.Groups)
+            {
+                string bestState = null;
+                int bestCount = 0;
+                foreach (string member in g.Value)
+                {
+                    // Never treat an error/fault sink state as a composite's start state.
+                    if (NameLooksLikeError(member)) continue;
+                    if (externalEntryCount.TryGetValue(member, out int c) && c > bestCount)
+                    {
+                        bestCount = c;
+                        bestState = member;
+                    }
+                }
+
+                // Only override the enum-order default when transitions provide evidence
+                // of a real entry point; otherwise keep the existing first state.
+                if (bestState != null)
+                    groups.GroupFirstState[g.Key] = bestState;
+            }
+        }
+
+        // Name heuristic: the state looks like an error/fault sink (contains ERROR or FAULT).
+        private static bool NameLooksLikeError(string state)
+            => !string.IsNullOrEmpty(state) &&
+               (state.IndexOf("ERROR", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                state.IndexOf("FAULT", StringComparison.OrdinalIgnoreCase) >= 0);
+
+        // Move "error sink" states out of their composite to the top level. A state
+        // qualifies when BOTH heuristics agree:
+        //   (1) Name signals an error/fault (ends with ERROR, or contains ERROR/FAULT).
+        //   (2) It is a sink targeted by most substates of its composite and has no forward
+        //       progress edges (its only outgoing edges leave the composite, e.g. back to a
+        //       DISABLED/start state).
+        // Extraction only removes the node from the composite; all guarded incoming edges are
+        // preserved (they simply cross the composite border after the move).
+        private static void ExtractErrorSinkStates(List<Transition> transitions, GroupingResult groups,
+                                                   bool collapseErrorSinkEdges)
+        {
+            if (groups.Groups.Count == 0 || transitions.Count == 0) return;
+
+            // Snapshot the state->group map so nested-membership tests are stable while we
+            // mutate the grouping.
+            var origStateToGroup = new Dictionary<string, string>(groups.StateToGroup, StringComparer.Ordinal);
+
+            foreach (var candidate in origStateToGroup.Keys.ToList())
+            {
+                if (!origStateToGroup.TryGetValue(candidate, out var group)) continue;
+
+                // (1) Name heuristic.
+                bool nameLooksError = NameLooksLikeError(candidate);
+                if (!nameLooksError) continue;
+
+                // (2) Sink heuristic: count how many distinct states inside the same composite
+                // subtree target the candidate, and confirm it makes no forward progress
+                // (no outgoing edge that stays within the composite subtree).
+                var incomingFromInside = new HashSet<string>(StringComparer.Ordinal);
+                bool hasForwardEdge = false;
+                foreach (var t in transitions)
+                {
+                    if (string.Equals(t.To, candidate, StringComparison.Ordinal) &&
+                        !string.Equals(t.From, candidate, StringComparison.Ordinal) &&
+                        origStateToGroup.TryGetValue(t.From, out var fromG) &&
+                        IsSameOrDescendantGroup(fromG, group, groups))
+                    {
+                        incomingFromInside.Add(t.From);
+                    }
+
+                    if (string.Equals(t.From, candidate, StringComparison.Ordinal) &&
+                        !string.Equals(t.To, candidate, StringComparison.Ordinal))
+                    {
+                        origStateToGroup.TryGetValue(t.To, out var toG);
+                        if (toG != null && IsSameOrDescendantGroup(toG, group, groups))
+                            hasForwardEdge = true;
+                    }
+                }
+
+                // Number of member states in the composite subtree (excluding the candidate).
+                int subtreeMemberCount = origStateToGroup.Count(kvp =>
+                    !string.Equals(kvp.Key, candidate, StringComparison.Ordinal) &&
+                    IsSameOrDescendantGroup(kvp.Value, group, groups));
+
+                // Require the candidate to be a broad sink: targeted by a majority of the
+                // composite's substates, and with no forward progress inside the composite.
+                bool isBroadSink = subtreeMemberCount > 0 &&
+                                   incomingFromInside.Count * 2 >= subtreeMemberCount &&
+                                   !hasForwardEdge;
+                if (!isBroadSink) continue;
+
+                RemoveStateFromGroup(candidate, groups);
+                origStateToGroup.Remove(candidate);
+
+                // Option A: collapse the many internal "<substate> --> ERROR" edges into a
+                // single "<composite> --> ERROR" border edge. Group the collapsed edges by
+                // the top-level composite the source belongs to, so each composite box gets
+                // exactly one error edge.
+                if (collapseErrorSinkEdges)
+                    CollapseInternalEdgesToBorder(transitions, candidate, group, groups);
+            }
+        }
+
+        // Replace every internal edge "<substate> --> error" (where the source is inside the
+        // given composite subtree) with a single "<composite> --> error" border edge per
+        // distinct composite. The per-state guard labels are intentionally dropped.
+        private static void CollapseInternalEdgesToBorder(
+            List<Transition> transitions, string error, string composite, GroupingResult groups)
+        {
+            // Determine, for each edge targeting the error state, whether the source lives in
+            // the composite subtree; if so, record the border composite and drop the edge.
+            var borderSources = new HashSet<string>(StringComparer.Ordinal);
+            var kept = new List<Transition>(transitions.Count);
+
+            foreach (var t in transitions)
+            {
+                bool targetsError = string.Equals(t.To, error, StringComparison.Ordinal);
+                bool fromInside = groups.StateToGroup.TryGetValue(t.From, out var fromG) &&
+                                  IsSameOrDescendantGroup(fromG, composite, groups);
+
+                if (targetsError && fromInside && !string.Equals(t.From, error, StringComparison.Ordinal))
+                {
+                    // The source's own top-level composite becomes the single border source.
+                    borderSources.Add(TopLevelComposite(fromG, groups));
+                    continue; // drop this internal edge
+                }
+                kept.Add(t);
+            }
+
+            transitions.Clear();
+            transitions.AddRange(kept);
+
+            // Add one border edge per composite that had collapsed edges. The warning label
+            // signals that per-state guard conditions were dropped (Option A).
+            foreach (string src in borderSources)
+            {
+                bool exists = transitions.Any(t =>
+                    string.Equals(t.From, src, StringComparison.Ordinal) &&
+                    string.Equals(t.To, error, StringComparison.Ordinal));
+                if (!exists)
+                    transitions.Add(new Transition(src, error, CollapsedEdgeWarningLabel, "doState"));
+            }
+        }
+
+        // Walk up to the top-most composite ancestor for the given group.
+        private static string TopLevelComposite(string group, GroupingResult groups)
+        {
+            string top = group;
+            int guard = 0;
+            while (top != null && guard++ < 100 &&
+                   groups.GroupParent.TryGetValue(top, out var p) && groups.Groups.ContainsKey(p))
+                top = p;
+            return top;
+        }
+
+        // True when 'candidate' is the same as 'ancestor' or nested inside it.
+        private static bool IsSameOrDescendantGroup(string candidate, string ancestor, GroupingResult groups)
+            => string.Equals(candidate, ancestor, StringComparison.Ordinal) ||
+               IsDescendantGroup(candidate, ancestor, groups);
+
+        // Remove a state from its composite so it renders at the top level. Edges to/from the
+        // state are untouched and will simply cross the composite border.
+        private static void RemoveStateFromGroup(string state, GroupingResult groups)
+        {
+            if (!groups.StateToGroup.TryGetValue(state, out var group)) return;
+            groups.StateToGroup.Remove(state);
+
+            if (groups.Groups.TryGetValue(group, out var members))
+            {
+                members.Remove(state);
+
+                // Repair first/last markers for the composite if they referenced the state.
+                if (groups.GroupFirstState.TryGetValue(group, out var first) &&
+                    string.Equals(first, state, StringComparison.Ordinal))
+                {
+                    if (members.Count > 0) groups.GroupFirstState[group] = members[0];
+                    else groups.GroupFirstState.Remove(group);
+                }
+                if (groups.GroupLastState.TryGetValue(group, out var last) &&
+                    string.Equals(last, state, StringComparison.Ordinal))
+                {
+                    if (members.Count > 0) groups.GroupLastState[group] = members[members.Count - 1];
+                    else groups.GroupLastState.Remove(group);
+                }
+            }
+        }
+
+        // True when 'candidate' is 'ancestor' itself or nested (directly/indirectly) inside
+        // 'ancestor' via the GroupParent chain.
+        private static bool IsDescendantGroup(string candidate, string ancestor, GroupingResult groups)
+        {
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(ancestor)) return false;
+            string cur = candidate;
+            int guard = 0;
+            while (cur != null && guard++ < 100)
+            {
+                if (string.Equals(cur, ancestor, StringComparison.Ordinal)) return true;
+                cur = groups.GroupParent.TryGetValue(cur, out var p) && groups.Groups.ContainsKey(p) ? p : null;
+            }
+            return false;
+        }
+
+        // ==================================================================
+        // Mermaid emission
+        // ==================================================================
+        private static string BuildMermaid(List<Transition> tr, HashSet<string> states, GroupingResult groups,
+                                           Dictionary<string, string> stateDescriptions = null,
+                                           bool flowchartOutput = false)
+        {
+            var firstStateToGroup = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kvp in groups.GroupFirstState) firstStateToGroup[kvp.Value] = kvp.Key;
+
+            var lastStateToGroup = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kvp in groups.GroupLastState) lastStateToGroup[kvp.Value] = kvp.Key;
+
+            foreach (var t in tr)
+            {
+                // (1) Whole-composite name used as endpoint -> composite id.
+                if (groups.CompositeToId.TryGetValue(t.To,   out var compIdTo))   t.RedirectedTo   = compIdTo;
+                if (groups.CompositeToId.TryGetValue(t.From, out var compIdFrom)) t.RedirectedFrom = compIdFrom;
+
+                string srcGroup = null, dstGroup = null;
+                groups.StateToGroup.TryGetValue(t.From, out srcGroup);
+                groups.StateToGroup.TryGetValue(t.To,   out dstGroup);
+
+                // (2) Entering a composite's START state from outside -> composite border.
+                //     Exception: when the source is itself nested INSIDE the target composite,
+                //     the transition is returning to a concrete ancestor state that merely
+                //     happens to be that composite's start state (e.g. a jog sub-composite
+                //     returning to C234_FEEDMANAGER_AUTOFEED_OFF inside Enabled). Redirecting
+                //     to the enclosing border would be misleading, so keep the concrete target.
+                if (t.RedirectedTo == null &&
+                    firstStateToGroup.TryGetValue(t.To, out var targetGroup) &&
+                    !string.Equals(srcGroup, targetGroup, StringComparison.Ordinal) &&
+                    !IsDescendantGroup(srcGroup, targetGroup, groups))
+                {
+                    t.RedirectedTo = targetGroup;
+                }
+
+                // (3) Leaving a composite's LAST state to another group -> exit from
+                //     the composite border (source becomes the composite id). Skip this when
+                //     the destination group is nested INSIDE the source's own group: the
+                //     transition then dives into a child composite (e.g.
+                //     DOOR_DASHER_AUTOFEED_ON -> DoordashSeq), so it must keep its real source
+                //     rather than appearing to exit the enclosing composite border.
+                if (t.RedirectedFrom == null &&
+                    lastStateToGroup.TryGetValue(t.From, out var sourceGroup) &&
+                    !string.Equals(sourceGroup, dstGroup, StringComparison.Ordinal) &&
+                    !IsDescendantGroup(dstGroup, sourceGroup, groups))
+                {
+                    t.RedirectedFrom = sourceGroup;
+                }
+
+                // (4) preProcess resets are parsed as AnyState -> target rules. Each such
+                //     reset is guarded by a stateVarName range in preProcess(); resolve
+                //     that range to the composite border it applies to, so the arrow
+                //     originates from a real composite instead of the pseudo AnyState node.
+                if (t.Source == "preProcess" && t.From == "AnyState")
+                {
+                    string scopeComposite = ResolveScopeComposite(t, groups);
+                    if (!string.IsNullOrEmpty(scopeComposite))
+                        t.RedirectedFrom = scopeComposite;
+                }
+            }
+
+            // Determine which states genuinely EXIT their composite (a transition whose
+            // target lands outside the state's own composite subtree). Only such states
+            // complete the composite and deserve an end-state (--> [*]) marker. This avoids
+            // marking a last-declared member that merely flows into a child composite or a
+            // sibling within the same composite (e.g. DOOR_DASHER_AUTOFEED_ON -> DoordashSeq).
+            var exitStates = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var t in tr)
+            {
+                if (string.IsNullOrEmpty(t.From) || string.IsNullOrEmpty(t.To)) continue;
+                if (!groups.StateToGroup.TryGetValue(t.From, out var fromGroup)) continue;
+
+                // Resolve the destination's group: a composite-id target maps to that
+                // composite; otherwise use the target state's group.
+                string toGroup = null;
+                if (groups.Groups.ContainsKey(t.To)) toGroup = t.To;
+                else groups.StateToGroup.TryGetValue(t.To, out toGroup);
+
+                bool leavesGroup = !string.Equals(fromGroup, toGroup, StringComparison.Ordinal) &&
+                                   !IsDescendantGroup(toGroup, fromGroup, groups);
+                if (leavesGroup) exitStates.Add(t.From);
+            }
+
+            // Build parent -> child composite map for nested emission.
+            var childGroups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var kvp in groups.GroupParent)
+            {
+                if (!groups.Groups.ContainsKey(kvp.Key) || !groups.Groups.ContainsKey(kvp.Value))
+                    continue;
+                if (!childGroups.TryGetValue(kvp.Value, out var kids))
+                    childGroups[kvp.Value] = kids = new List<string>();
+                kids.Add(kvp.Key);
+            }
+
+            // Drop interior exit edges made redundant by a sibling composite-border exit.
+            // When a non-last member of a composite exits the composite to the same target
+            // with the same guard as the composite's border edge (produced by rule (3) from
+            // the last member), the interior edge merely duplicates that border exit (e.g.
+            // the jog "*_CYLS --> AUTOFEED_OFF" edges duplicate "CrossTransferJog --> ...").
+            var borderExits = new HashSet<(string, string, string)>();
+            foreach (var t in tr)
+            {
+                if (t.RedirectedFrom != null && groups.Groups.ContainsKey(t.RedirectedFrom))
+                    borderExits.Add((t.RedirectedFrom, t.EffectiveTo, t.Guard ?? ""));
+            }
+            var redundant = new HashSet<Transition>();
+            foreach (var t in tr)
+            {
+                if (t.RedirectedFrom != null) continue;          // the border edge itself
+                if (string.IsNullOrEmpty(t.From)) continue;
+                if (!groups.StateToGroup.TryGetValue(t.From, out var g)) continue;
+                if (groups.GroupLastState.TryGetValue(g, out var last) &&
+                    string.Equals(last, t.From, StringComparison.Ordinal))
+                    continue;                                    // last state = border source
+                if (borderExits.Contains((g, t.EffectiveTo, t.Guard ?? "")))
+                    redundant.Add(t);
+            }
+
+            var uniq = tr.Where(t => !redundant.Contains(t))
+                         .GroupBy(t => (t.EffectiveFrom, t.EffectiveTo, t.Guard, t.Source))
+                         .Select(g => g.First())
+                         .ToList();
+
+            return flowchartOutput
+                ? BuildFlowchart(uniq, states, groups, childGroups, exitStates, stateDescriptions)
+                : BuildStateDiagram(uniq, states, groups, childGroups, exitStates, stateDescriptions);
+        }
+
+        // Emit the classic stateDiagram-v2 rendering (default output).
+        private static string BuildStateDiagram(List<Transition> uniq, HashSet<string> states,
+                                                GroupingResult groups,
+                                                Dictionary<string, List<string>> childGroups,
+                                                HashSet<string> exitStates,
+                                                Dictionary<string, string> stateDescriptions)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("```mermaid");
+            sb.AppendLine("stateDiagram-v2");
+
+            // Top-level composites: those without a (known) parent composite.
+            var topLevel = groups.Groups.Keys
+                .Where(k => !groups.GroupParent.TryGetValue(k, out var p) || !groups.Groups.ContainsKey(p))
+                .OrderBy(k => k, StringComparer.Ordinal);
+
+            foreach (var gname in topLevel)
+                EmitComposite(sb, gname, groups, childGroups, 1, exitStates, stateDescriptions);
+
+            // Requirement 1: the machine's start state (first enum value) gets the
+            // start-state symbol at the top level.
+            if (!string.IsNullOrEmpty(groups.MachineStartState))
+                sb.AppendLine("    [*] --> " + San(groups.MachineStartState));
+
+            foreach (var t in uniq)
+            {
+                if (string.IsNullOrEmpty(t.EffectiveFrom) || string.IsNullOrEmpty(t.EffectiveTo)) continue;
+                if (t.EffectiveFrom == t.EffectiveTo) continue;
+
+                string lbl = t.Guard;
+                if (t.Source == "preProcess")
+                    lbl = string.IsNullOrEmpty(lbl) ? "[preProcess]" : "[preProcess] " + lbl;
+
+                if (string.IsNullOrEmpty(lbl))
+                    sb.AppendLine("    " + San(t.EffectiveFrom) + " --> " + San(t.EffectiveTo));
+                else
+                    sb.AppendLine("    " + San(t.EffectiveFrom) + " --> " + San(t.EffectiveTo) + ": " + Esc(lbl));
+            }
+
+            // State descriptions from getStateDescription(): stateDiagram-v2 hover tooltips
+            // (click ... callbacks/href) do not render reliably in common viewers such as
+            // mermaid.live, so surface the description as part of the node's DISPLAY LABEL
+            // instead. The internal node id keeps the enum name (so all transitions still
+            // resolve); the box shows "ENUM_NAME" over its description. Composite members are
+            // labeled at their declaration site inside EmitComposite; here we only declare
+            // labels for standalone (ungrouped) top-level states to avoid duplicate nodes.
+            if (stateDescriptions != null && stateDescriptions.Count > 0)
+            {
+                foreach (string s in states.OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    if (groups.StateToGroup.ContainsKey(s)) continue; // labeled inside its composite
+                    if (stateDescriptions.TryGetValue(s, out var desc) && !string.IsNullOrEmpty(desc))
+                        sb.AppendLine($"    state \"{s}<br/>{desc.Replace("\"", "'")}\" as {San(s)}");
+                }
+            }
+
+            sb.AppendLine("```");
+            return sb.ToString();
+        }
+
+        // Emit a Mermaid flowchart rendering. Unlike stateDiagram-v2, flowcharts support real
+        // hover tooltips via "click id \"description\"" (with securityLevel 'loose', the default
+        // on mermaid.live). Composites become nested subgraphs; the machine start is a small
+        // round node; edges use the -->|guard| syntax.
+        private static string BuildFlowchart(List<Transition> uniq, HashSet<string> states,
+                                            GroupingResult groups,
+                                            Dictionary<string, List<string>> childGroups,
+                                            HashSet<string> exitStates,
+                                            Dictionary<string, string> stateDescriptions)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("```mermaid");
+            sb.AppendLine("flowchart TD");
+
+            // Track which nodes have been declared (inside a subgraph) so we don't redeclare
+            // them at the top level.
+            var declared = new HashSet<string>(StringComparer.Ordinal);
+
+            // Top-level composites: those without a (known) parent composite.
+            var topLevel = groups.Groups.Keys
+                .Where(k => !groups.GroupParent.TryGetValue(k, out var p) || !groups.Groups.ContainsKey(p))
+                .OrderBy(k => k, StringComparer.Ordinal);
+
+            foreach (var gname in topLevel)
+                EmitFlowchartSubgraph(sb, gname, groups, childGroups, 1, declared, stateDescriptions);
+
+            // Declare any remaining (ungrouped) states as plain nodes.
+            foreach (string s in states.OrderBy(x => x, StringComparer.Ordinal))
+            {
+                if (declared.Contains(s)) continue;
+                sb.AppendLine($"    {San(s)}[\"{FlowNodeLabel(s, stateDescriptions)}\"]");
+                declared.Add(s);
+            }
+
+            // Machine start: a small round start node pointing at the first enum state.
+            if (!string.IsNullOrEmpty(groups.MachineStartState))
+            {
+                sb.AppendLine("    startNode((\" \")) --> " + San(groups.MachineStartState));
+            }
+
+            // Edges.
+            foreach (var t in uniq)
+            {
+                if (string.IsNullOrEmpty(t.EffectiveFrom) || string.IsNullOrEmpty(t.EffectiveTo)) continue;
+                if (t.EffectiveFrom == t.EffectiveTo) continue;
+
+                string lbl = t.Guard;
+                if (t.Source == "preProcess")
+                    lbl = string.IsNullOrEmpty(lbl) ? "[preProcess]" : "[preProcess] " + lbl;
+
+                if (string.IsNullOrEmpty(lbl))
+                    sb.AppendLine("    " + San(t.EffectiveFrom) + " --> " + San(t.EffectiveTo));
+                else
+                    sb.AppendLine("    " + San(t.EffectiveFrom) + " -->|\"" + FlowLabel(lbl) + "\"| " + San(t.EffectiveTo));
+            }
+
+            sb.AppendLine("```");
+            return sb.ToString();
+        }
+
+        // Build a flowchart node label: the enum name, plus its description on a second line
+        // (via <br/>) when one is available. Mermaid flowchart hover tooltips (`click ... "text"`)
+        // are unreliable in common viewers such as mermaid.live, so the description is shown
+        // inline in the box instead — the same reliable approach used by the state-diagram mode.
+        private static string FlowNodeLabel(string state, Dictionary<string, string> stateDescriptions)
+        {
+            if (stateDescriptions != null && stateDescriptions.TryGetValue(state, out var desc)
+                && !string.IsNullOrEmpty(desc))
+                return state + "<br/>" + desc.Replace("\"", "'");
+            return state;
+        }
+
+        // Recursively emit a composite as a flowchart subgraph, declaring member nodes and
+        // nested child subgraphs.
+        private static void EmitFlowchartSubgraph(StringBuilder sb, string gname, GroupingResult groups,
+                                                  Dictionary<string, List<string>> childGroups, int depth,
+                                                  HashSet<string> declared,
+                                                  Dictionary<string, string> stateDescriptions)
+        {
+            string indent = new string(' ', depth * 4);
+            string bodyIndent = new string(' ', (depth + 1) * 4);
+            string gid = San(gname);
+
+            sb.AppendLine($"{indent}subgraph {gid}[\"{gname}\"]");
+
+            if (groups.Groups.TryGetValue(gname, out var members))
+                foreach (string s in members)
+                {
+                    if (declared.Contains(s)) continue;
+                    sb.AppendLine($"{bodyIndent}{San(s)}[\"{FlowNodeLabel(s, stateDescriptions)}\"]");
+                    declared.Add(s);
+                }
+
+            // Nested child composites.
+            if (childGroups.TryGetValue(gname, out var kids))
+                foreach (string child in kids.OrderBy(k => k, StringComparer.Ordinal))
+                    EmitFlowchartSubgraph(sb, child, groups, childGroups, depth + 1, declared, stateDescriptions);
+
+            sb.AppendLine($"{indent}end");
+        }
+
+        // Escape a guard label for use inside a QUOTED flowchart edge |"..."| label.
+        // Quoting lets the label contain parentheses, dots, operators (OR/AND), etc. without
+        // tripping the flowchart parser. Inner double quotes are swapped to single quotes and
+        // '#' is escaped (it starts an HTML entity in Mermaid).
+        private static string FlowLabel(string l)
+        {
+            if (string.IsNullOrEmpty(l)) return l;
+            if (l.Length > 120) l = l.Substring(0, 117) + "...";
+            return l.Replace("\r", " ").Replace("\n", " ").Replace("\"", "'").Replace("#", "#35;");
+        }
+
+        // Emit a composite and (recursively) any nested child composites so the output
+        // mirrors the nesting captured in doState_UmlSC() (e.g. TrackerFindpathSeq inside
+        // TrackerSeq inside TablemanagerEnabled).
+        private static void EmitComposite(StringBuilder sb, string gname, GroupingResult groups,
+                                          Dictionary<string, List<string>> childGroups, int depth,
+                                          HashSet<string> exitStates,
+                                          Dictionary<string, string> stateDescriptions)
+        {
+            string indent = new string(' ', depth * 4);
+            string bodyIndent = new string(' ', (depth + 1) * 4);
+            string gid = San(gname);
+
+            sb.AppendLine($"{indent}state \"{gname}\" as {gid} {{");
+            if (groups.GroupFirstState.TryGetValue(gname, out var first))
+                sb.AppendLine($"{bodyIndent}[*] --> {San(first)}");
+
+            if (groups.Groups.TryGetValue(gname, out var members))
+                foreach (string s in members)
+                {
+                    if (stateDescriptions != null &&
+                        stateDescriptions.TryGetValue(s, out var desc) && !string.IsNullOrEmpty(desc))
+                        sb.AppendLine($"{bodyIndent}state \"{s}<br/>{desc.Replace("\"", "'")}\" as {San(s)}");
+                    else
+                        sb.AppendLine($"{bodyIndent}{San(s)}");
+                }
+
+            // Nested child composites.
+            if (childGroups.TryGetValue(gname, out var kids))
+                foreach (string child in kids.OrderBy(k => k, StringComparer.Ordinal))
+                    EmitComposite(sb, child, groups, childGroups, depth + 1, exitStates, stateDescriptions);
+
+            // End-state marker: only when the last declared state genuinely EXITS the
+            // composite (i.e. it has a transition leaving the composite subtree). A state
+            // that merely flows into a child/sibling within the composite does not complete
+            // it (e.g. DOOR_DASHER_AUTOFEED_ON -> DoordashSeq).
+            if (groups.GroupLastState.TryGetValue(gname, out var last) && exitStates.Contains(last))
+                sb.AppendLine($"{bodyIndent}{San(last)} --> [*]");
+
+            sb.AppendLine($"{indent}}}");
+        }
+
+        private static string San(string id) => (id ?? "").Replace('.', '_').Replace('-', '_');
+        private static string Esc(string l) { if (l.Length > 90) l = l.Substring(0,87) + "..."; return l.Replace(":", "\\:").Replace("\n"," "); }
+
+        // ==================================================================
+        // Types
+        // ==================================================================
+        internal sealed class Transition
+        {
+            public string From { get; }
+            public string To   { get; }
+            public string Guard { get; }
+            public string Source { get; }
+            public string RedirectedFrom { get; set; }
+            public string RedirectedTo   { get; set; }
+            // For a preProcess reset, the stateVarName range guard bounds (enum names)
+            // used to resolve which composite border the reset should originate from.
+            public string ScopeLower { get; set; }
+            public string ScopeUpper { get; set; }
+            public string EffectiveFrom => RedirectedFrom ?? From;
+            public string EffectiveTo   => RedirectedTo   ?? To;
+            public Transition(string f, string t, string g, string s) { From=f; To=t; Guard=g; Source=s; }
+        }
+        internal sealed class IfFrame
+        {
+            public string CurrentCond;
+            public readonly List<string> NegatedPriorConds = new List<string>();
+            public IfFrame(string c) { CurrentCond = c; }
+        }
+        internal sealed class UmlComposite
+        {
+            public string DisplayName;
+            public string FullName;
+            public string ObjectGuid;
+            public string ContainerGuid;
+        }
+        internal sealed class GroupingResult
+        {
+            public Dictionary<string, List<string>> Groups          = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            public Dictionary<string, string>       StateToGroup    = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, string>       GroupFirstState = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, string>       GroupLastState  = new Dictionary<string, string>(StringComparer.Ordinal);
+            public Dictionary<string, string>       CompositeToId   = new Dictionary<string, string>(StringComparer.Ordinal);
+            // Child composite display name -> parent composite display name (nesting).
+            public Dictionary<string, string>       GroupParent     = new Dictionary<string, string>(StringComparer.Ordinal);
+            // The machine's start state (first state declared in the .TcDUT enum).
+            public string                           MachineStartState;
+            // Display name of the composite whose enum name ends with "ENABLED".
+            public string                           EnabledCompositeName;
+            // Enum values in declaration order (from the .TcDUT).
+            public List<string>                     EnumOrder = new List<string>();
+        }
+    }
+}
