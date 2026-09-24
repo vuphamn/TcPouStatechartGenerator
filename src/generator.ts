@@ -158,23 +158,51 @@ function looksLikeStateLabel(label: string): boolean {
   return true;
 }
 
+function isFullyParenthesized(s: string): boolean {
+  if (!s.startsWith('(') || !s.endsWith(')')) return false;
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') depth--;
+    if (depth === 0 && i < s.length - 1) {
+      return false;
+    }
+  }
+  return depth === 0;
+}
+
+function parenthesizeCondition(c: string): string {
+  const trimmed = c.trim();
+  if (!trimmed) return '';
+  if (isFullyParenthesized(trimmed)) {
+    return trimmed;
+  }
+  return `(${trimmed})`;
+}
+
 function buildGuard(s: IfFrame[]): string | null {
   if (s.length === 0) return null;
-  const t = s[s.length - 1];
-  return t.currentCond ?? 'else';
+  if (s.length === 1) {
+    return s[0].currentCond ?? 'else';
+  }
+  const parts: string[] = [];
+  for (const f of s) {
+    if (f.currentCond === null) {
+      parts.push('else');
+    } else {
+      parts.push(parenthesizeCondition(f.currentCond));
+    }
+  }
+  return parts.join(' AND ');
 }
 
 function buildResetGuard(s: IfFrame[], stateVarName: string): string | null {
-  for (let i = s.length - 1; i >= 0; i--) {
-    const f = s[i];
-    const cond = f.currentCond;
-    if (cond === null) return 'else';
-    if (new RegExp(`\\b(${stateVarName})\\b`, 'i').test(cond)) {
-      continue; // scope guard, not trigger
-    }
-    return cond;
-  }
-  return null;
+  const nonScope = s.filter((f) => {
+    if (f.currentCond === null) return true;
+    return !new RegExp(`\\b(${stateVarName})\\b`, 'i').test(f.currentCond);
+  });
+  if (nonScope.length === 0) return null;
+  return buildGuard(nonScope);
 }
 
 function parseStateDescriptions(st: string | null): Map<string, string> {

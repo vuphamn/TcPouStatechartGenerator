@@ -24,18 +24,37 @@ import {
   FileImage,
   FileCode,
   X,
+  Activity,
+  TrendingUp,
+  History,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { generateStatechart, PriorityFormat } from './generator.ts';
 import { MermaidViewer, MermaidViewerHandle, LayoutEngine, FlowchartCurve, MermaidTheme } from './components/MermaidViewer.tsx';
 import { MermaidMarkdownViewer } from './components/MermaidMarkdownViewer.tsx';
+import { PouComplexityReportTab } from './components/PouComplexityReportTab.tsx';
+import { TransitionFrequencyTab } from './components/TransitionFrequencyTab.tsx';
+import { TransitionHistoryTab } from './components/TransitionHistoryTab.tsx';
+import { PlcTransitionLoggerSidebarCard } from './components/PlcTransitionLoggerSidebarCard.tsx';
+import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.tsx';
+import { TransitionHistoryDataset } from './utils/transitionHistoryAnalytics.ts';
 import { FileDropzone } from './components/FileDropzone.tsx';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector } from './components/StateNodeStyleInspector.tsx';
 import { HeaderHiddenControls } from './components/HeaderHiddenControls.tsx';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
+import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
+import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
 import { getMermaidLiveUrl } from './utils/mermaidLive.ts';
-import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition } from './types.ts';
+import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset } from './types.ts';
+import { DiagramPresetManager } from './components/DiagramPresetManager.tsx';
+import {
+  DiagramOptionsState,
+  loadActivePresetId,
+  loadUserPresets,
+  BUILTIN_PRESETS,
+} from './utils/diagramPresets.ts';
 import { applyCustomStylesToMermaid } from './utils/nodeStyles.ts';
 import { applyNotesToMermaid } from './utils/diagramNotes.ts';
 import { NodeOffsetsMap } from './utils/nodeDragger.ts';
@@ -58,18 +77,46 @@ export const App: React.FC = () => {
   const [pouFileName, setPouFileName] = useState<string>(SAMPLES[0].pouName);
   const [pouContent, setPouContent] = useState<string>(SAMPLES[0].pouContent);
 
-  // Configuration options matching C# LauncherForm
+  // Configuration options matching C# LauncherForm & active User/Builtin Preset
+  const initialPreset = useMemo(() => {
+    try {
+      const activeId = loadActivePresetId();
+      const allPresets = [...loadUserPresets(), ...BUILTIN_PRESETS];
+      return allPresets.find((p) => p.id === activeId) || BUILTIN_PRESETS[0];
+    } catch {
+      return BUILTIN_PRESETS[0];
+    }
+  }, []);
+
   const [flowchartOutput, setFlowchartOutput] = useState<boolean>(SAMPLES[0].defaultFlowchart);
   const [collapseErrorSinkEdges, setCollapseErrorSinkEdges] = useState<boolean>(true);
   const [includeStateDescriptions, setIncludeStateDescriptions] = useState<boolean>(
     SAMPLES[0].defaultIncludeDescriptions
   );
   const [showTransitionPriorities, setShowTransitionPriorities] = useState<boolean>(true);
-  const [priorityFormat, setPriorityFormat] = useState<PriorityFormat>('circled');
-  const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>('elk');
-  const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>('basis');
-  const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>('dark');
+  const [priorityFormat, setPriorityFormat] = useState<PriorityFormat>(initialPreset.priorityFormat);
+  const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
+  const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
+  const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
   const [liveUpdate, setLiveUpdate] = useState<boolean>(true);
+
+  // Grouped diagram options state for preset matching and manager
+  const currentDiagramOptions: DiagramOptionsState = useMemo(
+    () => ({
+      layoutEngine,
+      flowchartCurve,
+      mermaidTheme,
+      priorityFormat,
+    }),
+    [layoutEngine, flowchartCurve, mermaidTheme, priorityFormat]
+  );
+
+  const handleApplyPreset = useCallback((preset: DiagramPreset) => {
+    setLayoutEngine(preset.layoutEngine);
+    setFlowchartCurve(preset.flowchartCurve);
+    setMermaidTheme(preset.mermaidTheme);
+    setPriorityFormat(preset.priorityFormat);
+  }, []);
 
   // Lock diagram layout toggle: disables automatic re-layout triggered by edits, preserving custom node positions
   const [lockDiagramLayout, setLockDiagramLayout] = useState<boolean>(() => {
@@ -89,10 +136,15 @@ export const App: React.FC = () => {
   }, [lockDiagramLayout]);
 
   // UI tabs & states
-  const [activeTab, setActiveTab] = useState<'diagram' | 'markdown'>('diagram');
+  const [activeTab, setActiveTab] = useState<'diagram' | 'markdown' | 'complexity' | 'frequency' | 'history'>('diagram');
   const [diagramSearchQuery, setDiagramSearchQuery] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [copiedMarkdown, setCopiedMarkdown] = useState<boolean>(false);
+  const [headerToolbarElement, setHeaderToolbarElement] = useState<HTMLDivElement | null>(null);
+
+  // PLC Transition Logger & Telemetry State
+  const [historyDataset, setHistoryDataset] = useState<TransitionHistoryDataset | null>(null);
+  const [isPlcLoggerModalOpen, setIsPlcLoggerModalOpen] = useState<boolean>(false);
 
   // Node display customizations
   const [customNodeStyles, setCustomNodeStyles] = useState<CustomNodeStylesMap>({});
@@ -259,6 +311,20 @@ export const App: React.FC = () => {
       theme: mermaidTheme,
     });
   }, [styledMarkdown, diagramNotes, canvasPositions, layoutEngine, flowchartCurve, mermaidTheme]);
+
+  // Extract edges for complexity analysis
+  const availableEdges = useMemo(() => {
+    return extractEdgesFromMermaid(outputMarkdown);
+  }, [outputMarkdown]);
+
+  // Comprehensive POU Cyclomatic Complexity & Transition Density Report
+  const pouComplexityReport = useMemo(() => {
+    return generatePouComplexityReport(
+      identifiedStatesResult,
+      availableEdges,
+      pouFileName.replace(/\.TcPOU$/i, '') || 'Statechart POU'
+    );
+  }, [identifiedStatesResult, availableEdges, pouFileName]);
 
   const handleStyleChange = useCallback((stateId: string, style: NodeDisplayProperties) => {
     setCustomNodeStyles((prev) => ({
@@ -867,11 +933,16 @@ export const App: React.FC = () => {
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      {/* Top Application Bar */}
+      {/* Top Application Bar & Header Section */}
       <header
         id="app-header"
-        className="relative z-40 flex items-center justify-between px-2.5 sm:px-4 py-2 bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0 gap-1.5 sm:gap-2"
+        className="relative z-40 flex flex-col bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0"
       >
+        {/* Row 1: Brand, Title, Sample Selector, Generate, Copy Markdown, Export */}
+        <div
+          id="header-row-1"
+          className="flex items-center justify-between px-2.5 sm:px-4 py-1.5 border-b border-slate-800/80 gap-1.5 sm:gap-2 shrink-0"
+        >
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 shrink">
           <button
             id="toggle-sidebar-btn"
@@ -907,6 +978,8 @@ export const App: React.FC = () => {
         <div id="header-action-bar" className="flex items-center gap-1 sm:gap-1.5 md:gap-2 shrink-0">
           {/* Hidden Controls Menu (ALWAYS at the very front of header action bar on any monitor size) */}
           <HeaderHiddenControls
+            currentPresetOptions={currentDiagramOptions}
+            onApplyPreset={handleApplyPreset}
             flowchartOutput={flowchartOutput}
             setFlowchartOutput={setFlowchartOutput}
             collapseErrorSinkEdges={collapseErrorSinkEdges}
@@ -1193,18 +1266,41 @@ export const App: React.FC = () => {
             <span className="hidden xl:inline">Mermaid Live</span>
           </button>
         </div>
+        </div>
+
+        {/* Row 2: Diagram Toolbar Container */}
+        <div
+          id="header-toolbar-container"
+          ref={setHeaderToolbarElement}
+          className={`relative z-30 items-center justify-between bg-slate-950/95 text-xs text-slate-300 overflow-visible shrink-0 ${
+            activeTab === 'diagram' ? 'flex px-2 sm:px-3 py-0.5 min-h-[34px] border-b border-slate-800/80' : 'hidden'
+          }`}
+        >
+          {/* Portaled from MermaidViewer */}
+        </div>
       </header>
 
       {/* Options Control Ribbon */}
       <div
         id="options-ribbon"
-        className="relative z-30 flex flex-wrap items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-800/80 text-xs text-slate-300 gap-3 shrink-0"
+        className="relative z-30 flex flex-wrap items-center justify-between px-3 sm:px-4 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 gap-2 shrink-0"
       >
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
           <div className="flex items-center gap-1.5 text-slate-400 font-medium">
             <Settings2 className="w-3.5 h-3.5 text-sky-400" />
             <span>Options:</span>
           </div>
+
+          {/* User Preset Quick Toggle & Manager */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-400 text-[11px] font-medium hidden md:inline">Preset:</span>
+            <DiagramPresetManager
+              currentOptions={currentDiagramOptions}
+              onApplyPreset={handleApplyPreset}
+            />
+          </div>
+
+          <div className="h-4 w-px bg-slate-800 hidden sm:block"></div>
 
           {/* Format Toggle */}
           <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
@@ -1549,6 +1645,24 @@ export const App: React.FC = () => {
               onOpenEnumEditor={() => {
                 handleOpenEnumEditorModal(selectedStateId || undefined);
               }}
+              onOpenComplexityReport={() => {
+                setActiveTab('complexity');
+              }}
+            />
+
+            {/* PLC Transition Logger Sidebar Card */}
+            <PlcTransitionLoggerSidebarCard
+              states={identifiedStatesResult.states}
+              edges={availableEdges}
+              activeDataset={historyDataset}
+              onOpenLoggerModal={() => setIsPlcLoggerModalOpen(true)}
+              onPopulateHistory={(ds, msg) => {
+                setHistoryDataset(ds);
+                setActiveTab('history');
+                if (msg) showCopyToast(msg, 'success');
+              }}
+              onViewHistoryTab={() => setActiveTab('history')}
+              onToast={showCopyToast}
             />
 
             {/* Guidance Info Card */}
@@ -1565,9 +1679,9 @@ export const App: React.FC = () => {
         )}
 
         {/* Right Side: Output Viewer */}
-        <main id="output-workspace" className="flex-1 flex flex-col min-w-0 bg-slate-950 p-3 overflow-hidden">
+        <main id="output-workspace" className="flex-1 flex flex-col min-w-0 bg-slate-950 px-2.5 pt-1.5 pb-2 overflow-hidden">
           {/* Output View Tabs */}
-          <div className="flex items-center justify-between pb-2 shrink-0">
+          <div className="flex items-center justify-between pb-1.5 shrink-0">
             <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-xs">
               <button
                 id="tab-diagram-btn"
@@ -1593,6 +1707,55 @@ export const App: React.FC = () => {
               >
                 Mermaid Markdown
               </button>
+              <button
+                id="tab-complexity-btn"
+                type="button"
+                onClick={() => setActiveTab('complexity')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
+                  activeTab === 'complexity'
+                    ? 'bg-slate-800 text-sky-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span>Complexity Report</span>
+                {pouComplexityReport.refactorCandidatesCount > 0 && (
+                  <span
+                    className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800"
+                    title={`${pouComplexityReport.refactorCandidatesCount} refactoring candidates flagged`}
+                  >
+                    {pouComplexityReport.refactorCandidatesCount}
+                  </span>
+                )}
+              </button>
+              <button
+                id="tab-frequency-btn"
+                type="button"
+                onClick={() => setActiveTab('frequency')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
+                  activeTab === 'frequency'
+                    ? 'bg-slate-800 text-sky-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Analyze transition frequency over time from PLC logs or view static State Hit Count heatmap"
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>Transition Frequency</span>
+              </button>
+              <button
+                id="tab-history-btn"
+                type="button"
+                onClick={() => setActiveTab('history')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
+                  activeTab === 'history'
+                    ? 'bg-slate-800 text-indigo-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Process PLC log files to generate a time-series visualization showing state transitions chronologically and identify unexpected state changes"
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Transition History</span>
+              </button>
             </div>
 
             {generationError && (
@@ -1605,9 +1768,10 @@ export const App: React.FC = () => {
 
           {/* Tab Content */}
           <div className="flex-1 min-h-0 relative">
-            {activeTab === 'diagram' ? (
+            <div className={`h-full w-full ${activeTab === 'diagram' ? '' : 'hidden'}`}>
               <MermaidViewer
                 ref={mermaidViewerRef}
+                toolbarPortalTarget={headerToolbarElement}
                 focusStateRequest={jumpRequest}
                 code={styledMarkdown}
                 layoutEngine={layoutEngine}
@@ -1654,13 +1818,49 @@ export const App: React.FC = () => {
                 layoutLocked={lockDiagramLayout}
                 onLayoutLockedChange={setLockDiagramLayout}
                 onToast={showCopyToast}
+                onSwitchToDiagramTab={() => setActiveTab('diagram')}
               />
-            ) : (
+            </div>
+            {activeTab === 'markdown' && (
               <MermaidMarkdownViewer
                 code={outputMarkdown}
                 fileName={`${pouFileName.replace(/\.TcPOU$/i, '') || 'statechart'}.statechart.md`}
                 searchQuery={diagramSearchQuery}
                 onSearchQueryChange={setDiagramSearchQuery}
+                onToast={showCopyToast}
+              />
+            )}
+            {activeTab === 'complexity' && (
+              <PouComplexityReportTab
+                report={pouComplexityReport}
+                onJumpToState={handleJumpToState}
+                onOpenStateEditor={(stateId) => handleOpenEnumEditorModal(stateId)}
+                onOpenMethodEditor={(methodName) => handleOpenMethodEditorModal(methodName)}
+                onToast={showCopyToast}
+              />
+            )}
+            {activeTab === 'frequency' && (
+              <TransitionFrequencyTab
+                states={identifiedStatesResult.states}
+                edges={availableEdges}
+                pouContent={pouContent}
+                pouFileName={pouFileName}
+                onJumpToState={handleJumpToState}
+                onApplyHeatmapStyles={(styles) => {
+                  setCustomNodeStyles((prev) => ({ ...prev, ...styles }));
+                  setActiveTab('diagram');
+                }}
+                onToast={showCopyToast}
+              />
+            )}
+            {activeTab === 'history' && (
+              <TransitionHistoryTab
+                states={identifiedStatesResult.states}
+                edges={availableEdges}
+                pouFileName={pouFileName}
+                activeDataset={historyDataset}
+                onDatasetChange={(ds) => setHistoryDataset(ds)}
+                onJumpToState={handleJumpToState}
                 onToast={showCopyToast}
               />
             )}
@@ -1699,6 +1899,21 @@ export const App: React.FC = () => {
           onUpdateNoteStyle={handleUpdateNoteStyle}
         />
       )}
+
+      {/* Dedicated PLC Transition Logger Tool Modal */}
+      <PlcTransitionLoggerTool
+        isOpen={isPlcLoggerModalOpen}
+        onClose={() => setIsPlcLoggerModalOpen(false)}
+        states={identifiedStatesResult.states}
+        edges={availableEdges}
+        pouFileName={pouFileName}
+        onPopulateHistory={(newDs, msg) => {
+          setHistoryDataset(newDs);
+          setActiveTab('history');
+          if (msg) showCopyToast(msg, 'success');
+        }}
+        onToast={showCopyToast}
+      />
 
       {/* Floating Toast Notifications Container */}
       <div

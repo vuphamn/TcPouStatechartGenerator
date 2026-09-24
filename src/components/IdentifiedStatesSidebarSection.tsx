@@ -6,7 +6,11 @@ import {
   ChevronDown,
   ChevronUp,
   Crosshair,
+  Target,
   ArrowRight,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Activity,
   Filter,
   ArrowDownAZ,
   ArrowDown01,
@@ -25,10 +29,11 @@ export interface IdentifiedStatesSidebarSectionProps {
   customStyles?: CustomNodeStylesMap;
   stateVarName?: string;
   onOpenEnumEditor?: () => void;
+  onOpenComplexityReport?: () => void;
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
-type SortMode = 'enum' | 'alpha';
+type SortMode = 'enum' | 'alpha' | 'complexity';
 
 export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSectionProps> = ({
   states,
@@ -37,12 +42,97 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   customStyles,
   stateVarName = 'machineState',
   onOpenEnumEditor,
+  onOpenComplexityReport,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [selectedGroup, setSelectedGroup] = useState<string>('all');
   const [sortMode, setSortMode] = useState<SortMode>('enum');
+  const [recentlyNavigatedStateId, setRecentlyNavigatedStateId] = useState<string | null>(null);
+  const navigatedTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (navigatedTimerRef.current) clearTimeout(navigatedTimerRef.current);
+    };
+  }, []);
+
+  const handleTriggerGoToState = (stateId: string, label?: string) => {
+    setRecentlyNavigatedStateId(stateId);
+    if (navigatedTimerRef.current) {
+      clearTimeout(navigatedTimerRef.current);
+    }
+    navigatedTimerRef.current = setTimeout(() => {
+      setRecentlyNavigatedStateId(null);
+    }, 2600);
+    onJumpToState(stateId, label);
+  };
+
+  // Calculate incoming, outgoing and total transition counts for each state
+  const stateTransitionsMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        incoming: string[];
+        outgoing: string[];
+        incomingCount: number;
+        outgoingCount: number;
+        totalCount: number;
+      }
+    >();
+
+    // 1. Initialize with explicit arrays from states
+    const incomingSetMap = new Map<string, Set<string>>();
+    const outgoingSetMap = new Map<string, Set<string>>();
+
+    states.forEach((s) => {
+      incomingSetMap.set(s.id, new Set(s.incomingTransitions || []));
+      outgoingSetMap.set(s.id, new Set(s.outgoingTransitions || []));
+    });
+
+    // 2. Cross-verify bidirectional transitions across all states
+    states.forEach((s) => {
+      const outList = s.outgoingTransitions || [];
+      outList.forEach((targetId) => {
+        if (!incomingSetMap.has(targetId)) {
+          incomingSetMap.set(targetId, new Set());
+        }
+        incomingSetMap.get(targetId)!.add(s.id);
+      });
+
+      const inList = s.incomingTransitions || [];
+      inList.forEach((srcId) => {
+        if (!outgoingSetMap.has(srcId)) {
+          outgoingSetMap.set(srcId, new Set());
+        }
+        outgoingSetMap.get(srcId)!.add(s.id);
+      });
+    });
+
+    // 3. Assemble complete stats
+    states.forEach((s) => {
+      const inArray = Array.from(incomingSetMap.get(s.id) || []);
+      const outArray = Array.from(outgoingSetMap.get(s.id) || []);
+      map.set(s.id, {
+        incoming: inArray,
+        outgoing: outArray,
+        incomingCount: inArray.length,
+        outgoingCount: outArray.length,
+        totalCount: inArray.length + outArray.length,
+      });
+    });
+
+    return map;
+  }, [states]);
+
+  const totalTransitionsSum = useMemo(() => {
+    let sum = 0;
+    stateTransitionsMap.forEach((val) => {
+      sum += val.outgoingCount;
+    });
+    return sum;
+  }, [stateTransitionsMap]);
 
   // Extract distinct composite groups
   const availableGroups = useMemo(() => {
@@ -83,12 +173,21 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     // Sort mode
     if (sortMode === 'alpha') {
       list.sort((a, b) => a.id.localeCompare(b.id));
+    } else if (sortMode === 'complexity') {
+      list.sort((a, b) => {
+        const statsA = stateTransitionsMap.get(a.id);
+        const statsB = stateTransitionsMap.get(b.id);
+        const totalA = statsA ? statsA.totalCount : 0;
+        const totalB = statsB ? statsB.totalCount : 0;
+        if (totalB !== totalA) return totalB - totalA;
+        return a.enumIndex - b.enumIndex;
+      });
     } else {
       list.sort((a, b) => a.enumIndex - b.enumIndex);
     }
 
     return list;
-  }, [states, searchQuery, filterMode, selectedGroup, sortMode]);
+  }, [states, searchQuery, filterMode, selectedGroup, sortMode, stateTransitionsMap]);
 
   const logicCount = useMemo(() => states.filter((s) => s.hasCaseBranch).length, [states]);
   const scrollListRef = useRef<HTMLDivElement>(null);
@@ -214,6 +313,36 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                 )}
               </div>
 
+              {/* Quick 'Go to State' Dropdown Jump Selector */}
+              <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-950/70 border border-slate-800/90 text-xs">
+                <Target className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <label htmlFor="quick-goto-state-select" className="text-[11px] font-semibold text-slate-300 shrink-0 select-none">
+                  Go to:
+                </label>
+                <select
+                  id="quick-goto-state-select"
+                  value={selectedStateId || ''}
+                  onChange={(e) => {
+                    const targetId = e.target.value;
+                    if (targetId) {
+                      const st = states.find((s) => s.id === targetId);
+                      handleTriggerGoToState(targetId, st?.label);
+                    }
+                  }}
+                  className="flex-1 bg-transparent text-[11px] font-mono text-sky-300 border-none outline-none cursor-pointer truncate py-0.5 focus:ring-0"
+                  title="Select any state to automatically pan and center it on the canvas with highlight animation"
+                >
+                  <option value="" disabled className="bg-slate-900 text-slate-400">
+                    Jump to state...
+                  </option>
+                  {states.map((s) => (
+                    <option key={s.id} value={s.id} className="bg-slate-900 text-slate-200">
+                      {s.id} {s.compositeGroup ? `(${s.compositeGroup})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Quick Filters and Sort Toolbar */}
               <div className="flex items-center justify-between gap-1 text-[11px] text-slate-400 pt-0.5">
                 {/* Filter Pills */}
@@ -263,19 +392,34 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                 {/* Sort Mode Button */}
                 <button
                   type="button"
-                  onClick={() => setSortMode(sortMode === 'enum' ? 'alpha' : 'enum')}
+                  onClick={() => {
+                    if (sortMode === 'enum') setSortMode('alpha');
+                    else if (sortMode === 'alpha') setSortMode('complexity');
+                    else setSortMode('enum');
+                  }}
                   className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800/80 transition-colors shrink-0"
-                  title={sortMode === 'enum' ? 'Ordered by Enum / Cycle. Click to sort A-Z' : 'Sorted Alphabetically A-Z. Click to sort by Enum order'}
+                  title={
+                    sortMode === 'enum'
+                      ? 'Ordered by Enum / Cycle index. Click to sort A-Z'
+                      : sortMode === 'alpha'
+                      ? 'Sorted Alphabetically A-Z. Click to sort by Complexity (highest transitions first)'
+                      : 'Sorted by Transition Complexity. Click to sort by Enum order'
+                  }
                 >
                   {sortMode === 'enum' ? (
                     <>
                       <ArrowDown01 className="w-3 h-3 text-sky-400" />
                       <span>Enum</span>
                     </>
-                  ) : (
+                  ) : sortMode === 'alpha' ? (
                     <>
                       <ArrowDownAZ className="w-3 h-3 text-sky-400" />
                       <span>A-Z</span>
+                    </>
+                  ) : (
+                    <>
+                      <Activity className="w-3 h-3 text-amber-400" />
+                      <span>Complexity</span>
                     </>
                   )}
                 </button>
@@ -316,19 +460,29 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
             ) : (
               filteredStates.map((state) => {
                 const isSelected = selectedStateId === state.id;
+                const isJustNavigated = recentlyNavigatedStateId === state.id;
                 const customStyle = customStyles ? customStyles[state.id] : undefined;
+                const transStats = stateTransitionsMap.get(state.id) || {
+                  incoming: [],
+                  outgoing: [],
+                  incomingCount: 0,
+                  outgoingCount: 0,
+                  totalCount: 0,
+                };
 
                 return (
                   <div
                     key={state.id}
                     id={`state-list-item-${state.id}`}
-                    onClick={() => onJumpToState(state.id, state.label)}
+                    onClick={() => handleTriggerGoToState(state.id, state.label)}
                     className={`group relative flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${
-                      isSelected
+                      isJustNavigated
+                        ? 'bg-sky-950/80 border-sky-400 shadow-[0_0_18px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/80 text-white'
+                        : isSelected
                         ? 'bg-sky-950/60 border-sky-500/60 shadow-[0_0_12px_rgba(56,189,248,0.15)] ring-1 ring-sky-500/30'
                         : 'bg-slate-950/50 hover:bg-slate-800/70 border-slate-800/70 hover:border-slate-700 text-slate-300'
                     }`}
-                    title="Click to jump and center on this state in the Diagram Canvas"
+                    title="Click to center this state in the Diagram Canvas with highlight animation"
                   >
                     {/* Left Indicator & Info */}
                     <div className="flex items-start gap-2 min-w-0 pr-2">
@@ -365,11 +519,21 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span
                             className={`font-mono text-xs font-semibold leading-tight break-all ${
-                              isSelected ? 'text-sky-300' : 'text-slate-200 group-hover:text-white'
+                              isJustNavigated
+                                ? 'text-sky-200'
+                                : isSelected
+                                ? 'text-sky-300'
+                                : 'text-slate-200 group-hover:text-white'
                             }`}
                           >
                             {state.id}
                           </span>
+                          {isJustNavigated && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full text-[9px] font-medium bg-sky-500 text-white shadow-xs animate-pulse">
+                              <Target className="w-2.5 h-2.5" />
+                              <span>Centered</span>
+                            </span>
+                          )}
                         </div>
 
                         {/* Description (if available) */}
@@ -379,30 +543,72 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                           </span>
                         )}
 
-                        {/* Meta Tags: Group, Transitions count */}
-                        <div className="flex items-center gap-1.5 mt-1 text-[10px] text-slate-500 font-mono">
+                        {/* Meta Tags: Group, Incoming / Outgoing Transitions count, Complexity */}
+                        <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-slate-500 font-mono flex-wrap">
                           {state.compositeGroup && (
                             <span
-                              className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-slate-400 truncate max-w-[130px]"
+                              className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 truncate max-w-[110px]"
                               title={`Composite Group: ${state.compositeGroup}`}
                             >
                               {state.compositeGroup}
                             </span>
                           )}
 
-                          {state.outgoingTransitions.length > 0 && (
+                          {/* Incoming Transitions Count Badge */}
+                          <span
+                            id={`state-${state.id}-incoming-badge`}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border transition-colors ${
+                              transStats.incomingCount > 0
+                                ? 'bg-indigo-950/70 text-indigo-300 border-indigo-800/60 shadow-sm'
+                                : 'bg-slate-900/60 text-slate-500 border-slate-800/60'
+                            }`}
+                            title={
+                              transStats.incomingCount > 0
+                                ? `Incoming transitions (${transStats.incomingCount}) from: ${transStats.incoming.join(', ')}`
+                                : '0 incoming transitions (Possible initial entry or unreachable state)'
+                            }
+                          >
+                            <ArrowDownLeft className={`w-2.5 h-2.5 ${transStats.incomingCount > 0 ? 'text-indigo-400' : 'text-slate-600'}`} />
+                            <span>{transStats.incomingCount} in</span>
+                          </span>
+
+                          {/* Outgoing Transitions Count Badge */}
+                          <span
+                            id={`state-${state.id}-outgoing-badge`}
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border transition-colors ${
+                              transStats.outgoingCount > 0
+                                ? 'bg-emerald-950/70 text-emerald-300 border-emerald-800/60 shadow-sm'
+                                : 'bg-slate-900/60 text-slate-500 border-slate-800/60'
+                            }`}
+                            title={
+                              transStats.outgoingCount > 0
+                                ? `Outgoing transitions (${transStats.outgoingCount}) to: ${transStats.outgoing.join(', ')}`
+                                : '0 outgoing transitions (Terminal or sink state)'
+                            }
+                          >
+                            <ArrowUpRight className={`w-2.5 h-2.5 ${transStats.outgoingCount > 0 ? 'text-emerald-400' : 'text-slate-600'}`} />
+                            <span>{transStats.outgoingCount} out</span>
+                          </span>
+
+                          {/* Quick Complexity Tag */}
+                          {transStats.totalCount > 0 && (
                             <span
-                              className="flex items-center gap-0.5 text-slate-400"
-                              title={`Transitions to: ${state.outgoingTransitions.join(', ')}`}
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border ${
+                                transStats.totalCount >= 6
+                                  ? 'bg-rose-950/60 text-rose-300 border-rose-800/60'
+                                  : transStats.totalCount >= 4
+                                  ? 'bg-amber-950/60 text-amber-300 border-amber-800/60'
+                                  : 'bg-slate-900/80 text-slate-400 border-slate-800/60'
+                              }`}
+                              title={`Total transition complexity: ${transStats.totalCount} transitions (${transStats.incomingCount} in + ${transStats.outgoingCount} out)`}
                             >
-                              <ArrowRight className="w-2.5 h-2.5 text-sky-400/80" />
-                              {state.outgoingTransitions.length}
+                              {transStats.totalCount} tot
                             </span>
                           )}
 
                           {state.hasCaseBranch && (
                             <span
-                              className="px-1 py-0.1 rounded text-[9px] font-mono bg-sky-950/60 text-sky-400 border border-sky-800/40"
+                              className="px-1 py-0.2 rounded text-[9px] font-mono bg-sky-950/60 text-sky-400 border border-sky-800/40"
                               title="Has explicit logic in doState() CASE"
                             >
                               doState
@@ -412,22 +618,34 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                       </div>
                     </div>
 
-                    {/* Right Jump Action Button */}
+                    {/* Right 'Go to State' Action Button */}
                     <div className="shrink-0 flex items-center self-center pl-1">
                       <button
                         type="button"
+                        id={`btn-goto-state-${state.id}`}
                         onClick={(e) => {
                           e.stopPropagation();
-                          onJumpToState(state.id, state.label);
+                          handleTriggerGoToState(state.id, state.label);
                         }}
-                        className={`p-1.5 rounded-md transition-all ${
-                          isSelected
-                            ? 'bg-sky-500 text-white shadow-sm'
-                            : 'text-slate-400 hover:text-sky-400 hover:bg-slate-800 opacity-60 group-hover:opacity-100'
+                        className={`group/btn flex items-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-medium transition-all ${
+                          isJustNavigated
+                            ? 'bg-sky-500 text-white shadow-md shadow-sky-500/40 ring-1 ring-sky-300'
+                            : isSelected
+                            ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-400'
+                            : 'bg-slate-900/90 hover:bg-sky-600/25 text-slate-300 hover:text-white border border-slate-700/70 hover:border-sky-500/60'
                         }`}
-                        title="Jump and focus on diagram canvas"
+                        title="Go to State: pan diagram and center on this node with highlight animation"
                       >
-                        <Crosshair className="w-3.5 h-3.5" />
+                        <Target
+                          className={`w-3.5 h-3.5 ${
+                            isJustNavigated
+                              ? 'animate-spin text-white'
+                              : 'text-sky-400 group-hover/btn:text-sky-300 group-hover/btn:scale-110 transition-transform'
+                          } shrink-0`}
+                        />
+                        <span className="font-semibold text-[11px] whitespace-nowrap">
+                          {isJustNavigated ? 'Centered' : 'Go to State'}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -438,11 +656,33 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
 
           {/* Quick Stats Summary Footer */}
           {states.length > 0 && (
-            <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] text-slate-500">
-              <span>
-                Showing {filteredStates.length} of {states.length} states
-              </span>
-              <span className="font-mono text-slate-400">{stateVarName}</span>
+            <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/60 text-[10px] text-slate-500">
+              <div className="flex items-center gap-2">
+                <span>
+                  Showing {filteredStates.length} of {states.length} states
+                </span>
+                <span className="text-slate-600">•</span>
+                <span title="Total transitions identified across states">
+                  {totalTransitionsSum} transitions
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {onOpenComplexityReport && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenComplexityReport();
+                    }}
+                    className="flex items-center gap-1 text-[10px] text-sky-400 hover:text-sky-300 font-medium transition-colors"
+                    title="Open POU Complexity & Transition Density Report"
+                  >
+                    <Activity className="w-3 h-3" />
+                    <span>Report</span>
+                  </button>
+                )}
+                <span className="font-mono text-slate-400">{stateVarName}</span>
+              </div>
             </div>
           )}
         </div>

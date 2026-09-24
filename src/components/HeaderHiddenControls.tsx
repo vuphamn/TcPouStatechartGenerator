@@ -20,8 +20,13 @@ import {
 } from 'lucide-react';
 import { FlowchartCurve, MermaidTheme } from './MermaidViewer.tsx';
 import { PriorityFormat } from '../generator.ts';
+import { DiagramPreset } from '../types.ts';
+import { DiagramOptionsState } from '../utils/diagramPresets.ts';
+import { DiagramPresetManager } from './DiagramPresetManager.tsx';
 
 export interface HeaderHiddenControlsProps {
+  currentPresetOptions?: DiagramOptionsState;
+  onApplyPreset?: (preset: DiagramPreset) => void;
   flowchartOutput: boolean;
   setFlowchartOutput: (val: boolean) => void;
   collapseErrorSinkEdges: boolean;
@@ -60,6 +65,8 @@ export interface HeaderHiddenControlsProps {
 }
 
 export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
+  currentPresetOptions,
+  onApplyPreset,
   flowchartOutput,
   setFlowchartOutput,
   collapseErrorSinkEdges,
@@ -194,13 +201,10 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
         id="header-hidden-controls-btn"
         type="button"
         onClick={() => {
-          setIsOpen((prev) => {
-            const next = !prev;
-            if (next) {
-              setTimeout(updateDropdownPosition, 0);
-            }
-            return next;
-          });
+          if (!isOpen) {
+            updateDropdownPosition();
+          }
+          setIsOpen((prev) => !prev);
         }}
         className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shrink-0 ${
           isOpen
@@ -497,9 +501,20 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
 
           {/* SECTION 4: Engine & Appearance */}
           <div className="flex flex-col gap-2 pt-2 border-t border-slate-800">
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Engine & Theme
+            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
+              <span>Engine & Presets</span>
             </div>
+
+            {/* Diagram Preset Selector if props provided */}
+            {currentPresetOptions && onApplyPreset && (
+              <div className="flex items-center justify-between py-1 px-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                <span className="text-slate-300 font-medium">Preset:</span>
+                <DiagramPresetManager
+                  currentOptions={currentPresetOptions}
+                  onApplyPreset={onApplyPreset}
+                />
+              </div>
+            )}
 
             {/* Layout Engine: Dagre vs ELK */}
             <div className="flex items-center justify-between">

@@ -212,13 +212,10 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
         id="toolbar-hidden-controls-btn"
         type="button"
         onClick={() => {
-          setIsOpen((prev) => {
-            const next = !prev;
-            if (next) {
-              setTimeout(updateDropdownPosition, 0);
-            }
-            return next;
-          });
+          if (!isOpen) {
+            updateDropdownPosition();
+          }
+          setIsOpen((prev) => !prev);
         }}
         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
           isOpen

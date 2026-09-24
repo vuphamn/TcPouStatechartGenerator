@@ -35,6 +35,8 @@ export interface ExportModalProps {
   customStyles?: Record<string, NodeDisplayProperties>;
   theme?: string;
   defaultFormat?: ExportFormat;
+  defaultScale?: ExportScale;
+  defaultBackground?: ExportBackground;
   onToast?: (message: string, type: 'success' | 'error') => void;
 }
 
@@ -47,11 +49,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   customStyles,
   theme,
   defaultFormat = 'png',
+  defaultScale = 2,
+  defaultBackground = 'dark',
   onToast,
 }) => {
   const [format, setFormat] = useState<ExportFormat>(defaultFormat);
-  const [scale, setScale] = useState<ExportScale>(2);
-  const [background, setBackground] = useState<ExportBackground>('dark');
+  const [scale, setScale] = useState<ExportScale>(defaultScale);
+  const [background, setBackground] = useState<ExportBackground>(defaultBackground);
   const [padding, setPadding] = useState<number>(32);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
@@ -59,7 +63,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   useEffect(() => {
     if (defaultFormat) setFormat(defaultFormat);
-  }, [defaultFormat, isOpen]);
+    if (defaultScale) setScale(defaultScale);
+    if (defaultBackground) setBackground(defaultBackground);
+  }, [defaultFormat, defaultScale, defaultBackground, isOpen]);
 
   // Handle ESC key
   useEffect(() => {

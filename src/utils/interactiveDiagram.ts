@@ -1,10 +1,9 @@
 import { extractPriorityFromText, extractCleanCondition } from './diagramNotes.ts';
 
 /**
- * Compacts an edge label for interactive mode to provide a cleaner layout
- * for complex state machines while keeping priority symbols and indicating interactive expandability.
+ * Formats an edge label for interactive mode while keeping priority symbols and preserving full boolean expressions.
  */
-export function compactLabelForInteractiveMode(rawLabel?: string, maxLen = 24): string {
+export function compactLabelForInteractiveMode(rawLabel?: string, maxLen = 140): string {
   if (!rawLabel) return '';
   const trimmed = rawLabel.trim();
   const prio = extractPriorityFromText(trimmed);
@@ -12,31 +11,20 @@ export function compactLabelForInteractiveMode(rawLabel?: string, maxLen = 24): 
 
   const prioPrefix = prio ? `${prio.symbol} ` : '';
 
-  // If already short, return with subtle expand indicator if appropriate
+  // Preserve the complete boolean condition expression without discarding clauses after AND/OR
   if (clean.length <= maxLen) {
     return `${prioPrefix}${clean}`;
   }
 
-  // Attempt to split by top-level AND/OR to show the primary guard
-  const parts = clean.split(/\s+(?:AND|OR)\s+/i);
-  let base = parts[0].trim();
-  if (base.startsWith('(') && base.endsWith(')')) {
-    base = base.slice(1, -1).trim();
-  }
-
-  if (base.length > maxLen - 4) {
-    base = base.slice(0, maxLen - 4).trim() + '...';
-  } else if (parts.length > 1) {
-    base = `${base} (+${parts.length - 1})`;
-  }
-
-  return `${prioPrefix}${base} ▾`;
+  // Gracefully truncate at limit only if extremely long
+  const truncated = clean.slice(0, maxLen - 3).trim() + '...';
+  return `${prioPrefix}${truncated}`;
 }
 
 /**
- * Transforms Mermaid markdown source by compacting edge labels for interactive mode rendering.
+ * Transforms Mermaid markdown source by preparing edge labels for interactive mode rendering.
  */
-export function createInteractiveMermaidCode(code: string, isCompact = true, maxLen = 24): string {
+export function createInteractiveMermaidCode(code: string, isCompact = true, maxLen = 140): string {
   if (!code || !isCompact) return code;
 
   const isFlowchart = code.includes('flowchart') || code.includes('graph');

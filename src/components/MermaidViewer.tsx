@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback, useImperativeHandle, forwardRef } from 'react';
+import { createPortal } from 'react-dom';
 import mermaid from 'mermaid';
 import elkLayouts from '@mermaid-js/layout-elk';
 import {
@@ -39,6 +40,7 @@ import {
   Loader2,
   ShieldCheck,
   ArrowRight,
+  Target,
 } from 'lucide-react';
 import { DiagramMinimap } from './DiagramMinimap.tsx';
 import { DiagramLegendOverlay } from './DiagramLegendOverlay.tsx';
@@ -186,6 +188,8 @@ export interface MermaidViewerProps {
   layoutLocked?: boolean;
   onLayoutLockedChange?: (locked: boolean) => void;
   onToast?: (message: string, type: 'success' | 'error') => void;
+  toolbarPortalTarget?: HTMLElement | null;
+  onSwitchToDiagramTab?: () => void;
 }
 
 interface ParsedPath {
@@ -330,6 +334,18 @@ function cleanSymbolFromLabel(labelEl: Element, symbol: string) {
  * Avoids any compacting ellipses (...) from interactive rendering modes.
  */
 function getFullGuardCondition(edge: EdgeInfo, labelEl?: Element | null): string {
+  // If edge already has an untruncated condition from diagram source, prefer it
+  if (edge.condition && !edge.condition.endsWith('...') && !edge.condition.endsWith('▾')) {
+    let cand = edge.condition.trim();
+    if (cand && cand !== '->') {
+      const prio = extractPriorityFromText(cand);
+      if (prio && prio.symbol) {
+        cand = cand.replace(prio.symbol, '').trim();
+      }
+      return cand || '(unconditional transition)';
+    }
+  }
+
   let cand = labelEl?.getAttribute('data-condition')?.trim() || '';
   if (!cand || cand.endsWith('...') || cand.endsWith('▾') || cand.endsWith('... ▾')) {
     cand = (edge.condition || edge.guard || edge.label || '').trim();
@@ -388,7 +404,7 @@ function getFullGuardCondition(edge: EdgeInfo, labelEl?: Element | null): string
 function tryExtractGuardFromPou(pouContent: string | undefined, fromState: string, toState: string): string | null {
   if (!pouContent || !fromState || !toState) return null;
   try {
-    const caseRegex = new RegExp(`\\b${fromState}\\s*:[\\s\\S]*?(?=\\n\\s*[A-Za-z0-9_]+\\s*:|END_CASE)`, 'i');
+    const caseRegex = new RegExp(`\\b${fromState}\\s*:[\\s\\S]*?(?=\\n\\s*[A-Za-z0-9_]+\\s*:(?!\\=)|END_CASE)`, 'i');
     const caseMatch = pouContent.match(caseRegex);
     const searchArea = caseMatch ? caseMatch[0] : pouContent;
 
@@ -1323,11 +1339,30 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     layoutLocked: externalLayoutLocked,
     onLayoutLockedChange: onLayoutLockedChangeProp,
     onToast: onToastProp,
+    toolbarPortalTarget,
+    onSwitchToDiagramTab,
   } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeMenuRef = useRef<HTMLDivElement>(null);
+  const codeButtonRef = useRef<HTMLButtonElement>(null);
+  const [codeMenuCoords, setCodeMenuCoords] = useState<{ top: number; left: number }>({ top: 80, left: 100 });
   const [isCodeMenuOpen, setIsCodeMenuOpen] = useState<boolean>(false);
+
+  const updateCodeMenuPosition = useCallback(() => {
+    if (!codeButtonRef.current) return;
+    const rect = codeButtonRef.current.getBoundingClientRect();
+    const menuWidth = 224; // 14rem = 224px
+    let left = rect.left;
+    if (left + menuWidth > window.innerWidth - 8) {
+      left = window.innerWidth - menuWidth - 8;
+    }
+    if (left < 8) left = 8;
+    setCodeMenuCoords({
+      top: rect.bottom + 6,
+      left: Math.round(left),
+    });
+  }, []);
   const [svgContent, setSvgContent] = useState<string>('');
   const [layoutTrigger, setLayoutTrigger] = useState<number>(0);
   const [isAutoAligning, setIsAutoAligning] = useState<boolean>(false);
@@ -1507,13 +1542,40 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (codeMenuRef.current && !codeMenuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        codeButtonRef.current &&
+        !codeButtonRef.current.contains(target) &&
+        codeMenuRef.current &&
+        !codeMenuRef.current.contains(target)
+      ) {
         setIsCodeMenuOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isCodeMenuOpen) {
+        setIsCodeMenuOpen(false);
+      }
+    };
+    const handleReposition = () => {
+      if (isCodeMenuOpen) {
+        updateCodeMenuPosition();
+      }
+    };
+
+    if (isCodeMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('resize', handleReposition);
+      window.addEventListener('scroll', handleReposition, true);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [isCodeMenuOpen, updateCodeMenuPosition]);
 
   // Notes & Edge Selection State
   const [selectedEdge, setSelectedEdge] = useState<EdgeInfo | null>(null);
@@ -1772,74 +1834,297 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     transitions: 0,
   });
 
-  // State jump animation and auto-centering refs
+  // State jump animation, smooth scroll-to and auto-centering refs
   const jumpAttemptTimerRef = useRef<number | null>(null);
   const jumpHighlightTimerRef = useRef<NodeJS.Timeout | null>(null);
   const jumpTransitionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const jumpHighlightedNodeRef = useRef<SVGElement | null>(null);
   const jumpSavedInlineStylesRef = useRef<Array<{
     el: SVGElement;
-    fill: string;
-    stroke: string;
-    strokeWidth: string;
-    fillPriority: string;
-    strokePriority: string;
-    attrFill: string | null;
-    attrStroke: string | null;
-    attrStrokeWidth: string | null;
+    fill?: string;
+    stroke?: string;
+    strokeWidth?: string;
+    fillPriority?: string;
+    strokePriority?: string;
+    attrFill?: string | null;
+    attrStroke?: string | null;
+    attrStrokeWidth?: string | null;
   }> | null>(null);
   const lastPanStateIdRef = useRef<{ id: string; timestamp: number } | null>(null);
   const lastHandledFocusRequestTimestampRef = useRef<number | null>(null);
 
-  const panToElement = (elem: Element) => {
-    if (!containerRef.current) return;
-    const containerRect = containerRef.current.getBoundingClientRect();
-    const elemRect = elem.getBoundingClientRect();
+  // Smooth scroll-to animation for canvas pan, ensuring node is centered in viewport
+  const activePanAnimationRef = useRef<number | null>(null);
+  const currentPanRef = useRef<{ x: number; y: number }>({ x: pan.x, y: pan.y });
+  const zoomRef = useRef<number>(zoom);
+  const lastPanRequestRef = useRef<{ target: Element | string; time: number } | null>(null);
 
-    if (elemRect.width === 0 && elemRect.height === 0) return;
+  useEffect(() => {
+    currentPanRef.current = pan;
+  }, [pan]);
 
-    const wrapper = containerRef.current.querySelector('#mermaid-svg-wrapper') as HTMLElement | null;
-    let currentPanX = pan.x;
-    let currentPanY = pan.y;
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
 
-    if (wrapper) {
-      const transformStr = window.getComputedStyle(wrapper).transform;
-      if (transformStr && transformStr !== 'none') {
-        const matrixMatch = transformStr.match(/matrix\(([^)]+)\)/);
-        if (matrixMatch) {
-          const parts = matrixMatch[1].split(',').map((p) => parseFloat(p.trim()));
-          if (parts.length >= 6 && !isNaN(parts[4]) && !isNaN(parts[5])) {
-            currentPanX = parts[4];
-            currentPanY = parts[5];
+  useEffect(() => {
+    return () => {
+      if (activePanAnimationRef.current) {
+        cancelAnimationFrame(activePanAnimationRef.current);
+        activePanAnimationRef.current = null;
+      }
+    };
+  }, []);
+
+  // Glowing radiant border highlight on target node with expanding radar pulse beacon
+  // Ensures state name and description remain 100% visible, sharp, and clear at all times
+  const triggerNodeJumpHighlight = useCallback((nodeEl: Element) => {
+    if (jumpHighlightedNodeRef.current && jumpHighlightedNodeRef.current !== nodeEl) {
+      jumpHighlightedNodeRef.current.classList.remove('diagram-jump-highlight');
+      jumpHighlightedNodeRef.current.querySelectorAll('.state-jump-border-pulse, .state-jump-border-bg-flash').forEach((s) => {
+        s.classList.remove('state-jump-border-pulse', 'state-jump-border-bg-flash');
+      });
+      jumpHighlightedNodeRef.current.querySelectorAll('.tc-goto-state-beacon').forEach((b) => b.remove());
+      if (jumpSavedInlineStylesRef.current) {
+        jumpSavedInlineStylesRef.current.forEach(
+          ({ el, stroke, strokeWidth, strokePriority, attrStroke, attrStrokeWidth }) => {
+            if (stroke) el.style.setProperty('stroke', stroke, strokePriority);
+            else el.style.removeProperty('stroke');
+            if (strokeWidth) el.style.setProperty('stroke-width', strokeWidth, strokePriority);
+            else el.style.removeProperty('stroke-width');
+            if (attrStroke !== null && attrStroke !== undefined) el.setAttribute('stroke', attrStroke);
+            else el.removeAttribute('stroke');
+            if (attrStrokeWidth !== null && attrStrokeWidth !== undefined) el.setAttribute('stroke-width', attrStrokeWidth);
+            else el.removeAttribute('stroke-width');
           }
-        }
+        );
+        jumpSavedInlineStylesRef.current = null;
       }
     }
 
-    const currentElemCenterX = elemRect.left + elemRect.width / 2;
-    const currentElemCenterY = elemRect.top + elemRect.height / 2;
-    const targetCenterX = containerRect.left + containerRect.width / 2;
-    const targetCenterY = containerRect.top + containerRect.height / 2;
+    // Select only actual background shape elements, strictly avoiding beacon radar rings or text elements
+    const shapes = Array.from(
+      nodeEl.querySelectorAll<SVGElement>(
+        ':scope > rect, :scope > polygon, :scope > circle, :scope > path.basic, :scope > path.label-container, :scope > .label-container, rect.basic, polygon.basic'
+      )
+    ).filter((s) => !s.closest('.tc-goto-state-beacon') && !s.classList.contains('tc-beacon-radar-pulse'));
 
-    const deltaX = targetCenterX - currentElemCenterX;
-    const deltaY = targetCenterY - currentElemCenterY;
+    if (!jumpSavedInlineStylesRef.current || jumpHighlightedNodeRef.current !== nodeEl) {
+      const savedStyles = shapes.map((s) => ({
+        el: s,
+        stroke: s.style.getPropertyValue('stroke'),
+        strokeWidth: s.style.getPropertyValue('stroke-width'),
+        strokePriority: s.style.getPropertyPriority('stroke'),
+        attrStroke: s.getAttribute('stroke'),
+        attrStrokeWidth: s.getAttribute('stroke-width'),
+      }));
+      jumpSavedInlineStylesRef.current = savedStyles;
+    }
 
-    // Apply smooth animated glide on the canvas wrapper via state
-    setCanvasTransition('transform 0.45s cubic-bezier(0.16, 1, 0.3, 1)');
-
-    setPan({
-      x: Math.round(currentPanX + deltaX),
-      y: Math.round(currentPanY + deltaY),
+    // Clear only stroke and stroke-width inline so the pulsing border animation class can take effect.
+    // Interior fill and text styling are deliberately untouched to keep state name and description crisp!
+    shapes.forEach((s) => {
+      s.style.removeProperty('stroke');
+      s.style.removeProperty('stroke-width');
     });
 
-    // Reset transition back to none after glide finishes so drag/zoom remain instant
-    if (jumpTransitionTimerRef.current) {
-      clearTimeout(jumpTransitionTimerRef.current);
+    nodeEl.classList.remove('diagram-jump-highlight');
+    shapes.forEach((s) => s.classList.remove('state-jump-border-pulse', 'state-jump-border-bg-flash'));
+    nodeEl.querySelectorAll('.tc-goto-state-beacon').forEach((b) => b.remove());
+
+    // Force synchronous layout reflow on SVG element so consecutive animations reliably restart from 0%
+    void (nodeEl as SVGGraphicsElement).getBoundingClientRect?.();
+
+    nodeEl.classList.add('diagram-jump-highlight');
+    shapes.forEach((s) => s.classList.add('state-jump-border-pulse'));
+    jumpHighlightedNodeRef.current = nodeEl as SVGElement;
+
+    // Attach expanding beacon pulse radar ring around the node, inserted as FIRST child behind text
+    try {
+      const bbox = (nodeEl as SVGGraphicsElement).getBBox?.();
+      if (bbox && bbox.width > 0 && bbox.height > 0) {
+        const beaconG = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        beaconG.setAttribute('class', 'tc-goto-state-beacon pointer-events-none');
+        beaconG.style.pointerEvents = 'none';
+        const pad = 10;
+        const beaconRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        beaconRect.setAttribute('x', String(bbox.x - pad));
+        beaconRect.setAttribute('y', String(bbox.y - pad));
+        beaconRect.setAttribute('width', String(bbox.width + pad * 2));
+        beaconRect.setAttribute('height', String(bbox.height + pad * 2));
+        beaconRect.setAttribute('rx', '12');
+        beaconRect.setAttribute('ry', '12');
+        beaconRect.setAttribute('fill', 'none');
+        beaconRect.setAttribute('stroke', '#38bdf8');
+        beaconRect.setAttribute('stroke-width', '3.5');
+        beaconRect.setAttribute('class', 'tc-beacon-radar-pulse');
+        beaconRect.style.setProperty('fill', 'none', 'important');
+        beaconRect.style.setProperty('pointer-events', 'none', 'important');
+        beaconG.appendChild(beaconRect);
+
+        // Insert as first child so it is rendered behind the node content and text label!
+        if (nodeEl.firstChild) {
+          nodeEl.insertBefore(beaconG, nodeEl.firstChild);
+        } else {
+          nodeEl.appendChild(beaconG);
+        }
+      }
+    } catch {
+      // getBBox fallback ignored if detached
     }
-    jumpTransitionTimerRef.current = setTimeout(() => {
+
+    if (jumpHighlightTimerRef.current) {
+      clearTimeout(jumpHighlightTimerRef.current);
+    }
+    jumpHighlightTimerRef.current = setTimeout(() => {
+      nodeEl.classList.remove('diagram-jump-highlight');
+      shapes.forEach((s) => s.classList.remove('state-jump-border-pulse', 'state-jump-border-bg-flash'));
+      nodeEl.querySelectorAll('.tc-goto-state-beacon').forEach((b) => b.remove());
+
+      if (jumpSavedInlineStylesRef.current) {
+        jumpSavedInlineStylesRef.current.forEach(
+          ({ el, stroke, strokeWidth, strokePriority, attrStroke, attrStrokeWidth }) => {
+            if (stroke) el.style.setProperty('stroke', stroke, strokePriority);
+            else el.style.removeProperty('stroke');
+            if (strokeWidth) el.style.setProperty('stroke-width', strokeWidth, strokePriority);
+            else el.style.removeProperty('stroke-width');
+            if (attrStroke !== null && attrStroke !== undefined) el.setAttribute('stroke', attrStroke);
+            else el.removeAttribute('stroke');
+            if (attrStrokeWidth !== null && attrStrokeWidth !== undefined) el.setAttribute('stroke-width', attrStrokeWidth);
+            else el.removeAttribute('stroke-width');
+          }
+        );
+        jumpSavedInlineStylesRef.current = null;
+      }
+      if (jumpHighlightedNodeRef.current === nodeEl) {
+        jumpHighlightedNodeRef.current = null;
+      }
+    }, 2500);
+  }, []);
+
+  // Smooth scroll-to animation that glides canvas to center the target element in the viewport
+  const panToElement = useCallback(
+    (
+      elem: Element,
+      options?: { duration?: number; onComplete?: () => void }
+    ) => {
+      if (!containerRef.current) return;
+      const container = containerRef.current;
+      const containerRect = container.getBoundingClientRect();
+
+      let elemRect = elem.getBoundingClientRect();
+      if (elemRect.width === 0 && elemRect.height === 0) {
+        const child = elem.querySelector('rect, polygon, circle, path, foreignObject, text');
+        if (child) {
+          elemRect = child.getBoundingClientRect();
+        }
+      }
+      if (elemRect.width === 0 && elemRect.height === 0) return;
+
+      // Deduplicate calls for the same element within 40ms to avoid re-triggering mid-frame
+      const now = performance.now();
+      if (
+        lastPanRequestRef.current &&
+        lastPanRequestRef.current.target === elem &&
+        now - lastPanRequestRef.current.time < 40 &&
+        activePanAnimationRef.current
+      ) {
+        return;
+      }
+      lastPanRequestRef.current = { target: elem, time: now };
+
+      // Stop any existing animation
+      if (activePanAnimationRef.current) {
+        cancelAnimationFrame(activePanAnimationRef.current);
+        activePanAnimationRef.current = null;
+      }
+
+      const wrapper = container.querySelector('#mermaid-svg-wrapper') as HTMLElement | null;
+      let startX = currentPanRef.current.x;
+      let startY = currentPanRef.current.y;
+
+      // Read current actual rendered position if wrapper was previously transforming
+      if (wrapper) {
+        wrapper.style.transition = 'none';
+        const transformStr = window.getComputedStyle(wrapper).transform;
+        if (transformStr && transformStr !== 'none') {
+          const matrixMatch = transformStr.match(/matrix\(([^)]+)\)/);
+          if (matrixMatch) {
+            const parts = matrixMatch[1].split(',').map((p) => parseFloat(p.trim()));
+            if (parts.length >= 6 && !isNaN(parts[4]) && !isNaN(parts[5])) {
+              startX = parts[4];
+              startY = parts[5];
+              currentPanRef.current = { x: startX, y: startY };
+            }
+          }
+        }
+      }
+
+      // Viewport center
+      const targetCenterX = containerRect.left + containerRect.width / 2;
+      const targetCenterY = containerRect.top + containerRect.height / 2;
+
+      // Current element center in screen viewport
+      const currentElemCenterX = elemRect.left + elemRect.width / 2;
+      const currentElemCenterY = elemRect.top + elemRect.height / 2;
+
+      const deltaX = targetCenterX - currentElemCenterX;
+      const deltaY = targetCenterY - currentElemCenterY;
+
+      const targetX = Math.round(startX + deltaX);
+      const targetY = Math.round(startY + deltaY);
+
+      // If already centered within 2 pixels, just finish
+      if (Math.abs(deltaX) < 2 && Math.abs(deltaY) < 2) {
+        setPan({ x: targetX, y: targetY });
+        currentPanRef.current = { x: targetX, y: targetY };
+        options?.onComplete?.();
+        return;
+      }
+
+      const distance = Math.hypot(deltaX, deltaY);
+      // Dynamic smooth duration: 400ms to 650ms depending on travel distance
+      const duration = options?.duration ?? Math.min(650, Math.max(380, Math.round(distance * 0.38)));
+      const startTime = performance.now();
+
+      // Natural deceleration curve (smooth ease-out with slight quart blend)
+      const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+      const easeOutQuart = (t: number) => 1 - Math.pow(1 - t, 4);
+      const ease = (t: number) => 0.4 * easeOutCubic(t) + 0.6 * easeOutQuart(t);
+
       setCanvasTransition('none');
-    }, 500);
-  };
+
+      const animateStep = (currentTime: number) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(1, elapsed / duration);
+        const eased = ease(progress);
+
+        const curX = startX + (targetX - startX) * eased;
+        const curY = startY + (targetY - startY) * eased;
+
+        currentPanRef.current = { x: curX, y: curY };
+
+        if (wrapper) {
+          wrapper.style.transform = `translate(${curX}px, ${curY}px) scale(${zoomRef.current})`;
+        }
+
+        if (progress < 1) {
+          activePanAnimationRef.current = requestAnimationFrame(animateStep);
+        } else {
+          activePanAnimationRef.current = null;
+          setPan({ x: targetX, y: targetY });
+          currentPanRef.current = { x: targetX, y: targetY };
+          if (wrapper) {
+            wrapper.style.transform = `translate(${targetX}px, ${targetY}px) scale(${zoomRef.current})`;
+          }
+          options?.onComplete?.();
+        }
+      };
+
+      activePanAnimationRef.current = requestAnimationFrame(animateStep);
+    },
+    []
+  );
 
   const clearHighlighting = () => {
     if (!containerRef.current) return;
@@ -2055,6 +2340,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       );
       setActiveMatchIndex(newIdx);
       panToElement(item.element);
+      if (item.element.classList.contains('node') || item.element.closest('g.node')) {
+        const nodeG = (item.element.classList.contains('node') ? item.element : item.element.closest('g.node')) as SVGGElement;
+        if (nodeG) triggerNodeJumpHighlight(nodeG);
+      }
     }
   };
 
@@ -2292,23 +2581,285 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   }, [svgContent, availableEdges, isLayoutLocked, getDiagramSvg]);
 
-  // 2. Synchronize node selection highlight class in SVG
+  // 2. Synchronize node selection and incoming/outgoing edges highlight in SVG
   useEffect(() => {
     if (!containerRef.current) return;
     const svg = getDiagramSvg();
     if (!svg) return;
+
+    // A. Clean up previous state selection & connected edge highlight classes
+    svg.classList.remove('diagram-state-focus-active');
     svg.querySelectorAll('.diagram-selected-node').forEach((el) => {
       el.classList.remove('diagram-selected-node');
     });
-    if (effectiveSelectedStateId) {
-      const target =
-        findNodeElement(svg as SVGSVGElement, effectiveSelectedStateId) ||
-        (svg.querySelector(`g.node[data-state-id="${effectiveSelectedStateId}"]`) as SVGGElement | null);
-      if (target) {
-        target.classList.add('diagram-selected-node');
+    svg.querySelectorAll('.diagram-connected-edge, .diagram-outgoing-edge, .diagram-incoming-edge, .diagram-loop-edge').forEach((el) => {
+      el.classList.remove('diagram-connected-edge', 'diagram-outgoing-edge', 'diagram-incoming-edge', 'diagram-loop-edge');
+    });
+    svg.querySelectorAll('.diagram-connected-edge-label, .diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diagram-loop-edge-label').forEach((el) => {
+      el.classList.remove('diagram-connected-edge-label', 'diagram-outgoing-edge-label', 'diagram-incoming-edge-label', 'diagram-loop-edge-label');
+    });
+    svg.querySelectorAll('.diagram-connected-badge, .diagram-outgoing-badge, .diagram-incoming-badge').forEach((el) => {
+      el.classList.remove('diagram-connected-badge', 'diagram-outgoing-badge', 'diagram-incoming-badge');
+    });
+
+    // Restore original marker-ends if saved
+    svg.querySelectorAll('path[data-prev-marker-end]').forEach((p) => {
+      const orig = p.getAttribute('data-prev-marker-end');
+      if (orig) {
+        p.setAttribute('marker-end', orig);
+      } else {
+        p.removeAttribute('marker-end');
       }
+      p.removeAttribute('data-prev-marker-end');
+    });
+
+    if (!effectiveSelectedStateId) return;
+
+    // B. Highlight selected state node
+    const targetNode =
+      findNodeElement(svg as SVGSVGElement, effectiveSelectedStateId) ||
+      (svg.querySelector(`g.node[data-state-id="${effectiveSelectedStateId}"]`) as SVGGElement | null) ||
+      (svg.querySelector(`g.node[id*="${cleanNodeId(effectiveSelectedStateId)}"]`) as SVGGElement | null);
+    if (targetNode) {
+      targetNode.classList.add('diagram-selected-node');
     }
-  }, [effectiveSelectedStateId, svgContent, getDiagramSvg]);
+
+    // C. Activate state focus mode (softens unconnected edges/labels so transitions stand out)
+    svg.classList.add('diagram-state-focus-active');
+
+    // D. Setup custom markers in <defs> for colored arrowheads
+    let defs = svg.querySelector('defs');
+    if (!defs) {
+      defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      svg.insertBefore(defs, svg.firstChild);
+    }
+    const ensureMarker = (id: string, color: string) => {
+      let marker = defs!.querySelector(`#${id}`) as SVGMarkerElement | null;
+      if (!marker) {
+        marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+        marker.setAttribute('id', id);
+        marker.setAttribute('viewBox', '0 0 10 10');
+        marker.setAttribute('refX', '9');
+        marker.setAttribute('refY', '5');
+        marker.setAttribute('markerWidth', '7');
+        marker.setAttribute('markerHeight', '7');
+        marker.setAttribute('orient', 'auto');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', 'M 0 1.5 L 9 5 L 0 8.5 z');
+        path.setAttribute('fill', color);
+        path.setAttribute('stroke', color);
+        marker.appendChild(path);
+        defs!.appendChild(marker);
+      } else {
+        const path = marker.querySelector('path');
+        if (path) {
+          path.setAttribute('fill', color);
+          path.setAttribute('stroke', color);
+        }
+      }
+    };
+    ensureMarker('tc-marker-outgoing', '#10b981');
+    ensureMarker('tc-marker-incoming', '#818cf8');
+    ensureMarker('tc-marker-loop', '#f59e0b');
+
+    // E. Matching helpers for selected state ID
+    const cleanTargetId = cleanNodeId(effectiveSelectedStateId);
+    const targetLower = cleanTargetId.toLowerCase();
+    const targetSuffix = targetLower.includes('.') ? targetLower.split('.').pop()! : targetLower;
+    const targetAlnum = targetLower.replace(/[^a-z0-9]/g, '');
+
+    const isStateMatch = (candidate: string): boolean => {
+      if (!candidate) return false;
+      const cClean = cleanNodeId(candidate);
+      const cLower = cClean.toLowerCase();
+      const cSuffix = cLower.includes('.') ? cLower.split('.').pop()! : cLower;
+      const cAlnum = cLower.replace(/[^a-z0-9]/g, '');
+      return (
+        cClean === cleanTargetId ||
+        cLower === targetLower ||
+        cSuffix === targetSuffix ||
+        (cAlnum.length > 2 && targetAlnum.length > 2 && cAlnum === targetAlnum) ||
+        candidate === effectiveSelectedStateId ||
+        candidate.toLowerCase() === effectiveSelectedStateId.toLowerCase()
+      );
+    };
+
+    // Filter available edges
+    const outgoingEdges = availableEdges.filter((e) => isStateMatch(e.from));
+    const incomingEdges = availableEdges.filter((e) => isStateMatch(e.to));
+
+    const outgoingEdgeKeys = new Set(outgoingEdges.map((e) => `${cleanNodeId(e.from)}->${cleanNodeId(e.to)}`));
+    const incomingEdgeKeys = new Set(incomingEdges.map((e) => `${cleanNodeId(e.from)}->${cleanNodeId(e.to)}`));
+    const outgoingPathIds = new Set(outgoingEdges.map((e) => e.id || e.pathId).filter(Boolean));
+    const incomingPathIds = new Set(incomingEdges.map((e) => e.id || e.pathId).filter(Boolean));
+
+    // F. Find and highlight all edge paths (lines, arrowheads, hitboxes)
+    const allEdgePaths = Array.from(
+      new Set(
+        Array.from(
+          svg.querySelectorAll<SVGPathElement>(
+            'path.tc-edge-path, g.edgePaths path:not(.tc-edge-hitbox), g.edgePath path:not(.tc-edge-hitbox), path.flowchart-link:not(.tc-edge-hitbox), path.transition:not(.tc-edge-hitbox), g[class*="edge"] path:not(.tc-edge-hitbox)'
+          )
+        ).filter((p) => !p.closest('defs') && !p.closest('marker') && p.getAttribute('d'))
+      )
+    );
+
+    // Pre-resolve path elements from outgoing and incoming edges for 100% reliable matching
+    const outgoingPathElements = new Set<SVGPathElement>();
+    const incomingPathElements = new Set<SVGPathElement>();
+
+    outgoingEdges.forEach((edge) => {
+      const p =
+        findEdgePathElement(svg, edge.id, availableEdges) ||
+        findEdgePathElement(svg, `${edge.from}->${edge.to}`, availableEdges) ||
+        findEdgePathElement(svg, `${cleanNodeId(edge.from)}->${cleanNodeId(edge.to)}`, availableEdges);
+      if (p) {
+        outgoingPathElements.add(p);
+        if (!allEdgePaths.includes(p)) allEdgePaths.push(p);
+      }
+    });
+
+    incomingEdges.forEach((edge) => {
+      const p =
+        findEdgePathElement(svg, edge.id, availableEdges) ||
+        findEdgePathElement(svg, `${edge.from}->${edge.to}`, availableEdges) ||
+        findEdgePathElement(svg, `${cleanNodeId(edge.from)}->${cleanNodeId(edge.to)}`, availableEdges);
+      if (p) {
+        incomingPathElements.add(p);
+        if (!allEdgePaths.includes(p)) allEdgePaths.push(p);
+      }
+    });
+
+    const allEdgeLabels = Array.from(svg.querySelectorAll<SVGGElement>('g.edgeLabel, .edgeLabel'));
+    const allPriorityBadges = Array.from(svg.querySelectorAll<SVGGElement>('.tc-priority-badge'));
+
+    allEdgePaths.forEach((path) => {
+      const pId = path.getAttribute('data-path-id') || path.getAttribute('data-edge-id') || path.getAttribute('id') || '';
+      const srcId = path.getAttribute('data-source-id') || path.getAttribute('data-from') || '';
+      const tgtId = path.getAttribute('data-target-id') || path.getAttribute('data-to') || '';
+      const edgeKey = path.getAttribute('data-edge-key') || `${srcId}->${tgtId}`;
+      const parent = path.parentElement;
+      const classStr = `${path.getAttribute('class') || ''} ${parent?.getAttribute('class') || ''}`;
+
+      let isOutgoing = outgoingPathElements.has(path);
+      let isIncoming = incomingPathElements.has(path);
+
+      // Check data-source-id / data-target-id
+      if (!isOutgoing && isStateMatch(srcId)) isOutgoing = true;
+      if (!isIncoming && isStateMatch(tgtId)) isIncoming = true;
+
+      // Check classes (LS-... LE-...)
+      if (!isOutgoing || !isIncoming) {
+        const lsMatch = classStr.match(/\bLS-([A-Za-z0-9_.-]+)\b/);
+        if (lsMatch && isStateMatch(lsMatch[1])) isOutgoing = true;
+        const leMatch = classStr.match(/\bLE-([A-Za-z0-9_.-]+)\b/);
+        if (leMatch && isStateMatch(leMatch[1])) isIncoming = true;
+      }
+
+      // Check keys and path IDs
+      if (!isOutgoing && (outgoingEdgeKeys.has(edgeKey) || outgoingPathIds.has(pId))) isOutgoing = true;
+      if (!isIncoming && (incomingEdgeKeys.has(edgeKey) || incomingPathIds.has(pId))) isIncoming = true;
+
+      // Fallback: resolveEdgeFromElement
+      if (!isOutgoing && !isIncoming) {
+        const resolved = resolveEdgeFromElement(path, svg, availableEdges);
+        if (resolved) {
+          if (isStateMatch(resolved.from)) isOutgoing = true;
+          if (isStateMatch(resolved.to)) isIncoming = true;
+        }
+      }
+
+      if (isOutgoing || isIncoming) {
+        path.classList.add('diagram-connected-edge');
+
+        // Also highlight matching hitbox
+        const hitbox = parent?.querySelector(`.tc-edge-hitbox[data-path-id="${pId}"], .tc-edge-hitbox[data-edge-id="${pId}"]`) ||
+          parent?.querySelector('.tc-edge-hitbox');
+        hitbox?.classList.add('diagram-connected-edge');
+
+        // Save original marker and apply custom colored arrowhead
+        if (!path.hasAttribute('data-prev-marker-end')) {
+          path.setAttribute('data-prev-marker-end', path.getAttribute('marker-end') || '');
+        }
+
+        if (isOutgoing && isIncoming) {
+          path.classList.add('diagram-loop-edge');
+          hitbox?.classList.add('diagram-loop-edge');
+          path.setAttribute('marker-end', 'url(#tc-marker-loop)');
+        } else if (isOutgoing) {
+          path.classList.add('diagram-outgoing-edge');
+          hitbox?.classList.add('diagram-outgoing-edge');
+          path.setAttribute('marker-end', 'url(#tc-marker-outgoing)');
+        } else if (isIncoming) {
+          path.classList.add('diagram-incoming-edge');
+          hitbox?.classList.add('diagram-incoming-edge');
+          path.setAttribute('marker-end', 'url(#tc-marker-incoming)');
+        }
+
+        // Link edge labels by linked path id, edge id, or from/to state
+        allEdgeLabels.forEach((labelEl) => {
+          const lPid = labelEl.getAttribute('data-linked-path-id');
+          const lEdgeId = labelEl.getAttribute('data-edge-id');
+          const lFrom = labelEl.getAttribute('data-from') || '';
+          const lTo = labelEl.getAttribute('data-to') || '';
+
+          const isLabelForThisPath =
+            (lPid && (lPid === pId || lPid === path.getAttribute('id'))) ||
+            (lEdgeId && (lEdgeId === pId || lEdgeId === path.getAttribute('data-edge-id'))) ||
+            (lFrom && lTo && isStateMatch(lFrom) && (srcId ? isStateMatch(srcId) : true)) ||
+            (lFrom && lTo && isStateMatch(lTo) && (tgtId ? isStateMatch(tgtId) : true));
+
+          if (isLabelForThisPath) {
+            labelEl.classList.add('diagram-connected-edge-label');
+            if (isOutgoing && isIncoming) {
+              labelEl.classList.add('diagram-loop-edge-label');
+            } else if (isOutgoing) {
+              labelEl.classList.add('diagram-outgoing-edge-label');
+            } else if (isIncoming) {
+              labelEl.classList.add('diagram-incoming-edge-label');
+            }
+          }
+        });
+
+        // Link priority badges
+        allPriorityBadges.forEach((badge) => {
+          const bPid = badge.getAttribute('data-path-id') || badge.getAttribute('data-edge-id');
+          const bFrom = badge.getAttribute('data-from') || '';
+          const bTo = badge.getAttribute('data-to') || '';
+          if (bPid === pId || (isOutgoing && isStateMatch(bFrom)) || (isIncoming && isStateMatch(bTo))) {
+            badge.classList.add('diagram-connected-badge');
+            if (isOutgoing) badge.classList.add('diagram-outgoing-badge');
+            if (isIncoming) badge.classList.add('diagram-incoming-badge');
+          }
+        });
+      }
+    });
+
+    // G. Secondary label matching by guard condition text (for labels without explicit data-linked-path-id)
+    allEdgeLabels.forEach((labelEl) => {
+      if (labelEl.classList.contains('diagram-connected-edge-label')) return;
+      const text = labelEl.textContent?.trim() || '';
+      if (!text) return;
+      const isOutLabel = outgoingEdges.some((e) => {
+        const cond = (e.condition || e.label || '').trim();
+        return cond && (text.includes(cond) || cond.includes(text));
+      });
+      const isInLabel = incomingEdges.some((e) => {
+        const cond = (e.condition || e.label || '').trim();
+        return cond && (text.includes(cond) || cond.includes(text));
+      });
+      if (isOutLabel || isInLabel) {
+        labelEl.classList.add('diagram-connected-edge-label');
+        if (isOutLabel && isInLabel) {
+          labelEl.classList.add('diagram-loop-edge-label');
+        } else if (isOutLabel) {
+          labelEl.classList.add('diagram-outgoing-edge-label');
+        } else if (isInLabel) {
+          labelEl.classList.add('diagram-incoming-edge-label');
+        }
+      }
+    });
+  }, [effectiveSelectedStateId, availableEdges, svgContent, getDiagramSvg]);
 
   // 3. Synchronize edge selection highlight and active offsets in SVG
   useEffect(() => {
@@ -2419,111 +2970,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         return;
       }
 
-      // Clean up previously flashing node if different from target
-      if (jumpHighlightedNodeRef.current && jumpHighlightedNodeRef.current !== nodeEl) {
-        jumpHighlightedNodeRef.current.classList.remove('diagram-jump-highlight', 'state-jump-ring-glow');
-        jumpHighlightedNodeRef.current.querySelectorAll('.state-jump-border-bg-flash').forEach((s) => {
-          s.classList.remove('state-jump-border-bg-flash');
-        });
-        jumpHighlightedNodeRef.current.querySelectorAll('.state-jump-div-flash').forEach((d) => {
-          d.classList.remove('state-jump-div-flash');
-        });
-        if (jumpSavedInlineStylesRef.current) {
-          jumpSavedInlineStylesRef.current.forEach(
-            ({ el, fill, stroke, strokeWidth, fillPriority, strokePriority, attrFill, attrStroke, attrStrokeWidth }) => {
-              if (fill) el.style.setProperty('fill', fill, fillPriority);
-              else el.style.removeProperty('fill');
-              if (stroke) el.style.setProperty('stroke', stroke, strokePriority);
-              else el.style.removeProperty('stroke');
-              if (strokeWidth) el.style.setProperty('stroke-width', strokeWidth, strokePriority);
-              else el.style.removeProperty('stroke-width');
-              if (attrFill !== null) el.setAttribute('fill', attrFill);
-              if (attrStroke !== null) el.setAttribute('stroke', attrStroke);
-              if (attrStrokeWidth !== null) el.setAttribute('stroke-width', attrStrokeWidth);
-            }
-          );
-          jumpSavedInlineStylesRef.current = null;
-        }
-      }
-
-      // Collect shapes and inner divs of the target node
-      const shapes = Array.from(nodeEl.querySelectorAll<SVGElement>('rect, polygon, circle, path'));
-      const innerDivs = Array.from(nodeEl.querySelectorAll<HTMLElement>('foreignObject div, div'));
-
-      // Save original styles ONLY if not already saved (e.g. if the same node was re-clicked while flashing)
-      if (!jumpSavedInlineStylesRef.current || jumpHighlightedNodeRef.current !== nodeEl) {
-        const savedStyles = shapes.map((s) => ({
-          el: s,
-          fill: s.style.getPropertyValue('fill'),
-          stroke: s.style.getPropertyValue('stroke'),
-          strokeWidth: s.style.getPropertyValue('stroke-width'),
-          fillPriority: s.style.getPropertyPriority('fill'),
-          strokePriority: s.style.getPropertyPriority('stroke'),
-          attrFill: s.getAttribute('fill'),
-          attrStroke: s.getAttribute('stroke'),
-          attrStrokeWidth: s.getAttribute('stroke-width'),
-        }));
-        jumpSavedInlineStylesRef.current = savedStyles;
-      }
-
-      // Temporarily clear inline fill/stroke and presentation attributes so CSS keyframes for flashing border & background take effect
-      shapes.forEach((s) => {
-        s.style.removeProperty('fill');
-        s.style.removeProperty('stroke');
-        s.style.removeProperty('stroke-width');
-        s.removeAttribute('fill');
-        s.removeAttribute('stroke');
-        s.removeAttribute('stroke-width');
-      });
-
-      // Clear any prior animation classes and force reflow
-      nodeEl.classList.remove('diagram-jump-highlight', 'state-jump-ring-glow');
-      shapes.forEach((s) => s.classList.remove('state-jump-border-bg-flash'));
-      innerDivs.forEach((d) => d.classList.remove('state-jump-div-flash'));
-
-      void (nodeEl as unknown as HTMLElement).offsetWidth; // Force DOM reflow to restart CSS animation
-
-      // Center the node in canvas viewport while in its clean resting position
+      // Center the node in canvas viewport with smooth animated glide and trigger visual highlight animation
       panToElement(nodeEl);
-
-      // Apply the four specific flash & glow CSS classes
-      nodeEl.classList.add('diagram-jump-highlight', 'state-jump-ring-glow');
-      shapes.forEach((s) => s.classList.add('state-jump-border-bg-flash'));
-      innerDivs.forEach((d) => d.classList.add('state-jump-div-flash'));
-      jumpHighlightedNodeRef.current = nodeEl;
-
-      if (jumpHighlightTimerRef.current) {
-        clearTimeout(jumpHighlightTimerRef.current);
-      }
-      jumpHighlightTimerRef.current = setTimeout(() => {
-        nodeEl.classList.remove('diagram-jump-highlight', 'state-jump-ring-glow');
-        shapes.forEach((s) => s.classList.remove('state-jump-border-bg-flash'));
-        innerDivs.forEach((d) => d.classList.remove('state-jump-div-flash'));
-
-        if (jumpSavedInlineStylesRef.current) {
-          jumpSavedInlineStylesRef.current.forEach(
-            ({ el, fill, stroke, strokeWidth, fillPriority, strokePriority, attrFill, attrStroke, attrStrokeWidth }) => {
-              if (fill) el.style.setProperty('fill', fill, fillPriority);
-              else el.style.removeProperty('fill');
-              if (stroke) el.style.setProperty('stroke', stroke, strokePriority);
-              else el.style.removeProperty('stroke');
-              if (strokeWidth) el.style.setProperty('stroke-width', strokeWidth, strokePriority);
-              else el.style.removeProperty('stroke-width');
-              if (attrFill !== null) el.setAttribute('fill', attrFill);
-              if (attrStroke !== null) el.setAttribute('stroke', attrStroke);
-              if (attrStrokeWidth !== null) el.setAttribute('stroke-width', attrStrokeWidth);
-            }
-          );
-          jumpSavedInlineStylesRef.current = null;
-        }
-        if (jumpHighlightedNodeRef.current === nodeEl) {
-          jumpHighlightedNodeRef.current = null;
-        }
-      }, 2500);
+      triggerNodeJumpHighlight(nodeEl);
     };
 
     attempt();
-  }, [getDiagramSvg]);
+  }, [getDiagramSvg, panToElement, triggerNodeJumpHighlight]);
 
   const handleSelectState = (stateId: string | null, label?: string) => {
     if (onSelectStateProp) {
@@ -2566,7 +3019,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         return;
       }
       lastHandledFocusRequestTimestampRef.current = focusStateRequest.timestamp || Date.now();
-      panToState(focusStateRequest.stateId);
+      panToState(focusStateRequest.stateId, focusStateRequest.timestamp);
     }
   }, [focusStateRequest, panToState]);
 
@@ -2644,6 +3097,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (e.button !== 0) return;
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
 
+    // Cancel any active smooth scroll animation immediately on mouse interaction
+    if (activePanAnimationRef.current) {
+      cancelAnimationFrame(activePanAnimationRef.current);
+      activePanAnimationRef.current = null;
+      setPan({ x: Math.round(currentPanRef.current.x), y: Math.round(currentPanRef.current.y) });
+    }
+
     // Reset any active jump transition immediately on mouse interaction
     const wrapper = containerRef.current?.querySelector('#mermaid-svg-wrapper') as HTMLElement | null;
     if (wrapper) {
@@ -2705,10 +3165,18 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     // B. Check if user clicked on a state node
     const nodeEl = (target.closest('g.clickable-state-node') ||
-      target.closest('g.node[data-state-id]')) as SVGGElement | null;
-    if (nodeEl) {
-      const stateId = nodeEl.getAttribute('data-state-id');
-      if (stateId) {
+      target.closest('g.node[data-state-id]') ||
+      target.closest('g.node')) as SVGGElement | null;
+    if (nodeEl && !nodeEl.closest('g.note') && !nodeEl.classList.contains('note')) {
+      let stateId = nodeEl.getAttribute('data-state-id');
+      if (!stateId) {
+        const rawId = nodeEl.getAttribute('id') || '';
+        stateId = cleanNodeId(rawId);
+        if (!stateId && (rawId.includes('root_start') || rawId.includes('startNode'))) {
+          stateId = '[*]';
+        }
+      }
+      if (stateId && !stateId.startsWith('note_')) {
         isDraggingNodeRef.current = true;
         draggedNodeIdRef.current = stateId;
         draggedNodeElRef.current = nodeEl;
@@ -2740,13 +3208,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
     if (clickedEdge && clickedEdge.from && clickedEdge.to && clickedEdge.from.trim() && clickedEdge.to.trim()) {
       setSelectedEdge(clickedEdge);
-      if (effectiveSelectedStateId) {
-        if (onSelectStateProp) {
-          onSelectStateProp(null);
-        } else {
-          setInternalSelectedStateId(null);
-        }
-      }
       if (svg) {
         applyDiagramOffsetsToSvg(
           svg,
@@ -3016,13 +3477,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         const edge = resolveEdgeFromElement(el, svg, availableEdges);
         if (edge && edge.from && edge.to) {
           setSelectedEdge(edge);
-          if (effectiveSelectedStateId) {
-            if (onSelectStateProp) {
-              onSelectStateProp(null);
-            } else {
-              setInternalSelectedStateId(null);
-            }
-          }
           const rect = el.getBoundingClientRect();
           toggleConditionOverlay(edge, {
             x: rect.left + rect.width / 2,
@@ -3095,6 +3549,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         setSelectedEdge(null);
         return;
       }
+
+      // Dragged node -> keep state selected so connected edges remain highlighted
+      if (wasMoved && stateId) {
+        const targetNode = containerRef.current?.querySelector(`g.node[data-state-id="${stateId}"]`);
+        const stateLabel = targetNode?.getAttribute('data-state-label') || stateId;
+        handleSelectState(stateId, stateLabel);
+        setSelectedEdge(null);
+      }
     }
 
     // 3. Released canvas panning
@@ -3137,13 +3599,25 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       }
 
       // Check if user clicked on a state node
-      const nodeEl =
-        target.closest('g.clickable-state-node') || target.closest('g.node[data-state-id]');
-      if (nodeEl) {
-        const stateId = nodeEl.getAttribute('data-state-id');
-        const stateLabel = nodeEl.getAttribute('data-state-label') || stateId || '';
-        if (stateId) {
+      const nodeEl = (target.closest('g.clickable-state-node') ||
+        target.closest('g.node[data-state-id]') ||
+        target.closest('g.node')) as SVGGElement | null;
+      if (nodeEl && !nodeEl.closest('g.note') && !nodeEl.classList.contains('note')) {
+        let stateId = nodeEl.getAttribute('data-state-id');
+        if (!stateId) {
+          const rawId = nodeEl.getAttribute('id') || '';
+          stateId = cleanNodeId(rawId);
+          if (!stateId && (rawId.includes('root_start') || rawId.includes('startNode'))) {
+            stateId = '[*]';
+          }
+        }
+        if (stateId && !stateId.startsWith('note_')) {
+          const stateLabel =
+            nodeEl.getAttribute('data-state-label') ||
+            nodeEl.querySelector('.nodeLabel')?.textContent?.trim() ||
+            stateId;
           handleSelectState(stateId, stateLabel);
+          triggerNodeJumpHighlight(nodeEl);
           setSelectedEdge(null);
           setActiveConditionOverlay(null);
           if (target.closest('.tc-refactor-flag-badge, .tc-complexity-badge')) {
@@ -3181,13 +3655,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           });
         }
 
-        if (effectiveSelectedStateId) {
-          if (onSelectStateProp) {
-            onSelectStateProp(null);
-          } else {
-            setInternalSelectedStateId(null);
-          }
-        }
         if (svg) {
           applyDiagramOffsetsToSvg(
             svg,
@@ -3202,7 +3669,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         return;
       }
 
-      // Clicked on empty canvas background -> deselect edge, close inspector, and close condition overlay
+      // Clicked on empty canvas background -> deselect edge and condition overlay, keep Method Editor open
       setSelectedEdge(null);
       setActiveConditionOverlay(null);
       if (svg) {
@@ -3215,9 +3682,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           layoutEngine,
           flowchartCurve
         );
-      }
-      if (effectiveSelectedStateId || isInspectorOpen) {
-        handleCloseInspector();
       }
     }
   };
@@ -3468,6 +3932,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     ).length;
 
   const handleWheel = (e: React.WheelEvent) => {
+    if (activePanAnimationRef.current) {
+      cancelAnimationFrame(activePanAnimationRef.current);
+      activePanAnimationRef.current = null;
+      setPan({ x: Math.round(currentPanRef.current.x), y: Math.round(currentPanRef.current.y) });
+    }
+
     const target = e.target as HTMLElement | null;
     if (
       target &&
@@ -4001,13 +4471,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const edge = resolveEdgeFromElement(labelOrBadgeEl, svg, availableEdges);
       if (edge && edge.from && edge.to) {
         setSelectedEdge(edge);
-        if (effectiveSelectedStateId) {
-          if (onSelectStateProp) {
-            onSelectStateProp(null);
-          } else {
-            setInternalSelectedStateId(null);
-          }
-        }
         const rect = labelOrBadgeEl.getBoundingClientRect();
         toggleConditionOverlay(edge, {
           x: rect.left + rect.width / 2,
@@ -4017,217 +4480,308 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   };
 
-  return (
+  const toolbarContent = (
     <div
-      id="mermaid-viewer-container"
-      className={`relative flex flex-col w-full h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden ${
-        isFullscreen ? 'fixed inset-0 z-[100] w-screen h-screen rounded-none border-none shadow-2xl' : ''
-      }`}
+      id="mermaid-toolbar"
+      className="relative flex flex-nowrap items-center justify-between gap-1.5 px-1 sm:px-2 py-0.5 text-xs text-slate-300 z-20 shrink-0 w-full overflow-visible"
     >
-      {/* Viewer Header / Toolbar */}
-      <div
-        id="mermaid-toolbar"
-        className="relative flex flex-nowrap items-center justify-between gap-2 px-3 py-1.5 sm:py-2 bg-slate-950/90 border-b border-slate-800 backdrop-blur text-xs text-slate-300 z-20 shrink-0 overflow-x-hidden"
-      >
-        <div className="flex items-center gap-2 min-w-0 shrink-0">
-          {/* Search Input for States and Transitions (Shrunk by default; expands longer when clicked/focused) */}
-          <div
-            id="diagram-search-input-container"
-            className={`relative flex items-center transition-all duration-300 ease-in-out ${
-              isSearchFocused
-                ? 'w-56 xs:w-64 sm:w-80 md:w-96 max-w-[calc(100vw-280px)]'
-                : 'w-28 xs:w-36 sm:w-44 md:w-48'
-            }`}
-          >
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
-            <input
-              ref={searchInputRef}
-              id="diagram-search-input"
-              type="text"
-              value={effectiveSearchQuery}
-              onChange={(e) => {
-                handleSearchChange(e.target.value);
-                if (!isSearchPanelOpen) setIsSearchPanelOpen(true);
-              }}
-              onFocus={() => {
-                setIsSearchFocused(true);
-                if (!isSearchPanelOpen) setIsSearchPanelOpen(true);
-              }}
-              onBlur={(e) => {
-                if (e.relatedTarget && (e.relatedTarget as HTMLElement).closest('#diagram-search-input-container')) {
-                  return;
-                }
-                setIsSearchFocused(false);
-              }}
-              onKeyDown={handleSearchKeyDown}
-              placeholder={isSearchFocused ? 'Search states or transitions... (Ctrl+F)' : 'Search (Ctrl+F)'}
-              className="w-full bg-slate-900/90 border border-slate-700/80 rounded-lg pl-8 pr-16 py-1 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50 transition-all truncate"
-            />
-            {effectiveSearchQuery.trim() && (
-              <div className="absolute right-1.5 flex items-center gap-0.5">
-                <span
-                  id="diagram-search-matches-count"
-                  className={`text-[10px] font-mono px-1.5 py-0.5 rounded border leading-none ${
-                    matches.length > 0
-                      ? 'bg-sky-950/90 text-sky-300 border-sky-800/80'
-                      : 'bg-rose-950/90 text-rose-300 border-rose-800/80'
-                  }`}
-                  title={
-                    matches.length > 0
-                      ? `${matchesBreakdown.states} states, ${matchesBreakdown.transitions} transitions matching`
-                      : 'No matching states or transitions'
-                  }
-                >
-                  {matches.length > 0 ? `${activeMatchIndex + 1}/${matches.length}` : '0 found'}
-                </span>
-
-                {matches.length > 1 && (
-                  <div className="flex items-center">
-                    <button
-                      id="diagram-search-prev-btn"
-                      type="button"
-                      onClick={goToPrevMatch}
-                      className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors"
-                      title="Previous match (Shift+Enter)"
-                    >
-                      <ChevronUp className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      id="diagram-search-next-btn"
-                      type="button"
-                      onClick={goToNextMatch}
-                      className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors"
-                      title="Next match (Enter)"
-                    >
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-
-                <button
-                  id="diagram-search-clear-btn"
-                  type="button"
-                  onClick={clearSearch}
-                  className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors cursor-pointer"
-                  title="Clear search (Esc)"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  id="keyword-search-panel-toggle-button"
-                  type="button"
-                  onClick={() => setIsSearchPanelOpen((prev) => !prev)}
-                  className={`p-0.5 rounded transition-colors cursor-pointer ${
-                    isSearchPanelOpen
-                      ? 'text-amber-400 bg-amber-950/80 hover:bg-amber-900/80'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title={isSearchPanelOpen ? 'Hide Search Results Panel (Ctrl+F)' : 'Show Search Results Panel (Ctrl+F)'}
-                >
-                  <ListFilter className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Right Side: Logically Grouped Toolbar Controls */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* Hidden Controls Menu (Accessible across all monitor sizes; hosts controls moved from toolbar) */}
-          <ToolbarHiddenControls
-            isInteractiveMode={isInteractiveMode}
-            setIsInteractiveMode={setIsInteractiveMode}
-            isCompactLabels={isCompactLabels}
-            setIsCompactLabels={setIsCompactLabels}
-            isInspectorOpen={isInspectorOpen}
-            handleToggleInspector={handleToggleInspector}
-            handleOpenMethodEditor={handleOpenMethodEditor}
-            handleOpenEnumEditor={handleOpenEnumEditor}
-            hasPouContent={Boolean(tcPouContent)}
-            hasDutContent={Boolean(tcDutContent || onOpenEnumEditorProp)}
-            handleAutoAlign={handleAutoAlign}
-            isAutoAligning={isAutoAligning}
-            isLayoutLocked={isLayoutLocked}
-            handleToggleLayoutLocked={handleToggleLayoutLocked}
-            movedElementsCount={movedElementsCount}
-            handleResetLayout={handleResetLayout}
-            totalNotesCount={totalNotesCount}
-            onOpenNotesDrawer={() => setIsNotesDrawerOpen(true)}
-            isMinimapOpen={isMinimapOpen}
-            setIsMinimapOpen={setIsMinimapOpen}
-            isLegendOpen={isLegendOpen}
-            setIsLegendOpen={setIsLegendOpen}
-            isStatsOpen={isStatsOpen}
-            setIsStatsOpen={setIsStatsOpen}
-            isHeatmapActive={isHeatmapActive}
-            setIsHeatmapActive={setIsHeatmapActive}
-            setIsHeatmapPanelOpen={setIsHeatmapPanelOpen}
-            refactorCandidatesCount={complexityHeatmapResult.refactorCandidatesCount}
-            complexityThreshold={complexityThreshold}
-            snapConfig={snapConfig}
-            setSnapConfig={setSnapConfig}
-            setShowSnapToast={setShowSnapToast}
-            zoom={zoom}
-            setZoom={setZoom}
-            handleResetZoom={handleResetZoom}
-            isFullscreen={isFullscreen}
-            toggleFullscreen={toggleFullscreen}
-            isSearchFocused={isSearchFocused}
+      <div className="flex items-center gap-2 min-w-0 shrink-0">
+        {/* Search Input for States and Transitions (Shrunk by default; expands longer when clicked/focused) */}
+        <div
+          id="diagram-search-input-container"
+          className={`relative flex items-center transition-all duration-300 ease-in-out ${
+            isSearchFocused
+              ? 'w-56 xs:w-64 sm:w-80 md:w-96 max-w-[calc(100vw-280px)]'
+              : 'w-28 xs:w-36 sm:w-44 md:w-48'
+          }`}
+        >
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+          <input
+            ref={searchInputRef}
+            id="diagram-search-input"
+            type="text"
+            value={effectiveSearchQuery}
+            onChange={(e) => {
+              handleSearchChange(e.target.value);
+              if (!isSearchPanelOpen) setIsSearchPanelOpen(true);
+            }}
+            onFocus={() => {
+              onSwitchToDiagramTab?.();
+              setIsSearchFocused(true);
+              if (!isSearchPanelOpen) setIsSearchPanelOpen(true);
+            }}
+            onBlur={(e) => {
+              if (e.relatedTarget && (e.relatedTarget as HTMLElement).closest('#diagram-search-input-container')) {
+                return;
+              }
+              setIsSearchFocused(false);
+            }}
+            onKeyDown={handleSearchKeyDown}
+            placeholder={isSearchFocused ? 'Search states or transitions... (Ctrl+F)' : 'Search (Ctrl+F)'}
+            className="w-full bg-slate-900/90 border border-slate-700/80 rounded-lg pl-8 pr-16 py-1 text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50 transition-all truncate"
           />
-          <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
 
-          {/* PRIMARY DIRECT CONTROLS (Hidden into 'Hidden' menu when search input expands) */}
-          {/* Interactive Mode Toggle */}
-          <button
-            id="toggle-interactive-mode-btn"
-            type="button"
-            onClick={() => setIsInteractiveMode((prev) => !prev)}
-            className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-              isSearchFocused ? 'hidden' : 'flex'
-            } ${
-              isInteractiveMode
-                ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/40'
-                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
-            }`}
-            title="Toggle Interactive Mode: Clean compact transition labels with click-to-expand condition details overlay"
-          >
-            <MousePointerClick className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">Interactive</span>
-            <span
-              className={`px-1.5 py-0.2 rounded-full font-bold text-[10px] ${
-                isInteractiveMode
-                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
-                  : 'bg-slate-900 text-slate-400'
-              }`}
+          {/* Quick Search Results Dropdown Menu */}
+          {isSearchFocused && effectiveSearchQuery.trim() && (
+            <div
+              id="diagram-search-results-dropdown"
+              onMouseDown={(e) => {
+                // Prevent input blur before click event fires
+                e.preventDefault();
+              }}
+              className="absolute left-0 top-full mt-1.5 w-full min-w-[280px] sm:min-w-[340px] max-h-72 overflow-y-auto bg-slate-950/95 border border-slate-700/90 rounded-xl shadow-2xl backdrop-blur-md z-50 divide-y divide-slate-800/70 text-xs py-1 animate-in fade-in slide-in-from-top-1 duration-150 custom-scrollbar"
             >
-              {isInteractiveMode ? 'ON' : 'OFF'}
-            </span>
-          </button>
-
-          {/* Consolidated Code Editors Dropdown Menu */}
-          {(tcPouContent || tcDutContent || onOpenEnumEditorProp) && (
-            <div className={`relative ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`} ref={codeMenuRef}>
-              <button
-                id="toolbar-code-editors-dropdown-btn"
-                type="button"
-                onClick={() => setIsCodeMenuOpen((prev) => !prev)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-                  isCodeMenuOpen
-                    ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-400/40'
-                    : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+              {matches.length === 0 ? (
+                <div className="px-3 py-3 text-center text-slate-400 text-xs">
+                  No matching states or transitions found for <span className="font-mono text-amber-300 font-semibold">"{effectiveSearchQuery}"</span>
+                </div>
+              ) : (
+                <>
+                  <div className="px-2.5 py-1 text-[10px] font-medium text-slate-400 flex items-center justify-between bg-slate-900/80">
+                    <span>{matches.length} {matches.length === 1 ? 'match' : 'matches'}</span>
+                    <span className="text-slate-500 font-mono text-[9px]">Click to scroll & center</span>
+                  </div>
+                  {matches.slice(0, 10).map((m, idx) => {
+                    const isActive = idx === activeMatchIndex;
+                    const isState = m.type === 'state';
+                    return (
+                      <button
+                        key={`search-dropdown-item-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          onSwitchToDiagramTab?.();
+                          switchActiveMatch(idx);
+                          if (isState) {
+                            const targetState =
+                              availableStates.find((s) => s.id === m.stateId || s.label === m.name) ||
+                              availableStates.find((s) => m.name.includes(s.id) || m.name.includes(s.label));
+                            if (targetState) {
+                              handleSelectState(targetState.id, targetState.label);
+                            }
+                          } else if (m.edgeInfo) {
+                            setSelectedEdge(m.edgeInfo);
+                          }
+                          panToElement(m.element);
+                          if (m.element.classList.contains('node') || m.element.closest('g.node')) {
+                            const nodeG = (m.element.classList.contains('node') ? m.element : m.element.closest('g.node')) as SVGGElement;
+                            if (nodeG) triggerNodeJumpHighlight(nodeG);
+                          }
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 flex items-center justify-between gap-2 transition-colors cursor-pointer group ${
+                          isActive
+                            ? 'bg-sky-950/80 text-sky-200 font-medium'
+                            : 'text-slate-200 hover:bg-slate-850 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span
+                            className={`px-1 py-0.2 rounded text-[9px] font-mono font-bold shrink-0 ${
+                              isState
+                                ? 'bg-sky-950 border border-sky-800 text-sky-400'
+                                : 'bg-emerald-950 border border-emerald-800 text-emerald-400'
+                            }`}
+                          >
+                            {isState ? 'STATE' : 'TRANS'}
+                          </span>
+                          <span className="truncate font-mono text-xs">
+                            {m.name || m.stateLabel || m.stateId}
+                          </span>
+                        </div>
+                        <Target className="w-3.5 h-3.5 text-slate-500 group-hover:text-amber-400 shrink-0 transition-colors" />
+                      </button>
+                    );
+                  })}
+                  {matches.length > 10 && (
+                    <div className="px-2.5 py-1 text-center text-[10px] text-slate-500 bg-slate-900/40">
+                      +{matches.length - 10} more in Keyword Search Panel
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          {effectiveSearchQuery.trim() && (
+            <div className="absolute right-1.5 flex items-center gap-0.5">
+              <span
+                id="diagram-search-matches-count"
+                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border leading-none ${
+                  matches.length > 0
+                    ? 'bg-sky-950/90 text-sky-300 border-sky-800/80'
+                    : 'bg-rose-950/90 text-rose-300 border-rose-800/80'
                 }`}
-                title="Edit TwinCAT POU Methods (.TcPOU) or State Enum (.TcDUT)"
+                title={
+                  matches.length > 0
+                    ? `${matchesBreakdown.states} states, ${matchesBreakdown.transitions} transitions matching`
+                    : 'No matching states or transitions'
+                }
               >
-                <Code2 className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden md:inline">Edit Code</span>
-                <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isCodeMenuOpen ? 'rotate-180' : ''}`} />
+                {matches.length > 0 ? `${activeMatchIndex + 1}/${matches.length}` : '0 found'}
+              </span>
+
+              {matches.length > 1 && (
+                <div className="flex items-center">
+                  <button
+                    id="diagram-search-prev-btn"
+                    type="button"
+                    onClick={goToPrevMatch}
+                    className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors"
+                    title="Previous match (Shift+Enter)"
+                  >
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    id="diagram-search-next-btn"
+                    type="button"
+                    onClick={goToNextMatch}
+                    className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors"
+                    title="Next match (Enter)"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              <button
+                id="diagram-search-clear-btn"
+                type="button"
+                onClick={clearSearch}
+                className="p-0.5 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded transition-colors cursor-pointer"
+                title="Clear search (Esc)"
+              >
+                <X className="w-3.5 h-3.5" />
               </button>
 
-              {isCodeMenuOpen && (
+              <button
+                id="keyword-search-panel-toggle-button"
+                type="button"
+                onClick={() => setIsSearchPanelOpen((prev) => !prev)}
+                className={`p-0.5 rounded transition-colors cursor-pointer ${
+                  isSearchPanelOpen
+                    ? 'text-amber-400 bg-amber-950/80 hover:bg-amber-900/80'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+                title={isSearchPanelOpen ? 'Hide Search Results Panel (Ctrl+F)' : 'Show Search Results Panel (Ctrl+F)'}
+              >
+                <ListFilter className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Right Side: Logically Grouped Toolbar Controls */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {/* Hidden Controls Menu (Accessible across all monitor sizes; hosts controls moved from toolbar) */}
+        <ToolbarHiddenControls
+          isInteractiveMode={isInteractiveMode}
+          setIsInteractiveMode={setIsInteractiveMode}
+          isCompactLabels={isCompactLabels}
+          setIsCompactLabels={setIsCompactLabels}
+          isInspectorOpen={isInspectorOpen}
+          handleToggleInspector={handleToggleInspector}
+          handleOpenMethodEditor={handleOpenMethodEditor}
+          handleOpenEnumEditor={handleOpenEnumEditor}
+          hasPouContent={Boolean(tcPouContent)}
+          hasDutContent={Boolean(tcDutContent || onOpenEnumEditorProp)}
+          handleAutoAlign={handleAutoAlign}
+          isAutoAligning={isAutoAligning}
+          isLayoutLocked={isLayoutLocked}
+          handleToggleLayoutLocked={handleToggleLayoutLocked}
+          movedElementsCount={movedElementsCount}
+          handleResetLayout={handleResetLayout}
+          totalNotesCount={totalNotesCount}
+          onOpenNotesDrawer={() => setIsNotesDrawerOpen(true)}
+          isMinimapOpen={isMinimapOpen}
+          setIsMinimapOpen={setIsMinimapOpen}
+          isLegendOpen={isLegendOpen}
+          setIsLegendOpen={setIsLegendOpen}
+          isStatsOpen={isStatsOpen}
+          setIsStatsOpen={setIsStatsOpen}
+          isHeatmapActive={isHeatmapActive}
+          setIsHeatmapActive={setIsHeatmapActive}
+          setIsHeatmapPanelOpen={setIsHeatmapPanelOpen}
+          refactorCandidatesCount={complexityHeatmapResult.refactorCandidatesCount}
+          complexityThreshold={complexityThreshold}
+          snapConfig={snapConfig}
+          setSnapConfig={setSnapConfig}
+          setShowSnapToast={setShowSnapToast}
+          zoom={zoom}
+          setZoom={setZoom}
+          handleResetZoom={handleResetZoom}
+          isFullscreen={isFullscreen}
+          toggleFullscreen={toggleFullscreen}
+          isSearchFocused={isSearchFocused}
+        />
+        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
+
+        {/* PRIMARY DIRECT CONTROLS (Hidden into 'Hidden' menu when search input expands) */}
+        {/* Interactive Mode Toggle */}
+        <button
+          id="toggle-interactive-mode-btn"
+          type="button"
+          onClick={() => {
+            onSwitchToDiagramTab?.();
+            setIsInteractiveMode((prev) => !prev);
+          }}
+          className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
+            isSearchFocused ? 'hidden' : 'flex'
+          } ${
+            isInteractiveMode
+              ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/40'
+              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+          }`}
+          title="Toggle Interactive Mode: Clean compact transition labels with click-to-expand condition details overlay"
+        >
+          <MousePointerClick className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden sm:inline">Interactive</span>
+          <span
+            className={`px-1.5 py-0.2 rounded-full font-bold text-[10px] ${
+              isInteractiveMode
+                ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                : 'bg-slate-900 text-slate-400'
+            }`}
+          >
+            {isInteractiveMode ? 'ON' : 'OFF'}
+          </span>
+        </button>
+
+        {/* Consolidated Code Editors Dropdown Menu */}
+        {(tcPouContent || tcDutContent || onOpenEnumEditorProp) && (
+          <div className={`relative ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`}>
+            <button
+              ref={codeButtonRef}
+              id="toolbar-code-editors-dropdown-btn"
+              type="button"
+              onClick={() => {
+                if (!isCodeMenuOpen) {
+                  updateCodeMenuPosition();
+                }
+                setIsCodeMenuOpen((prev) => !prev);
+              }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
+                isCodeMenuOpen
+                  ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-400/40'
+                  : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+              }`}
+              title="Edit TwinCAT POU Methods (.TcPOU) or State Enum (.TcDUT)"
+            >
+              <Code2 className="w-3.5 h-3.5 text-sky-400" />
+              <span className="hidden md:inline">Edit Code</span>
+              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isCodeMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isCodeMenuOpen &&
+              createPortal(
                 <div
+                  ref={codeMenuRef}
                   id="code-editors-dropdown-menu"
-                  className="absolute left-0 top-full mt-1.5 w-52 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1 z-40 text-xs text-slate-200 divide-y divide-slate-800/70"
+                  style={{
+                    position: 'fixed',
+                    top: `${codeMenuCoords.top}px`,
+                    left: `${codeMenuCoords.left}px`,
+                    zIndex: 99999,
+                  }}
+                  className="w-56 bg-slate-900 border border-slate-700/90 rounded-xl shadow-2xl py-1 text-xs text-slate-200 divide-y divide-slate-800/80 backdrop-blur-md animate-in fade-in zoom-in-95 duration-100"
                 >
                   <button
                     id="open-method-editor-btn"
@@ -4262,104 +4816,139 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                       </div>
                     </button>
                   )}
-                </div>
+                </div>,
+                document.body
               )}
-            </div>
-          )}
+          </div>
+        )}
 
-          <div className={`w-[1px] h-4 bg-slate-800 mx-0.5 ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`}></div>
+        <div className={`w-[1px] h-4 bg-slate-800 mx-0.5 ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`}></div>
 
-          {/* Auto-Align Diagram Button */}
+        {/* Auto-Align Diagram Button */}
+        <button
+          id="toolbar-auto-align-btn"
+          type="button"
+          onClick={() => {
+            onSwitchToDiagramTab?.();
+            handleAutoAlign();
+          }}
+          disabled={isAutoAligning || !svgContent}
+          className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
+            isSearchFocused ? 'hidden' : 'hidden sm:flex'
+          } ${
+            isAutoAligning
+              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 ring-1 ring-sky-500/20'
+              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 shadow-xs active:scale-95'
+          }`}
+          title={`Auto-Align (Shortcut: A): Re-runs the ${layoutEngine.toUpperCase()} layout engine to organize all nodes according to flowchart or state diagram logic${
+            isLayoutLocked ? ' (Layout remains locked)' : ''
+          }`}
+        >
+          <Workflow
+            className={`w-3.5 h-3.5 text-sky-400 ${
+              isAutoAligning ? 'animate-spin' : ''
+            }`}
+          />
+          <span className="hidden md:inline">Auto-Align</span>
+        </button>
+
+        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
+
+        {/* GROUP 4: Zoom Navigation */}
+        <div className="flex items-center gap-0.5">
           <button
-            id="toolbar-auto-align-btn"
+            id="zoom-out-button"
             type="button"
-            onClick={handleAutoAlign}
-            disabled={isAutoAligning || !svgContent}
-            className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-              isSearchFocused ? 'hidden' : 'hidden sm:flex'
-            } ${
-              isAutoAligning
-                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 ring-1 ring-sky-500/20'
-                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 shadow-xs active:scale-95'
-            }`}
-            title={`Auto-Align (Shortcut: A): Re-runs the ${layoutEngine.toUpperCase()} layout engine to organize all nodes according to flowchart or state diagram logic${
-              isLayoutLocked ? ' (Layout remains locked)' : ''
-            }`}
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              setZoom((z) => Math.max(0.2, z * 0.85));
+            }}
+            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+            title="Zoom Out"
           >
-            <Workflow
-              className={`w-3.5 h-3.5 text-sky-400 ${
-                isAutoAligning ? 'animate-spin' : ''
-              }`}
-            />
-            <span className="hidden md:inline">Auto-Align</span>
+            <ZoomOut className="w-4 h-4" />
           </button>
+          <span className="px-1 font-mono text-[11px] text-slate-400 select-none hidden xs:inline">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            id="zoom-in-button"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              setZoom((z) => Math.min(5, z * 1.15));
+            }}
+            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+            title="Zoom In"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <button
+            id="zoom-reset-button"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              handleResetZoom();
+            }}
+            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+            title="Reset View"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        </div>
 
-          <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
+        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
 
-          {/* GROUP 4: Zoom Navigation */}
-          <div className="flex items-center gap-0.5">
-            <button
-              id="zoom-out-button"
-              type="button"
-              onClick={() => setZoom((z) => Math.max(0.2, z * 0.85))}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-              title="Zoom Out"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-            <span className="px-1 font-mono text-[11px] text-slate-400 select-none hidden xs:inline">
-              {Math.round(zoom * 100)}%
-            </span>
-            <button
-              id="zoom-in-button"
-              type="button"
-              onClick={() => setZoom((z) => Math.min(5, z * 1.15))}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-              title="Zoom In"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              id="zoom-reset-button"
-              type="button"
-              onClick={handleResetZoom}
-              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-              title="Reset View"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
-
-          {/* GROUP 5: Fullscreen */}
-          <div className="flex items-center gap-1">
-            <button
-              id="fullscreen-button"
-              type="button"
-              onClick={toggleFullscreen}
-              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-                isFullscreen
-                  ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                  : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
-              }`}
-              title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Expand diagram canvas to fill the entire browser window'}
-            >
-              {isFullscreen ? (
-                <>
-                  <Minimize2 className="w-3.5 h-3.5" />
-                  <span className="hidden md:inline">Exit</span>
-                </>
-              ) : (
-                <>
-                  <Maximize2 className="w-3.5 h-3.5" />
-                  <span className="hidden md:inline">Full</span>
-                </>
-              )}
-            </button>
-          </div>
+        {/* GROUP 5: Fullscreen */}
+        <div className="flex items-center gap-1">
+          <button
+            id="fullscreen-button"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              toggleFullscreen();
+            }}
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
+              isFullscreen
+                ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
+                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+            }`}
+            title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Expand diagram canvas to fill the entire browser window'}
+          >
+            {isFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Exit</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Full</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
+    </div>
+  );
+
+  const effectivePortalTarget =
+    toolbarPortalTarget ||
+    (typeof document !== 'undefined' ? document.getElementById('header-toolbar-container') : null);
+
+  return (
+    <div
+      id="mermaid-viewer-container"
+      className={`relative flex flex-col w-full h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden ${
+        isFullscreen ? 'fixed inset-0 z-[100] w-screen h-screen rounded-none border-none shadow-2xl' : ''
+      }`}
+    >
+      {/* If in Fullscreen mode, render toolbar inside fullscreen container. Otherwise portal to 2nd row of header */}
+      {isFullscreen
+        ? toolbarContent
+        : effectivePortalTarget
+        ? createPortal(toolbarContent, effectivePortalTarget)
+        : toolbarContent}
 
       {/* Main Diagram Canvas */}
       <div
@@ -4659,7 +5248,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Visual Badge for Edge Label Guard Condition Expression */}
-        {hoveredEdgeCondition && !activeConditionOverlay && !isInspectorOpen && (
+        {hoveredEdgeCondition && !activeConditionOverlay && (
           <div
             id="edge-guard-condition-hover-badge"
             style={{
@@ -4783,19 +5372,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             availableEdges={availableEdges}
             onSelectState={(id, label) => {
               handleSelectState(id, label);
-              if (id) panToState(id);
             }}
             onSelectEdge={(edge) => {
               setSelectedEdge(edge);
             }}
             onPanToElement={(el) => {
               panToElement(el);
-              el.classList.remove('diagram-jump-highlight');
-              void (el as HTMLElement).offsetWidth;
-              el.classList.add('diagram-jump-highlight');
-              setTimeout(() => {
-                el.classList.remove('diagram-jump-highlight');
-              }, 2200);
+              if (el.classList.contains('node') || el.closest('g.node')) {
+                const nodeG = (el.classList.contains('node') ? el : el.closest('g.node')) as SVGGElement;
+                if (nodeG) triggerNodeJumpHighlight(nodeG);
+              }
             }}
             isStatsOpen={isStatsOpen}
             diagramVersionKey={`${fileName}_${code}_${availableEdges.length}_${availableStates.length}`}
@@ -4803,7 +5389,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Floating State Node Style Inspector */}
-        {isInspectorOpen && effectiveSelectedStateId && (
+        {isInspectorOpen && (
           <StateNodeStyleInspector
             selectedStateId={effectiveSelectedStateId}
             selectedStateLabel={effectiveSelectedStateLabel}

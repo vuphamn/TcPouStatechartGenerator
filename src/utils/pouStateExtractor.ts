@@ -17,6 +17,7 @@ export interface IdentifiedPouState {
   isErrorSink?: boolean; // Whether this represents an error or fault sink state
   enumIndex: number; // Order index from DUT or order of discovery
   lineCount?: number; // Approximate lines of Structured Text code in its branch
+  code?: string; // Structured Text code for this state branch
 }
 
 export interface PouStatesExtractionResult {
@@ -268,6 +269,7 @@ export function extractIdentifiedStatesFromPou(
       isErrorSink: isError,
       enumIndex: orderIndex,
       lineCount: lines,
+      code: info.rawCode || undefined,
     });
   }
 

@@ -69,3 +69,22 @@ export interface SearchMatchItem {
   guard?: string;
   priority?: number;
 }
+
+export interface PresetExportSettings {
+  format: 'png' | 'svg';
+  scale: 1 | 2 | 3 | 4;
+  background: 'dark' | 'white' | 'transparent';
+}
+
+export interface DiagramPreset {
+  id: string;
+  name: string;
+  layoutEngine: 'dagre' | 'elk';
+  flowchartCurve: 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
+  mermaidTheme: 'dark' | 'neutral' | 'forest' | 'base' | 'default';
+  priorityFormat: 'paren' | 'bracket' | 'circled';
+  exportSettings?: PresetExportSettings;
+  isBuiltin?: boolean;
+  description?: string;
+  createdAt?: number;
+}
