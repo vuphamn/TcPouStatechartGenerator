@@ -80,6 +80,7 @@ import {
   triggerDownload,
   ExportFormat,
   ExportScale,
+  ExportBackground,
 } from '../utils/diagramExport.ts';
 import {
   CustomNodeStylesMap,
@@ -89,6 +90,7 @@ import {
   EdgeInfo,
   NotePosition,
   SearchMatchItem,
+  PresetExportSettings,
 } from '../types.ts';
 import { extractStateNodesFromMermaid } from '../utils/nodeStyles.ts';
 import {
@@ -142,6 +144,7 @@ export interface MermaidViewerHandle {
   quickDownloadSvg: (scale?: ExportScale) => Promise<void>;
   quickCopyPng: (scale?: ExportScale) => Promise<{ success: boolean; message: string }>;
   quickCopySvg: () => Promise<{ success: boolean; message: string }>;
+  exportWithSettings: (settings: PresetExportSettings) => Promise<void>;
   printVisiblePdf: () => Promise<void>;
   getActiveSvgElement: () => SVGSVGElement | null;
 }
@@ -151,6 +154,8 @@ export interface MermaidViewerProps {
   layoutEngine?: LayoutEngine;
   flowchartCurve?: FlowchartCurve;
   mermaidTheme?: MermaidTheme;
+  /** Export format, scale & background from the active diagram preset */
+  exportSettings?: PresetExportSettings;
   searchQuery?: string;
   onSearchQueryChange?: (query: string) => void;
   selectedStateId?: string | null;
@@ -1302,6 +1307,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     layoutEngine = 'elk',
     flowchartCurve = 'basis',
     mermaidTheme = 'dark',
+    exportSettings,
     searchQuery: externalSearchQuery,
     onSearchQueryChange,
     selectedStateId: externalSelectedStateId,
@@ -3986,14 +3992,18 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setIsExportModalOpen(true);
   };
 
-  const handleQuickDownloadPng = async (scale: ExportScale = 2) => {
+  // Preset export background wins; otherwise derive from the diagram theme
+  const defaultExportBackground: ExportBackground =
+    exportSettings?.background ?? (mermaidTheme === 'dark' || !mermaidTheme ? 'dark' : 'white');
+
+  const handleQuickDownloadPng = async (scale: ExportScale = 2, background?: ExportBackground) => {
     const svgEl = getActiveSvgElement();
     if (!svgEl) return;
     setExportingNotification(`Exporting ${scale}x PNG...`);
     try {
       const result = await exportHighResPng(svgEl, {
         scale,
-        background: mermaidTheme === 'dark' || !mermaidTheme ? 'dark' : 'white',
+        background: background ?? defaultExportBackground,
         fileName: (fileName || 'statechart').replace(/\.statechart|\.TcPOU/gi, ''),
         notes: effectiveNotes,
         customStyles: effectiveCustomStyles,
@@ -4010,14 +4020,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   };
 
-  const handleQuickDownloadSvg = async (scale: ExportScale = 1) => {
+  const handleQuickDownloadSvg = async (scale: ExportScale = 1, background?: ExportBackground) => {
     const svgEl = getActiveSvgElement();
     if (!svgEl) return;
     setExportingNotification('Exporting vector SVG...');
     try {
       const result = await exportHighResSvg(svgEl, {
         scale,
-        background: mermaidTheme === 'dark' || !mermaidTheme ? 'dark' : 'white',
+        background: background ?? defaultExportBackground,
         fileName: (fileName || 'statechart').replace(/\.statechart|\.TcPOU/gi, ''),
         notes: effectiveNotes,
         customStyles: effectiveCustomStyles,
@@ -4034,7 +4044,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   };
 
-  const handleQuickCopyPng = async (scale: ExportScale = 2): Promise<{ success: boolean; message: string }> => {
+  const handleExportWithSettings = (settings: PresetExportSettings) =>
+    settings.format === 'svg'
+      ? handleQuickDownloadSvg(settings.scale, settings.background)
+      : handleQuickDownloadPng(settings.scale, settings.background);
+
+  const handleQuickCopyPng = async (scale: ExportScale = 2, background?: ExportBackground): Promise<{ success: boolean; message: string }> => {
     const svgEl = getActiveSvgElement();
     if (!svgEl) {
       const msg = 'Diagram SVG element not ready';
@@ -4048,7 +4063,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const res = await copyToClipboard(svgEl, {
         format: 'png',
         scale,
-        background: mermaidTheme === 'dark' || !mermaidTheme ? 'dark' : 'white',
+        background: background ?? defaultExportBackground,
         notes: effectiveNotes,
         customStyles: effectiveCustomStyles,
         theme: mermaidTheme,
@@ -4163,6 +4178,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       quickDownloadSvg: (scale?: ExportScale) => handleQuickDownloadSvg(scale),
       quickCopyPng: (scale?: ExportScale) => handleQuickCopyPng(scale),
       quickCopySvg: () => handleQuickCopySvg(),
+      exportWithSettings: (settings: PresetExportSettings) => handleExportWithSettings(settings),
       printVisiblePdf: () => handlePrintVisiblePdf(),
       getActiveSvgElement: () => getActiveSvgElement(),
     }),
@@ -4175,6 +4191,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       handleQuickDownloadSvg,
       handleQuickCopyPng,
       handleQuickCopySvg,
+      handleExportWithSettings,
       handlePrintVisiblePdf,
       getActiveSvgElement,
     ]
@@ -5567,6 +5584,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           customStyles={effectiveCustomStyles}
           theme={mermaidTheme}
           defaultFormat={exportModalDefaultFormat}
+          defaultScale={exportSettings?.scale}
+          defaultBackground={defaultExportBackground}
           onToast={onToastProp}
         />
 

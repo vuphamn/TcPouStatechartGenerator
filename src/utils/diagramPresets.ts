@@ -98,6 +98,20 @@ export interface DiagramOptionsState {
 }
 
 /**
+ * Returns a preset's export settings, falling back to defaults for legacy presets
+ */
+export function getPresetExportSettings(preset: DiagramPreset): PresetExportSettings {
+  return preset.exportSettings ?? DEFAULT_EXPORT_SETTINGS;
+}
+
+/**
+ * Short human-readable summary of export settings, e.g. "PNG 2x · dark"
+ */
+export function describeExportSettings(settings: PresetExportSettings): string {
+  return `${settings.format.toUpperCase()} ${settings.scale}x · ${settings.background}`;
+}
+
+/**
  * Loads custom user presets from localStorage
  */
 export function loadUserPresets(): DiagramPreset[] {
@@ -189,15 +203,12 @@ export function optionsMatchPreset(preset: DiagramPreset, current: DiagramOption
 
   if (!optionsMatch) return false;
 
-  if (preset.exportSettings && current.exportSettings) {
-    return (
-      preset.exportSettings.scale === current.exportSettings.scale &&
-      preset.exportSettings.format === current.exportSettings.format &&
-      preset.exportSettings.background === current.exportSettings.background
-    );
-  }
-
-  return true;
+  const presetExport = getPresetExportSettings(preset);
+  return (
+    presetExport.scale === current.exportSettings.scale &&
+    presetExport.format === current.exportSettings.format &&
+    presetExport.background === current.exportSettings.background
+  );
 }
 
 /**

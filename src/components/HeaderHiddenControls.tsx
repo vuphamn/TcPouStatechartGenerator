@@ -20,13 +20,14 @@ import {
 } from 'lucide-react';
 import { FlowchartCurve, MermaidTheme } from './MermaidViewer.tsx';
 import { PriorityFormat } from '../generator.ts';
-import { DiagramPreset } from '../types.ts';
+import { DiagramPreset, PresetExportSettings } from '../types.ts';
 import { DiagramOptionsState } from '../utils/diagramPresets.ts';
 import { DiagramPresetManager } from './DiagramPresetManager.tsx';
 
 export interface HeaderHiddenControlsProps {
   currentPresetOptions?: DiagramOptionsState;
   onApplyPreset?: (preset: DiagramPreset) => void;
+  onExportSettingsChange?: (settings: PresetExportSettings) => void;
   flowchartOutput: boolean;
   setFlowchartOutput: (val: boolean) => void;
   collapseErrorSinkEdges: boolean;
@@ -67,6 +68,7 @@ export interface HeaderHiddenControlsProps {
 export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
   currentPresetOptions,
   onApplyPreset,
+  onExportSettingsChange,
   flowchartOutput,
   setFlowchartOutput,
   collapseErrorSinkEdges,
@@ -512,6 +514,7 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
                 <DiagramPresetManager
                   currentOptions={currentPresetOptions}
                   onApplyPreset={onApplyPreset}
+                  onExportSettingsChange={onExportSettingsChange}
                 />
               </div>
             )}

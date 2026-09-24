@@ -28,6 +28,7 @@ import {
   TrendingUp,
   History,
   FileSpreadsheet,
+  Bookmark,
 } from 'lucide-react';
 import { generateStatechart, PriorityFormat } from './generator.ts';
 import { MermaidViewer, MermaidViewerHandle, LayoutEngine, FlowchartCurve, MermaidTheme } from './components/MermaidViewer.tsx';
@@ -47,10 +48,12 @@ import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
 import { getMermaidLiveUrl } from './utils/mermaidLive.ts';
-import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset } from './types.ts';
+import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset, PresetExportSettings } from './types.ts';
 import { DiagramPresetManager } from './components/DiagramPresetManager.tsx';
 import {
   DiagramOptionsState,
+  describeExportSettings,
+  getPresetExportSettings,
   loadActivePresetId,
   loadUserPresets,
   BUILTIN_PRESETS,
@@ -99,6 +102,9 @@ export const App: React.FC = () => {
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
   const [liveUpdate, setLiveUpdate] = useState<boolean>(true);
+  const [exportSettings, setExportSettings] = useState<PresetExportSettings>(() =>
+    getPresetExportSettings(initialPreset)
+  );
 
   // Grouped diagram options state for preset matching and manager
   const currentDiagramOptions: DiagramOptionsState = useMemo(
@@ -107,8 +113,9 @@ export const App: React.FC = () => {
       flowchartCurve,
       mermaidTheme,
       priorityFormat,
+      exportSettings,
     }),
-    [layoutEngine, flowchartCurve, mermaidTheme, priorityFormat]
+    [layoutEngine, flowchartCurve, mermaidTheme, priorityFormat, exportSettings]
   );
 
   const handleApplyPreset = useCallback((preset: DiagramPreset) => {
@@ -116,6 +123,7 @@ export const App: React.FC = () => {
     setFlowchartCurve(preset.flowchartCurve);
     setMermaidTheme(preset.mermaidTheme);
     setPriorityFormat(preset.priorityFormat);
+    setExportSettings(getPresetExportSettings(preset));
   }, []);
 
   // Lock diagram layout toggle: disables automatic re-layout triggered by edits, preserving custom node positions
@@ -813,7 +821,7 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  const handleOpenExportDialog = (format: 'png' | 'svg' = 'png') => {
+  const handleOpenExportDialog = (format: 'png' | 'svg' = exportSettings.format) => {
     setIsExportMenuOpen(false);
     if (activeTab !== 'diagram') {
       setActiveTab('diagram');
@@ -822,6 +830,18 @@ export const App: React.FC = () => {
       }, 50);
     } else {
       mermaidViewerRef.current?.openExportModal(format);
+    }
+  };
+
+  // One-click export using the active preset's format, scale & background
+  const handleExportWithPresetSettings = () => {
+    setIsExportMenuOpen(false);
+    const trigger = () => mermaidViewerRef.current?.exportWithSettings(exportSettings);
+    if (activeTab !== 'diagram') {
+      setActiveTab('diagram');
+      setTimeout(trigger, 50);
+    } else {
+      trigger();
     }
   };
 
@@ -980,6 +1000,7 @@ export const App: React.FC = () => {
           <HeaderHiddenControls
             currentPresetOptions={currentDiagramOptions}
             onApplyPreset={handleApplyPreset}
+            onExportSettingsChange={setExportSettings}
             flowchartOutput={flowchartOutput}
             setFlowchartOutput={setFlowchartOutput}
             collapseErrorSinkEdges={collapseErrorSinkEdges}
@@ -1011,7 +1032,7 @@ export const App: React.FC = () => {
             onCopyMarkdown={handleCopyMarkdown}
             copiedMarkdown={copiedMarkdown}
             onDownload={handleDownload}
-            onOpenExportDialog={() => handleOpenExportDialog('png')}
+            onOpenExportDialog={() => handleOpenExportDialog()}
           />
 
           <div className="h-4 sm:h-5 w-[1px] bg-slate-800 mx-0.5 shrink-0"></div>
@@ -1117,7 +1138,7 @@ export const App: React.FC = () => {
                   <button
                     id="dropdown-open-modal-btn"
                     type="button"
-                    onClick={() => handleOpenExportDialog('png')}
+                    onClick={() => handleOpenExportDialog()}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-800 text-sky-400 font-medium transition-colors cursor-pointer"
                   >
                     <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
@@ -1125,6 +1146,21 @@ export const App: React.FC = () => {
                       <div className="text-white text-xs">High-Res Export Dialog...</div>
                       <div className="text-[10px] text-slate-400">Custom scale (1x-4x), background & DPI</div>
                     </div>
+                  </button>
+                  <button
+                    id="dropdown-export-preset-btn"
+                    type="button"
+                    onClick={handleExportWithPresetSettings}
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    title="Download using the export format, scale and background saved in the active preset"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Bookmark className="w-3.5 h-3.5 text-sky-400" />
+                      Export with Preset
+                    </span>
+                    <span className="text-[10px] font-mono text-sky-300 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">
+                      {describeExportSettings(exportSettings)}
+                    </span>
                   </button>
                 </div>
                 <div className="py-1">
@@ -1297,6 +1333,7 @@ export const App: React.FC = () => {
             <DiagramPresetManager
               currentOptions={currentDiagramOptions}
               onApplyPreset={handleApplyPreset}
+              onExportSettingsChange={setExportSettings}
             />
           </div>
 
@@ -1777,6 +1814,7 @@ export const App: React.FC = () => {
                 layoutEngine={layoutEngine}
                 flowchartCurve={flowchartCurve}
                 mermaidTheme={mermaidTheme}
+                exportSettings={exportSettings}
                 searchQuery={diagramSearchQuery}
                 onSearchQueryChange={setDiagramSearchQuery}
                 selectedStateId={selectedStateId}

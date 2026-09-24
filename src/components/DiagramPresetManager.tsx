@@ -11,9 +11,9 @@ import {
   Sparkles,
   Layers,
   X,
+  Download,
 } from 'lucide-react';
-import { DiagramPreset } from '../types.ts';
-import { LayoutEngine, FlowchartCurve, MermaidTheme } from './MermaidViewer.tsx';
+import { DiagramPreset, PresetExportSettings } from '../types.ts';
 import { PriorityFormat } from '../generator.ts';
 import {
   DiagramOptionsState,
@@ -23,16 +23,105 @@ import {
   loadActivePresetId,
   saveActivePresetId,
   optionsMatchPreset,
+  getPresetExportSettings,
+  describeExportSettings,
 } from '../utils/diagramPresets.ts';
 
 interface DiagramPresetManagerProps {
   currentOptions: DiagramOptionsState;
   onApplyPreset: (preset: DiagramPreset) => void;
+  /** When provided, export settings can be customized live from the presets dropdown */
+  onExportSettingsChange?: (settings: PresetExportSettings) => void;
 }
+
+const EXPORT_FORMAT_OPTIONS: { value: PresetExportSettings['format']; label: string }[] = [
+  { value: 'png', label: 'PNG' },
+  { value: 'svg', label: 'SVG' },
+];
+const EXPORT_SCALE_OPTIONS: { value: PresetExportSettings['scale']; label: string }[] = [
+  { value: 1, label: '1x' },
+  { value: 2, label: '2x' },
+  { value: 3, label: '3x' },
+  { value: 4, label: '4x' },
+];
+const EXPORT_BACKGROUND_OPTIONS: { value: PresetExportSettings['background']; label: string }[] = [
+  { value: 'dark', label: 'Dark' },
+  { value: 'white', label: 'White' },
+  { value: 'transparent', label: 'Transparent' },
+];
+
+interface SegmentedFieldProps<T extends string | number> {
+  label: string;
+  idPrefix: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}
+
+function SegmentedField<T extends string | number>({ label, idPrefix, options, value, onChange }: SegmentedFieldProps<T>) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-slate-400 text-[11px]">{label}</span>
+      <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[10px]" role="radiogroup" aria-label={label}>
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            id={`${idPrefix}-${opt.value}`}
+            type="button"
+            role="radio"
+            aria-checked={value === opt.value}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(opt.value);
+            }}
+            className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+              value === opt.value ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface ExportSettingsFieldsProps {
+  idPrefix: string;
+  value: PresetExportSettings;
+  onChange: (settings: PresetExportSettings) => void;
+}
+
+const ExportSettingsFields: React.FC<ExportSettingsFieldsProps> = ({ idPrefix, value, onChange }) => (
+  <div className="space-y-1.5">
+    <SegmentedField
+      label="Format"
+      idPrefix={`${idPrefix}-format`}
+      options={EXPORT_FORMAT_OPTIONS}
+      value={value.format}
+      onChange={(format) => onChange({ ...value, format })}
+    />
+    <SegmentedField
+      label="Scale"
+      idPrefix={`${idPrefix}-scale`}
+      options={EXPORT_SCALE_OPTIONS}
+      value={value.scale}
+      onChange={(scale) => onChange({ ...value, scale })}
+    />
+    <SegmentedField
+      label="Background"
+      idPrefix={`${idPrefix}-background`}
+      options={EXPORT_BACKGROUND_OPTIONS}
+      value={value.background}
+      onChange={(background) => onChange({ ...value, background })}
+    />
+  </div>
+);
 
 export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
   currentOptions,
   onApplyPreset,
+  onExportSettingsChange,
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [userPresets, setUserPresets] = useState<DiagramPreset[]>(() => loadUserPresets());
@@ -42,6 +131,7 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
   const [newPresetName, setNewPresetName] = useState<string>('');
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
+  const [draftExportSettings, setDraftExportSettings] = useState<PresetExportSettings>(currentOptions.exportSettings);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -127,6 +217,7 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
       const engineLabel = currentOptions.layoutEngine.toUpperCase();
       setNewPresetName(`Custom ${engineLabel} ${themeLabel}`);
     }
+    setDraftExportSettings(currentOptions.exportSettings);
     setIsSaveModalOpen(true);
     setIsOpen(false);
   }, [currentOptions]);
@@ -137,46 +228,42 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
     const trimmed = newPresetName.trim();
     if (!trimmed) return;
 
+    const savedOptions = {
+      layoutEngine: currentOptions.layoutEngine,
+      flowchartCurve: currentOptions.flowchartCurve,
+      mermaidTheme: currentOptions.mermaidTheme,
+      priorityFormat: currentOptions.priorityFormat,
+      exportSettings: draftExportSettings,
+    };
+    const description = `Custom preset: ${savedOptions.layoutEngine.toUpperCase()} engine, ${savedOptions.flowchartCurve} curve, ${savedOptions.mermaidTheme} theme, ${savedOptions.priorityFormat} priorities, ${describeExportSettings(draftExportSettings)} export.`;
+
+    let savedPreset: DiagramPreset;
+    let updated: DiagramPreset[];
     if (editingPresetId) {
       // Update existing preset
-      const updated = userPresets.map((p) => {
-        if (p.id === editingPresetId) {
-          return {
-            ...p,
-            name: trimmed,
-            layoutEngine: currentOptions.layoutEngine,
-            flowchartCurve: currentOptions.flowchartCurve,
-            mermaidTheme: currentOptions.mermaidTheme,
-            priorityFormat: currentOptions.priorityFormat,
-          };
-        }
-        return p;
-      });
-      setUserPresets(updated);
-      saveUserPresets(updated);
-      setActivePresetId(editingPresetId);
-      saveActivePresetId(editingPresetId);
+      const existing = userPresets.find((p) => p.id === editingPresetId);
+      savedPreset = { ...existing!, ...savedOptions, name: trimmed, description };
+      updated = userPresets.map((p) => (p.id === editingPresetId ? savedPreset : p));
       setSaveSuccessNotice(`Preset "${trimmed}" updated!`);
     } else {
       // Create new preset
-      const newPreset: DiagramPreset = {
+      savedPreset = {
         id: `user-preset-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: trimmed,
-        layoutEngine: currentOptions.layoutEngine,
-        flowchartCurve: currentOptions.flowchartCurve,
-        mermaidTheme: currentOptions.mermaidTheme,
-        priorityFormat: currentOptions.priorityFormat,
+        ...savedOptions,
         isBuiltin: false,
         createdAt: Date.now(),
-        description: `Custom preset: ${currentOptions.layoutEngine.toUpperCase()} engine, ${currentOptions.flowchartCurve} curve, ${currentOptions.mermaidTheme} theme, ${currentOptions.priorityFormat} priorities.`,
+        description,
       };
-      const updated = [newPreset, ...userPresets];
-      setUserPresets(updated);
-      saveUserPresets(updated);
-      setActivePresetId(newPreset.id);
-      saveActivePresetId(newPreset.id);
+      updated = [savedPreset, ...userPresets];
       setSaveSuccessNotice(`Preset "${trimmed}" saved to localStorage!`);
     }
+    setUserPresets(updated);
+    saveUserPresets(updated);
+    setActivePresetId(savedPreset.id);
+    saveActivePresetId(savedPreset.id);
+    // Export settings may have been customized in the dialog; apply so the app matches the saved preset
+    onApplyPreset(savedPreset);
 
     setIsSaveModalOpen(false);
     setTimeout(() => {
@@ -194,6 +281,7 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
           flowchartCurve: currentOptions.flowchartCurve,
           mermaidTheme: currentOptions.mermaidTheme,
           priorityFormat: currentOptions.priorityFormat,
+          exportSettings: currentOptions.exportSettings,
         };
       }
       return p;
@@ -250,7 +338,7 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
               ? 'bg-sky-600 text-white shadow-sm'
               : 'text-slate-300 hover:text-white hover:bg-slate-900/90'
           }`}
-          title="Diagram Presets: Quickly toggle or save layout engine, curve interpolation, theme & priority format"
+          title="Diagram Presets: Quickly toggle or save layout engine, curve interpolation, theme, priority format & export settings"
           aria-expanded={isOpen}
           aria-haspopup="true"
         >
@@ -277,7 +365,7 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
           type="button"
           onClick={() => handleOpenSaveDialog()}
           className="flex items-center gap-1 px-1.5 py-1 text-slate-400 hover:text-sky-300 hover:bg-slate-800 rounded transition-colors ml-0.5"
-          title="Save current Diagram options (layout engine, curve, theme, priority format) as a User Preset"
+          title="Save current Diagram options (layout engine, curve, theme, priority format, export settings) as a User Preset"
         >
           <Plus className="w-3 h-3 text-sky-400" />
           <span className="hidden xl:inline text-[10px]">Save</span>
@@ -309,6 +397,24 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
               {userPresets.length} Custom · {BUILTIN_PRESETS.length} Built-in
             </span>
           </div>
+
+          {/* Current Export Settings (customizable, saved with presets) */}
+          {onExportSettingsChange && (
+            <div id="preset-export-settings-section" className="px-3 py-2 border-b border-slate-800/80 space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] font-semibold text-sky-400 tracking-wider uppercase">
+                <span className="flex items-center gap-1">
+                  <Download className="w-3 h-3" />
+                  Export Settings
+                </span>
+                <span className="font-normal normal-case text-slate-500 tracking-normal">saved with preset</span>
+              </div>
+              <ExportSettingsFields
+                idPrefix="preset-dropdown-export"
+                value={currentOptions.exportSettings}
+                onChange={onExportSettingsChange}
+              />
+            </div>
+          )}
 
           {/* User Presets Section */}
           <div className="py-1">
@@ -363,6 +469,10 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
                         </div>
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">
                           {preset.layoutEngine.toUpperCase()} · {preset.flowchartCurve} · {preset.mermaidTheme} · {getPriorityDisplay(preset.priorityFormat)}
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-sky-300/80 mt-0.5">
+                          <Download className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">{describeExportSettings(getPresetExportSettings(preset))}</span>
                         </div>
                       </div>
 
@@ -449,6 +559,10 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
                       </div>
                       <div className="text-[10px] text-slate-400 truncate mt-0.5">
                         {preset.layoutEngine.toUpperCase()} · {preset.flowchartCurve} · {preset.mermaidTheme} · {getPriorityDisplay(preset.priorityFormat)}
+                      </div>
+                      <div className="flex items-center gap-1 text-[10px] text-sky-300/80 mt-0.5">
+                        <Download className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate">{describeExportSettings(getPresetExportSettings(preset))}</span>
                       </div>
                     </div>
                   </div>
@@ -554,6 +668,25 @@ export const DiagramPresetManager: React.FC<DiagramPresetManagerProps> = ({
                 </div>
                 <p className="text-[10px] text-slate-500 leading-tight">
                   This preset is saved to your browser&apos;s localStorage and can be recalled anytime with one click.
+                </p>
+              </div>
+
+              {/* Export settings saved in this preset (editable) */}
+              <div id="save-preset-export-settings" className="bg-slate-950/80 border border-slate-800/80 rounded-lg p-3 text-xs space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Download className="w-3 h-3 text-sky-400" />
+                    Export Settings
+                  </span>
+                  <span className="text-[10px] font-mono text-sky-300">{describeExportSettings(draftExportSettings)}</span>
+                </div>
+                <ExportSettingsFields
+                  idPrefix="save-preset-export"
+                  value={draftExportSettings}
+                  onChange={setDraftExportSettings}
+                />
+                <p className="text-[10px] text-slate-500 leading-tight">
+                  Used by &quot;Export with Preset&quot; and as the defaults for the High-Res Export dialog.
                 </p>
               </div>
 
