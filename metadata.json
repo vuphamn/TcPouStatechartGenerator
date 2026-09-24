@@ -1,0 +1,6 @@
+{
+  "name": "TcPouStatechartGenerator",
+  "description": "Generates Mermaid stateDiagram-v2 and flowchart diagrams from Beckhoff TwinCAT PLC state machines (.TcPOU and .TcDUT files).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

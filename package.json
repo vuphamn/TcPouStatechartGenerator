@@ -1,0 +1,69 @@
+{
+  "name": "tcpoustatechartgenerator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "build": "tsc && vite build",
+    "lint": "tsc --noEmit",
+    "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "electron:dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .",
+    "build:exe": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.tcstatechart.generator",
+    "productName": "TcPouStatechartGenerator",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "dependencies": {
+    "@mermaid-js/layout-elk": "^1.0.0",
+    "@xmldom/xmldom": "^0.9.12",
+    "d3": "^7.9.0",
+    "html2canvas": "^1.4.1",
+    "html2canvas-pro": "^2.4.5",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^1.16.0",
+    "mermaid": "^11.4.1",
+    "pako": "^2.1.0",
+    "prismjs": "^1.30.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/d3": "^7.4.3",
+    "@types/jsdom": "^30.0.0",
+    "@types/pako": "^2.0.3",
+    "@types/prismjs": "^1.26.6",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^10.1.0",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^30.0.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}

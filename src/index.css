@@ -1,0 +1,755 @@
+@import "tailwindcss";
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+}
+
+/* Diagram Search Highlighting */
+.diagram-search-active .node,
+.diagram-search-active .edgePath,
+.diagram-search-active .edgeLabel,
+.diagram-search-active .tc-priority-badge {
+  opacity: 0.15;
+  transition: opacity 0.2s ease, stroke 0.2s ease, filter 0.2s ease;
+}
+
+/* Matching States (Nodes) */
+.diagram-search-active .node.diagram-match-node {
+  opacity: 1 !important;
+}
+.diagram-search-active .node.diagram-match-node rect,
+.diagram-search-active .node.diagram-match-node polygon,
+.diagram-search-active .node.diagram-match-node circle,
+.diagram-search-active .node.diagram-match-node path {
+  stroke: #38bdf8 !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.75)) !important;
+}
+.diagram-search-active .node.diagram-match-node .nodeLabel,
+.diagram-search-active .node.diagram-match-node span,
+.diagram-search-active .node.diagram-match-node p {
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+/* Matching Transitions (Edge Labels) */
+.diagram-search-active .edgeLabel.diagram-match-edge {
+  opacity: 1 !important;
+}
+.diagram-search-active .edgeLabel.diagram-match-edge .labelBkg,
+.diagram-search-active .edgeLabel.diagram-match-edge .edgeLabel {
+  background: rgba(14, 165, 233, 0.35) !important;
+  border: 1.5px solid #38bdf8 !important;
+  border-radius: 4px;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.7) !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+/* Matching Transitions (Edge Paths) */
+.diagram-search-active .edgePath path.diagram-match-path,
+.diagram-search-active path.diagram-match-path {
+  opacity: 1 !important;
+  stroke: #38bdf8 !important;
+  stroke-width: 3.5px !important;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.8)) !important;
+}
+.diagram-search-active .tc-priority-badge.diagram-match-path {
+  opacity: 1 !important;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.8)) !important;
+}
+
+/* Currently Focused / Active Match (Golden Amber glow) */
+.diagram-search-active .node.diagram-match-node.diagram-match-active rect,
+.diagram-search-active .node.diagram-match-node.diagram-match-active polygon,
+.diagram-search-active .node.diagram-match-node.diagram-match-active circle,
+.diagram-search-active .node.diagram-match-node.diagram-match-active path {
+  stroke: #f59e0b !important;
+  stroke-width: 4px !important;
+  filter: drop-shadow(0 0 18px rgba(245, 158, 11, 0.95)) !important;
+}
+.diagram-search-active .edgeLabel.diagram-match-edge.diagram-match-active .labelBkg,
+.diagram-search-active .edgeLabel.diagram-match-edge.diagram-match-active .edgeLabel {
+  background: rgba(245, 158, 11, 0.45) !important;
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.95) !important;
+}
+.diagram-search-active .edgePath path.diagram-match-path.diagram-match-active,
+.diagram-search-active path.diagram-match-path.diagram-match-active {
+  stroke: #f59e0b !important;
+  stroke-width: 4.5px !important;
+  filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.95)) !important;
+}
+.diagram-search-active .tc-priority-badge.diagram-match-path.diagram-match-active {
+  filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.95)) !important;
+}
+.diagram-search-active .tc-priority-badge.diagram-match-path.diagram-match-active circle {
+  stroke: #f59e0b !important;
+}
+
+/* Custom Scrollbar for Code Views */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #090d16;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* Prism Syntax Highlighting for Mermaid & Markdown */
+.prism-code {
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.prism-code .token.keyword {
+  color: #38bdf8; /* sky-400 */
+  font-weight: 600;
+}
+
+.prism-code .token.arrow,
+.prism-code .token.operator {
+  color: #fbbf24; /* amber-400 */
+  font-weight: 600;
+}
+
+.prism-code .token.label,
+.prism-code .token.property {
+  color: #34d399; /* emerald-400 */
+  font-weight: 500;
+}
+
+.prism-code .token.string,
+.prism-code .token.text {
+  color: #a7f3d0; /* emerald-200 */
+}
+
+.prism-code .token.comment {
+  color: #64748b; /* slate-500 */
+  font-style: italic;
+}
+
+.prism-code .token.punctuation {
+  color: #94a3b8; /* slate-400 */
+}
+
+.prism-code .token.style {
+  color: #c084fc; /* purple-400 */
+}
+
+.prism-code .token.number {
+  color: #fb923c; /* orange-400 */
+}
+
+.prism-code .token.class-name,
+.prism-code .token.function {
+  color: #818cf8; /* indigo-400 */
+}
+
+.prism-code .token.title,
+.prism-code .token.important {
+  color: #60a5fa; /* blue-400 */
+  font-weight: 700;
+}
+
+/* Structured Text (IEC 61131-3) Syntax Highlighting */
+.token.comment,
+.token.block-comment {
+  color: #64748b !important; /* slate-500 */
+  font-style: italic !important;
+}
+
+.token.keyword {
+  color: #38bdf8 !important; /* sky-400 */
+  font-weight: 600 !important;
+}
+
+.token.class-name {
+  color: #2dd4bf !important; /* teal-400 (types like BOOL, DINT, REAL, etc.) */
+  font-weight: 600 !important;
+}
+
+.token.boolean {
+  color: #fb923c !important; /* orange-400 (TRUE, FALSE) */
+  font-weight: 600 !important;
+}
+
+.token.number {
+  color: #facc15 !important; /* amber-400 */
+}
+
+.token.string {
+  color: #4ade80 !important; /* emerald-400 */
+}
+
+.token.operator {
+  color: #38bdf8 !important; /* sky-400 (:=, =, etc.) */
+}
+
+.token.punctuation {
+  color: #94a3b8 !important; /* slate-400 */
+}
+
+.token.function {
+  color: #818cf8 !important; /* indigo-400 */
+}
+
+.token.case-label {
+  color: #f59e0b !important; /* amber-500 */
+}
+
+.token.case-identifier {
+  color: #f59e0b !important; /* amber-400 */
+  font-weight: 700 !important;
+  text-shadow: 0 0 6px rgba(245, 158, 11, 0.35);
+}
+
+/* Identified State Selection Pulse Animation */
+@keyframes stateSelectedPulseAnimation {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.8), 0 0 12px rgba(56, 189, 248, 0.4);
+    border-color: #38bdf8;
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.25), 0 0 20px rgba(56, 189, 248, 0.6);
+    border-color: #38bdf8;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0), 0 0 12px rgba(56, 189, 248, 0.15);
+  }
+}
+
+.state-selected-pulse {
+  animation: stateSelectedPulseAnimation 1.5s ease-out;
+}
+
+/* Clickable & Draggable State Nodes */
+.clickable-state-node {
+  cursor: grab !important;
+  transition: filter 0.15s ease-in-out;
+}
+
+.clickable-state-node:hover > rect,
+.clickable-state-node:hover > polygon,
+.clickable-state-node:hover > circle,
+.clickable-state-node:hover > path.basic {
+  filter: brightness(1.15) drop-shadow(0 2px 8px rgba(56, 189, 248, 0.45));
+}
+
+/* Actively Dragged State Node */
+.clickable-state-node.dragging-state-node {
+  cursor: grabbing !important;
+  opacity: 0.95;
+}
+
+.clickable-state-node.dragging-state-node > rect,
+.clickable-state-node.dragging-state-node > polygon,
+.clickable-state-node.dragging-state-node > circle,
+.clickable-state-node.dragging-state-node > path.basic {
+  filter: brightness(1.22) drop-shadow(0 12px 28px rgba(0, 0, 0, 0.65)) !important;
+}
+
+/* Selected State Node (Active Inspector Selection) */
+.diagram-selected-node > rect,
+.diagram-selected-node > polygon,
+.diagram-selected-node > circle,
+.diagram-selected-node > path.basic {
+  stroke: #38bdf8 !important;
+  stroke-width: 3.5px !important;
+  stroke-dasharray: 6 3;
+  animation: selected-node-ring-spin 3s linear infinite;
+  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.85)) !important;
+}
+
+@keyframes selected-node-ring-spin {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+/* Interactive & Draggable Transitions/Edges */
+.tc-edge-path {
+  cursor: pointer;
+  transition: stroke 0.15s ease, filter 0.15s ease;
+}
+
+.tc-edge-hitbox {
+  cursor: grab;
+  pointer-events: stroke;
+}
+
+.tc-edge-hitbox:hover + .tc-edge-path,
+.tc-edge-path:hover {
+  stroke: #38bdf8 !important;
+  stroke-width: 2.2px !important;
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
+}
+
+/* Selected Edge State */
+.tc-edge-path.selected-edge,
+.tc-edge-path.diagram-selected-edge {
+  stroke: #38bdf8 !important;
+  stroke-width: 3.5px !important;
+  stroke-dasharray: 6 3;
+  animation: selected-edge-dash-spin 3s linear infinite;
+  filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.95)) !important;
+}
+
+@keyframes selected-edge-dash-spin {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+
+.clickable-edge-label {
+  cursor: pointer !important;
+}
+
+.clickable-edge-label:hover rect,
+.clickable-edge-label:hover span,
+.clickable-edge-label:hover .labelBkg {
+  outline: 1.5px solid #38bdf8 !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.diagram-selected-edge-label rect,
+.diagram-selected-edge-label span,
+.diagram-selected-edge-label .labelBkg {
+  outline: 2px solid #38bdf8 !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.8) !important;
+  border-radius: 4px;
+}
+
+/* Interactive Edge Labels & Transition Guard Details */
+.tc-interactive-edge-label {
+  cursor: pointer !important;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.tc-interactive-edge-label:hover {
+  filter: drop-shadow(0 2px 6px rgba(16, 185, 129, 0.45));
+}
+
+.tc-interactive-edge-label:hover rect,
+.tc-interactive-edge-label:hover span,
+.tc-interactive-edge-label:hover .labelBkg {
+  outline: 2px solid #10b981 !important;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.tc-interactive-edge-label-active rect,
+.tc-interactive-edge-label-active span,
+.tc-interactive-edge-label-active .labelBkg {
+  outline: 2.5px solid #10b981 !important;
+  outline-offset: 2px;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.8) !important;
+  border-radius: 4px;
+}
+
+/* TwinCAT XAE Priority Circle Badge Interactivity */
+.tc-priority-badge,
+.priority-badge {
+  cursor: pointer !important;
+  pointer-events: all !important;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.tc-priority-badge circle,
+.tc-priority-badge text,
+.priority-badge circle,
+.priority-badge text {
+  cursor: pointer !important;
+  pointer-events: all !important;
+  transition: all 0.15s ease;
+}
+
+.tc-priority-badge:hover,
+.priority-badge:hover {
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9)) !important;
+  transform: scale(1.2);
+}
+
+.tc-priority-badge:hover circle,
+.priority-badge:hover circle {
+  fill: #38bdf8 !important;
+  stroke: #0284c7 !important;
+  stroke-width: 2px !important;
+}
+
+.tc-priority-badge:hover text,
+.priority-badge:hover text {
+  fill: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+.tc-priority-badge-active,
+.tc-priority-badge.tc-priority-badge-active {
+  filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.9)) !important;
+  transform: scale(1.25);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.tc-priority-badge-active circle {
+  fill: #10b981 !important;
+  stroke: #059669 !important;
+  stroke-width: 2.2px !important;
+}
+
+.tc-priority-badge-active text {
+  fill: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+/* Edge Dragging State */
+.tc-edge-hitbox.dragging-edge,
+.tc-edge-path.dragging-edge {
+  cursor: grabbing !important;
+}
+
+/* Interactive Edge Waypoint Handle */
+.tc-edge-handle {
+  cursor: grab;
+  user-select: none;
+}
+
+.tc-edge-handle:hover .handle-core,
+.tc-edge-handle.dragging .handle-core {
+  fill: #0284c7;
+  r: 7.5px;
+}
+
+.tc-edge-handle:hover .handle-halo,
+.tc-edge-handle.dragging .handle-halo {
+  stroke: #38bdf8;
+  stroke-width: 2px;
+  animation: handle-pulse 1.2s ease-in-out infinite;
+}
+
+.tc-edge-handle.dragging {
+  cursor: grabbing;
+}
+
+@keyframes handle-pulse {
+  0%, 100% {
+    r: 12px;
+    opacity: 0.8;
+  }
+  50% {
+    r: 16px;
+    opacity: 0.3;
+  }
+}
+
+/* State name in node is ALWAYS a single line (never wrapped) and never clipped */
+.node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject div {
+  max-width: 440px !important;
+  width: max-content !important;
+  display: table-cell !important;
+  text-align: center !important;
+  overflow: visible !important;
+  white-space: nowrap !important;
+}
+
+.node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject {
+  overflow: visible !important;
+}
+
+.node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject p,
+.node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) .nodeLabel {
+  white-space: nowrap !important;
+  text-align: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+}
+
+/* Node description CAN be wrapped across multiple lines and is clearly readable */
+.node .node-desc,
+.node foreignObject .node-desc {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  display: block !important;
+  max-width: 320px !important;
+  margin: 4px auto 0 auto !important;
+  text-align: center !important;
+  font-size: 13px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  opacity: 0.95 !important;
+}
+
+/* Note nodes (in-diagram notes) are proportional (11px) to node title (14px) and description (13px) */
+.node[id*="note"],
+.node[id*="Note"],
+.node[id*="sticky"],
+g.note,
+.node[id*="note"] foreignObject div,
+.node[id*="Note"] foreignObject div,
+.node[id*="sticky"] foreignObject div {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  line-height: 1.35 !important;
+  max-width: 170px !important;
+  text-align: left !important;
+  padding: 2px !important;
+}
+
+/* Edge labels can be wrapped */
+.edgeLabel foreignObject div,
+.edgeLabel foreignObject p,
+.edgeLabel foreignObject span,
+.edgeLabel .edgeLabel {
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  text-align: center !important;
+}
+
+/* State Jump Pulse & Flashing Border/Background Animation */
+@keyframes state-jump-ring-glow {
+  0% {
+    filter: drop-shadow(0 0 0px rgba(56, 189, 248, 0));
+  }
+  12% {
+    filter: drop-shadow(0 0 32px rgba(56, 189, 248, 1)) drop-shadow(0 0 16px rgba(255, 255, 255, 0.95));
+  }
+  24% {
+    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.5));
+  }
+  38% {
+    filter: drop-shadow(0 0 36px rgba(245, 158, 11, 1)) drop-shadow(0 0 18px rgba(251, 191, 36, 0.95));
+  }
+  52% {
+    filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.45));
+  }
+  66% {
+    filter: drop-shadow(0 0 30px rgba(56, 189, 248, 0.95)) drop-shadow(0 0 14px rgba(56, 189, 248, 0.85));
+  }
+  80% {
+    filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.55));
+  }
+  100% {
+    filter: drop-shadow(0 0 0px rgba(56, 189, 248, 0));
+  }
+}
+
+@keyframes state-jump-border-bg-flash {
+  0% {
+    stroke: #38bdf8;
+    stroke-width: 4.5px;
+    fill: #0369a1;
+  }
+  12% {
+    stroke: #ffffff;
+    stroke-width: 6.5px;
+    fill: #0284c7;
+  }
+  24% {
+    stroke: #38bdf8;
+    stroke-width: 3.5px;
+    fill: #0f172a;
+  }
+  38% {
+    stroke: #f59e0b;
+    stroke-width: 7px;
+    fill: #b45309;
+  }
+  52% {
+    stroke: #fbbf24;
+    stroke-width: 3.5px;
+    fill: #1e293b;
+  }
+  66% {
+    stroke: #00f0ff;
+    stroke-width: 6px;
+    fill: #0369a1;
+  }
+  80% {
+    stroke: #38bdf8;
+    stroke-width: 4.5px;
+    fill: #0c4a6e;
+  }
+  100% {
+    /* Smoothly returns to normal resting styling */
+  }
+}
+
+@keyframes state-jump-div-flash {
+  0% {
+    background-color: rgba(3, 105, 161, 0.85);
+    border: 3px solid #38bdf8;
+    box-shadow: 0 0 22px rgba(56, 189, 248, 0.95);
+  }
+  12% {
+    background-color: rgba(2, 132, 199, 0.95);
+    border: 4px solid #ffffff;
+    box-shadow: 0 0 35px rgba(56, 189, 248, 1), inset 0 0 16px rgba(255, 255, 255, 0.6);
+  }
+  24% {
+    background-color: rgba(15, 23, 42, 0.85);
+    border: 2.5px solid #38bdf8;
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+  }
+  38% {
+    background-color: rgba(180, 83, 9, 0.95);
+    border: 4.5px solid #f59e0b;
+    box-shadow: 0 0 38px rgba(245, 158, 11, 1), inset 0 0 16px rgba(251, 191, 36, 0.6);
+  }
+  52% {
+    background-color: rgba(30, 41, 59, 0.85);
+    border: 2.5px solid #fbbf24;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+  }
+  66% {
+    background-color: rgba(3, 105, 161, 0.9);
+    border: 3.5px solid #00f0ff;
+    box-shadow: 0 0 28px rgba(56, 189, 248, 0.95);
+  }
+  80% {
+    background-color: rgba(12, 74, 110, 0.85);
+    border: 3px solid #38bdf8;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+  }
+  100% {
+    /* Smoothly returns to normal resting styling */
+  }
+}
+
+@keyframes state-jump-text-flash {
+  0%, 24%, 52%, 80%, 100% {
+    color: #ffffff;
+    fill: #ffffff;
+  }
+  12%, 38%, 66% {
+    color: #ffffff;
+    fill: #ffffff;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.95), 0 0 16px rgba(56, 189, 248, 0.9);
+  }
+}
+
+.diagram-jump-highlight,
+.state-jump-ring-glow {
+  animation: state-jump-ring-glow 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+}
+
+.diagram-jump-highlight rect,
+.diagram-jump-highlight polygon,
+.diagram-jump-highlight circle,
+.diagram-jump-highlight path.basic,
+.diagram-jump-highlight path.label-container,
+.diagram-jump-highlight .label-container,
+.state-jump-border-bg-flash,
+rect.state-jump-border-bg-flash,
+polygon.state-jump-border-bg-flash,
+circle.state-jump-border-bg-flash,
+path.state-jump-border-bg-flash {
+  animation: state-jump-border-bg-flash 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+}
+
+.diagram-jump-highlight foreignObject div,
+.diagram-jump-highlight foreignObject body > div,
+.state-jump-div-flash,
+div.state-jump-div-flash {
+  animation: state-jump-div-flash 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  border-radius: 6px;
+}
+
+.diagram-jump-highlight .nodeLabel,
+.diagram-jump-highlight span,
+.diagram-jump-highlight p,
+.diagram-jump-highlight text,
+.state-jump-text-flash {
+  animation: state-jump-text-flash 2.4s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  font-weight: 800 !important;
+}
+
+/* State Machine Statistics Panel Entrance Animation (fade-in and slide-up) */
+@keyframes stats-entrance-slide-up {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  60% {
+    opacity: 0.95;
+    transform: translateY(-2px) scale(1.002);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-stats-entrance {
+  animation: stats-entrance-slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+}
+
+/* Complexity Heat-Map Visual Cue Styling */
+.complexity-heatmap-node {
+  transition: filter 0.2s ease;
+}
+
+.complexity-heatmap-node:hover {
+  filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.85)) !important;
+  cursor: pointer;
+}
+
+@keyframes refactor-warning-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 6px rgba(244, 63, 94, 0.5));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(244, 63, 94, 0.95));
+  }
+}
+
+.complexity-refactor-needed {
+  animation: refactor-warning-pulse 2.2s infinite ease-in-out;
+}
+
+.tc-complexity-badge {
+  user-select: none;
+  cursor: pointer;
+  pointer-events: all;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), filter 0.15s ease-out;
+}
+
+.tc-complexity-badge:hover {
+  transform: scale(1.1);
+  filter: brightness(1.2) drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
+}
+
+.tc-refactor-flag-badge {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+
+.tc-refactor-flag-badge.is-critical {
+  filter: drop-shadow(0 0 8px rgba(244, 63, 94, 0.85));
+}
+
+.tc-refactor-flag-badge.is-high {
+  filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.75));
+}
+
+
