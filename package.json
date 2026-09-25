@@ -10,7 +10,9 @@
     "lint": "tsc --noEmit",
     "preview": "vite preview --host 0.0.0.0 --port 3000",
     "electron:dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .",
-    "build:exe": "npm run build && electron-builder --win"
+    "build:exe": "npm run build && electron-builder --win",
+    "build:gateway": "npm run build && node scripts/build-gateway.cjs",
+    "build:link": "node scripts/build-link.cjs"
   },
   "build": {
     "appId": "com.kval.statescope",
@@ -20,7 +22,8 @@
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "shared/**/*"
     ],
     "win": {
       "icon": "build/icon.ico",
@@ -39,6 +42,7 @@
   "dependencies": {
     "@mermaid-js/layout-elk": "^0.2.3",
     "@xmldom/xmldom": "^0.9.12",
+    "ads-client": "^2.2.0",
     "d3": "^7.9.0",
     "html2canvas": "^1.4.1",
     "html2canvas-pro": "^2.4.5",
@@ -63,8 +67,10 @@
     "electron": "^44.4.1",
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
+    "postject": "^1.0.0-alpha.6",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "ws": "^8.21.3"
   }
 }

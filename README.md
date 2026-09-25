@@ -32,7 +32,7 @@ When more than one `.TcDUT` matches, the header shows the count; click the enum 
 
 ### Inside TwinCAT XAE (prototype)
 
-`xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE. Inside XAE you get **Save to project** for edits, **Show in TwinCAT editor**, and a **Live** tab. The Live tab follows the state machine in the running PLC over ADS: the active state lights up on the diagram, and a trail lists every transition with its dwell time. See [xae-extension/README.md](xae-extension/README.md).
+`xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE. Inside XAE you get **Save to project** for edits, **Show in TwinCAT editor**, and a **Live** tab. The Live tab follows the state machine in the running PLC over ADS: the active state lights up on the diagram, and a trail lists every transition with its dwell time. See [xae-extension/README.md](xae-extension/README.md). The desktop app has the same Live tab for a PLC on another computer, without XAE (see [Live view in the desktop app](#live-view-in-the-desktop-app)), and so does the web edition, through a small helper on the same computer or a shared gateway (see [Live view in the web edition](#live-view-in-the-web-edition)).
 
 ### Working with tabs
 - **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
@@ -162,6 +162,39 @@ npm run build:exe
 Compiled executables are output to the `release/` directory:
 - **`Kval StateScope Setup <version>.exe`** — Standard Windows Installer with Start menu shortcuts and auto-updater support.
 - **`Kval StateScope <version>.exe`** — Portable single-file executable (no installation required, runs directly from USB or local drive).
+
+### Live view in the desktop app
+The desktop app's **Live** tab follows a state machine in a PLC on another computer. The Electron main process talks ADS straight to the PLC's router over TCP 48898 (`electron/tcLive.cjs`, with [ads-client](https://github.com/jisotalo/ads-client)), so TwinCAT is not needed on the laptop. The display is the same as in XAE: the active state glows on the diagram, and the tab lists every transition with its dwell and flags those that aren't in the diagram.
+
+**One-time setup:**
+1. **Add an ADS route on the PLC** for the laptop. The Live tab shows exactly what to add after the first Go live: the laptop's IP and the AMS NetId it uses (the laptop's IP + `.1.1`, or `.1.2` when TwinCAT on the laptop already uses that NetId). Add it with the PLC's TwinCAT router settings (*Router > Edit Routes*) or from an XAE connected to the PLC.
+2. **Network:** the laptop must reach the PLC on TCP 48898.
+
+**Going live:**
+1. Open the POU from the PLC project with *Browse*. Instance paths and the ADS port are found from the project files, the same way the XAE extension does it.
+2. In the Live tab, enter the PLC's **AMS NetId**. The PLC IP defaults to the first four numbers of the NetId; enter it when it differs, or `host:port` for a forwarded port.
+3. Click **Go live**. Without a route the PLC closes the connection, and the tab says which route to add.
+
+Only reads happen, plus the release of the variable handle when the session stops. PLCs that enforce Secure ADS (TLS) are not supported yet.
+
+When the POU is not from the project (a sample, a dropped file), its instances are looked up in the PLC's own symbol and data type tables.
+
+## Live view in the web edition
+
+A browser can't talk ADS itself, so the web edition goes live through a helper. In the Live tab, **Via** chooses which:
+
+- **This computer:** *Kval StateScope Link* (`link/`), a small program on the same computer. It talks ADS straight to the PLC, like the desktop app. Build it with `npm run build:link`, start `Kval StateScope Link.exe`, and enter the pairing code it shows. The PLC needs an ADS route for the computer. See [link/README.md](link/README.md).
+- **Gateway:** a shared service on the PLC network, for teams that shouldn't install anything (below).
+
+### Gateway
+
+The **Kval StateScope gateway** (`gateway/`) is a small Node.js service on a machine in the PLC network. The gateway serves the web app over HTTPS, so people open `https://<gateway>:8443/` and install nothing, and it follows the PLCs listed in its configuration for them.
+
+- **Access:** access tokens (only their hashes are stored), connections limited to the configured PLCs, and a log of who follows what.
+- **Read-only:** one ADS connection per PLC and one change notification per variable, shared by every viewer.
+- **Setup:** `npm run build:gateway` assembles `release/gateway`. The rest (certificate, PLC list, ADS routes, tokens, running it as a service) is in [gateway/README.md](gateway/README.md).
+
+In the Live tab, enter your access token, choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
 
 ---
 

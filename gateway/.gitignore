@@ -1,0 +1,5 @@
+config.json
+*.pem
+*.pfx
+public/
+node_modules/

@@ -76,6 +76,11 @@ import { LintFinding, addCaseBranch, addEnumMember, lintStateMachine } from './u
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
 import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
+import { desktopLive } from './utils/liveHost.ts';
+import { GatewayConnection, GatewayPlc, detectGatewayOrigin } from './utils/liveGateway.ts';
+import { useStoredSecret } from './hooks/useStoredSecret.ts';
+
+const DEFAULT_LIVE_SETTINGS: LiveSettings = { instance: '', netId: '', port: '', ip: '', localNetId: '', gateway: '', plc: '', via: '', linkPort: '' };
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
 import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
@@ -1027,6 +1032,7 @@ export const App: React.FC = () => {
       plcState: m.plcState ?? prev.plcState,
       instance: state === 'connected' ? m.instance : prev.instance,
       instances: m.instances && m.instances.length ? m.instances : prev.instances,
+      route: m.route ?? prev.route,
     }));
   }, []);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
@@ -1218,13 +1224,13 @@ export const App: React.FC = () => {
 
   // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
   const liveSettingsKey = `kss.live.${pouFileName || 'POU'}`;
-  const [liveSettings, setLiveSettings] = useState<LiveSettings>({ instance: '', netId: '', port: '' });
+  const [liveSettings, setLiveSettings] = useState<LiveSettings>(DEFAULT_LIVE_SETTINGS);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(liveSettingsKey);
-      setLiveSettings(raw ? { instance: '', netId: '', port: '', ...(JSON.parse(raw) as Partial<LiveSettings>) } : { instance: '', netId: '', port: '' });
+      setLiveSettings(raw ? { ...DEFAULT_LIVE_SETTINGS, ...(JSON.parse(raw) as Partial<LiveSettings>) } : DEFAULT_LIVE_SETTINGS);
     } catch {
-      setLiveSettings({ instance: '', netId: '', port: '' });
+      setLiveSettings(DEFAULT_LIVE_SETTINGS);
     }
   }, [liveSettingsKey]);
   const handleLiveSettingsChange = useCallback(
@@ -1239,27 +1245,133 @@ export const App: React.FC = () => {
     [liveSettingsKey]
   );
   const [liveFollow, setLiveFollow] = useState(true);
-  // Another POU: the extension stops following the old one
+  // Desktop app: the main process talks ADS to the PLC and sends the same messages as the XAE extension
   useEffect(() => {
+    const api = desktopLive();
+    if (!api) return;
+    return api.onMessage((m) => {
+      if (m.type === 'liveStatus') handleLiveStatus(m);
+      else handleLiveValues(m.events);
+    });
+  }, [handleLiveStatus, handleLiveValues]);
+  // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
+  const liveMode: 'xae' | 'desktop' | 'web' | null = canNavigateInXae ? 'xae' : isXaeHost() ? null : desktopLive() ? 'desktop' : 'web';
+  const [gatewayOrigin, setGatewayOrigin] = useState<string | null>(null);
+  useEffect(() => {
+    if (liveMode === 'web') void detectGatewayOrigin().then(setGatewayOrigin);
+  }, [liveMode]);
+  const [gatewayToken, setGatewayToken, rememberGatewayToken, setRememberGatewayToken] = useStoredSecret('kss.gateway.token');
+  const [linkCode, setLinkCode, rememberLinkCode, setRememberLinkCode] = useStoredSecret('kss.link.code');
+  // Through the gateway when this page is served by one, else through the helper on this computer
+  const liveVia: 'link' | 'gateway' = liveSettings.via || (gatewayOrigin ? 'gateway' : 'link');
+  const gatewayRef = useRef<GatewayConnection | null>(null);
+  const gatewayConnection = useCallback(() => {
+    gatewayRef.current ??= new GatewayConnection((m) => {
+      if (m.type === 'liveStatus') handleLiveStatus(m);
+      else if (m.type === 'liveValues') handleLiveValues(m.events);
+      else if (m.type === 'closed') setLiveStatus((prev) => ({ ...prev, state: 'lost', message: m.message }));
+    });
+    return gatewayRef.current;
+  }, [handleLiveStatus, handleLiveValues]);
+  useEffect(() => () => gatewayRef.current?.close(), []);
+  const pouTypeName = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
+  // Another POU: stop following the old one (the XAE extension does that itself)
+  useEffect(() => {
+    if (!isXaeHost()) void desktopLive()?.stop();
+    gatewayRef.current?.stop();
     setLiveSession(EMPTY_LIVE_SESSION);
     setLiveStatus({ state: 'idle', instances: [] });
   }, [pouPath]);
   const handleLiveStart = useCallback(() => {
+    const port = parseInt(liveSettings.port, 10);
+    const stateVar = identifiedStatesResult.stateVarName || 'machineState';
+    if (liveMode === 'desktop') {
+      setLiveSession(EMPTY_LIVE_SESSION);
+      setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting...' }));
+      void desktopLive()!.start({
+        path: pouPath,
+        typeName: pouTypeName,
+        stateVar,
+        instance: liveSettings.instance.trim() || undefined,
+        netId: liveSettings.netId.trim(),
+        ip: liveSettings.ip.trim() || undefined,
+        port: port > 0 ? port : undefined,
+        localNetId: liveSettings.localNetId.trim() || undefined,
+      });
+      return;
+    }
+    if (liveMode === 'web' && liveVia === 'link') {
+      if (!/^\d+(\.\d+){5}$/.test(liveSettings.netId.trim())) {
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: "Enter the PLC's AMS NetId (e.g. 192.168.1.20.1.1)" }));
+        return;
+      }
+      if (!linkCode) {
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter the pairing code shown by Kval StateScope Link' }));
+        return;
+      }
+      setLiveSession(EMPTY_LIVE_SESSION);
+      setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting to Kval StateScope Link...' }));
+      const connection = gatewayConnection();
+      connection
+        .connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode)
+        .then(() =>
+          connection.start({
+            stateVar,
+            typeName: pouTypeName,
+            instance: liveSettings.instance.trim() || undefined,
+            netId: liveSettings.netId.trim(),
+            ip: liveSettings.ip.trim() || undefined,
+            port: port > 0 ? port : undefined,
+            localNetId: liveSettings.localNetId.trim() || undefined,
+          })
+        )
+        .catch((err: Error) => setLiveStatus((prev) => ({ ...prev, state: 'error', message: err.message })));
+      return;
+    }
+    if (liveMode === 'web') {
+      const address = liveSettings.gateway || gatewayOrigin;
+      if (!address) {
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter the gateway address' }));
+        return;
+      }
+      if (!gatewayToken) {
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter your gateway access token' }));
+        return;
+      }
+      setLiveSession(EMPTY_LIVE_SESSION);
+      setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting to the gateway...' }));
+      const connection = gatewayConnection();
+      connection
+        .connect(address, gatewayToken)
+        .then(({ user, plcs }: { user: string; plcs: GatewayPlc[] }) => {
+          setLiveStatus((prev) => ({ ...prev, user, plcs }));
+          const plc = plcs.find((p) => p.id === liveSettings.plc) ?? (plcs.length === 1 ? plcs[0] : undefined);
+          if (!plc) {
+            setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: `Signed in as ${user}: choose a PLC and go live` }));
+            return;
+          }
+          if (plc.id !== liveSettings.plc) handleLiveSettingsChange({ ...liveSettings, plc: plc.id });
+          connection.start({ plc: plc.id, stateVar, typeName: pouTypeName, instance: liveSettings.instance.trim() || undefined });
+        })
+        .catch((err: Error) => setLiveStatus((prev) => ({ ...prev, state: 'error', message: err.message })));
+      return;
+    }
     if (!pouPath) return;
     setLiveSession(EMPTY_LIVE_SESSION);
     setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting...' }));
-    const port = parseInt(liveSettings.port, 10);
     postToHost({
       type: 'liveStart',
       path: pouPath,
-      stateVar: identifiedStatesResult.stateVarName || 'machineState',
+      stateVar,
       instance: liveSettings.instance.trim() || undefined,
       netId: liveSettings.netId.trim() || undefined,
       port: port > 0 ? port : undefined,
     });
-  }, [pouPath, liveSettings, identifiedStatesResult.stateVarName]);
+  }, [pouPath, pouTypeName, liveSettings, identifiedStatesResult.stateVarName, liveMode, gatewayOrigin, gatewayToken, linkCode, liveVia, gatewayConnection, handleLiveSettingsChange]);
   const handleLiveStop = useCallback(() => {
-    postToHost({ type: 'liveStop' });
+    if (isXaeHost()) postToHost({ type: 'liveStop' });
+    else if (desktopLive()) void desktopLive()!.stop();
+    else gatewayRef.current?.stop();
     setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: 'Not connected' }));
   }, []);
   const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
@@ -2565,7 +2677,13 @@ export const App: React.FC = () => {
       {isDockTabMounted('live') &&
         createPortal(
           <LivePanel
-            available={canNavigateInXae}
+            mode={liveMode}
+            gatewayOrigin={gatewayOrigin}
+            defaultVia={gatewayOrigin ? 'gateway' : 'link'}
+            token={liveVia === 'link' ? linkCode : gatewayToken}
+            onTokenChange={liveVia === 'link' ? setLinkCode : setGatewayToken}
+            rememberToken={liveVia === 'link' ? rememberLinkCode : rememberGatewayToken}
+            onRememberTokenChange={liveVia === 'link' ? setRememberLinkCode : setRememberGatewayToken}
             stateVar={identifiedStatesResult.stateVarName || 'machineState'}
             status={liveStatus}
             session={liveSession}

@@ -25,6 +25,8 @@ export type HostMessage =
       instance?: string;
       instances?: string[];
       symbolType?: string;
+      /** Desktop: the address this computer uses towards the PLC (the PLC needs a route for it) */
+      route?: { localNetId: string; localIp: string };
     }
   /** Live view: new values of the state variable (t: PLC time, ms since 1970) */
   | { type: 'liveValues'; events: { t: number; value: number }[] }
