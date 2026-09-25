@@ -9,5 +9,10 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    watch: {
+      // Build output: watching it locks packaged files (electron-builder rename fails)
+      // and crashes the dev server with EBUSY while a built .exe is running
+      ignored: ['**/release/**', '**/dist/**'],
+    },
   },
 });

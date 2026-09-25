@@ -607,9 +607,10 @@ path.diagram-loop-edge {
   }
 }
 
-/* State name in node is ALWAYS a single line (never wrapped) and never clipped */
+/* State name in node is ALWAYS a single line (never wrapped) and never clipped. No width cap: state names have
+   no spaces to wrap at, so a cap made long names spill outside their box (Mermaid sizes the box to this div) */
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject div {
-  max-width: 440px !important;
+  max-width: none !important;
   width: max-content !important;
   display: table-cell !important;
   text-align: center !important;
@@ -836,6 +837,19 @@ path.state-jump-border-pulse {
 
 .complexity-refactor-needed {
   animation: refactor-warning-pulse 2.2s infinite ease-in-out;
+}
+
+/* While a node or edge handle is dragged, hold the pulsing glow still: animating drop-shadow filters on
+   many nodes forces them to be re-rasterized every frame and makes dragging stutter */
+/* Labels and badges follow the pointer directly while dragging (their SVG transform would otherwise animate) */
+.tc-node-dragging .tc-interactive-edge-label,
+.tc-node-dragging .tc-priority-badge,
+.tc-node-dragging .priority-badge {
+  transition: none !important;
+}
+
+.tc-node-dragging .complexity-refactor-needed {
+  animation-play-state: paused;
 }
 
 .tc-complexity-badge {

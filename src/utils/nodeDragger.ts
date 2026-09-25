@@ -22,6 +22,9 @@ export interface EdgeOffset {
   startDy?: number;
   endDx?: number;
   endDy?: number;
+  /** Manual label move, added on top of the label's position along the (re-routed) edge */
+  labelDx?: number;
+  labelDy?: number;
 }
 
 export type NodeOffsetsMap = Record<string, NodeOffset>;
@@ -1129,6 +1132,207 @@ export function generateElkOrthogonalRoute(
 /**
  * Calculate rerouted curve for an edge between two nodes, preventing distortion and matching curve/engine settings.
  */
+/** Decodes Mermaid's `data-points` attribute (base64 JSON array of {x, y} route points) */
+function readMermaidRoutePoints(path: SVGPathElement): Point[] | null {
+  const raw = path.getAttribute('data-points');
+  if (!raw) return null;
+  try {
+    const pts = JSON.parse(atob(raw)) as Point[];
+    return Array.isArray(pts) && pts.length >= 2 && pts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+      ? pts
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+const ORTHO_EPS = 0.5;
+const isVerticalSeg = (a: Point, b: Point) => Math.abs(a.x - b.x) < ORTHO_EPS;
+const isHorizontalSeg = (a: Point, b: Point) => Math.abs(a.y - b.y) < ORTHO_EPS;
+
+/** Point at a fraction of the total length along a polyline */
+function pointAlongPolyline(pts: Point[], fraction: number): Point {
+  const lengths = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+  let remaining = lengths.reduce((a, b) => a + b, 0) * fraction;
+  for (let i = 0; i < lengths.length; i++) {
+    if (remaining <= lengths[i] || i === lengths.length - 1) {
+      const t = lengths[i] > 0 ? Math.min(1, remaining / lengths[i]) : 0;
+      return { x: pts[i].x + (pts[i + 1].x - pts[i].x) * t, y: pts[i].y + (pts[i + 1].y - pts[i].y) * t };
+    }
+    remaining -= lengths[i];
+  }
+  return pts[pts.length - 1];
+}
+
+/** SVG path through an orthogonal polyline with rounded corners (matches Mermaid's ELK edge style) */
+function orthogonalPolylineToPath(pts: Point[], radius = 7): string {
+  const f = (p: Point) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+  let d = `M${f(pts[0])}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = pts[i - 1];
+    const cur = pts[i];
+    const next = pts[i + 1];
+    const inLen = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+    const outLen = Math.hypot(next.x - cur.x, next.y - cur.y);
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    if (r < 0.5) {
+      d += `L${f(cur)}`;
+      continue;
+    }
+    const a = { x: cur.x - ((cur.x - prev.x) / inLen) * r, y: cur.y - ((cur.y - prev.y) / inLen) * r };
+    const b = { x: cur.x + ((next.x - cur.x) / outLen) * r, y: cur.y + ((next.y - cur.y) / outLen) * r };
+    d += `L${f(a)}Q${f(cur)} ${f(b)}`;
+  }
+  return d + `L${f(pts[pts.length - 1])}`;
+}
+
+/**
+ * Re-routes an ELK edge orthogonally when its source and/or target node moved: the endpoints move with
+ * their nodes, the first/last bends slide only along the axis that keeps their segments horizontal or
+ * vertical, the inner channel segments ELK chose stay put, and a right-angle jog is inserted where a
+ * segment would otherwise become diagonal. Returns null when the path has no usable ELK route points.
+ */
+function rerouteElkOrthogonal(
+  path: SVGPathElement,
+  origD: string,
+  srcOffset: Point,
+  tgtOffset: Point,
+  edgeOffset: EdgeOffset = { x: 0, y: 0 }
+): { d: string; midPoint: Point; startPoint: Point; endPoint: Point } | null {
+  // Start / end handle drags move that endpoint on top of any node movement
+  srcOffset = { x: srcOffset.x + (edgeOffset.startDx || 0), y: srcOffset.y + (edgeOffset.startDy || 0) };
+  tgtOffset = { x: tgtOffset.x + (edgeOffset.endDx || 0), y: tgtOffset.y + (edgeOffset.endDy || 0) };
+  const route = readMermaidRoutePoints(path);
+  if (!route) return null;
+
+  // Mermaid shortens the drawn path for the arrow head: use the drawn start / end, ELK's interior bends
+  const drawn = extractCoordinatePoints(parseSvgPathCommands(origD));
+  if (drawn.length < 2) return null;
+  const orig: Point[] = [drawn[0], ...route.slice(1, -1), drawn[drawn.length - 1]].map((p) => ({ x: p.x, y: p.y }));
+
+  // Only handle routes that are orthogonal to begin with
+  for (let i = 1; i < orig.length; i++) {
+    if (!isVerticalSeg(orig[i - 1], orig[i]) && !isHorizontalSeg(orig[i - 1], orig[i])) return null;
+  }
+  // Drop collinear / duplicate points so every inner point is a real bend
+  const simplified: Point[] = [orig[0]];
+  for (let i = 1; i < orig.length; i++) {
+    const p = orig[i];
+    const last = simplified[simplified.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) < ORTHO_EPS) continue;
+    if (simplified.length >= 2) {
+      const prev = simplified[simplified.length - 2];
+      const sameAxis =
+        (isVerticalSeg(prev, last) && isVerticalSeg(last, p)) || (isHorizontalSeg(prev, last) && isHorizontalSeg(last, p));
+      if (sameAxis) {
+        simplified[simplified.length - 1] = p;
+        continue;
+      }
+    }
+    simplified.push(p);
+  }
+  if (simplified.length < 2) return null;
+
+  const vertical = simplified.slice(1).map((p, i) => isVerticalSeg(simplified[i], p));
+  const pts = simplified.map((p) => ({ ...p }));
+  const n = pts.length;
+  pts[0] = { x: pts[0].x + srcOffset.x, y: pts[0].y + srcOffset.y };
+  pts[n - 1] = { x: pts[n - 1].x + tgtOffset.x, y: pts[n - 1].y + tgtOffset.y };
+  if (n >= 3) {
+    // First bend follows the source along the first segment's cross axis, last bend follows the target
+    if (vertical[0]) pts[1].x = pts[0].x;
+    else pts[1].y = pts[0].y;
+    if (vertical[n - 2]) pts[n - 2].x = pts[n - 1].x;
+    else pts[n - 2].y = pts[n - 1].y;
+  }
+
+  // Any segment that is no longer axis-aligned gets a right-angle jog at its middle
+  const routed: Point[] = [pts[0]];
+  for (let i = 1; i < n; i++) {
+    const a = routed[routed.length - 1];
+    const b = pts[i];
+    if (!isVerticalSeg(a, b) && !isHorizontalSeg(a, b)) {
+      if (vertical[i - 1]) {
+        const midY = (a.y + b.y) / 2;
+        routed.push({ x: a.x, y: midY }, { x: b.x, y: midY });
+      } else {
+        const midX = (a.x + b.x) / 2;
+        routed.push({ x: midX, y: a.y }, { x: midX, y: b.y });
+      }
+    }
+    routed.push(b);
+  }
+
+  // Middle handle drag: move the segment at the middle of the route perpendicular to its direction.
+  // A middle segment touching a node is split so that only its middle part moves (ends stay attached).
+  const base = pointAlongPolyline(simplified, 0.5);
+  const halfway = pointAlongPolyline(routed, 0.5);
+  const midShift = { x: 0, y: 0 };
+  const finalRoute = shiftMiddleSegment(routed, halfway, edgeOffset.x || 0, edgeOffset.y || 0, midShift);
+
+  // Labels & the middle handle follow the displacement of the route's middle; badges follow the start point
+  const origMidDrawn = drawn[Math.floor(drawn.length / 2)] || drawn[0];
+  return {
+    d: orthogonalPolylineToPath(finalRoute),
+    midPoint: {
+      x: origMidDrawn.x + (halfway.x - base.x) + midShift.x,
+      y: origMidDrawn.y + (halfway.y - base.y) + midShift.y,
+    },
+    startPoint: finalRoute[0],
+    endPoint: finalRoute[finalRoute.length - 1],
+  };
+}
+
+/**
+ * Moves the orthogonal segment containing `halfway` perpendicular to its direction (horizontal segments by dy,
+ * vertical ones by dx). Its neighbours are perpendicular, so they just stretch and the route stays orthogonal.
+ * If that segment starts or ends at the route's endpoints, only a middle part of it (around `halfway`) is moved,
+ * joined by right-angle connectors, so the edge stays attached to its nodes. Writes the applied shift to `applied`.
+ */
+function shiftMiddleSegment(pts: Point[], halfway: Point, dx: number, dy: number, applied: Point): Point[] {
+  if ((Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) || pts.length < 2) return pts;
+  // Segment containing the halfway point
+  let m = 0;
+  let best = Infinity;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const minX = Math.min(a.x, b.x) - ORTHO_EPS, maxX = Math.max(a.x, b.x) + ORTHO_EPS;
+    const minY = Math.min(a.y, b.y) - ORTHO_EPS, maxY = Math.max(a.y, b.y) + ORTHO_EPS;
+    const dist = Math.hypot(Math.max(minX - halfway.x, 0, halfway.x - maxX), Math.max(minY - halfway.y, 0, halfway.y - maxY));
+    if (dist < best) {
+      best = dist;
+      m = i;
+    }
+  }
+  const a = pts[m];
+  const b = pts[m + 1];
+  const vertical = isVerticalSeg(a, b);
+  const shift = vertical ? { x: dx, y: 0 } : { x: 0, y: dy };
+  if (Math.abs(shift.x) < 0.5 && Math.abs(shift.y) < 0.5) return pts;
+  applied.x = shift.x;
+  applied.y = shift.y;
+
+  const touchesEndpoint = m === 0 || m === pts.length - 2;
+  if (!touchesEndpoint) {
+    return pts.map((p, i) => (i === m || i === m + 1 ? { x: p.x + shift.x, y: p.y + shift.y } : p));
+  }
+
+  // Split out the middle part of the segment (half its length, centred on the halfway point) and move it
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const ux = len > 0 ? (b.x - a.x) / len : 0;
+  const uy = len > 0 ? (b.y - a.y) / len : 0;
+  const along = Math.hypot(halfway.x - a.x, halfway.y - a.y);
+  const half = len / 4;
+  const t1 = Math.max(len * 0.15, Math.min(along - half, len * 0.85 - 2 * half));
+  const t2 = Math.min(len * 0.85, t1 + 2 * half);
+  const s1 = { x: a.x + ux * t1, y: a.y + uy * t1 };
+  const s2 = { x: a.x + ux * t2, y: a.y + uy * t2 };
+  const moved1 = { x: s1.x + shift.x, y: s1.y + shift.y };
+  const moved2 = { x: s2.x + shift.x, y: s2.y + shift.y };
+  return [...pts.slice(0, m + 1), s1, moved1, moved2, s2, ...pts.slice(m + 1)];
+}
+
 export function calculateReroutedEdgePath(
   path: SVGPathElement,
   svg: SVGSVGElement,
@@ -1188,6 +1392,13 @@ export function calculateReroutedEdgePath(
     const endPoint = loopPoints[loopPoints.length - 1] || startPoint;
     const midPoint = loopPoints[Math.floor(loopPoints.length / 2)] || startPoint;
     return { d: newD, midPoint, startPoint, endPoint };
+  }
+
+  // ELK draws orthogonal routes regardless of the curve setting: keep them orthogonal when nodes move
+  // and when the edge's own handles are dragged (start / end endpoints, middle segment)
+  if (normEngine === 'elk') {
+    const orthogonal = rerouteElkOrthogonal(path, origD, srcOffset, tgtOffset, edgeOffset);
+    if (orthogonal) return orthogonal;
   }
 
   // Resolve source node moved center & boundary dimensions
@@ -1351,8 +1562,13 @@ export function applyDiagramOffsetsToSvg(
   targetEdgeId?: string | null,
   selectedEdgeId?: string | null,
   layoutEngine: 'dagre' | 'elk' = 'elk',
-  flowchartCurve: string = 'basis'
+  flowchartCurve: string = 'basis',
+  options: {
+    /** Live node drag: only that node and the edges attached to it can change, so skip everything else */
+    onlyNodeId?: string | null;
+  } = {}
 ): void {
+  const onlyNodeId = options.onlyNodeId ?? null;
   const actualSelectedEdgeId =
     selectedEdgeId !== undefined && selectedEdgeId !== null
       ? selectedEdgeId
@@ -1374,6 +1590,7 @@ export function applyDiagramOffsetsToSvg(
       stateId = '[*]';
     }
     if (!stateId) continue;
+    if (onlyNodeId && stateId !== onlyNodeId) continue;
     if (!node.getAttribute('data-state-id')) {
       node.setAttribute('data-state-id', stateId);
     }
@@ -1423,12 +1640,26 @@ export function applyDiagramOffsetsToSvg(
   handlesGroup.style.pointerEvents = 'all';
 
   let selectedFound = false;
+  // A selected transition id (e.g. "A->B#60") maps to its exact path through its label; parallel edges share "A->B"
+  const selectedIdTrimmed = actualSelectedEdgeId && actualSelectedEdgeId.trim() !== '->' ? actualSelectedEdgeId.trim() : '';
+  const selectedLinkedPathId = selectedIdTrimmed
+    ? svg.querySelector(`g.edgeLabel[data-edge-id="${selectedIdTrimmed}"]`)?.getAttribute('data-linked-path-id') || null
+    : null;
 
   for (const path of allPaths) {
     const rawPathId = path.getAttribute('data-path-id') || path.getAttribute('id') || '';
     const edgeId = path.getAttribute('data-edge-id') || rawPathId;
     const srcId = path.getAttribute('data-source-id');
     const tgtId = path.getAttribute('data-target-id');
+    if (
+      onlyNodeId &&
+      srcId !== onlyNodeId &&
+      tgtId !== onlyNodeId &&
+      path.getAttribute('data-from') !== onlyNodeId &&
+      path.getAttribute('data-to') !== onlyNodeId
+    ) {
+      continue;
+    }
     const edgeKey = srcId && tgtId ? `${srcId}->${tgtId}` : edgeId;
 
     const { d: newD, midPoint, startPoint, endPoint } = calculateReroutedEdgePath(
@@ -1452,11 +1683,16 @@ export function applyDiagramOffsetsToSvg(
 
     // Update edge label position to follow rerouted midpoint
     if (edgeKey || edgeId) {
-      const labels = Array.from(
+      // Parallel edges share "from->to": never take a label / badge that is linked to another path
+      const ownedBy = (linkAttr: string) => (el: Element) => {
+        const linked = el.getAttribute(linkAttr);
+        return !linked || linked === rawPathId || linked === edgeKey;
+      };
+      const labels = (Array.from(
         svg.querySelectorAll(
           `g.edgeLabel[data-linked-path-id="${rawPathId}"], g.edgeLabel[data-linked-path-id="${edgeKey}"], g.edgeLabel[data-edge-id="${edgeId}"], g.edgeLabel[data-edge-id="${rawPathId}"], g.edgeLabel[data-edge-id="${edgeKey}"]`
         )
-      ) as SVGGElement[];
+      ) as SVGGElement[]).filter(ownedBy('data-linked-path-id'));
       for (const label of labels) {
         if (!label.hasAttribute('data-orig-x')) {
           let curX = 0;
@@ -1480,15 +1716,18 @@ export function applyDiagramOffsetsToSvg(
         const origMid = origPoints[Math.floor(origPoints.length / 2)] || { x: origLx, y: origLy };
         const dX = midPoint.x - origMid.x;
         const dY = midPoint.y - origMid.y;
-        label.setAttribute('transform', `translate(${origLx + dX}, ${origLy + dY})`);
+        const labelOffset = edgeOffsets[rawPathId] || edgeOffsets[edgeId] || edgeOffsets[edgeKey];
+        const lDx = labelOffset?.labelDx || 0;
+        const lDy = labelOffset?.labelDy || 0;
+        label.setAttribute('transform', `translate(${origLx + dX + lDx}, ${origLy + dY + lDy})`);
       }
 
       // Update priority badge position
-      const badges = Array.from(
+      const badges = (Array.from(
         svg.querySelectorAll(
           `.tc-priority-badge[data-path-id="${rawPathId}"], .tc-priority-badge[data-path-id="${edgeKey}"], .tc-priority-badge[data-edge-id="${edgeId}"], .tc-priority-badge[data-edge-id="${rawPathId}"], .tc-priority-badge[data-edge-id="${edgeKey}"]`
         )
-      ) as SVGGElement[];
+      ) as SVGGElement[]).filter(ownedBy('data-path-id'));
       for (const badge of badges) {
         if (!badge.hasAttribute('data-orig-x')) {
           badge.setAttribute('data-orig-x', '0');
@@ -1510,7 +1749,9 @@ export function applyDiagramOffsetsToSvg(
     const normSelected = actualSelectedEdgeId && actualSelectedEdgeId.trim() !== '->' ? actualSelectedEdgeId.trim() : '';
 
     let isSelected = false;
-    if (normSelected) {
+    if (normSelected && selectedLinkedPathId) {
+      isSelected = pathId === selectedLinkedPathId;
+    } else if (normSelected) {
       if (pathId === normSelected || path.id === normSelected) {
         isSelected = true;
       } else if (
@@ -1529,6 +1770,8 @@ export function applyDiagramOffsetsToSvg(
       hitbox?.classList.add('selected-edge');
 
       const handleKey = pathId;
+      // Handles are keyed by path id, but the selection may be a transition id (A->B): remember both
+      const selectionKey = normSelected;
 
       // 1. Midpoint / Curvature handle
       let midHandle = handlesGroup.querySelector(
@@ -1569,6 +1812,7 @@ export function applyDiagramOffsetsToSvg(
         midHandle.setAttribute('data-source-id', srcId || '');
         midHandle.setAttribute('data-target-id', tgtId || '');
       }
+      midHandle.setAttribute('data-selection-key', selectionKey);
       midHandle.setAttribute('transform', `translate(${midPoint.x.toFixed(1)}, ${midPoint.y.toFixed(1)})`);
 
       // 2. Start endpoint handle (Source anchor)
@@ -1609,6 +1853,7 @@ export function applyDiagramOffsetsToSvg(
         startHandle.setAttribute('data-source-id', srcId || '');
         startHandle.setAttribute('data-target-id', tgtId || '');
       }
+      startHandle.setAttribute('data-selection-key', selectionKey);
       startHandle.setAttribute('transform', `translate(${startPoint.x.toFixed(1)}, ${startPoint.y.toFixed(1)})`);
 
       // 3. End endpoint handle (Target anchor)
@@ -1649,6 +1894,7 @@ export function applyDiagramOffsetsToSvg(
         endHandle.setAttribute('data-source-id', srcId || '');
         endHandle.setAttribute('data-target-id', tgtId || '');
       }
+      endHandle.setAttribute('data-selection-key', selectionKey);
       endHandle.setAttribute('transform', `translate(${endPoint.x.toFixed(1)}, ${endPoint.y.toFixed(1)})`);
     } else {
       path.classList.remove('selected-edge', 'diagram-selected-edge');
@@ -1657,12 +1903,15 @@ export function applyDiagramOffsetsToSvg(
   }
 
   // Remove handles for edges that are no longer selected
-  if (handlesGroup) {
+  // (live node drags only touch attached edges, so leave the handles of other edges alone)
+  if (handlesGroup && !onlyNodeId) {
     const existingHandles = Array.from(handlesGroup.querySelectorAll('.tc-edge-handle'));
     const normSelected = actualSelectedEdgeId && actualSelectedEdgeId.trim() !== '->' ? actualSelectedEdgeId.trim() : '';
     for (const h of existingHandles) {
       const hEdgeId = (h.getAttribute('data-edge-id') || '').trim();
-      const isStillSelected = Boolean(normSelected && hEdgeId === normSelected);
+      const isStillSelected = Boolean(
+        normSelected && (hEdgeId === normSelected || h.getAttribute('data-selection-key') === normSelected)
+      );
       if (!isStillSelected) {
         h.remove();
       }

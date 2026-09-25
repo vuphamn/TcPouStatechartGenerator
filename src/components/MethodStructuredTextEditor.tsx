@@ -568,12 +568,11 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
 
       setScrollToLine(targetLine);
       setHighlightedCaseLine(targetLine);
-      setScrollNotification(`Jumped to case: ${selectedStateId} (line ${targetLine})`);
 
-      // Clear the temporary highlight after 3 seconds
+      // Clear the temporary highlight after 3 seconds. No "Jumped to case" notice here: selecting a state
+      // on the canvas already updates the breadcrumb "Case:" chip and highlights the line
       const timer = setTimeout(() => {
         setHighlightedCaseLine(null);
-        setScrollNotification(null);
       }, 3000);
       return () => clearTimeout(timer);
     }
@@ -907,13 +906,6 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                 ({availableMethods.length} found)
               </span>
             </div>
-
-            {/* Jump to Case status badge */}
-            {scrollNotification && (
-              <span className="text-[10px] bg-sky-950/90 text-sky-300 border border-sky-700/80 px-2 py-0.5 rounded font-mono animate-pulse shrink-0">
-                {scrollNotification}
-              </span>
-            )}
 
             {extractedInfo.methodFound ? (
               <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono shrink-0">
@@ -1362,7 +1354,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             height: showDeclaration ? `calc(${(1 - splitRatio) * 100}% - 4px)` : '100%',
           }}
           onWheel={(e) => e.stopPropagation()}
-          className="flex-1 flex flex-col min-h-0 bg-slate-950 overflow-hidden"
+          className="relative flex-1 flex flex-col min-h-0 bg-slate-950 overflow-hidden"
         >
           {/* Implementation Section Header & Code Folding Toolbar */}
           <div
@@ -1497,6 +1489,17 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             activeFindMatchIndex={activeImplMatchIndex}
             className="flex-1"
           />
+
+          {/* "Jumped to case" toast for jumps made in the editor; floats over the code so nothing shifts */}
+          {scrollNotification && (
+            <div
+              id="method-jump-toast"
+              role="status"
+              className="absolute bottom-3 right-4 z-20 pointer-events-none max-w-[80%] truncate px-2.5 py-1 rounded-md bg-slate-900/95 border border-sky-700/70 text-[11px] font-mono text-sky-300 shadow-lg animate-in fade-in duration-200"
+            >
+              {scrollNotification}
+            </div>
+          )}
         </div>
       </div>
 

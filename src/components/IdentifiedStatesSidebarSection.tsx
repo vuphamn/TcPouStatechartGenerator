@@ -30,6 +30,8 @@ export interface IdentifiedStatesSidebarSectionProps {
   stateVarName?: string;
   onOpenEnumEditor?: () => void;
   onOpenComplexityReport?: () => void;
+  /** Grow into the free height of the parent column; the state list scrolls instead of stopping at a fixed height */
+  fill?: boolean;
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
@@ -43,6 +45,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   stateVarName = 'machineState',
   onOpenEnumEditor,
   onOpenComplexityReport,
+  fill = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -242,7 +245,9 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   return (
     <section
       id="identified-states-sidebar-section"
-      className="flex flex-col bg-slate-900/70 border border-slate-800/80 rounded-xl overflow-hidden shrink-0 shadow-sm"
+      className={`flex flex-col bg-slate-900/70 border border-slate-800/80 rounded-xl overflow-hidden shadow-sm ${
+        fill && isExpanded ? 'flex-1 min-h-[360px]' : 'shrink-0'
+      }`}
     >
       {/* Section Header */}
       <div
@@ -286,7 +291,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
 
       {/* Expanded Content */}
       {isExpanded && (
-        <div className="flex flex-col p-3 gap-2.5">
+        <div className={`flex flex-col p-3 gap-2.5 ${fill ? 'flex-1 min-h-0' : ''}`}>
           {/* Controls: Search, Filters & Sorting */}
           {states.length > 0 && (
             <div className="flex flex-col gap-2">
@@ -431,7 +436,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
           <div
             ref={scrollListRef}
             id="identified-states-scrollable-list"
-            className="flex flex-col gap-1 max-h-[340px] overflow-y-auto pr-0.5 custom-scrollbar"
+            className={`flex flex-col gap-1 overflow-y-auto pr-0.5 custom-scrollbar ${fill ? 'flex-1 min-h-0' : 'max-h-[340px]'}`}
           >
             {states.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-6 px-3 text-center border border-dashed border-slate-800 rounded-lg bg-slate-950/40 text-slate-400">

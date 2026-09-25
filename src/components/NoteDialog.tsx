@@ -80,11 +80,11 @@ export const NoteDialog: React.FC<NoteDialogProps> = ({
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-800/40">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
               <StickyNote className="w-4 h-4" />
             </div>
-            <div>
+            <div className="min-w-0 flex-1">
               <h3 className="text-sm font-semibold text-slate-100 flex items-center gap-2">
                 {hasExisting ? 'Edit Note' : 'Add Note'}
                 <span
@@ -97,22 +97,31 @@ export const NoteDialog: React.FC<NoteDialogProps> = ({
                   {isEdge ? 'Transition' : 'State Node'}
                 </span>
               </h3>
-              <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
+              <div className="text-xs text-slate-400 mt-0.5 min-w-0">
                 {isEdge ? (
                   <>
-                    <ArrowRight className="w-3 h-3 text-amber-400 shrink-0" />
-                    <span className="font-mono text-slate-200">
-                      {target.from} → {target.to}
-                    </span>
-                    {target.label && <span className="text-slate-400">({target.label})</span>}
+                    <div className="flex items-start gap-1 min-w-0">
+                      <ArrowRight className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
+                      <span className="font-mono text-slate-200 break-all">
+                        {target.from} → {target.to}
+                      </span>
+                    </div>
+                    {/* Long guard expressions: wrap and clamp to 3 lines, full text on hover */}
+                    {target.label && (
+                      <p className="mt-0.5 text-slate-400 break-words [overflow-wrap:anywhere] line-clamp-3" title={target.label}>
+                        {target.label}
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>
-                    <Layers className="w-3 h-3 text-sky-400 shrink-0" />
-                    <span className="font-mono text-slate-200">{target.label || target.id}</span>
+                    <div className="flex items-center gap-1 min-w-0">
+                      <Layers className="w-3 h-3 text-sky-400 shrink-0" />
+                      <span className="font-mono text-slate-200 break-all">{target.label || target.id}</span>
+                    </div>
                   </>
                 )}
-              </p>
+              </div>
             </div>
           </div>
           <button

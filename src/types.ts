@@ -7,6 +7,33 @@ export interface NodeDisplayProperties {
 
 export type CustomNodeStylesMap = Record<string, NodeDisplayProperties>;
 
+export type EdgeLinePattern = 'solid' | 'dashed' | 'dotted';
+
+/** Custom look of one transition edge (unset fields keep the theme default) */
+export interface EdgeDisplayProperties {
+  stroke?: string;
+  strokeWidth?: number;
+  pattern?: EdgeLinePattern;
+  /** Look of the transition's guard label */
+  labelStyle?: EdgeLabelStyle;
+}
+
+export interface EdgeLabelStyle {
+  background?: string;
+  color?: string;
+  /** px; unset = diagram default */
+  fontSize?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  borderColor?: string;
+  /** px; 0 / unset = no border */
+  borderWidth?: number;
+}
+
+/** Keyed by transition id (EdgeInfo.id) */
+export type CustomEdgeStylesMap = Record<string, EdgeDisplayProperties>;
+
 export interface StateNodeInfo {
   id: string;
   label: string;

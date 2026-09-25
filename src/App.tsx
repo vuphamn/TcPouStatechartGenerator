@@ -8,9 +8,7 @@ import {
   Check,
   RotateCcw,
   Sparkles,
-  GitFork,
   Settings2,
-  FileCode2,
   CheckCircle2,
   AlertTriangle,
   PanelLeftClose,
@@ -59,7 +57,17 @@ import { TransitionHistoryTab } from './components/TransitionHistoryTab.tsx';
 import { PlcTransitionLoggerSidebarCard } from './components/PlcTransitionLoggerSidebarCard.tsx';
 import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.tsx';
 import { TransitionHistoryDataset } from './utils/transitionHistoryAnalytics.ts';
-import { FileDropzone } from './components/FileDropzone.tsx';
+import { SourceFilesHeaderItem, DutSearchStatus } from './components/SourceFilesHeaderItem.tsx';
+import { rankDutCandidates, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
+import {
+  browseForPou,
+  readDroppedPou,
+  findDutCandidates,
+  chooseDutFiles,
+  isDesktopApp,
+  canPickFolder,
+  PouSource,
+} from './utils/sourceFileAccess.ts';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
 import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
@@ -80,13 +88,14 @@ import {
   revealDockTab,
   saveDockLayout,
 } from './utils/dockLayout.ts';
-import { HeaderHiddenControls } from './components/HeaderHiddenControls.tsx';
+import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
+import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
 import { getMermaidLiveUrl } from './utils/mermaidLive.ts';
-import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset, PresetExportSettings } from './types.ts';
+import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset, PresetExportSettings, CustomEdgeStylesMap, EdgeDisplayProperties } from './types.ts';
 import { DiagramPresetManager } from './components/DiagramPresetManager.tsx';
 import {
   DiagramOptionsState,
@@ -117,6 +126,11 @@ export const App: React.FC = () => {
   const [dutContent, setDutContent] = useState<string>(SAMPLES[0].dutContent);
   const [pouFileName, setPouFileName] = useState<string>(SAMPLES[0].pouName);
   const [pouContent, setPouContent] = useState<string>(SAMPLES[0].pouContent);
+  // Loaded .TcPOU (full path on desktop) and the .TcDUT enums found for it in its folder tree
+  const [pouPath, setPouPath] = useState<string | undefined>(undefined);
+  const [dutMatches, setDutMatches] = useState<DutMatch[] | null>(null);
+  const [dutRelativePath, setDutRelativePath] = useState<string | undefined>(undefined);
+  const [dutStatus, setDutStatus] = useState<DutSearchStatus>('sample');
 
   // Configuration options matching C# LauncherForm & active User/Builtin Preset
   const initialPreset = useMemo(() => {
@@ -227,8 +241,15 @@ export const App: React.FC = () => {
 
   // Node display customizations
   const [customNodeStyles, setCustomNodeStyles] = useState<CustomNodeStylesMap>({});
+  const [customEdgeStyles, setCustomEdgeStyles] = useState<CustomEdgeStylesMap>({});
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
   const [selectedStateLabel, setSelectedStateLabel] = useState<string>('');
+  // Last selected state: the Method Editor, Style & Documentation tabs stay on it when the
+  // canvas selection is cleared (background click / Esc) instead of jumping to the first state
+  const [lastSelectedState, setLastSelectedState] = useState<{ id: string; label: string } | null>(null);
+  useEffect(() => {
+    if (selectedStateId) setLastSelectedState({ id: selectedStateId, label: selectedStateLabel || selectedStateId });
+  }, [selectedStateId, selectedStateLabel]);
 
   // Inspector tabs: Method Editor & Enum Editor (MiddlePanel), Style & Documentation (RightPanel)
   const [inspectorRequest, setInspectorRequest] = useState<{ method: string; enumMember?: string }>({
@@ -256,6 +277,8 @@ export const App: React.FC = () => {
         );
         return;
       }
+      // State style is a window on the canvas (opened by the diagram itself), not a dock tab
+      if (mode === 'style') return;
       setDockLayout((l) => activateDockTab(l, mode));
     },
     [handleOpenEnumEditorModal]
@@ -418,6 +441,15 @@ export const App: React.FC = () => {
 
   const handleClearAllCustomStyles = useCallback(() => {
     setCustomNodeStyles({});
+  }, []);
+
+  const handleEdgeStyleChange = useCallback((edgeId: string, style: EdgeDisplayProperties | null) => {
+    setCustomEdgeStyles((prev) => {
+      const next = { ...prev };
+      if (style) next[edgeId] = style;
+      else delete next[edgeId];
+      return next;
+    });
   }, []);
 
   const handleSaveNote = useCallback((target: ContextMenuTarget, text: string) => {
@@ -769,11 +801,17 @@ export const App: React.FC = () => {
     setFlowchartOutput(sample.defaultFlowchart);
     setIncludeStateDescriptions(sample.defaultIncludeDescriptions);
     setCustomNodeStyles({});
+    setCustomEdgeStyles({});
     setDiagramNotes({ nodes: {}, edges: {} });
     setNodeOffsets({});
     setCanvasPositions({});
     setSelectedStateId(null);
     setSelectedStateLabel('');
+    setLastSelectedState(null);
+    setPouPath(undefined);
+    setDutMatches(null);
+    setDutRelativePath(undefined);
+    setDutStatus('sample');
   };
 
   // Helper to extract the most up-to-date canvas positions and generate the full exported markdown
@@ -807,6 +845,92 @@ export const App: React.FC = () => {
       copyToastTimeoutRef.current = null;
     }, durationMs);
   }, []);
+
+  // ---------------------------------------------------------------------------
+  // Source files: a browsed .TcPOU, and its state enum found among the .TcDUT files in its folder tree
+  // ---------------------------------------------------------------------------
+  const applyDut = useCallback((dut: { name: string; relativePath: string; content: string } | null) => {
+    setDutFileName(dut?.name ?? '');
+    setDutContent(dut?.content ?? '');
+    setDutRelativePath(dut?.relativePath);
+  }, []);
+
+  /** Picks the enum that declares the most doState() states; `forceFirst` keeps a hand-picked file without a match */
+  const applyDutCandidates = useCallback(
+    (pou: string, candidates: DutCandidate[], forceFirst = false) => {
+      const ranked = rankDutCandidates(pou, candidates);
+      setDutMatches(ranked);
+      if (ranked.length > 0) {
+        applyDut(ranked[0]);
+        setDutStatus('found');
+        if (ranked.length > 1) {
+          showCopyToast(`${ranked.length} .TcDUT files match; using ${ranked[0].relativePath}. Click the enum to choose another.`);
+        }
+      } else if (forceFirst && candidates.length > 0) {
+        applyDut(candidates[0]);
+        setDutStatus('found');
+        showCopyToast(`${candidates[0].name} declares none of the doState() states`, 'error');
+      } else {
+        applyDut(null);
+        setDutStatus('none');
+        showCopyToast(
+          candidates.length === 0
+            ? 'No .TcDUT files in the .TcPOU folder or its subfolders'
+            : `None of the ${candidates.length} .TcDUT files declares the doState() states`,
+          'error'
+        );
+      }
+    },
+    [showCopyToast, applyDut]
+  );
+
+  const applyLoadedPou = useCallback(
+    (src: PouSource) => {
+      setPouFileName(src.name);
+      setPouContent(src.content);
+      setPouPath(src.path);
+      setSelectedSampleId('');
+      if (src.dutCandidates) {
+        applyDutCandidates(src.content, src.dutCandidates);
+      } else {
+        // Web without folder access yet: the header offers "Find .TcDUT..."
+        setDutMatches(null);
+        applyDut(null);
+        setDutStatus('pending');
+      }
+    },
+    [applyDutCandidates, applyDut]
+  );
+
+  const handleBrowsePou = useCallback(async () => {
+    try {
+      const src = await browseForPou();
+      if (src) applyLoadedPou(src);
+    } catch (e) {
+      showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [applyLoadedPou, showCopyToast]);
+
+  const handleDropPou = useCallback(
+    async (file: File) => {
+      applyLoadedPou(await readDroppedPou(file));
+    },
+    [applyLoadedPou]
+  );
+
+  const handleFindDut = useCallback(async () => {
+    try {
+      const candidates = await findDutCandidates();
+      if (candidates) applyDutCandidates(pouContent, candidates);
+    } catch (e) {
+      showCopyToast(`Could not search the folder: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [applyDutCandidates, pouContent, showCopyToast]);
+
+  const handleChooseDutFiles = useCallback(async () => {
+    const candidates = await chooseDutFiles();
+    if (candidates) applyDutCandidates(pouContent, candidates, true);
+  }, [applyDutCandidates, pouContent]);
 
   useEffect(() => {
     return () => {
@@ -977,6 +1101,12 @@ export const App: React.FC = () => {
     [diagramNotes]
   );
 
+  // State shown by the inspector tabs: the selection, or the last selection if it still exists
+  const lastStateStillExists =
+    lastSelectedState !== null && identifiedStatesResult.states.some((s) => s.id === lastSelectedState.id);
+  const inspectorStateId = selectedStateId ?? (lastStateStillExists ? lastSelectedState!.id : null);
+  const inspectorStateLabel = selectedStateId ? selectedStateLabel : lastStateStillExists ? lastSelectedState!.label : '';
+
   // Titles, icons & badges for every dockable tab
   const dockTabMeta = useMemo<Record<DockTabId, DockTabMeta>>(
     () => ({
@@ -1010,7 +1140,6 @@ export const App: React.FC = () => {
         icon: <History />,
         tooltip: 'Time-series visualization of state transitions from PLC log files',
       },
-      style: { title: 'Style', icon: <Palette />, tooltip: 'State Node Appearance / Style' },
       docs: { title: 'Documentation', icon: <BookOpen />, tooltip: 'State purpose, notes & documentation' },
       markdown: { title: 'Mermaid Markdown', icon: <FileText />, tooltip: 'Generated Mermaid diagram markdown' },
       search: { title: 'Keyword Search & Filter', icon: <Search /> },
@@ -1065,6 +1194,353 @@ export const App: React.FC = () => {
     window.open(liveUrl, '_blank', 'noopener,noreferrer');
   };
 
+
+  // ---------------------------------------------------------------------------
+  // Header overflow: actions that do not fit on the header row move into its Hidden menu
+  // ---------------------------------------------------------------------------
+  const [headerRowEl, setHeaderRowEl] = useState<HTMLDivElement | null>(null);
+  const [headerLeftFixedEl, setHeaderLeftFixedEl] = useState<HTMLDivElement | null>(null);
+  const headerActionsRef = useRef<HTMLDivElement>(null);
+  const [headerRowWidth, setHeaderRowWidth] = useState<number>(0);
+  const [headerLeftWidth, setHeaderLeftWidth] = useState<number>(0);
+  useEffect(() => {
+    if (!headerRowEl || !headerLeftFixedEl) return;
+    const ro = new ResizeObserver(() => {
+      setHeaderRowWidth(headerRowEl.clientWidth);
+      setHeaderLeftWidth(headerLeftFixedEl.offsetWidth);
+    });
+    ro.observe(headerRowEl);
+    ro.observe(headerLeftFixedEl);
+    return () => ro.disconnect();
+  }, [headerRowEl, headerLeftFixedEl]);
+
+  const headerItems: HeaderItemId[] = ['source', 'sample', 'generate', 'copy', 'download', 'export', 'pdf', 'mermaidLive'];
+  const headerOverflow = useToolbarOverflow<HeaderItemId>({
+    items: headerItems,
+    // First entries stay visible longest
+    priority: ['source', 'generate', 'sample', 'export', 'copy', 'download', 'mermaidLive', 'pdf'],
+    // Row padding (2 x 16) + gap between title and actions + separator + safety margin
+    available: headerRowWidth - headerLeftWidth - 60,
+    containerRef: headerActionsRef,
+    hiddenButtonSelector: '#header-hidden-controls-container',
+    initialHiddenButtonWidth: 100,
+  });
+
+  function renderHeaderItem(id: HeaderItemId): React.ReactNode {
+    switch (id) {
+      case 'source':
+        return (
+          <SourceFilesHeaderItem
+            pouFileName={pouFileName}
+            pouPath={pouPath}
+            dutFileName={dutFileName}
+            dutRelativePath={dutRelativePath}
+            dutMatches={dutMatches}
+            dutStatus={dutStatus}
+            canSearchFolder={isDesktopApp() || canPickFolder()}
+            onBrowsePou={handleBrowsePou}
+            onDropPou={handleDropPou}
+            onFindDut={handleFindDut}
+            onChooseDutFiles={handleChooseDutFiles}
+            onSelectDut={(m) => {
+              applyDut(m);
+              setDutStatus('found');
+            }}
+          />
+        );
+      case 'sample':
+        return (
+            <div className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 bg-slate-800/80 border border-slate-700/60 rounded-lg px-1.5 sm:px-2 py-1 text-xs shrink-0 max-w-[240px]">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="text-slate-400 text-[11px] font-medium shrink-0">Sample:</span>
+              <select
+                id="sample-selector"
+                value={selectedSampleId}
+                onChange={(e) => {
+                  const sample = SAMPLES.find((s) => s.id === e.target.value);
+                  if (sample) handleSelectSample(sample);
+                }}
+                className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer pr-1 truncate w-full"
+              >
+                {/* A browsed .TcPOU is not one of the samples */}
+                {selectedSampleId === '' && (
+                  <option value="" disabled className="bg-slate-900 text-slate-400">
+                    (own file)
+                  </option>
+                )}
+                {SAMPLES.map((s) => (
+                  <option key={s.id} value={s.id} className="bg-slate-900 text-slate-200">
+                    {s.title}
+                  </option>
+                ))}
+              </select>
+              {selectedSampleId && (
+                <button
+                  id="sample-reset-btn"
+                  type="button"
+                  onClick={() => {
+                    const sample = SAMPLES.find((s) => s.id === selectedSampleId);
+                    if (sample) handleSelectSample(sample);
+                  }}
+                  className="p-0.5 rounded text-slate-400 hover:text-sky-400 hover:bg-slate-700/60 transition-colors shrink-0"
+                  title="Reload this sample (discards edits, styles, notes and moved nodes)"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+        );
+      case 'generate':
+        return (
+            <button
+              id="generate-button"
+              type="button"
+              onClick={handleGenerate}
+              className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors shrink-0 cursor-pointer"
+              title={liveUpdate ? 'Re-generate statechart diagram' : 'Generate statechart diagram'}
+            >
+              <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span>Generate</span>
+            </button>
+        );
+      case 'copy':
+        return (
+            <button
+              id="copy-markdown-btn"
+              type="button"
+              onClick={handleCopyMarkdown}
+              disabled={!outputMarkdown}
+              className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 shrink-0 cursor-pointer"
+              title="Copy Mermaid Markdown"
+            >
+              {copiedMarkdown ? (
+                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              ) : (
+                <Copy className="w-3.5 h-3.5 shrink-0" />
+              )}
+              <span>
+                {copiedMarkdown ? (
+                  'Copied'
+                ) : (
+                  <>
+                    <span>Copy</span>
+                    <span> Markdown</span>
+                  </>
+                )}
+              </span>
+            </button>
+        );
+      case 'download':
+        return (
+            <button
+              id="download-file-btn"
+              type="button"
+              onClick={handleDownload}
+              disabled={!outputMarkdown}
+              className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 shrink-0 cursor-pointer"
+              title="Download .statechart.md"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span>Download</span>
+            </button>
+        );
+      case 'export':
+        return (
+            <div className="relative shrink-0" ref={exportMenuRef}>
+              <button
+                id="export-dropdown-button"
+                type="button"
+                onClick={() => setIsExportMenuOpen((prev) => !prev)}
+                disabled={!outputMarkdown}
+                className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium shadow-sm transition-all disabled:opacity-40 cursor-pointer shrink-0"
+                title="Export high-resolution PNG/SVG with custom scale and options"
+              >
+                <Download className="w-3.5 h-3.5 shrink-0" />
+                <span>Export</span>
+                <ChevronDown className={`w-3 h-3 transition-transform shrink-0 ${isExportMenuOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isExportMenuOpen && (
+                <div
+                  id="export-options-dropdown"
+                  className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 text-xs text-slate-200 divide-y divide-slate-800/70"
+                >
+                  <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                    High-Resolution Export
+                  </div>
+                  <div className="py-1">
+                    <button
+                      id="dropdown-open-modal-btn"
+                      type="button"
+                      onClick={() => handleOpenExportDialog()}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-800 text-sky-400 font-medium transition-colors cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
+                      <div>
+                        <div className="text-white text-xs">High-Res Export Dialog...</div>
+                        <div className="text-[10px] text-slate-400">Custom scale (1x-4x), background & DPI</div>
+                      </div>
+                    </button>
+                    <button
+                      id="dropdown-export-preset-btn"
+                      type="button"
+                      onClick={handleExportWithPresetSettings}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                      title="Download using the export format, scale and background saved in the active preset"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <Bookmark className="w-3.5 h-3.5 text-sky-400" />
+                        Export with Preset
+                      </span>
+                      <span className="text-[10px] font-mono text-sky-300 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">
+                        {describeExportSettings(exportSettings)}
+                      </span>
+                    </button>
+                  </div>
+                  <div className="py-1">
+                    <div className="px-3 py-1 text-[10px] text-slate-500 font-medium">Quick Downloads</div>
+                    <button
+                      id="dropdown-png-2x-btn"
+                      type="button"
+                      onClick={() => handleQuickDownloadPng(2)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <FileImage className="w-3.5 h-3.5 text-sky-400" />
+                        Download PNG
+                      </span>
+                      <span className="text-[10px] font-mono text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">2x Retina</span>
+                    </button>
+                    <button
+                      id="dropdown-png-3x-btn"
+                      type="button"
+                      onClick={() => handleQuickDownloadPng(3)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <FileImage className="w-3.5 h-3.5 text-amber-400" />
+                        Download PNG
+                      </span>
+                      <span className="text-[10px] font-mono text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">High-Quality (3x)</span>
+                    </button>
+                    <button
+                      id="dropdown-png-4x-btn"
+                      type="button"
+                      onClick={() => handleQuickDownloadPng(4)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <FileImage className="w-3.5 h-3.5 text-emerald-400" />
+                        Download PNG
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/50">4x UHD 4K</span>
+                    </button>
+                    <button
+                      id="dropdown-svg-btn"
+                      type="button"
+                      onClick={() => handleQuickDownloadSvg(1)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <FileCode className="w-3.5 h-3.5 text-indigo-400" />
+                        Download SVG
+                      </span>
+                      <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/50">Vector</span>
+                    </button>
+                    <button
+                      id="dropdown-print-pdf-btn"
+                      type="button"
+                      onClick={() => {
+                        setIsExportMenuOpen(false);
+                        handlePrintToPdf();
+                      }}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <Printer className="w-3.5 h-3.5 text-rose-400" />
+                        Print to PDF
+                      </span>
+                      <span className="text-[10px] font-mono text-rose-400 bg-rose-950/80 px-1.5 py-0.5 rounded border border-rose-800/50">Visible Area</span>
+                    </button>
+                  </div>
+                  <div className="py-1">
+                    <div className="px-3 py-1 text-[10px] text-slate-500 font-medium">Copy to System Clipboard</div>
+                    <button
+                      id="dropdown-copy-png-btn"
+                      type="button"
+                      onClick={() => handleQuickCopyPng(2)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <Copy className="w-3.5 h-3.5 text-slate-400" />
+                        Copy PNG
+                      </span>
+                      <span className="text-[10px] font-mono text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">2x Retina</span>
+                    </button>
+                    <button
+                      id="dropdown-copy-png-3x-btn"
+                      type="button"
+                      onClick={() => handleQuickCopyPng(3)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <Copy className="w-3.5 h-3.5 text-amber-400" />
+                        Copy PNG
+                      </span>
+                      <span className="text-[10px] font-mono text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">High-Quality (3x)</span>
+                    </button>
+                    <button
+                      id="dropdown-copy-svg-btn"
+                      type="button"
+                      onClick={handleQuickCopySvg}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center whitespace-nowrap gap-2">
+                        <Copy className="w-3.5 h-3.5 text-indigo-400" />
+                        Copy SVG
+                      </span>
+                      <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/50">Vector</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+        );
+      case 'pdf':
+        return (
+            <button
+              id="print-to-pdf-btn"
+              type="button"
+              onClick={handlePrintToPdf}
+              disabled={!outputMarkdown || isPrintingPdf}
+              className="flex items-center whitespace-nowrap gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 cursor-pointer"
+              title="Print current visible area of the Mermaid diagram as a high-resolution PDF file"
+            >
+              {isPrintingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 text-rose-400 animate-spin" />
+              ) : (
+                <Printer className="w-3.5 h-3.5 text-rose-400" />
+              )}
+              <span>{isPrintingPdf ? 'Generating PDF...' : 'Print to PDF'}</span>
+            </button>
+        );
+      case 'mermaidLive':
+        return (
+            <button
+              id="open-mermaid-live-btn"
+              type="button"
+              onClick={handleOpenMermaidLive}
+              disabled={!outputMarkdown}
+              className="flex items-center whitespace-nowrap gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-40"
+              title="Open in mermaid.live"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Mermaid Live</span>
+            </button>
+        );
+    }
+  }
+
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* Top Application Bar & Header Section */}
@@ -1075,9 +1551,11 @@ export const App: React.FC = () => {
         {/* Row 1: Brand, Title, Sample Selector, Generate, Copy Markdown, Export */}
         <div
           id="header-row-1"
-          className="flex items-center justify-between px-2.5 sm:px-4 py-1.5 border-b border-slate-800/80 gap-1.5 sm:gap-2 shrink-0"
+          ref={setHeaderRowEl}
+          className="flex flex-nowrap items-center justify-between px-2.5 sm:px-4 py-1.5 border-b border-slate-800/80 gap-2 shrink-0"
         >
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 shrink">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+          <div ref={setHeaderLeftFixedEl} className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button
             id="toggle-sidebar-btn"
             type="button"
@@ -1098,333 +1576,59 @@ export const App: React.FC = () => {
             {dockLayout.rightVisible ? <PanelRightClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelRightOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
 
-          <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold shrink-0">
-              <GitFork className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </div>
-            <div className="min-w-0">
+            <img src="/icon.svg" alt="Kval StateScope" className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" draggable={false} />
+          </div>
+            {/* Title shrinks and truncates first when the header runs out of room */}
+            <div className="min-w-0 overflow-hidden">
               <h1 className="text-xs sm:text-sm font-bold tracking-tight text-white flex items-center gap-1.5 sm:gap-2 truncate">
-                <span className="truncate max-w-[120px] xs:max-w-[160px] sm:max-w-[200px] md:max-w-none">
-                  TcPouStatechartGenerator
-                </span>
-                <span className="hidden lg:inline-block text-[10px] px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800/60 font-mono shrink-0">
-                  Web Edition
-                </span>
+                <span className="truncate">Kval StateScope</span>
               </h1>
               <p className="text-[11px] text-slate-400 truncate hidden 2xl:block">
-                TwinCAT PLC Statechart & Flowchart Diagram Generator
+                TwinCAT state machine viewer for Kval SM_*.TcPOU function blocks
               </p>
             </div>
-          </div>
         </div>
 
-        {/* Header Action Bar */}
-        <div id="header-action-bar" className="flex items-center gap-1 sm:gap-1.5 md:gap-2 shrink-0">
-          {/* Hidden Controls Menu (ALWAYS at the very front of header action bar on any monitor size) */}
-          <HeaderHiddenControls
-            currentPresetOptions={currentDiagramOptions}
-            onApplyPreset={handleApplyPreset}
-            onExportSettingsChange={setExportSettings}
-            flowchartOutput={flowchartOutput}
-            setFlowchartOutput={setFlowchartOutput}
-            collapseErrorSinkEdges={collapseErrorSinkEdges}
-            setCollapseErrorSinkEdges={setCollapseErrorSinkEdges}
-            includeStateDescriptions={includeStateDescriptions}
-            setIncludeStateDescriptions={setIncludeStateDescriptions}
-            showTransitionPriorities={showTransitionPriorities}
-            setShowTransitionPriorities={setShowTransitionPriorities}
-            priorityFormat={priorityFormat}
-            setPriorityFormat={setPriorityFormat}
-            layoutEngine={layoutEngine}
-            setLayoutEngine={setLayoutEngine}
-            flowchartCurve={flowchartCurve}
-            setFlowchartCurve={setFlowchartCurve}
-            mermaidTheme={mermaidTheme}
-            setMermaidTheme={setMermaidTheme}
-            lockDiagramLayout={lockDiagramLayout}
-            setLockDiagramLayout={setLockDiagramLayout}
-            liveUpdate={liveUpdate}
-            setLiveUpdate={setLiveUpdate}
-            handlePrintToPdf={handlePrintToPdf}
-            isPrintingPdf={isPrintingPdf}
-            handleOpenMermaidLive={handleOpenMermaidLive}
-            generationStats={generationStats}
-            outputMarkdown={outputMarkdown}
-            customizedStatesCount={customizedStatesCount}
-            onClearAllCustomStyles={handleClearAllCustomStyles}
-            isSidebarOpen={isSidebarOpen}
-            onCopyMarkdown={handleCopyMarkdown}
-            copiedMarkdown={copiedMarkdown}
-            onDownload={handleDownload}
-            onOpenExportDialog={() => handleOpenExportDialog()}
-          />
-
-          <div className="h-4 sm:h-5 w-[1px] bg-slate-800 mx-0.5 shrink-0"></div>
-
-          {/* Sample Selector */}
-          <div className="flex items-center gap-1 sm:gap-1.5 bg-slate-800/80 border border-slate-700/60 rounded-lg px-1.5 sm:px-2 py-1 text-xs shrink-0 max-w-[105px] xs:max-w-[130px] sm:max-w-[170px] md:max-w-[210px] lg:max-w-none">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-slate-400 text-[11px] font-medium hidden sm:inline shrink-0">Sample:</span>
-            <select
-              id="sample-selector"
-              value={selectedSampleId}
-              onChange={(e) => {
-                const sample = SAMPLES.find((s) => s.id === e.target.value);
+        {/* Header Action Bar: actions that fit on this row; the rest are listed in the Hidden menu */}
+        <div ref={headerActionsRef} id="header-action-bar" className="flex flex-nowrap items-center gap-1.5 shrink-0">
+          {headerItems.map((id, index) => {
+            if (!headerOverflow.isVisible(id)) return null;
+            const prevVisible = headerItems.slice(0, index).filter(headerOverflow.isVisible).pop();
+            return (
+              <React.Fragment key={id}>
+                {prevVisible === 'sample' && <div className="h-4 sm:h-5 w-[1px] bg-slate-800 shrink-0" />}
+                <div data-toolbar-item={id} className="shrink-0 flex items-center">
+                  {renderHeaderItem(id)}
+                </div>
+              </React.Fragment>
+            );
+          })}
+          {headerOverflow.overflow.length > 0 && (
+            <HeaderHiddenControls
+              overflowItems={headerOverflow.overflow}
+              compact={headerRowWidth < 900}
+              samples={SAMPLES}
+              pouFileName={pouFileName}
+              dutFileName={dutFileName}
+              onBrowsePou={handleBrowsePou}
+              onFindDut={dutStatus === 'pending' || dutStatus === 'none' ? handleFindDut : undefined}
+              selectedSampleId={selectedSampleId}
+              onSelectSample={(id) => {
+                const sample = SAMPLES.find((x) => x.id === id);
                 if (sample) handleSelectSample(sample);
               }}
-              className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer pr-1 truncate w-full"
-            >
-              {SAMPLES.map((s) => (
-                <option key={s.id} value={s.id} className="bg-slate-900 text-slate-200">
-                  {s.title}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="h-4 sm:h-5 w-[1px] bg-slate-800 mx-0.5 hidden sm:block shrink-0"></div>
-
-          {/* Re-generate / Generate button - ALWAYS visible even on compact monitors */}
-          <button
-            id="generate-button"
-            type="button"
-            onClick={handleGenerate}
-            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors shrink-0 cursor-pointer"
-            title={liveUpdate ? 'Re-generate statechart diagram' : 'Generate statechart diagram'}
-          >
-            <Play className="w-3.5 h-3.5 fill-current shrink-0" />
-            <span>Generate</span>
-          </button>
-
-          {/* Copy Markdown - ALWAYS visible with compact text on smaller widths */}
-          <button
-            id="copy-markdown-btn"
-            type="button"
-            onClick={handleCopyMarkdown}
-            disabled={!outputMarkdown}
-            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 shrink-0 cursor-pointer"
-            title="Copy Mermaid Markdown"
-          >
-            {copiedMarkdown ? (
-              <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-            ) : (
-              <Copy className="w-3.5 h-3.5 shrink-0" />
-            )}
-            <span>
-              {copiedMarkdown ? (
-                'Copied'
-              ) : (
-                <>
-                  <span>Copy</span>
-                  <span className="hidden md:inline"> Markdown</span>
-                </>
-              )}
-            </span>
-          </button>
-
-          {/* Download File - Available on larger screens, and always in Export dropdown & Hidden Controls on smaller screens */}
-          <button
-            id="download-file-btn"
-            type="button"
-            onClick={handleDownload}
-            disabled={!outputMarkdown}
-            className="hidden xl:flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 shrink-0 cursor-pointer"
-            title="Download .statechart.md"
-          >
-            <Download className="w-3.5 h-3.5 shrink-0" />
-            <span>Download</span>
-          </button>
-
-          {/* Export Dropdown - ALWAYS visible even on compact monitors */}
-          <div className="relative shrink-0" ref={exportMenuRef}>
-            <button
-              id="export-dropdown-button"
-              type="button"
-              onClick={() => setIsExportMenuOpen((prev) => !prev)}
-              disabled={!outputMarkdown}
-              className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 md:px-3 py-1 sm:py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium shadow-sm transition-all disabled:opacity-40 cursor-pointer shrink-0"
-              title="Export high-resolution PNG/SVG with custom scale and options"
-            >
-              <Download className="w-3.5 h-3.5 shrink-0" />
-              <span>Export</span>
-              <ChevronDown className={`w-3 h-3 transition-transform shrink-0 ${isExportMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {isExportMenuOpen && (
-              <div
-                id="export-options-dropdown"
-                className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 text-xs text-slate-200 divide-y divide-slate-800/70"
-              >
-                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                  High-Resolution Export
-                </div>
-                <div className="py-1">
-                  <button
-                    id="dropdown-open-modal-btn"
-                    type="button"
-                    onClick={() => handleOpenExportDialog()}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-800 text-sky-400 font-medium transition-colors cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4 text-sky-400 shrink-0" />
-                    <div>
-                      <div className="text-white text-xs">High-Res Export Dialog...</div>
-                      <div className="text-[10px] text-slate-400">Custom scale (1x-4x), background & DPI</div>
-                    </div>
-                  </button>
-                  <button
-                    id="dropdown-export-preset-btn"
-                    type="button"
-                    onClick={handleExportWithPresetSettings}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                    title="Download using the export format, scale and background saved in the active preset"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Bookmark className="w-3.5 h-3.5 text-sky-400" />
-                      Export with Preset
-                    </span>
-                    <span className="text-[10px] font-mono text-sky-300 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">
-                      {describeExportSettings(exportSettings)}
-                    </span>
-                  </button>
-                </div>
-                <div className="py-1">
-                  <div className="px-3 py-1 text-[10px] text-slate-500 font-medium">Quick Downloads</div>
-                  <button
-                    id="dropdown-png-2x-btn"
-                    type="button"
-                    onClick={() => handleQuickDownloadPng(2)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileImage className="w-3.5 h-3.5 text-sky-400" />
-                      Download PNG
-                    </span>
-                    <span className="text-[10px] font-mono text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">2x Retina</span>
-                  </button>
-                  <button
-                    id="dropdown-png-3x-btn"
-                    type="button"
-                    onClick={() => handleQuickDownloadPng(3)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileImage className="w-3.5 h-3.5 text-amber-400" />
-                      Download PNG
-                    </span>
-                    <span className="text-[10px] font-mono text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">High-Quality (3x)</span>
-                  </button>
-                  <button
-                    id="dropdown-png-4x-btn"
-                    type="button"
-                    onClick={() => handleQuickDownloadPng(4)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileImage className="w-3.5 h-3.5 text-emerald-400" />
-                      Download PNG
-                    </span>
-                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/50">4x UHD 4K</span>
-                  </button>
-                  <button
-                    id="dropdown-svg-btn"
-                    type="button"
-                    onClick={() => handleQuickDownloadSvg(1)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <FileCode className="w-3.5 h-3.5 text-indigo-400" />
-                      Download SVG
-                    </span>
-                    <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/50">Vector</span>
-                  </button>
-                  <button
-                    id="dropdown-print-pdf-btn"
-                    type="button"
-                    onClick={() => {
-                      setIsExportMenuOpen(false);
-                      handlePrintToPdf();
-                    }}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Printer className="w-3.5 h-3.5 text-rose-400" />
-                      Print to PDF
-                    </span>
-                    <span className="text-[10px] font-mono text-rose-400 bg-rose-950/80 px-1.5 py-0.5 rounded border border-rose-800/50">Visible Area</span>
-                  </button>
-                </div>
-                <div className="py-1">
-                  <div className="px-3 py-1 text-[10px] text-slate-500 font-medium">Copy to System Clipboard</div>
-                  <button
-                    id="dropdown-copy-png-btn"
-                    type="button"
-                    onClick={() => handleQuickCopyPng(2)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Copy className="w-3.5 h-3.5 text-slate-400" />
-                      Copy PNG
-                    </span>
-                    <span className="text-[10px] font-mono text-sky-400 bg-sky-950/80 px-1.5 py-0.5 rounded border border-sky-800/50">2x Retina</span>
-                  </button>
-                  <button
-                    id="dropdown-copy-png-3x-btn"
-                    type="button"
-                    onClick={() => handleQuickCopyPng(3)}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Copy className="w-3.5 h-3.5 text-amber-400" />
-                      Copy PNG
-                    </span>
-                    <span className="text-[10px] font-mono text-amber-400 bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/50">High-Quality (3x)</span>
-                  </button>
-                  <button
-                    id="dropdown-copy-svg-btn"
-                    type="button"
-                    onClick={handleQuickCopySvg}
-                    className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-slate-800 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Copy className="w-3.5 h-3.5 text-indigo-400" />
-                      Copy SVG
-                    </span>
-                    <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/50">Vector</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Print to PDF (Visible Area on wide monitors, always available in Hidden menu) */}
-          <button
-            id="print-to-pdf-btn"
-            type="button"
-            onClick={handlePrintToPdf}
-            disabled={!outputMarkdown || isPrintingPdf}
-            className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium border border-slate-700 transition-colors disabled:opacity-40 cursor-pointer"
-            title="Print current visible area of the Mermaid diagram as a high-resolution PDF file"
-          >
-            {isPrintingPdf ? (
-              <Loader2 className="w-3.5 h-3.5 text-rose-400 animate-spin" />
-            ) : (
-              <Printer className="w-3.5 h-3.5 text-rose-400" />
-            )}
-            <span className="hidden 2xl:inline">{isPrintingPdf ? 'Generating PDF...' : 'Print to PDF'}</span>
-          </button>
-
-          {/* Open in Mermaid Live (on wide monitors, always available in Hidden menu) */}
-          <button
-            id="open-mermaid-live-btn"
-            type="button"
-            onClick={handleOpenMermaidLive}
-            disabled={!outputMarkdown}
-            className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors disabled:opacity-40"
-            title="Open in mermaid.live"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Mermaid Live</span>
-          </button>
+              onGenerate={handleGenerate}
+              onCopyMarkdown={handleCopyMarkdown}
+              onDownload={handleDownload}
+              onOpenExportDialog={() => handleOpenExportDialog()}
+              onExportWithPreset={handleExportWithPresetSettings}
+              exportPresetLabel={describeExportSettings(exportSettings)}
+              onPrintToPdf={handlePrintToPdf}
+              isPrintingPdf={isPrintingPdf}
+              onOpenMermaidLive={handleOpenMermaidLive}
+              hasOutput={Boolean(outputMarkdown)}
+            />
+          )}
         </div>
         </div>
 
@@ -1441,70 +1645,6 @@ export const App: React.FC = () => {
             style={{ width: clampSidePanelWidth(dockLayout.leftWidth) }}
             className="bg-slate-950/90 flex flex-col shrink-0 overflow-y-auto p-4 gap-4"
           >
-            <div className="flex items-center justify-between pb-1 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <FileCode2 className="w-4 h-4 text-sky-400" />
-                <h2 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                  TwinCAT Source Files
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const sample = SAMPLES.find((s) => s.id === selectedSampleId) || SAMPLES[0];
-                  handleSelectSample(sample);
-                }}
-                className="text-[11px] text-slate-400 hover:text-sky-400 flex items-center gap-1 transition-colors"
-                title="Reset to selected sample defaults"
-              >
-                <RotateCcw className="w-3 h-3" />
-                Reset
-              </button>
-            </div>
-
-            {/* TcDUT File Dropzone */}
-            <FileDropzone
-              label="Enum Declaration"
-              fileExtension=".TcDUT"
-              fileName={dutFileName}
-              content={dutContent}
-              onFileLoaded={(name, text) => {
-                setDutFileName(name);
-                setDutContent(text);
-                setSelectedSampleId('');
-              }}
-              onContentChanged={(text) => {
-                setDutContent(text);
-              }}
-              idPrefix="tcdut"
-              onOpenEditor={() => {
-                handleOpenEnumEditorModal();
-              }}
-              editorButtonLabel="Edit"
-            />
-
-            {/* TcPOU File Dropzone */}
-            <FileDropzone
-              label="Function Block"
-              fileExtension=".TcPOU"
-              fileName={pouFileName}
-              content={pouContent}
-              onFileLoaded={(name, text) => {
-                setPouFileName(name);
-                setPouContent(text);
-                setSelectedSampleId('');
-              }}
-              onContentChanged={(text) => {
-                setPouContent(text);
-              }}
-              idPrefix="tcpou"
-              onOpenEditor={() => {
-                handleOpenMethodEditorModal('doState()');
-              }}
-              editorButtonLabel="Edit"
-              editorButtonTooltip="Opens a multi-tabbed editor for Methods, Documentation, and Style configuration"
-            />
-
             {/* Identified States Sidebar Section */}
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
@@ -1516,8 +1656,11 @@ export const App: React.FC = () => {
                 handleOpenEnumEditorModal(selectedStateId || undefined);
               }}
               onOpenComplexityReport={() => showDockTab('complexity')}
+              fill
             />
 
+            {/* Pinned to the bottom of the panel (also when Identified States is collapsed) */}
+            <div className="mt-auto flex flex-col gap-4 shrink-0">
             {/* PLC Transition Logger Sidebar Card */}
             <PlcTransitionLoggerSidebarCard
               states={identifiedStatesResult.states}
@@ -1542,6 +1685,7 @@ export const App: React.FC = () => {
               <p>
                 Parses <code className="text-sky-300">doState()</code> and <code className="text-sky-300">preProcess()</code> from the POU, matches enum sequences from the DUT or embedded UML composites, and emits clean Mermaid diagram markdown.
               </p>
+            </div>
             </div>
           </aside>
         )}
@@ -1935,6 +2079,8 @@ export const App: React.FC = () => {
                   onStyleChange={handleStyleChange}
                   onResetStateStyle={handleResetStateStyle}
                   onClearAllCustomStyles={handleClearAllCustomStyles}
+                  customEdgeStyles={customEdgeStyles}
+                  onEdgeStyleChange={handleEdgeStyleChange}
                   nodeOffsets={nodeOffsets}
                   onNodeOffsetsChange={setNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
@@ -1974,15 +2120,15 @@ export const App: React.FC = () => {
         dockRegistry.nodes.diagram
       )}
 
-      {(['method', 'enum', 'style', 'docs'] as const).map(
+      {(['method', 'enum', 'docs'] as const).map(
         (mode) =>
           isDockTabMounted(mode) &&
           createPortal(
             <StateNodeStyleInspector
               key={mode}
               panelMode={mode}
-              selectedStateId={selectedStateId}
-              selectedStateLabel={selectedStateLabel}
+              selectedStateId={inspectorStateId}
+              selectedStateLabel={inspectorStateLabel}
               availableStates={identifiedStatesResult.states}
               customStyles={customNodeStyles}
               onStyleChange={handleStyleChange}

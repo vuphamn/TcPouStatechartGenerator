@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   ShieldCheck,
   Code2,
@@ -12,8 +12,23 @@ import {
   Move,
   StickyNote,
   Zap,
+  Palette,
+  RotateCcw,
 } from 'lucide-react';
-import { EdgeInfo, DiagramNotes } from '../types.ts';
+import { EdgeInfo, DiagramNotes, EdgeDisplayProperties, EdgeLabelStyle } from '../types.ts';
+import {
+  EDGE_COLOR_SWATCHES,
+  EDGE_WIDTH_OPTIONS,
+  EDGE_PATTERN_OPTIONS,
+  LABEL_BACKGROUND_SWATCHES,
+  LABEL_TEXT_SWATCHES,
+  LABEL_FONT_SIZE_OPTIONS,
+  LABEL_BORDER_WIDTH_OPTIONS,
+  edgeDashArray,
+  hasEdgeStyle,
+  hasLabelStyle,
+  compactStyle,
+} from '../utils/edgeStyles.ts';
 import { parseConditionClauses } from '../utils/interactiveDiagram.ts';
 
 export interface TransitionGuardInspectorProps {
@@ -24,6 +39,9 @@ export interface TransitionGuardInspectorProps {
   notes?: DiagramNotes;
   onSelectState?: (stateId: string, label?: string) => void;
   onOpenNoteEditor?: (edge: EdgeInfo) => void;
+  /** Custom line style of this transition; omit onEdgeStyleChange to hide the style controls */
+  edgeStyle?: EdgeDisplayProperties;
+  onEdgeStyleChange?: (style: EdgeDisplayProperties | null) => void;
 }
 
 export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> = ({
@@ -34,6 +52,8 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
   notes,
   onSelectState,
   onOpenNoteEditor,
+  edgeStyle,
+  onEdgeStyleChange,
 }) => {
   const [copied, setCopied] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
@@ -62,31 +82,33 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
     edge.note ||
     (notes?.edges ? notes.edges[edge.id] || notes.edges[`${edge.from}->${edge.to}`] : undefined);
 
-  // Calculate default position relative to container
+  // Position relative to the canvas; the panel may be no taller than the canvas (its body scrolls)
   const [pos, setPos] = useState<{ x: number; y: number }>({ x: 24, y: 72 });
+  const [maxHeight, setMaxHeight] = useState<number | undefined>(undefined);
 
-  useEffect(() => {
-    if (!anchorPos || !containerRef?.current) return;
+  // Place the panel beside the clicked label / badge (right of it, or left if there is no room) so it never
+  // covers the transition it describes, and keep it fully inside the canvas
+  useLayoutEffect(() => {
+    if (!containerRef?.current) return;
     const cRect = containerRef.current.getBoundingClientRect();
-    const overlayW = Math.min(460, cRect.width - 32);
-    const overlayH = 340;
+    const margin = 12;
+    // Compact by default (long guard breakdowns scroll inside the body), never taller than the canvas
+    const availableH = Math.max(160, Math.min(480, cRect.height - margin * 2));
+    setMaxHeight(availableH);
+    if (!anchorPos) return;
+    const w = inspectorRef.current?.offsetWidth || 420;
+    const h = Math.min(inspectorRef.current?.offsetHeight || 360, availableH);
+    const ax = anchorPos.x - cRect.left;
+    const ay = anchorPos.y - cRect.top;
+    const gap = 28;
 
-    let targetX = anchorPos.x - cRect.left - overlayW / 2;
-    let targetY = anchorPos.y - cRect.top + 20;
+    let x = ax + gap;
+    if (x + w > cRect.width - margin) x = ax - gap - w;
+    x = Math.max(margin, Math.min(x, cRect.width - w - margin));
+    let y = ay - 48;
+    y = Math.max(margin, Math.min(y, cRect.height - h - margin));
 
-    // Clamp horizontally within container
-    if (targetX < 16) targetX = 16;
-    if (targetX + overlayW > cRect.width - 16) {
-      targetX = Math.max(16, cRect.width - overlayW - 16);
-    }
-
-    // Clamp vertically, or flip above if it would overflow bottom
-    if (targetY + overlayH > cRect.height - 16) {
-      const aboveY = anchorPos.y - cRect.top - overlayH - 24;
-      targetY = aboveY >= 16 ? aboveY : Math.max(16, cRect.height - overlayH - 16);
-    }
-
-    setPos({ x: Math.round(targetX), y: Math.round(targetY) });
+    setPos({ x: Math.round(x), y: Math.round(y) });
     setDragOffset(null);
   }, [anchorPos, containerRef, edge.id]);
 
@@ -148,11 +170,12 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
       setIsDragging(false);
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    // Capture phase: the panel stops mouse events from reaching the canvas, which must not block ending the drag
+    window.addEventListener('mousemove', handleMouseMove, true);
+    window.addEventListener('mouseup', handleMouseUp, true);
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove, true);
+      window.removeEventListener('mouseup', handleMouseUp, true);
     };
   }, [isDragging, containerRef]);
 
@@ -165,28 +188,36 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
       ref={inspectorRef}
       style={{
         transform: `translate3d(${currentX}px, ${currentY}px, 0)`,
+        maxHeight,
       }}
-      className="absolute top-0 left-0 z-40 w-[450px] max-w-[calc(100vw-32px)] bg-slate-900/95 backdrop-blur-md border border-slate-700/90 rounded-xl shadow-2xl shadow-slate-950/90 overflow-hidden flex flex-col text-slate-200 animate-in fade-in zoom-in-95 duration-150 select-none transition-shadow edge-condition-detail-overlay"
+      // Keep clicks (e.g. Add Note) from reaching the canvas handlers underneath, which would close the panel
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.stopPropagation()}
+      className="absolute top-0 left-0 z-40 w-[420px] max-w-[calc(100%-24px)] bg-slate-900/95 backdrop-blur-md border border-slate-700/90 rounded-xl shadow-2xl shadow-slate-950/90 overflow-hidden flex flex-col text-slate-200 animate-in fade-in zoom-in-95 duration-150 select-none transition-shadow edge-condition-detail-overlay"
       role="dialog"
       aria-labelledby="transition-guard-inspector-title"
     >
       {/* Header bar (Draggable) */}
       <div
         onMouseDown={handleMouseDownHeader}
-        className={`px-3.5 py-2.5 bg-slate-950/85 border-b border-slate-800 flex items-center justify-between gap-2 cursor-grab ${
+        className={`px-3.5 py-2.5 bg-slate-950/85 border-b border-slate-800 flex items-center justify-between gap-2 cursor-grab shrink-0 ${
           isDragging ? 'cursor-grabbing' : ''
         }`}
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
           <div className="w-6 h-6 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
           </div>
           <div className="min-w-0">
             <h2
               id="transition-guard-inspector-title"
-              className="text-xs font-bold text-slate-100 uppercase tracking-wider flex items-center gap-1.5 truncate"
+              className="text-xs font-bold text-slate-100 uppercase tracking-wider truncate"
+              title="Transition Guard & Condition Inspector"
             >
-              Transition Guard & Condition Inspector
+              Transition Guard
             </h2>
           </div>
         </div>
@@ -222,13 +253,16 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
       </div>
 
       {/* State Machine Transition Path Badge */}
-      <div className="px-3.5 py-2 bg-slate-950/40 border-b border-slate-800/60 flex items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div
+        className="px-3.5 py-2 bg-slate-950/40 border-b border-slate-800/60 text-xs shrink-0"
+        title={edge.id || `${edge.from}->${edge.to}`}
+      >
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <button
             id="guard-inspector-from-state-btn"
             type="button"
             onClick={() => onSelectState?.(edge.from, edge.from)}
-            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 font-mono text-[11px] border border-slate-700 hover:border-sky-500/50 transition-colors truncate max-w-[150px]"
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 font-mono text-[11px] border border-slate-700 hover:border-sky-500/50 transition-colors text-left break-all max-w-full"
             title={`Source state: ${edge.from} (click to inspect)`}
           >
             {edge.from}
@@ -238,20 +272,20 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
             id="guard-inspector-to-state-btn"
             type="button"
             onClick={() => onSelectState?.(edge.to, edge.to)}
-            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[11px] border border-slate-700 hover:border-emerald-500/50 transition-colors truncate max-w-[150px]"
+            className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 font-mono text-[11px] border border-slate-700 hover:border-emerald-500/50 transition-colors text-left break-all max-w-full"
             title={`Target state: ${edge.to} (click to inspect)`}
           >
             {edge.to}
           </button>
         </div>
-
-        <div className="text-[10px] text-slate-400 font-mono shrink-0">
-          {edge.id || `${edge.from}->${edge.to}`}
-        </div>
       </div>
 
       {/* Main Content Body */}
-      <div className="p-3.5 flex flex-col gap-3 max-h-[380px] overflow-y-auto custom-scrollbar select-text">
+      <div className="p-3.5 flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto custom-scrollbar select-text">
+        {onEdgeStyleChange && (
+          <EdgeStyleEditor style={edgeStyle} onChange={onEdgeStyleChange} />
+        )}
+
         {/* Full Condition Code Block */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -397,8 +431,8 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
       </div>
 
       {/* Footer bar */}
-      <div className="px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400">
-        <span className="truncate">Click edge label or priority badge to toggle</span>
+      <div className="px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 shrink-0">
+        <span className="truncate">Click the selected transition again to close</span>
         <button
           id="guard-inspector-dismiss-btn"
           type="button"
@@ -472,5 +506,321 @@ function StructuredTextSyntaxHighlighter({ code }: { code: string }) {
         return <span key={i}>{token}</span>;
       })}
     </span>
+  );
+}
+
+type Swatch = { label: string; value: string };
+
+const styleChip = (active: boolean) =>
+  `px-1.5 h-6 rounded border text-[10px] font-medium transition-colors flex items-center justify-center ${
+    active
+      ? 'bg-sky-900/60 border-sky-500 text-sky-100'
+      : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white'
+  }`;
+
+function StyleRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-12 shrink-0 text-[10px] text-slate-400">{label}</span>
+      <div className="flex flex-wrap items-center gap-1 min-w-0">{children}</div>
+    </div>
+  );
+}
+
+/** Default + preset swatches + a custom colour picker */
+function ColorSwatchRow({
+  id,
+  value,
+  swatches,
+  onChange,
+  fallback,
+}: {
+  id: string;
+  value?: string;
+  swatches: Swatch[];
+  onChange: (color: string | undefined) => void;
+  fallback: string;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        data-swatch=""
+        onClick={() => onChange(undefined)}
+        className={`${styleChip(!value)} w-6 px-0`}
+        title="Default"
+      >
+        <X className="w-3 h-3" />
+      </button>
+      {swatches.map((c) => (
+        <button
+          key={c.value}
+          type="button"
+          data-swatch={c.value}
+          onClick={() => onChange(c.value)}
+          className={`w-6 h-6 rounded border transition-transform hover:scale-110 ${
+            value?.toLowerCase() === c.value ? 'border-white ring-2 ring-sky-400' : 'border-slate-600'
+          }`}
+          style={{ backgroundColor: c.value }}
+          title={c.label}
+        />
+      ))}
+      <label
+        className="relative w-6 h-6 rounded border border-slate-600 overflow-hidden cursor-pointer"
+        title="Custom color"
+        style={{ background: 'conic-gradient(#f43f5e, #f59e0b, #10b981, #3b82f6, #a855f7, #f43f5e)' }}
+      >
+        <input
+          id={id}
+          type="color"
+          value={value || fallback}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute inset-0 opacity-0 cursor-pointer"
+        />
+      </label>
+    </>
+  );
+}
+
+// Last chosen tab, kept while the app runs so re-opening the inspector stays on it
+let lastStyleTab: 'line' | 'label' = 'line';
+
+/** Line (colour, width, dash) and label (fill, text, font, border) style of one transition */
+function EdgeStyleEditor({
+  style,
+  onChange,
+}: {
+  style?: EdgeDisplayProperties;
+  onChange: (style: EdgeDisplayProperties | null) => void;
+}) {
+  const [tab, setTab] = useState<'line' | 'label'>(lastStyleTab);
+  const current = style || {};
+  const label = current.labelStyle || {};
+
+  const emit = (next: EdgeDisplayProperties) => {
+    const labelStyle = next.labelStyle ? compactStyle(next.labelStyle) : undefined;
+    const compacted = compactStyle({
+      ...next,
+      labelStyle: labelStyle && hasLabelStyle(labelStyle) ? labelStyle : undefined,
+    });
+    onChange(hasEdgeStyle(compacted) ? compacted : null);
+  };
+  const updateLine = (patch: Partial<EdgeDisplayProperties>) => emit({ ...current, ...patch });
+  const updateLabel = (patch: Partial<EdgeLabelStyle>) => emit({ ...current, labelStyle: { ...label, ...patch } });
+
+  const lineChanged = Boolean(current.stroke || current.strokeWidth || current.pattern);
+  const labelChanged = hasLabelStyle(label);
+  const tabBtn = (id: 'line' | 'label', text: string, changed: boolean) => (
+    <button
+      type="button"
+      id={`guard-inspector-style-tab-${id}`}
+      onClick={() => {
+        lastStyleTab = id;
+        setTab(id);
+      }}
+      className={`px-2 h-5 rounded text-[10px] font-semibold transition-colors flex items-center gap-1 ${
+        tab === id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
+      }`}
+    >
+      {text}
+      {changed && <span className="w-1.5 h-1.5 rounded-full bg-violet-400" title="Customized" />}
+    </button>
+  );
+
+  return (
+    <div id="guard-inspector-line-style" className="bg-slate-950/60 border border-slate-800/80 rounded-lg p-2.5 flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-300">
+        <span className="flex items-center gap-1">
+          <Palette className="w-3 h-3 text-violet-400" />
+          Style
+        </span>
+        <div className="flex items-center gap-0.5 p-0.5 rounded bg-slate-900 border border-slate-800">
+          {tabBtn('line', 'Line', lineChanged)}
+          {tabBtn('label', 'Label', labelChanged)}
+        </div>
+        {(tab === 'line' ? lineChanged : labelChanged) ? (
+          <button
+            id="guard-inspector-line-style-reset"
+            type="button"
+            onClick={() =>
+              tab === 'line' ? emit({ labelStyle: current.labelStyle }) : emit({ ...current, labelStyle: undefined })
+            }
+            className="text-[10px] text-slate-400 hover:text-slate-200 flex items-center gap-0.5"
+            title={`Back to the default ${tab} style`}
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+            Reset
+          </button>
+        ) : (
+          <span className="w-10" />
+        )}
+      </div>
+
+      {tab === 'line' ? (
+        <div id="guard-inspector-line-controls" className="flex flex-col gap-2">
+          <StyleRow label="Color">
+            <ColorSwatchRow
+              id="guard-inspector-line-color-input"
+              value={current.stroke}
+              swatches={EDGE_COLOR_SWATCHES}
+              onChange={(stroke) => updateLine({ stroke })}
+              fallback="#94a3b8"
+            />
+          </StyleRow>
+          <StyleRow label="Width">
+            <button
+              type="button"
+              data-edge-width=""
+              onClick={() => updateLine({ strokeWidth: undefined })}
+              className={styleChip(!current.strokeWidth)}
+            >
+              Auto
+            </button>
+            {EDGE_WIDTH_OPTIONS.map((w) => (
+              <button
+                key={w}
+                type="button"
+                data-edge-width={w}
+                onClick={() => updateLine({ strokeWidth: w })}
+                className={`${styleChip(current.strokeWidth === w)} gap-1`}
+                title={`${w}px`}
+              >
+                <span className="w-3 rounded-full bg-current" style={{ height: `${Math.min(w, 4)}px` }} />
+                {w}
+              </button>
+            ))}
+          </StyleRow>
+          <StyleRow label="Pattern">
+            {EDGE_PATTERN_OPTIONS.map((p) => (
+              <button
+                key={p.value}
+                type="button"
+                data-edge-pattern={p.value}
+                onClick={() => updateLine({ pattern: p.value })}
+                className={`${styleChip(current.pattern === p.value)} gap-1`}
+              >
+                <svg width="20" height="6" className="shrink-0">
+                  <line
+                    x1="0"
+                    y1="3"
+                    x2="20"
+                    y2="3"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeDasharray={edgeDashArray(p.value, 1.2)}
+                  />
+                </svg>
+                {p.label}
+              </button>
+            ))}
+          </StyleRow>
+        </div>
+      ) : (
+        <div id="guard-inspector-label-controls" className="flex flex-col gap-2">
+          <StyleRow label="Fill">
+            <ColorSwatchRow
+              id="guard-inspector-label-bg-input"
+              value={label.background}
+              swatches={LABEL_BACKGROUND_SWATCHES}
+              onChange={(background) => updateLabel({ background })}
+              fallback="#0f172a"
+            />
+          </StyleRow>
+          <StyleRow label="Text">
+            <ColorSwatchRow
+              id="guard-inspector-label-color-input"
+              value={label.color}
+              swatches={LABEL_TEXT_SWATCHES}
+              onChange={(color) => updateLabel({ color })}
+              fallback="#f8fafc"
+            />
+          </StyleRow>
+          <StyleRow label="Size">
+            <button
+              type="button"
+              data-label-size=""
+              onClick={() => updateLabel({ fontSize: undefined })}
+              className={styleChip(!label.fontSize)}
+            >
+              Auto
+            </button>
+            {LABEL_FONT_SIZE_OPTIONS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                data-label-size={s}
+                onClick={() => updateLabel({ fontSize: s })}
+                className={styleChip(label.fontSize === s)}
+              >
+                {s}
+              </button>
+            ))}
+          </StyleRow>
+          <StyleRow label="Font">
+            <button
+              type="button"
+              data-label-font="bold"
+              onClick={() => updateLabel({ bold: !label.bold })}
+              className={`${styleChip(!!label.bold)} w-7 font-bold`}
+              title="Bold"
+            >
+              B
+            </button>
+            <button
+              type="button"
+              data-label-font="italic"
+              onClick={() => updateLabel({ italic: !label.italic })}
+              className={`${styleChip(!!label.italic)} w-7 italic`}
+              title="Italic"
+            >
+              I
+            </button>
+            <button
+              type="button"
+              data-label-font="underline"
+              onClick={() => updateLabel({ underline: !label.underline })}
+              className={`${styleChip(!!label.underline)} w-7 underline`}
+              title="Underline"
+            >
+              U
+            </button>
+          </StyleRow>
+          <StyleRow label="Border">
+            <button
+              type="button"
+              data-label-border=""
+              onClick={() => updateLabel({ borderWidth: undefined })}
+              className={styleChip(!label.borderWidth)}
+            >
+              None
+            </button>
+            {LABEL_BORDER_WIDTH_OPTIONS.map((w) => (
+              <button
+                key={w}
+                type="button"
+                data-label-border={w}
+                onClick={() => updateLabel({ borderWidth: w })}
+                className={`${styleChip(label.borderWidth === w)} gap-1`}
+                title={`${w}px border`}
+              >
+                <span className="w-3 h-3 rounded-sm border-current" style={{ borderWidth: `${w}px` }} />
+                {w}
+              </button>
+            ))}
+          </StyleRow>
+          {!!label.borderWidth && (
+            <StyleRow label="Edge">
+              <ColorSwatchRow
+                id="guard-inspector-label-border-input"
+                value={label.borderColor}
+                swatches={EDGE_COLOR_SWATCHES}
+                onChange={(borderColor) => updateLabel({ borderColor })}
+                fallback="#94a3b8"
+              />
+            </StyleRow>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

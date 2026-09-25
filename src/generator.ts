@@ -560,7 +560,7 @@ function tryLoadUmlGrouping(doc: Document | null): GroupingResult | null {
   return result.groups.size > 0 ? result : null;
 }
 
-function extractDeclaration(tcDutContent: string): string | null {
+export function extractDeclaration(tcDutContent: string): string | null {
   const doc = parseXmlDoc(tcDutContent);
   if (doc) {
     const decls = Array.from(doc.getElementsByTagName('Declaration'));
@@ -576,7 +576,7 @@ function extractDeclaration(tcDutContent: string): string | null {
   return tcDutContent;
 }
 
-function readEnumOrder(decl: string | null): string[] {
+export function readEnumOrder(decl: string | null): string[] {
   const order: string[] = [];
   if (!decl) return order;
 

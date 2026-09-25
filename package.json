@@ -1,5 +1,5 @@
 {
-  "name": "tcpoustatechartgenerator",
+  "name": "kval-statescope",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -13,8 +13,8 @@
     "build:exe": "npm run build && electron-builder --win"
   },
   "build": {
-    "appId": "com.tcstatechart.generator",
-    "productName": "TcPouStatechartGenerator",
+    "appId": "com.kval.statescope",
+    "productName": "Kval StateScope",
     "directories": {
       "output": "release"
     },
@@ -23,6 +23,7 @@
       "electron/**/*"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"

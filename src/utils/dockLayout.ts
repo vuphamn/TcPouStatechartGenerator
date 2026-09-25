@@ -19,7 +19,6 @@ export type DockTabId =
   | 'complexity'
   | 'frequency'
   | 'history'
-  | 'style'
   | 'docs'
   | 'markdown'
   | 'search'
@@ -37,7 +36,6 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'complexity',
   'frequency',
   'history',
-  'style',
   'docs',
   'markdown',
   'search',
@@ -55,7 +53,6 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   complexity: 'middle',
   frequency: 'middle',
   history: 'middle',
-  style: 'right',
   docs: 'right',
   markdown: 'right',
   search: 'right',
@@ -108,7 +105,7 @@ export interface DockLayout {
 /** Tabs that existed before `knownTabs` was recorded */
 const LEGACY_KNOWN_TABS: DockTabId[] = [
   'diagram', 'method', 'enum', 'complexity', 'frequency', 'history',
-  'style', 'docs', 'markdown', 'search', 'minimap',
+  'docs', 'markdown', 'search', 'minimap',
 ];
 
 export type DockTabLocation =
@@ -140,7 +137,7 @@ export function createDefaultDockLayout(): DockLayout {
     },
     right: {
       groups: [
-        { id: 'right-inspector', tabs: ['style', 'docs', 'markdown'], active: 'style', size: 1.3 },
+        { id: 'right-inspector', tabs: ['docs', 'markdown'], active: 'docs', size: 1.3 },
         { id: 'right-search', tabs: ['search', 'stats', 'heatmap', 'legend', 'notes'], active: 'search', size: 1.2 },
         { id: 'right-minimap', tabs: ['minimap'], active: 'minimap', size: 0.6 },
       ],

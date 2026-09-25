@@ -46,6 +46,35 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
   const [isStylingNoteId, setIsStylingNoteId] = useState<string | null>(null);
   const [activeDragOffset, setActiveDragOffset] = useState<{ id: string; x: number; y: number } | null>(null);
   const dragStartRef = useRef<{ clientX: number; clientY: number; origX: number; origY: number } | null>(null);
+  const latestDragRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const noteItemsRef = useRef<NoteItemWithPos[]>([]);
+  const dragFrameRef = useRef<number | null>(null);
+  // A drag only counts once the pointer moved a few pixels; the click that follows a real drag is ignored
+  const dragMovedRef = useRef<boolean>(false);
+  const suppressNextClickRef = useRef<boolean>(false);
+
+  // Note cards live in the zoom wrapper, but the diagram SVG inside it is additionally scaled to fit its viewBox.
+  // Scale cards (and their default gaps) by that factor so notes are sized like the diagram they annotate.
+  const [svgUnitScale, setSvgUnitScale] = useState<number>(1);
+  useEffect(() => {
+    if (!svgElement) return;
+    const update = () => {
+      const wrapper = (svgElement.closest('#mermaid-svg-wrapper') ||
+        document.getElementById('mermaid-svg-wrapper')) as HTMLElement | null;
+      const vb = svgElement.viewBox?.baseVal;
+      const r = svgElement.getBoundingClientRect();
+      if (!wrapper || !vb || !vb.width || !vb.height || !r.width || !r.height) return;
+      const wRect = wrapper.getBoundingClientRect();
+      const wrapperScale = wrapper.offsetWidth > 0 && wRect.width > 0 ? wRect.width / wrapper.offsetWidth : 1;
+      const s = Math.min(r.width / vb.width, r.height / vb.height) / wrapperScale;
+      if (s > 0 && Number.isFinite(s)) setSvgUnitScale((prev) => (Math.abs(prev - s) > 1e-4 ? s : prev));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(svgElement);
+    return () => ro.disconnect();
+  }, [svgElement, zoom]);
+  const gap = (px: number) => Math.round(px * svgUnitScale);
 
   // Close selection & styling when clicking outside or pressing Escape
   useEffect(() => {
@@ -123,16 +152,16 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
             const localH = nRect.height / actualScale;
             targetX = Math.round(localLeft + localW / 2);
             targetY = Math.round(localTop + localH / 2);
-            defaultNoteX = Math.round(localLeft + localW + 28);
-            defaultNoteY = Math.max(16, Math.round(localTop - 12));
+            defaultNoteX = Math.round(localLeft + localW + gap(28));
+            defaultNoteY = Math.max(gap(16), Math.round(localTop - gap(12)));
           }
         } else {
           try {
             const bbox = nodeEl.getBBox();
             targetX = Math.round(bbox.x + bbox.width / 2);
             targetY = Math.round(bbox.y + bbox.height / 2);
-            defaultNoteX = Math.round(bbox.x + bbox.width + 28);
-            defaultNoteY = Math.max(16, Math.round(bbox.y - 12));
+            defaultNoteX = Math.round(bbox.x + bbox.width + gap(28));
+            defaultNoteY = Math.max(gap(16), Math.round(bbox.y - gap(12)));
           } catch {
             // fallback
           }
@@ -237,8 +266,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
             const localH = nRect.height / actualScale;
             targetX = Math.round(localLeft + localW / 2);
             targetY = Math.round(localTop + localH / 2);
-            defaultNoteX = Math.round(localLeft + localW + 28);
-            defaultNoteY = Math.max(16, Math.round(localTop - 12));
+            defaultNoteX = Math.round(localLeft + localW + gap(28));
+            defaultNoteY = Math.max(gap(16), Math.round(localTop - gap(12)));
             positionedNearTargetNode = true;
           }
         }
@@ -258,8 +287,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
         const pt = getEdgeAnchorPoint(svgElement, pathEl, wrapperEl, zoom);
         targetX = pt.x;
         targetY = pt.y;
-        defaultNoteX = Math.round(targetX + 28);
-        defaultNoteY = Math.max(16, Math.round(targetY - 24));
+        defaultNoteX = Math.round(targetX + gap(28));
+        defaultNoteY = Math.max(gap(16), Math.round(targetY - gap(24)));
       }
     }
 
@@ -325,6 +354,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
       origX: note.x,
       origY: note.y,
     };
+    latestDragRef.current = { id: note.id, x: note.x, y: note.y };
+    dragMovedRef.current = false;
     setDraggingNoteId(note.id);
     setActiveDragOffset({ id: note.id, x: note.x, y: note.y });
   };
@@ -334,22 +365,39 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
 
     const handleWindowMouseMove = (e: MouseEvent) => {
       if (!dragStartRef.current) return;
+      if (!dragMovedRef.current) {
+        if (Math.hypot(e.clientX - dragStartRef.current.clientX, e.clientY - dragStartRef.current.clientY) < 3) return;
+        dragMovedRef.current = true;
+      }
       const dx = (e.clientX - dragStartRef.current.clientX) / zoom;
       const dy = (e.clientY - dragStartRef.current.clientY) / zoom;
-
-      const newX = Math.round(dragStartRef.current.origX + dx);
-      const newY = Math.round(dragStartRef.current.origY + dy);
-
-      setActiveDragOffset({
+      latestDragRef.current = {
         id: draggingNoteId,
-        x: newX,
-        y: newY,
-      });
+        x: Math.round(dragStartRef.current.origX + dx),
+        y: Math.round(dragStartRef.current.origY + dy),
+      };
+      // At most one re-render per frame
+      if (dragFrameRef.current === null) {
+        dragFrameRef.current = requestAnimationFrame(() => {
+          dragFrameRef.current = null;
+          if (latestDragRef.current) setActiveDragOffset({ ...latestDragRef.current });
+        });
+      }
     };
 
     const handleWindowMouseUp = () => {
-      if (activeDragOffset) {
-        const matchingNote = noteItems.find((n) => n.id === activeDragOffset.id);
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      const activeDragOffset = latestDragRef.current;
+      latestDragRef.current = null;
+      const moved = dragMovedRef.current;
+      dragMovedRef.current = false;
+      // The click event of a real drag must not select / pan to the note's target (that made the canvas jump)
+      suppressNextClickRef.current = moved;
+      if (activeDragOffset && moved) {
+        const matchingNote = noteItemsRef.current.find((n) => n.id === activeDragOffset.id);
         const targetAnchor = matchingNote?.targetAnchor || { x: 0, y: 0 };
         const deltaX = Math.round(activeDragOffset.x - targetAnchor.x);
         const deltaY = Math.round(activeDragOffset.y - targetAnchor.y);
@@ -366,14 +414,16 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
       setActiveDragOffset(null);
     };
 
-    window.addEventListener('mousemove', handleWindowMouseMove);
-    window.addEventListener('mouseup', handleWindowMouseUp);
+    window.addEventListener('mousemove', handleWindowMouseMove, true);
+    window.addEventListener('mouseup', handleWindowMouseUp, true);
 
     return () => {
-      window.removeEventListener('mousemove', handleWindowMouseMove);
-      window.removeEventListener('mouseup', handleWindowMouseUp);
+      window.removeEventListener('mousemove', handleWindowMouseMove, true);
+      window.removeEventListener('mouseup', handleWindowMouseUp, true);
     };
-  }, [draggingNoteId, activeDragOffset, onUpdateNotePosition, zoom, noteItems]);
+  }, [draggingNoteId, onUpdateNotePosition, zoom]);
+
+  noteItemsRef.current = noteItems;
 
   if (noteItems.length === 0) {
     return null;
@@ -402,7 +452,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
             key={note.id}
             id={`note-overlay-${note.id}`}
             style={{
-              transform: `translate(${note.x}px, ${note.y}px)`,
+              transform: `translate(${note.x}px, ${note.y}px) scale(${svgUnitScale})`,
+              transformOrigin: '0 0',
               position: 'absolute',
               top: 0,
               left: 0,
@@ -411,23 +462,29 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
               borderColor: cardBorder,
               borderWidth: cardBorderWidth,
             }}
-            className={`pointer-events-auto w-44 rounded-lg shadow-md transition-all select-none ${
+            className={`pointer-events-auto w-44 rounded-lg shadow-md select-none ${
               isDragging
-                ? 'shadow-xl ring-2 scale-[1.02] cursor-grabbing z-30'
+                ? 'shadow-xl ring-2 cursor-grabbing z-30'
                 : isSelected
-                ? 'ring-2 shadow-lg z-25'
-                : 'hover:shadow-lg cursor-grab active:cursor-grabbing'
+                ? 'ring-2 shadow-lg z-25 transition-shadow'
+                : 'hover:shadow-lg cursor-grab active:cursor-grabbing transition-shadow'
             }`}
             onClick={(e) => {
               e.stopPropagation();
               setSelectedNoteCardId(note.id);
+              if (suppressNextClickRef.current) {
+                suppressNextClickRef.current = false;
+                return;
+              }
               onSelectTarget?.(note.targetObject);
             }}
             onMouseDown={(e) => {
-              // When not selected or clicking background of card, allow direct dragging
-              if (!isSelected) {
-                handleNoteMouseDown(e, note);
+              // Drag from anywhere on the card, selected or not, except its buttons, fields and style popover
+              if ((e.target as HTMLElement).closest('button, input, textarea, select, a, [id^="note-style-popover-"]')) {
+                e.stopPropagation();
+                return;
               }
+              handleNoteMouseDown(e, note);
             }}
             onDoubleClick={(e) => {
               e.stopPropagation();
@@ -436,15 +493,18 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
           >
             {/* Note Style Popover */}
             {isStyling && isSelected && (
-              <NoteStylePopover
-                noteId={note.id}
-                noteLabel={note.label}
-                currentStyle={noteStyle}
-                onUpdateStyle={(updatedStyle) => {
-                  onUpdateNoteStyle?.(note.id, updatedStyle);
-                }}
-                onClose={() => setIsStylingNoteId(null)}
-              />
+              // Counter-scale so the style controls stay readable however small the card is drawn
+              <div style={{ transform: `scale(${1 / svgUnitScale})`, transformOrigin: '0 0', position: 'relative', zIndex: 40 }}>
+                <NoteStylePopover
+                  noteId={note.id}
+                  noteLabel={note.label}
+                  currentStyle={noteStyle}
+                  onUpdateStyle={(updatedStyle) => {
+                    onUpdateNoteStyle?.(note.id, updatedStyle);
+                  }}
+                  onClose={() => setIsStylingNoteId(null)}
+                  />
+              </div>
             )}
 
             {/* Note Title Bar - ONLY rendered when note is selected / focused */}

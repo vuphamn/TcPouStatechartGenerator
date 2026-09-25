@@ -44,7 +44,8 @@ import {
 } from 'lucide-react';
 import { DiagramMinimap } from './DiagramMinimap.tsx';
 import { DiagramLegendOverlay } from './DiagramLegendOverlay.tsx';
-import { ToolbarHiddenControls } from './ToolbarHiddenControls.tsx';
+import { ToolbarHiddenControls, ToolbarItemId } from './ToolbarHiddenControls.tsx';
+import { useToolbarOverflow } from '../hooks/useToolbarOverflow.ts';
 import { StateMachineStatsPanel } from './StateMachineStatsPanel.tsx';
 import { ComplexityHeatmapPanel } from './ComplexityHeatmapPanel.tsx';
 import {
@@ -63,6 +64,7 @@ import {
   SnapResult,
 } from '../utils/snapToGrid.ts';
 import { StateNodeStyleInspector, InspectorPanelMode } from './StateNodeStyleInspector.tsx';
+import { StateStylePopup } from './StateStylePopup.tsx';
 import { DiagramContextMenu } from './DiagramContextMenu.tsx';
 import { NoteDialog } from './NoteDialog.tsx';
 import { NotesDrawer } from './NotesDrawer.tsx';
@@ -91,7 +93,10 @@ import {
   NotePosition,
   SearchMatchItem,
   PresetExportSettings,
+  CustomEdgeStylesMap,
+  EdgeDisplayProperties,
 } from '../types.ts';
+import { applyEdgeStylesToSvg } from '../utils/edgeStyles.ts';
 import { extractStateNodesFromMermaid } from '../utils/nodeStyles.ts';
 import {
   extractEdgesFromMermaid,
@@ -165,6 +170,9 @@ export interface MermaidViewerProps {
   onStyleChange?: (stateId: string, style: NodeDisplayProperties) => void;
   onResetStateStyle?: (stateId: string) => void;
   onClearAllCustomStyles?: () => void;
+  /** Custom line colour / width / pattern per transition id */
+  customEdgeStyles?: CustomEdgeStylesMap;
+  onEdgeStyleChange?: (edgeId: string, style: EdgeDisplayProperties | null) => void;
   nodeOffsets?: NodeOffsetsMap;
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -249,6 +257,61 @@ interface ParsedPath {
 }
 
 /**
+ * Finds the transition(s) for a Mermaid flowchart link id. Mermaid names links `L_<from>_<to>_<n>`, with n
+ * increasing in document order for links between the same pair of states, but not always consecutive
+ * (e.g. _0, _2, _3). The link's rank among all rendered links of that pair therefore selects the matching
+ * edge (edges are extracted in document order).
+ */
+function matchEdgesByLinkId(linkId: string, edges: EdgeInfo[], allLinkIds: string[]): EdgeInfo[] {
+  const parse = (id: string) => id.match(/(?:^|-)L_(.+)_(\d+)$/);
+  const m = parse(linkId);
+  if (!m) return [];
+  const pairEdges = edges.filter((e) => `${e.from}_${e.to}` === m[1]);
+  const pairSuffixes = [...new Set(allLinkIds.map(parse).filter((x) => x && x[1] === m[1]).map((x) => Number(x![2])))].sort(
+    (a, b) => a - b
+  );
+  const nth = pairEdges[pairSuffixes.indexOf(Number(m[2]))];
+  return nth ? [nth] : pairEdges;
+}
+
+/** Guard text without priority prefixes, note markers and truncation, for comparing labels with transitions */
+function normalizeGuardText(text: string): string {
+  return text
+    .replace(/📝.*$/, '')
+    .replace(/▾/g, '')
+    .replace(/\.\.\./g, '')
+    .replace(/\(\+\d+\)/g, '')
+    .replace(/^[①-⑳㉑-㉟㊱-㊿]\s*/, '')
+    .replace(/^\(\d+\)\s*/, '')
+    .replace(/^\[\d+\]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * stateDiagram-v2 links are named `edge<N>` in document order, the same order transitions are extracted in.
+ * The positional candidate is only trusted when its guard text or priority agrees with the rendered label.
+ */
+function matchStateDiagramEdge(
+  linkId: string,
+  edges: EdgeInfo[],
+  labelText: string,
+  priority: number | undefined
+): EdgeInfo | null {
+  const m = linkId.match(/^edge(\d+)$/);
+  const cand = m ? edges[Number(m[1])] : undefined;
+  if (!cand) return null;
+  const label = normalizeGuardText(labelText);
+  const guard = normalizeGuardText(cand.condition || cand.label || '');
+  const textAgrees = label.length > 0 && guard.length > 0 && (guard === label || guard.startsWith(label) || label.startsWith(guard));
+  const priorityAgrees = priority !== undefined && cand.priority === priority;
+  // With guard text on both sides the texts must agree; otherwise fall back to priority / both unlabelled
+  if (label && guard) return textAgrees ? cand : null;
+  return priorityAgrees || (!label && !guard) ? cand : null;
+}
+
+/**
  * Moves a badge's content into an inner group. The outer group is positioned with a
  * transform="translate()" attribute, which a CSS hover transform would replace (making the badge jump),
  * so the hover scale is applied to the inner group instead.
@@ -258,6 +321,18 @@ function wrapBadgeContent(badgeG: SVGGElement): void {
   body.setAttribute('class', 'tc-complexity-badge-body');
   while (badgeG.firstChild) body.appendChild(badgeG.firstChild);
   badgeG.appendChild(body);
+}
+
+/**
+ * Screen pixels per SVG user unit for an element's coordinate space. Includes the canvas zoom AND Mermaid's
+ * fit-to-canvas viewBox scaling, so dragged items follow the cursor 1:1 however the diagram is scaled.
+ */
+function getSvgUnitScale(el: Element | null, fallback: number): { x: number; y: number } {
+  const ctm = (el as SVGGraphicsElement | null)?.getScreenCTM?.();
+  if (!ctm) return { x: fallback, y: fallback };
+  const x = Math.hypot(ctm.a, ctm.b);
+  const y = Math.hypot(ctm.c, ctm.d);
+  return x > 0 && y > 0 ? { x, y } : { x: fallback, y: fallback };
 }
 
 function extractPriorityFromText(text: string): { priority: number; symbol: string } | null {
@@ -574,6 +649,15 @@ function resolveEdgeFromElement(
       }
     }
 
+    // Parallel edges share source and target: the label linked to this path names the exact transition
+    if (svg && pathId) {
+      const linkedEdgeId = svg
+        .querySelector(`g.edgeLabel[data-linked-path-id="${pathId}"]`)
+        ?.getAttribute('data-edge-id');
+      const byLabel = linkedEdgeId ? availableEdges.find((e) => e.id === linkedEdgeId) : undefined;
+      if (byLabel) return { ...byLabel, pathId };
+    }
+
     // Try finding matching edge in availableEdges
     let matchedEdge = pathId
       ? availableEdges.find((e) => e.id === pathId || (e.pathId && e.pathId === pathId))
@@ -828,6 +912,13 @@ function enhanceSvgWithPriorityCircles(
     const doc = parser.parseFromString(svgString, 'image/svg+xml');
     const svgEl = doc.documentElement;
     if (!svgEl || svgEl.nodeName.toLowerCase() === 'parsererror') return svgString;
+
+    // 0. Normalize the edge container: Mermaid's Dagre renderer groups edge paths in <g class="edgePaths">,
+    // the ELK renderer in <g class="edges edgePath">. Priority badges, node dragging, edge handles and edge
+    // hit-testing all look for g.edgePaths, so give ELK's group that class too.
+    doc.querySelectorAll('g.edges.edgePath').forEach((g) => {
+      if (g.querySelector(':scope > path')) g.classList.add('edgePaths');
+    });
 
     // 1. Mark state nodes with data attributes, clickability, and selection classes
     const nodes = Array.from(doc.querySelectorAll('g.node'));
@@ -1093,6 +1184,8 @@ function enhanceSvgWithPriorityCircles(
     }
 
     let anyBadgeAdded = false;
+    // Every rendered link id, used to rank parallel links between the same pair of states
+    const allLinkIds = Array.from(doc.querySelectorAll('path[data-id]')).map((p) => p.getAttribute('data-id') || '');
 
     for (const pGroup of pGroups) {
       const parent = pGroup.parentElement;
@@ -1200,6 +1293,20 @@ function enhanceSvgWithPriorityCircles(
           const directId = labelEl.getAttribute('data-edge-id');
           if (directId) {
             matchedEdge = availableEdgesList.find((e) => e.id === directId || e.pathId === directId) || null;
+          }
+
+          // Structural match on Mermaid's link id (exact); guard-text matching below is only a fallback,
+          // since many transitions share guard text (e.g. "else" branches or common interlocks)
+          if (!matchedEdge) {
+            const linkId = labelDataId || pathEl?.getAttribute('data-id') || '';
+            const byLinkId = linkId ? matchEdgesByLinkId(linkId, availableEdgesList, allLinkIds) : [];
+            if (byLinkId.length === 1) {
+              matchedEdge = byLinkId[0];
+            } else if (byLinkId.length > 1) {
+              matchedEdge = byLinkId.find((e) => prioInfo && e.priority === prioInfo.priority) || byLinkId[0];
+            } else if (linkId) {
+              matchedEdge = matchStateDiagramEdge(linkId, availableEdgesList, text, prioInfo?.priority);
+            }
           }
 
           if (!matchedEdge) {
@@ -1380,6 +1487,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     selectedStateLabel: externalSelectedStateLabel,
     onSelectState: onSelectStateProp,
     customStyles: externalCustomStyles,
+    customEdgeStyles,
+    onEdgeStyleChange,
     onStyleChange: onStyleChangeProp,
     onResetStateStyle: onResetStateStyleProp,
     onClearAllCustomStyles: onClearAllCustomStylesProp,
@@ -1533,6 +1642,27 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     );
   }, [renderedSvg]);
 
+  // Whether the pressed edge was already selected before this press (the press itself selects it)
+  const edgeSelectedBeforePressRef = useRef<boolean>(false);
+  // True when this press started on an edge (and therefore already selected it)
+  const edgePressedRef = useRef<boolean>(false);
+  // Set when mouse-up handled an edge click, so the click event of the same gesture is ignored
+  const edgeClickHandledRef = useRef<boolean>(false);
+
+  /**
+   * Edge click: the first click selects and highlights the transition; clicking the already selected
+   * transition again opens (or closes) the Transition Guard & Condition Inspector.
+   */
+  const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, wasSelected: boolean) => {
+    setSelectedEdge(edge);
+    if (wasSelected) {
+      toggleConditionOverlay(edge, anchor);
+    } else {
+      // Selecting a different transition closes an inspector that belongs to another one
+      setActiveConditionOverlay((prev) => (prev && prev.edge.id !== edge.id ? null : prev));
+    }
+  };
+
   const toggleConditionOverlay = (edge: EdgeInfo, anchorPos?: { x: number; y: number }) => {
     const now = Date.now();
     if (now - lastOverlayToggleTimeRef.current < 300) {
@@ -1541,11 +1671,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     lastOverlayToggleTimeRef.current = now;
 
     setActiveConditionOverlay((prev) => {
-      if (
-        prev &&
-        (prev.edge.id === edge.id ||
-          (prev.edge.from === edge.from && prev.edge.to === edge.to))
-      ) {
+      // Same transition only: parallel transitions share from / to
+      if (prev && prev.edge.id === edge.id) {
         return null;
       }
       let finalAnchor = anchorPos;
@@ -1678,9 +1805,18 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     return notes || { nodes: {}, edges: {} };
   }, [notes]);
 
+  // The rendered diagram only depends on note texts (note markers / edge note flags). Positions and styles are
+  // drawn by the note overlay layer, so moving or restyling a note must not re-render (and re-layout) the diagram.
+  const noteTextsKey = JSON.stringify([effectiveNotes.nodes || {}, effectiveNotes.edges || {}]);
+  const notesForDiagram: DiagramNotes = useMemo(
+    () => ({ nodes: effectiveNotes.nodes || {}, edges: effectiveNotes.edges || {} }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [noteTextsKey]
+  );
+
   const availableEdges = useMemo(() => {
-    return extractEdgesFromMermaid(code, effectiveNotes);
-  }, [code, effectiveNotes]);
+    return extractEdgesFromMermaid(code, notesForDiagram);
+  }, [code, notesForDiagram]);
 
   const totalNotesCount = useMemo(() => {
     return countTotalNotes(effectiveNotes);
@@ -1710,8 +1846,20 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const draggedNodeIdRef = useRef<string | null>(null);
   const draggedNodeElRef = useRef<SVGGElement | null>(null);
   const nodeDragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Screen px per SVG unit, captured when a node / edge-handle drag starts
+  const dragUnitScaleRef = useRef<{ x: number; y: number }>({ x: 1, y: 1 });
+  // Node drags are applied once per animation frame with the latest pointer position
+  const pendingNodeDragPointRef = useRef<{ x: number; y: number } | null>(null);
+  const nodeDragFrameRef = useRef<number | null>(null);
+  const applyNodeDragFrameRef = useRef<(() => void) | null>(null);
   const nodeInitialOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const nodeMovedRef = useRef<boolean>(false);
+  // State Style window: a second click on the selected state opens it beside the node
+  const [stylePopup, setStylePopup] = useState<{
+    stateId: string;
+    anchorRect?: { left: number; right: number; top: number };
+  } | null>(null);
+  const nodeSelectedBeforePressRef = useRef<boolean>(false);
 
   // Edge Offsets & Endpoint Dragging State
   const [edgeOffsets, setEdgeOffsets] = useState<EdgeOffsetsMap>({});
@@ -1722,9 +1870,29 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   const isDraggingEdgeHandleRef = useRef<boolean>(false);
   const draggedEdgeIdRef = useRef<string | null>(null);
-  const draggedHandleTypeRef = useRef<'start' | 'end' | 'mid' | null>(null);
+  const draggedHandleTypeRef = useRef<'start' | 'end' | 'mid' | 'label' | null>(null);
   const edgeHandleDragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const edgeInitialOffsetRef = useRef<EdgeOffset>({ x: 0, y: 0 });
+  // Label drag: only the label element moves (once per frame); the full re-apply runs on release
+  const draggedLabelRef = useRef<{ el: SVGGElement; x: number; y: number } | null>(null);
+  const labelDragFrameRef = useRef<number | null>(null);
+  const flushLabelDrag = () => {
+    if (labelDragFrameRef.current !== null) {
+      cancelAnimationFrame(labelDragFrameRef.current);
+      labelDragFrameRef.current = null;
+    }
+    const dragged = draggedLabelRef.current;
+    draggedLabelRef.current = null;
+    // Put the label exactly where it was released (the committed offset re-applies the same spot)
+    const offset = dragged && draggedEdgeIdRef.current ? currentEdgeOffsetsRef.current[draggedEdgeIdRef.current] : null;
+    if (dragged && offset && edgeMovedRef.current) {
+      const initial = edgeInitialOffsetRef.current;
+      dragged.el.setAttribute(
+        'transform',
+        `translate(${dragged.x + (offset.labelDx || 0) - (initial.labelDx || 0)}, ${dragged.y + (offset.labelDy || 0) - (initial.labelDy || 0)})`
+      );
+    }
+  };
   const edgeMovedRef = useRef<boolean>(false);
 
   // State selection and inspector
@@ -1931,6 +2099,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // Smooth scroll-to animation for canvas pan, ensuring node is centered in viewport
   const activePanAnimationRef = useRef<number | null>(null);
   const currentPanRef = useRef<{ x: number; y: number }>({ x: pan.x, y: pan.y });
+  // Latest zoom for wheel handling (several wheel events can arrive before a re-render)
+  const wheelZoomRef = useRef<number>(zoom);
+  wheelZoomRef.current = zoom;
   const zoomRef = useRef<number>(zoom);
   const lastPanRequestRef = useRef<{ target: Element | string; time: number } | null>(null);
 
@@ -2514,7 +2685,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             effectiveSelectedStateId,
             effectiveCustomStyles,
             selectedEdge?.id,
-            effectiveNotes,
+            notesForDiagram,
             isInteractiveMode,
             activeConditionOverlay?.edge?.id,
             availableEdges,
@@ -2546,7 +2717,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     effectiveCustomStyles,
     isInteractiveMode,
     isCompactLabels,
-    effectiveNotes,
+    notesForDiagram,
     complexityHeatmapResult,
     isHeatmapActive,
     heatmapOnlyRefactor,
@@ -2572,7 +2743,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         if (
           (lEdgeId && lEdgeId === activeId) ||
           (lPathId && lPathId === activeId) ||
-          (activeConditionOverlay.edge.label && l.textContent?.includes(activeConditionOverlay.edge.label))
+          // Whole-text match only for labels without an edge id (guards repeat and contain each other)
+          (!lEdgeId &&
+            !!activeConditionOverlay.edge.label &&
+            normalizeGuardText(l.textContent || '') === normalizeGuardText(activeConditionOverlay.edge.label))
         ) {
           l.classList.add('tc-interactive-edge-label-active');
           break;
@@ -2878,11 +3052,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           const lFrom = labelEl.getAttribute('data-from') || '';
           const lTo = labelEl.getAttribute('data-to') || '';
 
-          const isLabelForThisPath =
-            (lPid && (lPid === pId || lPid === path.getAttribute('id'))) ||
-            (lEdgeId && (lEdgeId === pId || lEdgeId === path.getAttribute('data-edge-id'))) ||
-            (lFrom && lTo && isStateMatch(lFrom) && (srcId ? isStateMatch(srcId) : true)) ||
-            (lFrom && lTo && isStateMatch(lTo) && (tgtId ? isStateMatch(tgtId) : true));
+          // A label linked to a path belongs to that path only; the looser checks are for unlinked labels
+          const isLabelForThisPath = lPid
+            ? lPid === pId || lPid === path.getAttribute('id')
+            : (lEdgeId && (lEdgeId === pId || lEdgeId === path.getAttribute('data-edge-id'))) ||
+              (lFrom && lTo && isStateMatch(lFrom) && (srcId ? isStateMatch(srcId) : true)) ||
+              (lFrom && lTo && isStateMatch(lTo) && (tgtId ? isStateMatch(tgtId) : true));
 
           if (isLabelForThisPath) {
             labelEl.classList.add('diagram-connected-edge-label');
@@ -2911,18 +3086,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     });
 
     // G. Secondary label matching by guard condition text (for labels without explicit data-linked-path-id)
+    // Only for labels not linked to a path, and on the whole guard text: guards such as "else" repeat across the
+    // diagram, and a guard can be part of another one, so substring matches highlighted unrelated transitions
     allEdgeLabels.forEach((labelEl) => {
       if (labelEl.classList.contains('diagram-connected-edge-label')) return;
-      const text = labelEl.textContent?.trim() || '';
+      if (labelEl.getAttribute('data-linked-path-id') || labelEl.getAttribute('data-edge-id')) return;
+      const text = normalizeGuardText(labelEl.textContent || '');
       if (!text) return;
-      const isOutLabel = outgoingEdges.some((e) => {
-        const cond = (e.condition || e.label || '').trim();
-        return cond && (text.includes(cond) || cond.includes(text));
-      });
-      const isInLabel = incomingEdges.some((e) => {
-        const cond = (e.condition || e.label || '').trim();
-        return cond && (text.includes(cond) || cond.includes(text));
-      });
+      const isOutLabel = outgoingEdges.some((e) => normalizeGuardText(e.condition || e.label || '') === text);
+      const isInLabel = incomingEdges.some((e) => normalizeGuardText(e.condition || e.label || '') === text);
       if (isOutLabel || isInLabel) {
         labelEl.classList.add('diagram-connected-edge-label');
         if (isOutLabel && isInLabel) {
@@ -2955,6 +3127,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (!targetPath) {
         targetPath = svg.querySelector<SVGPathElement>(`path.tc-edge-path[data-edge-id="${selId}"]`);
       }
+      if (!targetPath) {
+        // Via the transition's label, which is linked to its exact path (parallel edges share from->to)
+        const linkedPathId = svg
+          .querySelector(`g.edgeLabel[data-edge-id="${selId}"]`)
+          ?.getAttribute('data-linked-path-id');
+        if (linkedPathId) targetPath = svg.querySelector<SVGPathElement>(`path.tc-edge-path[data-path-id="${linkedPathId}"]`);
+      }
       if (!targetPath && selectedEdge?.from && selectedEdge?.to) {
         const key = `${selectedEdge.from.trim()}->${selectedEdge.to.trim()}`;
         targetPath = svg.querySelector<SVGPathElement>(`path.tc-edge-path[data-edge-id="${key}"]`);
@@ -2971,7 +3150,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         const labels = svg.querySelectorAll<SVGGElement>('g.edgeLabel');
         labels.forEach((l) => {
           const lPid = l.getAttribute('data-linked-path-id');
-          if (lPid === pId || (selectedEdge?.label && l.textContent?.includes(selectedEdge.label))) {
+          // Text match only for labels not linked to a path: "[preProcess]" is part of other guards too
+          if (lPid ? lPid === pId : !!selectedEdge?.label && normalizeGuardText(l.textContent || '') === normalizeGuardText(selectedEdge.label)) {
             l.classList.add('diagram-selected-edge-label');
           }
         });
@@ -2994,6 +3174,20 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       onCanvasPositionsChange(positions);
     }
   }, [selectedEdge, effectiveNodeOffsets, edgeOffsets, layoutEngine, flowchartCurve]);
+
+  // Custom transition line styles, applied to the rendered paths (resolved like a click on the path)
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    const styles = customEdgeStyles || {};
+    const hasAny = Object.keys(styles).length > 0;
+    if (!hasAny && !svg.querySelector('path[data-tc-edge-styled], g.edgeLabel[data-tc-label-styled]')) return;
+    applyEdgeStylesToSvg(svg, (path) => {
+      if (!hasAny) return undefined;
+      const edge = resolveEdgeFromElement(path, svg, availableEdges);
+      return edge ? styles[edge.id] : undefined;
+    });
+  }, [renderedSvg, customEdgeStyles, availableEdges]);
 
   const panToState = useCallback((stateId: string, timestamp?: number) => {
     if (!stateId) return;
@@ -3075,12 +3269,30 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   };
 
+  // The State Style window belongs to the selected state: selecting another state or clearing the selection closes it
+  useEffect(() => {
+    if (stylePopup && effectiveSelectedStateId !== stylePopup.stateId) setStylePopup(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveSelectedStateId]);
+
+  /** Opens the State Style window beside the state's node (or at the canvas corner if it is not rendered) */
+  const openStylePopup = (stateId: string) => {
+    const nodeEl = containerRef.current?.querySelector(`#mermaid-diagram-svg-container g.node[data-state-id="${stateId}"]`);
+    const r = nodeEl?.getBoundingClientRect();
+    setActiveConditionOverlay(null);
+    setStylePopup({ stateId, anchorRect: r ? { left: r.left, right: r.right, top: r.top } : undefined });
+  };
+
   const handleToggleInspector = () => {
     if (onOpenInspectorPanel) {
-      if (!effectiveSelectedStateId && availableStates.length > 0) {
-        handleSelectState(availableStates[0].id, availableStates[0].label);
+      if (stylePopup) {
+        setStylePopup(null);
+        return;
       }
-      onOpenInspectorPanel('style');
+      const stateId = effectiveSelectedStateId || availableStates[0]?.id;
+      if (!stateId) return;
+      if (!effectiveSelectedStateId) handleSelectState(stateId, availableStates[0].label);
+      openStylePopup(stateId);
       return;
     }
     if (isInspectorOpen) {
@@ -3179,6 +3391,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    edgeSelectedBeforePressRef.current = false;
+    edgePressedRef.current = false;
 
     // Cancel any active smooth scroll animation immediately on mouse interaction
     if (activePanAnimationRef.current) {
@@ -3196,12 +3410,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const target = e.target as Element;
     // If clicking inside inspector, toolbar, context menu, dialogs, or detail overlay, don't initiate drag
     if (
-      target.closest('#state-style-inspector') ||
+      target.closest('#state-style-inspector, #state-style-popup') ||
       target.closest('#mermaid-toolbar') ||
       target.closest('#diagram-context-menu') ||
       target.closest('#note-dialog-overlay') ||
       target.closest('#notes-drawer-overlay') ||
-      target.closest('#edge-condition-detail-overlay') ||
+      target.closest('#edge-condition-detail-overlay, #transition-guard-inspector') ||
       target.closest('#transition-guard-inspector') ||
       target.closest('#complexity-heatmap-panel') ||
       target.closest('#state-machine-stats-panel') ||
@@ -3224,6 +3438,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         clientX: e.clientX,
         clientY: e.clientY,
       };
+      // An edge label can also be dragged away from its default spot (it only counts as a drag after 3px)
+      const labelEl = labelOrBadgeEl.closest('g.edgeLabel') as SVGGElement | null;
+      const labelPathId = labelEl?.getAttribute('data-linked-path-id');
+      if (labelEl && labelPathId) {
+        isDraggingEdgeHandleRef.current = true;
+        draggedEdgeIdRef.current = labelPathId;
+        draggedHandleTypeRef.current = 'label';
+        dragUnitScaleRef.current = getSvgUnitScale(labelEl.parentElement, zoom);
+        edgeHandleDragStartPosRef.current = { x: e.clientX, y: e.clientY };
+        edgeMovedRef.current = false;
+        edgeInitialOffsetRef.current = { ...(currentEdgeOffsetsRef.current[labelPathId] || { x: 0, y: 0 }) };
+        draggedLabelRef.current = { el: labelEl, ...parseTranslation(labelEl.getAttribute('transform') || '') };
+      }
       return;
     }
 
@@ -3236,6 +3463,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (eId && hType) {
         isDraggingEdgeHandleRef.current = true;
         draggedEdgeIdRef.current = eId;
+        dragUnitScaleRef.current = getSvgUnitScale(handleEl.parentElement, zoom);
         draggedHandleTypeRef.current = hType;
         edgeHandleDragStartPosRef.current = { x: e.clientX, y: e.clientY };
         edgeMovedRef.current = false;
@@ -3260,9 +3488,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
       }
       if (stateId && !stateId.startsWith('note_')) {
+        nodeSelectedBeforePressRef.current = effectiveSelectedStateId === stateId;
         isDraggingNodeRef.current = true;
         draggedNodeIdRef.current = stateId;
         draggedNodeElRef.current = nodeEl;
+        dragUnitScaleRef.current = getSvgUnitScale(nodeEl.parentElement, zoom);
         nodeDragStartPosRef.current = { x: e.clientX, y: e.clientY };
         nodeMovedRef.current = false;
         const currentOffset = effectiveNodeOffsets[stateId] || { x: 0, y: 0 };
@@ -3290,6 +3520,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       clickedEdge = findEdgeNearPoint(svg, e.clientX, e.clientY, availableEdges, 24);
     }
     if (clickedEdge && clickedEdge.from && clickedEdge.to && clickedEdge.from.trim() && clickedEdge.to.trim()) {
+      edgeSelectedBeforePressRef.current = selectedEdge?.id === clickedEdge.id;
+      edgePressedRef.current = true;
       setSelectedEdge(clickedEdge);
       if (svg) {
         applyDiagramOffsetsToSvg(
@@ -3302,12 +3534,20 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           flowchartCurve
         );
       }
+      // Key the offset by the path id, like the edge handles do, so line drags and handle drags add up
+      const grabbedPathId = target.closest('path')?.getAttribute('data-path-id') || null;
+      const offsetKey = grabbedPathId || clickedEdge.id;
       isDraggingEdgeHandleRef.current = true;
-      draggedEdgeIdRef.current = clickedEdge.id;
+      draggedEdgeIdRef.current = offsetKey;
       draggedHandleTypeRef.current = 'mid';
+      dragUnitScaleRef.current = getSvgUnitScale(
+        target.closest('path')?.parentElement ?? svg?.querySelector('g.edgePaths') ?? null,
+        zoom
+      );
       edgeHandleDragStartPosRef.current = { x: e.clientX, y: e.clientY };
       edgeMovedRef.current = false;
-      const currentEdgeOffset = currentEdgeOffsetsRef.current[clickedEdge.id] || { x: 0, y: 0 };
+      const currentEdgeOffset =
+        currentEdgeOffsetsRef.current[offsetKey] || currentEdgeOffsetsRef.current[clickedEdge.id] || { x: 0, y: 0 };
       edgeInitialOffsetRef.current = { ...currentEdgeOffset };
       setIsNodeDragging(true);
       return;
@@ -3326,13 +3566,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const screenDx = e.clientX - edgeHandleDragStartPosRef.current.x;
       const screenDy = e.clientY - edgeHandleDragStartPosRef.current.y;
 
-      if (Math.hypot(screenDx, screenDy) >= 3) {
+      if (!edgeMovedRef.current && Math.hypot(screenDx, screenDy) >= 3) {
         edgeMovedRef.current = true;
+        // A label press only becomes a drag here (a plain click must not toggle the dragging state)
+        if (handleType === 'label') setIsNodeDragging(true);
       }
 
       if (edgeMovedRef.current) {
-        const canvasDx = screenDx / zoom;
-        const canvasDy = screenDy / zoom;
+        const canvasDx = screenDx / dragUnitScaleRef.current.x;
+        const canvasDy = screenDy / dragUnitScaleRef.current.y;
         const initial = edgeInitialOffsetRef.current;
 
         const nextOffset: EdgeOffset = { ...initial };
@@ -3345,6 +3587,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         } else if (handleType === 'mid') {
           nextOffset.x = Math.round(initial.x + canvasDx);
           nextOffset.y = Math.round(initial.y + canvasDy);
+        } else if (handleType === 'label') {
+          nextOffset.labelDx = Math.round((initial.labelDx || 0) + canvasDx);
+          nextOffset.labelDy = Math.round((initial.labelDy || 0) + canvasDy);
         }
 
         currentEdgeOffsetsRef.current = {
@@ -3352,7 +3597,17 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           [edgeId]: nextOffset,
         };
 
-        if (containerRef.current) {
+        const draggedLabel = draggedLabelRef.current;
+        if (handleType === 'label' && draggedLabel) {
+          // The edge itself does not change: move just the label element, at most once per frame
+          const tx = draggedLabel.x + (nextOffset.labelDx || 0) - (initial.labelDx || 0);
+          const ty = draggedLabel.y + (nextOffset.labelDy || 0) - (initial.labelDy || 0);
+          if (labelDragFrameRef.current !== null) cancelAnimationFrame(labelDragFrameRef.current);
+          labelDragFrameRef.current = requestAnimationFrame(() => {
+            labelDragFrameRef.current = null;
+            draggedLabel.el.setAttribute('transform', `translate(${tx}, ${ty})`);
+          });
+        } else if (containerRef.current) {
           const svg = getDiagramSvg();
           if (svg) {
             applyDiagramOffsetsToSvg(
@@ -3370,19 +3625,38 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       return;
     }
 
-    // 2. Dragging a state node (reroute all edges to match current engine and curve settings without distortion)
+    // 2. Dragging a state node: applied once per animation frame with the latest pointer position, re-routing
+    // only the edges attached to the dragged node (the full re-route runs when the drag ends)
     if (isDraggingNodeRef.current && draggedNodeIdRef.current) {
+      pendingNodeDragPointRef.current = { x: e.clientX, y: e.clientY };
+      applyNodeDragFrameRef.current = () => applyNodeDragAt(pendingNodeDragPointRef.current);
+      if (nodeDragFrameRef.current === null) {
+        nodeDragFrameRef.current = requestAnimationFrame(() => {
+          nodeDragFrameRef.current = null;
+          applyNodeDragFrameRef.current?.();
+        });
+      }
+      return;
+    }
+
+    // 3. Panning canvas
+    handlePanMove(e);
+  };
+
+  const applyNodeDragAt = (point: { x: number; y: number } | null) => {
+    if (!point || !isDraggingNodeRef.current || !draggedNodeIdRef.current) return;
+    {
       const stateId = draggedNodeIdRef.current;
-      const screenDx = e.clientX - nodeDragStartPosRef.current.x;
-      const screenDy = e.clientY - nodeDragStartPosRef.current.y;
+      const screenDx = point.x - nodeDragStartPosRef.current.x;
+      const screenDy = point.y - nodeDragStartPosRef.current.y;
 
       if (Math.hypot(screenDx, screenDy) >= 3) {
         nodeMovedRef.current = true;
       }
 
       if (nodeMovedRef.current) {
-        const canvasDx = screenDx / zoom;
-        const canvasDy = screenDy / zoom;
+        const canvasDx = screenDx / dragUnitScaleRef.current.x;
+        const canvasDy = screenDy / dragUnitScaleRef.current.y;
 
         let newOffset = {
           x: Math.round(nodeInitialOffsetRef.current.x + canvasDx),
@@ -3401,14 +3675,25 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             snapConfig
           );
 
-          setActiveSnapResult(snapRes);
+          // Only re-render (snap guides) when the snapped position or alignment actually changes
+          setActiveSnapResult((prev) =>
+            prev &&
+            prev.x === snapRes.x &&
+            prev.y === snapRes.y &&
+            prev.snapSourceX === snapRes.snapSourceX &&
+            prev.snapSourceY === snapRes.snapSourceY &&
+            prev.alignedNodeX?.id === snapRes.alignedNodeX?.id &&
+            prev.alignedNodeY?.id === snapRes.alignedNodeY?.id
+              ? prev
+              : snapRes
+          );
 
           newOffset = {
             x: Math.round(snapRes.x - nodeInitialCenterRef.current.origCenterX),
             y: Math.round(snapRes.y - nodeInitialCenterRef.current.origCenterY),
           };
         } else {
-          setActiveSnapResult(null);
+          setActiveSnapResult((prev) => (prev === null ? prev : null));
         }
 
         currentNodeOffsetsRef.current = {
@@ -3426,14 +3711,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               null,
               selectedEdge?.id,
               layoutEngine,
-              flowchartCurve
+              flowchartCurve,
+              { onlyNodeId: stateId }
             );
           }
         }
       }
-      return;
     }
+  };
 
+  const handlePanMove = (e: React.MouseEvent) => {
     // 3. Panning canvas
     if (isDragging) {
       setPan({
@@ -3549,22 +3836,38 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    // Apply the latest pending node-drag position before finishing the drag
+    if (nodeDragFrameRef.current !== null) {
+      cancelAnimationFrame(nodeDragFrameRef.current);
+      nodeDragFrameRef.current = null;
+      applyNodeDragFrameRef.current?.();
+    }
+    flushLabelDrag();
     // 0. Check pending click on priority badge or edge label
     if (pendingLabelBadgeClickRef.current) {
       const { el, clientX, clientY } = pendingLabelBadgeClickRef.current;
       pendingLabelBadgeClickRef.current = null;
       const dx = Math.abs(e.clientX - clientX);
       const dy = Math.abs(e.clientY - clientY);
-      if (dx < 10 && dy < 10) {
+      const labelDragged = draggedHandleTypeRef.current === 'label' && edgeMovedRef.current;
+      if (labelDragged) {
+        // Commit the label move below; the click that follows must not select the edge / open the inspector
+        edgeClickHandledRef.current = true;
+        setTimeout(() => {
+          edgeClickHandledRef.current = false;
+        }, 0);
+      } else if (draggedHandleTypeRef.current === 'label') {
+        isDraggingEdgeHandleRef.current = false;
+        draggedEdgeIdRef.current = null;
+        draggedHandleTypeRef.current = null;
+      }
+      if (!labelDragged && dx < 10 && dy < 10) {
         const svg = getDiagramSvg();
         const edge = resolveEdgeFromElement(el, svg, availableEdges);
         if (edge && edge.from && edge.to) {
-          setSelectedEdge(edge);
           const rect = el.getBoundingClientRect();
-          toggleConditionOverlay(edge, {
-            x: rect.left + rect.width / 2,
-            y: rect.top,
-          });
+          activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id);
+          edgeClickHandledRef.current = true;
           return;
         }
       }
@@ -3626,12 +3929,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
       // Click without drag -> select state and open inspector
       if (!wasMoved && stateId) {
+        const onBadge = !!(e.target as Element).closest?.('.tc-refactor-flag-badge, .tc-complexity-badge');
+        // Second click on the selected state toggles its State Style window (a badge keeps its own action)
+        if (nodeSelectedBeforePressRef.current && !onBadge) {
+          if (stylePopup?.stateId === stateId) setStylePopup(null);
+          else openStylePopup(stateId);
+          return;
+        }
         const targetNode = containerRef.current?.querySelector(`g.node[data-state-id="${stateId}"]`);
         const stateLabel = targetNode?.getAttribute('data-state-label') || stateId;
         handleSelectState(stateId, stateLabel);
         setSelectedEdge(null);
         // Clicking a node's complexity / refactor badge also opens the Complexity Heat-Map
-        if ((e.target as Element).closest?.('.tc-refactor-flag-badge, .tc-complexity-badge')) {
+        if (onBadge) {
           setIsHeatmapPanelOpen(true);
         }
         return;
@@ -3656,13 +3966,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const target = e.target as Element;
       // If clicking inside inspector, toolbar, context menu, dialogs, or note overlays, don't change selection
       if (
-        target.closest('#state-style-inspector') ||
+        target.closest('#state-style-inspector, #state-style-popup') ||
         target.closest('#mermaid-toolbar') ||
         target.closest('#diagram-context-menu') ||
         target.closest('#note-dialog-overlay') ||
         target.closest('#notes-drawer-overlay') ||
         target.closest('#mermaid-note-overlays-layer') ||
-        target.closest('#edge-condition-detail-overlay')
+        target.closest('#edge-condition-detail-overlay, #transition-guard-inspector')
       ) {
         return;
       }
@@ -3721,26 +4031,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         clickedEdge = findEdgeNearPoint(svg, e.clientX, e.clientY, availableEdges, 24);
       }
       if (clickedEdge && clickedEdge.from && clickedEdge.to && clickedEdge.from.trim() && clickedEdge.to.trim()) {
-        setSelectedEdge(clickedEdge);
-
-        // Check if user clicked an edge label or priority badge to toggle transition condition detail overlay
+        // First click selects & highlights the transition; clicking the selected one again opens the inspector
         const labelOrBadgeEl = (target.closest('.tc-priority-badge') ||
           target.closest('.priority-badge') ||
           target.closest('g.edgeLabel') ||
           target.closest('.clickable-edge-label') ||
           target.closest('.tc-interactive-edge-label')) as HTMLElement | SVGElement | null;
-
-        if (labelOrBadgeEl || isInteractiveMode) {
-          const rect = labelOrBadgeEl?.getBoundingClientRect() || {
-            left: e.clientX - 10,
-            width: 20,
-            top: e.clientY - 10,
-          };
-          toggleConditionOverlay(clickedEdge, {
-            x: rect.left + rect.width / 2,
-            y: rect.top,
-          });
-        }
+        const rect = labelOrBadgeEl?.getBoundingClientRect() || { left: e.clientX - 10, width: 20, top: e.clientY - 10 };
+        activateEdgeClick(
+          clickedEdge,
+          { x: rect.left + rect.width / 2, y: rect.top },
+          edgePressedRef.current ? edgeSelectedBeforePressRef.current : selectedEdge?.id === clickedEdge.id
+        );
+        edgeClickHandledRef.current = true;
 
         if (svg) {
           applyDiagramOffsetsToSvg(
@@ -3756,7 +4059,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         return;
       }
 
-      // Clicked on empty canvas background -> deselect edge and condition overlay, keep Method Editor open
+      // Clicked on empty canvas background -> clear the selected state, its highlighted transitions,
+      // the selected edge and the condition overlay (editor tabs keep showing the last selected state)
+      if (effectiveSelectedStateId) handleSelectState(null);
       setSelectedEdge(null);
       setActiveConditionOverlay(null);
       if (svg) {
@@ -3781,7 +4086,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       target.closest('#complexity-heatmap-panel') ||
       target.closest('#state-machine-stats-panel') ||
       target.closest('#diagram-search-panel') ||
-      target.closest('#state-style-inspector') ||
+      target.closest('#state-style-inspector, #state-style-popup') ||
       target.closest('#transition-guard-inspector') ||
       target.closest('#edge-condition-detail-overlay')
     ) {
@@ -3940,6 +4245,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // Window-level mouseup listener to guarantee drag never gets orphaned
   useEffect(() => {
     const handleWindowMouseUp = () => {
+      flushLabelDrag();
       if (isDraggingEdgeHandleRef.current) {
         const edgeId = draggedEdgeIdRef.current;
         const wasMoved = edgeMovedRef.current;
@@ -4015,7 +4321,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         (edgeOffsets[id].startDx !== undefined && edgeOffsets[id].startDx !== 0) ||
         (edgeOffsets[id].startDy !== undefined && edgeOffsets[id].startDy !== 0) ||
         (edgeOffsets[id].endDx !== undefined && edgeOffsets[id].endDx !== 0) ||
-        (edgeOffsets[id].endDy !== undefined && edgeOffsets[id].endDy !== 0)
+        (edgeOffsets[id].endDy !== undefined && edgeOffsets[id].endDy !== 0) ||
+        !!edgeOffsets[id].labelDx ||
+        !!edgeOffsets[id].labelDy
     ).length;
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -4030,7 +4338,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       target &&
       (target.closest('#diagram-minimap-container') ||
         target.closest('#diagram-minimap-collapsed') ||
-        target.closest('#state-style-inspector') ||
+        target.closest('#state-style-inspector, #state-style-popup') ||
         target.closest('#method-editor-panel') ||
         target.closest('#method-editor-fullscreen-overlay') ||
         target.closest('#method-editor-modal-overlay') ||
@@ -4049,14 +4357,35 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         target.closest('#state-machine-stats-panel') ||
         target.closest('#diagram-search-panel') ||
         target.closest('#transition-guard-inspector') ||
-        target.closest('#edge-condition-detail-overlay'))
+        target.closest('#edge-condition-detail-overlay, #transition-guard-inspector'))
     ) {
       // Allow normal scrolling inside editors and UI overlays; do NOT zoom canvas
       return;
     }
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    setZoom((prev) => Math.min(Math.max(0.2, prev * factor), 5));
+    const oldZoom = wheelZoomRef.current;
+    const newZoom = Math.min(Math.max(0.2, oldZoom * factor), 5);
+    if (newZoom === oldZoom) return;
+
+    // Zoom around the cursor: the wrapper is drawn as translate(pan) scale(zoom) with its origin at the
+    // top-left, so move the pan such that the diagram point under the cursor stays under the cursor
+    const wrapper = containerRef.current?.querySelector('#mermaid-svg-wrapper') as HTMLElement | null;
+    const oldPan = currentPanRef.current;
+    if (wrapper) {
+      const wRect = wrapper.getBoundingClientRect();
+      // Untransformed wrapper origin on screen (its bounding box starts at origin + pan)
+      const originX = wRect.left - oldPan.x;
+      const originY = wRect.top - oldPan.y;
+      const cx = e.clientX - originX;
+      const cy = e.clientY - originY;
+      const ratio = newZoom / oldZoom;
+      const nextPan = { x: cx - (cx - oldPan.x) * ratio, y: cy - (cy - oldPan.y) * ratio };
+      currentPanRef.current = nextPan;
+      setPan(nextPan);
+    }
+    wheelZoomRef.current = newZoom;
+    setZoom(newZoom);
   };
 
   const handleResetZoom = () => {
@@ -4338,6 +4667,26 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           if (document.fullscreenElement) {
             document.exitFullscreen?.().catch(() => {});
           }
+          return;
+        }
+
+        // Clear the selected state / edge highlights, unless Esc is closing something else.
+        // Check the event target: inputs such as the search box blur themselves on Esc before this runs
+        const keyTarget = e.target as HTMLElement | null;
+        const isTyping =
+          keyTarget &&
+          (keyTarget.tagName === 'INPUT' ||
+            keyTarget.tagName === 'TEXTAREA' ||
+            keyTarget.tagName === 'SELECT' ||
+            keyTarget.isContentEditable);
+        const overlayOpen = document.querySelector(
+          '#toolbar-hidden-controls-menu, #code-editors-dropdown-menu, #dock-context-menu, #window-menu, #diagram-presets-dropdown-menu, #diagram-context-menu, [role="dialog"]'
+        );
+        const canvasVisible = Boolean(containerRef.current && containerRef.current.offsetParent !== null);
+        if (!isTyping && !overlayOpen && canvasVisible && (effectiveSelectedStateId || selectedEdge)) {
+          if (effectiveSelectedStateId) handleSelectState(null);
+          setSelectedEdge(null);
+          setActiveConditionOverlay(null);
         }
       }
 
@@ -4537,18 +4886,23 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [isFullscreen, isInspectorOpen, effectiveSelectedStateId, effectiveNodeOffsets]);
+  }, [isFullscreen, isInspectorOpen, effectiveSelectedStateId, effectiveNodeOffsets, selectedEdge]);
 
   const handleClick = (e: React.MouseEvent) => {
+    // Mouse-up already handled this gesture's edge click
+    if (edgeClickHandledRef.current) {
+      edgeClickHandledRef.current = false;
+      return;
+    }
     const target = e.target as Element;
     if (
-      target.closest('#state-style-inspector') ||
+      target.closest('#state-style-inspector, #state-style-popup') ||
       target.closest('#mermaid-toolbar') ||
       target.closest('#diagram-context-menu') ||
       target.closest('#note-dialog-overlay') ||
       target.closest('#notes-drawer-overlay') ||
       target.closest('#mermaid-note-overlays-layer') ||
-      target.closest('#edge-condition-detail-overlay') ||
+      target.closest('#edge-condition-detail-overlay, #transition-guard-inspector') ||
       target.closest('#transition-guard-inspector') ||
       target.closest('#complexity-heatmap-panel') ||
       target.closest('#state-machine-stats-panel') ||
@@ -4568,30 +4922,102 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const svg = getDiagramSvg();
       const edge = resolveEdgeFromElement(labelOrBadgeEl, svg, availableEdges);
       if (edge && edge.from && edge.to) {
-        setSelectedEdge(edge);
         const rect = labelOrBadgeEl.getBoundingClientRect();
-        toggleConditionOverlay(edge, {
-          x: rect.left + rect.width / 2,
-          y: rect.top,
-        });
+        activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id);
       }
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Toolbar overflow: controls stay on one row next to the search box; the lowest-priority
+  // controls that do not fit move into the "Hidden" menu (measured against the real toolbar width)
+  // ---------------------------------------------------------------------------
+  const hasCodeEditors = Boolean(tcPouContent || tcDutContent || onOpenEnumEditorProp);
+  const toolbarItems: ToolbarItemId[] = (
+    [
+      'interactive', 'labels', 'code',
+      'autoAlign', 'lock', 'snap', 'resetLayout',
+      'heatmap', 'refactor',
+      'stats', 'legend', 'notes', 'minimap', 'styles',
+      'zoom', 'fullscreen',
+    ] as ToolbarItemId[]
+  ).filter((id) => (id === 'code' ? hasCodeEditors : id === 'resetLayout' ? movedElementsCount > 0 : true));
+  const TOOLBAR_GROUP: Record<ToolbarItemId, number> = {
+    interactive: 0, labels: 0, code: 0,
+    autoAlign: 1, lock: 1, snap: 1, resetLayout: 1,
+    heatmap: 2, refactor: 2,
+    stats: 3, legend: 3, notes: 3, minimap: 3, styles: 3,
+    zoom: 4, fullscreen: 4,
+  };
+  // First to stay visible -> last to move into the Hidden menu
+  const TOOLBAR_PRIORITY: ToolbarItemId[] = [
+    'zoom', 'fullscreen', 'interactive', 'code', 'autoAlign', 'heatmap', 'lock', 'resetLayout',
+    'stats', 'legend', 'notes', 'minimap', 'styles', 'refactor', 'snap', 'labels',
+  ];
+
+  // Callback ref: the toolbar is portaled into a container that may not exist on the first render
+  const [toolbarEl, setToolbarEl] = useState<HTMLDivElement | null>(null);
+  const toolbarItemsRef = useRef<HTMLDivElement>(null);
+  const [toolbarWidth, setToolbarWidth] = useState<number>(0);
+
+  useEffect(() => {
+    if (!toolbarEl) return;
+    const ro = new ResizeObserver(() => setToolbarWidth(toolbarEl.clientWidth));
+    ro.observe(toolbarEl);
+    return () => ro.disconnect();
+  }, [toolbarEl]);
+
+  const hiddenButtonWidthRef = useRef<number>(96);
+  // Search box: wider while focused, but always leaves room for the Hidden button on narrow toolbars
+  const searchBoxWidth = Math.round(
+    Math.max(
+      40,
+      Math.min(
+        isSearchFocused ? Math.max(160, toolbarWidth * 0.55) : Math.max(120, toolbarWidth * 0.28),
+        isSearchFocused ? 360 : 200,
+        toolbarWidth - 46 - hiddenButtonWidthRef.current
+      )
+    )
+  );
+
+  const toolbarOverflow = useToolbarOverflow<ToolbarItemId>({
+    items: toolbarItems,
+    priority: TOOLBAR_PRIORITY,
+    // Toolbar padding + gap between the search box and the controls + safety margin
+    available: toolbarWidth - searchBoxWidth - 32,
+    containerRef: toolbarItemsRef,
+    hiddenButtonSelector: '#toolbar-hidden-controls-container',
+    groupOf: (id) => TOOLBAR_GROUP[id],
+  });
+  hiddenButtonWidthRef.current = toolbarOverflow.hiddenButtonWidth;
+  const overflowItems = toolbarOverflow.overflow;
+  const isToolbarItemVisible = toolbarOverflow.isVisible;
+  const toolbarButtonClass = (active: boolean, activeClass: string) =>
+    `flex items-center gap-1 px-1.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
+      active ? activeClass : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
+    }`;
+
+  const toggleHeatmap = () => {
+    onSwitchToDiagramTab?.();
+    setIsHeatmapActive((prev) => {
+      const next = !prev;
+      if (next) setIsHeatmapPanelOpen(true);
+      return next;
+    });
+  };
+
   const toolbarContent = (
     <div
+      ref={setToolbarEl}
       id="mermaid-toolbar"
-      className="relative flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1 px-1 sm:px-2 py-0.5 text-xs text-slate-300 z-20 shrink-0 w-full overflow-visible"
+      className="relative flex flex-nowrap items-center gap-2 px-1 sm:px-2 py-0.5 text-xs text-slate-300 z-20 shrink-0 w-full min-w-0 overflow-visible"
     >
-      <div className="flex items-center gap-2 min-w-0 shrink-0">
-        {/* Search Input for States and Transitions (Shrunk by default; expands longer when clicked/focused) */}
+      <div className="flex items-center min-w-0 shrink-0">
+        {/* Search Input for States and Transitions (expands when focused; controls overflow into Hidden) */}
         <div
           id="diagram-search-input-container"
-          className={`relative flex items-center transition-all duration-300 ease-in-out ${
-            isSearchFocused
-              ? 'w-56 xs:w-64 sm:w-80 md:w-96 max-w-[calc(100vw-280px)]'
-              : 'w-28 xs:w-36 sm:w-44 md:w-48'
-          }`}
+          style={{ width: searchBoxWidth }}
+          className="relative flex items-center transition-[width] duration-300 ease-in-out"
         >
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
           <input
@@ -4767,85 +5193,115 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         </div>
       </div>
 
-      {/* Right Side: Logically Grouped Toolbar Controls */}
-      <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto">
-        {/* Hidden Controls Menu (Accessible across all monitor sizes; hosts controls moved from toolbar) */}
-        <ToolbarHiddenControls
-          isInteractiveMode={isInteractiveMode}
-          setIsInteractiveMode={setIsInteractiveMode}
-          isCompactLabels={isCompactLabels}
-          setIsCompactLabels={setIsCompactLabels}
-          isInspectorOpen={isInspectorOpen}
-          handleToggleInspector={handleToggleInspector}
-          handleOpenMethodEditor={handleOpenMethodEditor}
-          handleOpenEnumEditor={handleOpenEnumEditor}
-          hasPouContent={Boolean(tcPouContent)}
-          hasDutContent={Boolean(tcDutContent || onOpenEnumEditorProp)}
-          handleAutoAlign={handleAutoAlign}
-          isAutoAligning={isAutoAligning}
-          isLayoutLocked={isLayoutLocked}
-          handleToggleLayoutLocked={handleToggleLayoutLocked}
-          movedElementsCount={movedElementsCount}
-          handleResetLayout={handleResetLayout}
-          totalNotesCount={totalNotesCount}
-          onOpenNotesDrawer={() => setIsNotesDrawerOpen(true)}
-          isMinimapOpen={isMinimapOpen}
-          setIsMinimapOpen={setIsMinimapOpen}
-          isLegendOpen={isLegendOpen}
-          setIsLegendOpen={setIsLegendOpen}
-          isStatsOpen={isStatsOpen}
-          setIsStatsOpen={setIsStatsOpen}
-          isHeatmapActive={isHeatmapActive}
-          setIsHeatmapActive={setIsHeatmapActive}
-          setIsHeatmapPanelOpen={setIsHeatmapPanelOpen}
-          refactorCandidatesCount={complexityHeatmapResult.refactorCandidatesCount}
-          complexityThreshold={complexityThreshold}
-          snapConfig={snapConfig}
-          setSnapConfig={setSnapConfig}
-          setShowSnapToast={setShowSnapToast}
-          zoom={zoom}
-          setZoom={setZoom}
-          handleResetZoom={handleResetZoom}
-          isFullscreen={isFullscreen}
-          toggleFullscreen={toggleFullscreen}
-          isSearchFocused={isSearchFocused}
-        />
-        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
+      {/* Controls that fit on this row (the rest are listed in the Hidden menu) */}
+      <div ref={toolbarItemsRef} className="flex flex-nowrap items-center justify-end gap-1.5 ml-auto min-w-0 overflow-hidden py-0.5 px-0.5">
+        {toolbarItems.map((id, index) => {
+          if (!isToolbarItemVisible(id)) return null;
+          const prevVisible = toolbarItems.slice(0, index).filter(isToolbarItemVisible).pop();
+          const separator =
+            prevVisible && TOOLBAR_GROUP[prevVisible] !== TOOLBAR_GROUP[id] ? (
+              <div className="w-[1px] h-4 bg-slate-800 shrink-0" />
+            ) : null;
+          return (
+            <React.Fragment key={id}>
+              {separator}
+              <div data-toolbar-item={id} className="shrink-0 flex items-center">
+                {renderToolbarItem(id)}
+              </div>
+            </React.Fragment>
+          );
+        })}
 
-        {/* PRIMARY DIRECT CONTROLS (Hidden into 'Hidden' menu when search input expands) */}
-        {/* Interactive Mode Toggle */}
-        <button
-          id="toggle-interactive-mode-btn"
-          type="button"
-          onClick={() => {
-            onSwitchToDiagramTab?.();
-            setIsInteractiveMode((prev) => !prev);
-          }}
-          className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-            isSearchFocused ? 'hidden' : 'flex'
-          } ${
-            isInteractiveMode
-              ? 'bg-emerald-600/90 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/40'
-              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
-          }`}
-          title="Toggle Interactive Mode: Clean compact transition labels with click-to-expand condition details overlay"
-        >
-          <MousePointerClick className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="hidden sm:inline">Interactive</span>
-          <span
-            className={`px-1.5 py-0.2 rounded-full font-bold text-[10px] ${
-              isInteractiveMode
-                ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
-                : 'bg-slate-900 text-slate-400'
-            }`}
+        {/* Hidden Controls Menu: lists only the controls that did not fit */}
+        {overflowItems.length > 0 && (
+          <ToolbarHiddenControls
+            overflowItems={overflowItems}
+            compact={toolbarWidth < 640}
+            isInteractiveMode={isInteractiveMode}
+            setIsInteractiveMode={setIsInteractiveMode}
+            isCompactLabels={isCompactLabels}
+            setIsCompactLabels={setIsCompactLabels}
+            isInspectorOpen={isInspectorOpen}
+            handleToggleInspector={handleToggleInspector}
+            handleOpenMethodEditor={handleOpenMethodEditor}
+            handleOpenEnumEditor={handleOpenEnumEditor}
+            hasPouContent={Boolean(tcPouContent)}
+            hasDutContent={Boolean(tcDutContent || onOpenEnumEditorProp)}
+            handleAutoAlign={handleAutoAlign}
+            isAutoAligning={isAutoAligning}
+            isLayoutLocked={isLayoutLocked}
+            handleToggleLayoutLocked={handleToggleLayoutLocked}
+            movedElementsCount={movedElementsCount}
+            handleResetLayout={handleResetLayout}
+            totalNotesCount={totalNotesCount}
+            onOpenNotesDrawer={() => setIsNotesDrawerOpen(true)}
+            isMinimapOpen={isMinimapOpen}
+            setIsMinimapOpen={setIsMinimapOpen}
+            isLegendOpen={isLegendOpen}
+            setIsLegendOpen={setIsLegendOpen}
+            isStatsOpen={isStatsOpen}
+            setIsStatsOpen={setIsStatsOpen}
+            isHeatmapActive={isHeatmapActive}
+            onToggleHeatmap={toggleHeatmap}
+            setIsHeatmapPanelOpen={setIsHeatmapPanelOpen}
+            refactorCandidatesCount={complexityHeatmapResult.refactorCandidatesCount}
+            complexityThreshold={complexityThreshold}
+            snapConfig={snapConfig}
+            setSnapConfig={setSnapConfig}
+            setShowSnapToast={setShowSnapToast}
+            zoom={zoom}
+            setZoom={setZoom}
+            handleResetZoom={handleResetZoom}
+            isFullscreen={isFullscreen}
+            toggleFullscreen={toggleFullscreen}
+          />
+        )}
+      </div>
+    </div>
+  );
+
+  function renderToolbarItem(id: ToolbarItemId): React.ReactNode {
+    switch (id) {
+      case 'interactive':
+        return (
+          <button
+            id="toggle-interactive-mode-btn"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              setIsInteractiveMode((prev) => !prev);
+            }}
+            className={toolbarButtonClass(
+              isInteractiveMode,
+              'bg-emerald-600/90 hover:bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/40'
+            )}
+            title="Toggle Interactive Mode: Clean compact transition labels with click-to-expand condition details overlay"
           >
-            {isInteractiveMode ? 'ON' : 'OFF'}
-          </span>
-        </button>
-
-        {/* Consolidated Code Editors Dropdown Menu */}
-        {(tcPouContent || tcDutContent || onOpenEnumEditorProp) && (
-          <div className={`relative ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`}>
+            <MousePointerClick className="w-3.5 h-3.5 text-emerald-400" />
+            <span
+              className={`px-1.5 py-0.2 rounded-full font-bold text-[10px] ${
+                isInteractiveMode ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60' : 'bg-slate-900 text-slate-400'
+              }`}
+            >
+              {isInteractiveMode ? 'ON' : 'OFF'}
+            </span>
+          </button>
+        );
+      case 'labels':
+        return (
+          <button
+            id="toolbar-labels-btn"
+            type="button"
+            onClick={() => setIsCompactLabels((prev) => !prev)}
+            className={toolbarButtonClass(isCompactLabels, 'bg-sky-950/80 text-sky-300 border border-sky-600/70')}
+            title={`Transition labels: ${isCompactLabels ? 'Clean (shortened)' : 'Full condition text'} - click to toggle`}
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-sky-400" />
+          </button>
+        );
+      case 'code':
+        return (
+          <div className="relative">
             <button
               ref={codeButtonRef}
               id="toolbar-code-editors-dropdown-btn"
@@ -4856,7 +5312,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 }
                 setIsCodeMenuOpen((prev) => !prev);
               }}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
+              className={`flex items-center gap-1 px-1.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
                 isCodeMenuOpen
                   ? 'bg-sky-600 text-white shadow-sm ring-1 ring-sky-400/40'
                   : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
@@ -4864,7 +5320,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               title="Edit TwinCAT POU Methods (.TcPOU) or State Enum (.TcDUT)"
             >
               <Code2 className="w-3.5 h-3.5 text-sky-400" />
-              <span className="hidden md:inline">Edit Code</span>
               <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isCodeMenuOpen ? 'rotate-180' : ''}`} />
             </button>
 
@@ -4918,87 +5373,202 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 document.body
               )}
           </div>
-        )}
-
-        <div className={`w-[1px] h-4 bg-slate-800 mx-0.5 ${isSearchFocused ? 'hidden' : 'hidden sm:block'}`}></div>
-
-        {/* Auto-Align Diagram Button */}
-        <button
-          id="toolbar-auto-align-btn"
-          type="button"
-          onClick={() => {
-            onSwitchToDiagramTab?.();
-            handleAutoAlign();
-          }}
-          disabled={isAutoAligning || !svgContent}
-          className={`items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-            isSearchFocused ? 'hidden' : 'hidden sm:flex'
-          } ${
-            isAutoAligning
-              ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 ring-1 ring-sky-500/20'
-              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 shadow-xs active:scale-95'
-          }`}
-          title={`Auto-Align (Shortcut: A): Re-runs the ${layoutEngine.toUpperCase()} layout engine to organize all nodes according to flowchart or state diagram logic${
-            isLayoutLocked ? ' (Layout remains locked)' : ''
-          }`}
-        >
-          <Workflow
-            className={`w-3.5 h-3.5 text-sky-400 ${
-              isAutoAligning ? 'animate-spin' : ''
+        );
+      case 'autoAlign':
+        return (
+          <button
+            id="toolbar-auto-align-btn"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              handleAutoAlign();
+            }}
+            disabled={isAutoAligning || !svgContent}
+            className={toolbarButtonClass(isAutoAligning, 'bg-sky-500/20 text-sky-300 border border-sky-500/40')}
+            title={`Auto-Align (Shortcut: A): Re-runs the ${layoutEngine.toUpperCase()} layout engine to organize all nodes${
+              isLayoutLocked ? ' (Layout remains locked)' : ''
             }`}
-          />
-          <span className="hidden md:inline">Auto-Align</span>
-        </button>
-
-        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
-
-        {/* GROUP 4: Zoom Navigation */}
-        <div className="flex items-center gap-0.5">
-          <button
-            id="zoom-out-button"
-            type="button"
-            onClick={() => {
-              onSwitchToDiagramTab?.();
-              setZoom((z) => Math.max(0.2, z * 0.85));
-            }}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            title="Zoom Out"
           >
-            <ZoomOut className="w-4 h-4" />
+            <Workflow className={`w-3.5 h-3.5 text-sky-400 ${isAutoAligning ? 'animate-spin' : ''}`} />
           </button>
-          <span className="px-1 font-mono text-[11px] text-slate-400 select-none hidden xs:inline">
-            {Math.round(zoom * 100)}%
-          </span>
+        );
+      case 'lock':
+        return (
           <button
-            id="zoom-in-button"
+            id="toolbar-lock-layout-btn"
             type="button"
-            onClick={() => {
-              onSwitchToDiagramTab?.();
-              setZoom((z) => Math.min(5, z * 1.15));
-            }}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            title="Zoom In"
+            onClick={handleToggleLayoutLocked}
+            className={toolbarButtonClass(isLayoutLocked, 'bg-amber-500/20 text-amber-300 border border-amber-500/60')}
+            title={isLayoutLocked ? 'Layout locked: automatic re-layout is disabled. Click to unlock.' : 'Lock layout to keep custom node positions'}
           >
-            <ZoomIn className="w-4 h-4" />
+            {isLayoutLocked ? <Lock className="w-3.5 h-3.5 text-amber-400" /> : <Unlock className="w-3.5 h-3.5 text-slate-400" />}
           </button>
+        );
+      case 'snap':
+        return (
+          <div
+            className={`flex items-center rounded-lg border text-xs ${
+              snapConfig.enabled ? 'border-sky-600/70 bg-sky-950/60' : 'border-slate-700/60 bg-slate-800/80'
+            }`}
+          >
+            <button
+              id="toolbar-snap-btn"
+              type="button"
+              onClick={() =>
+                setSnapConfig((prev) => {
+                  const next = { ...prev, enabled: !prev.enabled };
+                  setShowSnapToast({
+                    message: next.enabled ? `Snap to Grid: ON (${next.gridSize}px)` : 'Snap to Grid: OFF',
+                    timestamp: Date.now(),
+                  });
+                  return next;
+                })
+              }
+              className={`flex items-center gap-1.5 pl-2 pr-1.5 py-1 font-medium whitespace-nowrap cursor-pointer ${
+                snapConfig.enabled ? 'text-sky-300' : 'text-slate-300 hover:text-white'
+              }`}
+              title="Toggle snap to grid & smart alignment guides"
+            >
+              <Magnet className="w-3.5 h-3.5 text-sky-400" />
+            </button>
+            <select
+              id="toolbar-snap-size-select"
+              value={snapConfig.gridSize}
+              onChange={(e) => {
+                const size = Number(e.target.value);
+                setSnapConfig((prev) => ({ ...prev, gridSize: size, enabled: true }));
+                setShowSnapToast({ message: `Grid resolution: ${size}px`, timestamp: Date.now() });
+              }}
+              className="bg-transparent text-[11px] font-mono text-slate-300 pr-1 py-1 border-l border-slate-700/60 focus:outline-none cursor-pointer"
+              title="Grid resolution"
+            >
+              {[10, 20, 40].map((size) => (
+                <option key={size} value={size} className="bg-slate-900">
+                  {size}px
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      case 'resetLayout':
+        return (
           <button
-            id="zoom-reset-button"
+            id="toolbar-reset-layout-btn"
             type="button"
-            onClick={() => {
-              onSwitchToDiagramTab?.();
-              handleResetZoom();
-            }}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-            title="Reset View"
+            onClick={handleResetLayout}
+            className={toolbarButtonClass(true, 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30')}
+            title="Reset manually moved nodes and edges to the automatic layout"
           >
-            <RotateCcw className="w-4 h-4" />
+            <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+            <span className="px-1.5 rounded-full bg-amber-400 text-slate-950 font-bold text-[10px]">{movedElementsCount}</span>
           </button>
-        </div>
-
-        <div className="w-[1px] h-4 bg-slate-800 mx-0.5"></div>
-
-        {/* GROUP 5: Fullscreen */}
-        <div className="flex items-center gap-1">
+        );
+      case 'heatmap':
+        return (
+          <button
+            id="toolbar-heatmap-btn"
+            type="button"
+            onClick={toggleHeatmap}
+            className={toolbarButtonClass(isHeatmapActive, 'bg-amber-950/80 text-amber-300 border border-amber-500/70')}
+            title={`Complexity Heat-Map: ${isHeatmapActive ? 'ON' : 'OFF'} - click to toggle (Shortcut: H)`}
+          >
+            <Flame className="w-3.5 h-3.5 text-amber-400" />
+          </button>
+        );
+      case 'refactor':
+        return (
+          <button
+            id="toolbar-refactor-btn"
+            type="button"
+            onClick={() => setIsHeatmapPanelOpen(true)}
+            className={toolbarButtonClass(
+              complexityHeatmapResult.refactorCandidatesCount > 0,
+              'bg-rose-950/80 text-rose-300 border border-rose-500/60'
+            )}
+            title={`Refactor candidates (cyclomatic complexity M ≥ ${complexityThreshold}); opens the Complexity Heat-Map`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+            <span>{complexityHeatmapResult.refactorCandidatesCount}</span>
+          </button>
+        );
+      case 'stats':
+      case 'legend':
+      case 'notes':
+      case 'minimap':
+      case 'styles': {
+        const cfg = {
+          stats: { icon: <Activity className="w-3.5 h-3.5" />, active: isStatsOpen, onClick: () => setIsStatsOpen((p) => !p), title: 'State Machine Real-Time Stats (Shortcut: S)' },
+          legend: { icon: <BookOpen className="w-3.5 h-3.5" />, active: isLegendOpen, onClick: () => setIsLegendOpen((p) => !p), title: 'Diagram Legend (Shortcut: L)' },
+          notes: { icon: <StickyNote className="w-3.5 h-3.5" />, active: totalNotesCount > 0, onClick: () => setIsNotesDrawerOpen(true), title: `Notes (${totalNotesCount})` },
+          minimap: { icon: <Map className="w-3.5 h-3.5" />, active: isMinimapOpen, onClick: () => setIsMinimapOpen((p) => !p), title: 'Minimap (Shortcut: M)' },
+          styles: { icon: <Palette className="w-3.5 h-3.5" />, active: isInspectorOpen, onClick: handleToggleInspector, title: 'Node Styles (State Node Appearance)' },
+        }[id];
+        return (
+          <button
+            id={`toolbar-${id}-btn`}
+            type="button"
+            onClick={cfg.onClick}
+            className={`relative p-1.5 rounded-lg transition-colors cursor-pointer ${
+              cfg.active ? 'bg-sky-950/80 text-sky-300 ring-1 ring-sky-600/60' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            }`}
+            title={cfg.title}
+            aria-label={cfg.title}
+          >
+            {cfg.icon}
+            {id === 'notes' && totalNotesCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1 rounded-full bg-amber-400 text-slate-950 font-bold text-[9px] leading-tight">
+                {totalNotesCount}
+              </span>
+            )}
+          </button>
+        );
+      }
+      case 'zoom':
+        return (
+          <div className="flex items-center gap-0.5">
+            <button
+              id="zoom-out-button"
+              type="button"
+              onClick={() => {
+                onSwitchToDiagramTab?.();
+                setZoom((z) => Math.max(0.2, z * 0.85));
+              }}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              title="Zoom Out"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <span className="px-0.5 font-mono text-[11px] text-slate-400 select-none">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              id="zoom-in-button"
+              type="button"
+              onClick={() => {
+                onSwitchToDiagramTab?.();
+                setZoom((z) => Math.min(5, z * 1.15));
+              }}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              title="Zoom In"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button
+              id="zoom-reset-button"
+              type="button"
+              onClick={() => {
+                onSwitchToDiagramTab?.();
+                handleResetZoom();
+              }}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+              title="Reset View"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        );
+      case 'fullscreen':
+        return (
           <button
             id="fullscreen-button"
             type="button"
@@ -5006,29 +5576,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               onSwitchToDiagramTab?.();
               toggleFullscreen();
             }}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-all text-xs font-medium cursor-pointer ${
-              isFullscreen
-                ? 'bg-sky-600 hover:bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40'
-                : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60'
-            }`}
+            className={toolbarButtonClass(isFullscreen, 'bg-sky-600 hover:bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40')}
             title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Expand diagram canvas to fill the entire browser window'}
           >
-            {isFullscreen ? (
-              <>
-                <Minimize2 className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Exit</span>
-              </>
-            ) : (
-              <>
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Full</span>
-              </>
-            )}
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
-        </div>
-      </div>
-    </div>
-  );
+        );
+    }
+  }
 
   const renderCanvasPanel = (id: DockedCanvasPanelId, label: string, element: React.ReactNode) => {
     if (!dockedPanels) return element;
@@ -5069,6 +5624,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         onWheel={handleWheel}
         onContextMenu={handleContextMenu}
         className={`flex-1 relative overflow-hidden [background-size:16px_16px] cursor-grab transition-colors duration-200 ${
+          isNodeDragging ? 'tc-node-dragging ' : ''
+        }${
           mermaidTheme === 'dark'
             ? 'bg-slate-900 bg-[radial-gradient(#1e293b_1px,transparent_1px)]'
             : mermaidTheme === 'forest'
@@ -5160,13 +5717,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               onUpdateNotePosition={onUpdateNotePositionProp || (() => {})}
               onUpdateNoteStyle={onUpdateNoteStyle}
               onSelectTarget={(target) => {
+                // The note is drawn beside its target, so select it without panning the view
                 if (target.type === 'node') {
                   handleSelectState(target.id, target.label || target.id);
-                  panToState(target.id);
                 } else if (target.type === 'edge') {
                   const edge = availableEdges.find((e) => e.id === target.id);
                   if (edge) setSelectedEdge(edge);
-                  panToEdge(target.id);
                 }
               }}
             />
@@ -5622,6 +6178,29 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Floating Transition Guard & Condition Inspector */}
+        {stylePopup && (
+          <StateStylePopup
+            stateId={stylePopup.stateId}
+            stateLabel={availableStates.find((s) => s.id === stylePopup.stateId)?.label}
+            anchorRect={stylePopup.anchorRect}
+            containerRef={containerRef}
+            availableStates={availableStates}
+            customStyles={effectiveCustomStyles}
+            onStyleChange={handleStyleChange}
+            onResetStateStyle={handleResetStateStyle}
+            onClearAllCustomStyles={handleClearAllCustomStyles}
+            onSelectState={(id, label) => {
+              // Picking another state inside the window keeps the window on that state
+              handleSelectState(id, label);
+              if (id) {
+                setStylePopup((prev) => (prev ? { ...prev, stateId: id } : prev));
+                panToState(id);
+              }
+            }}
+            onClose={() => setStylePopup(null)}
+          />
+        )}
+
         {activeConditionOverlay && (
           <TransitionGuardInspector
             edge={activeConditionOverlay.edge}
@@ -5629,6 +6208,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             containerRef={containerRef}
             notes={effectiveNotes}
             onClose={() => setActiveConditionOverlay(null)}
+            edgeStyle={customEdgeStyles?.[activeConditionOverlay.edge.id]}
+            onEdgeStyleChange={
+              onEdgeStyleChange ? (style) => onEdgeStyleChange(activeConditionOverlay.edge.id, style) : undefined
+            }
             onSelectState={(id, label) => {
               handleSelectState(id, label);
               panToState(id);
@@ -5658,7 +6241,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             onOpenStyleCustomizer={(stateId: string) => {
               const st = availableStates.find((s) => s.id === stateId);
               handleSelectState(stateId, st?.label || stateId);
-              if (onOpenInspectorPanel) onOpenInspectorPanel('style');
+              if (onOpenInspectorPanel) openStylePopup(stateId);
               else setIsInspectorOpen(true);
             }}
             onOpenMethodEditor={(m) => {

@@ -1,6 +1,6 @@
-# TcPouStatechartGenerator (Web & Desktop Edition)
+# Kval StateScope
 
-A high-performance interactive tool that parses Beckhoff TwinCAT PLC Structured Text state machines and generates publication-quality [Mermaid](https://mermaid.js.org/) flowcharts and state diagrams (`flowchart TD` with subgraphs and `stateDiagram-v2`).
+Kval StateScope is an interactive viewer for the Kval Inc. TwinCAT state machines (`SM_*.TcPOU` function blocks). It parses the Beckhoff TwinCAT PLC Structured Text state machine and generates publication-quality [Mermaid](https://mermaid.js.org/) flowcharts and state diagrams (`flowchart TD` with subgraphs and `stateDiagram-v2`).
 
 The generator extracts state logic and transitions directly from the `doState()` and `preProcess()` methods of a `SM_*.TcPOU` file together with the enum definitions in matching `E_*_States.TcDUT` files. If the POU includes a `doState_UmlSC()` method, embedded UML composite states are preserved and mapped into nested subgraphs.
 
@@ -12,11 +12,23 @@ The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable 
 
 | Panel | Contents |
 |---|---|
-| **LeftPanel** | TwinCAT Source Files: Enum Declaration (`.TcDUT`), Function Block (`.TcPOU`), Identified States, PLC Transition Logger, How It Works |
+| **LeftPanel** | Identified States, PLC Transition Logger, How It Works |
 | **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History |
-| **RightPanel** | Tool windows stacked vertically: Style, Documentation, Mermaid Markdown · Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Diagram Legend, Notes · Minimap |
+| **RightPanel** | Tool windows stacked vertically: Documentation, Mermaid Markdown · Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Diagram Legend, Notes · Minimap |
 
 The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas.
+
+### Loading a Function Block
+
+The **Function Block** entry in the header toolbar (left of **Sample**) loads your own code: click **Browse** and pick a `.TcPOU` file, or drop one onto it. Only the file name is shown; the code is edited in the Method Editor and Enum Editor tabs.
+
+The state enum is found automatically. By convention the `.TcDUT` sits in the same folder as the `.TcPOU` or in one of its subfolders, and that folder may hold several `.TcDUT` files. So after the `doState()` method is parsed, every `.TcDUT` in that folder tree is checked, and the one whose enum declares the most `doState()` CASE states is used. Build and library folders (`_Boot`, `_CompileInfo`, `_Libraries`, ...) are skipped.
+
+- **Desktop app**: the folder is searched as soon as the `.TcPOU` is opened.
+- **Web (Chrome / Edge)**: browsers do not reveal a file's folder, so the header shows **Find .TcDUT...**. It opens a folder picker at the `.TcPOU`'s folder; after you allow read access, later `.TcPOU` files inside that folder are matched without asking again.
+- **Other browsers**: choose the `.TcDUT` file(s) directly; the best match among them is used.
+
+When more than one `.TcDUT` matches, the header shows the count; click the enum name to pick another one.
 
 ### Working with tabs
 - **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
@@ -38,7 +50,9 @@ The layout (panel widths, tab groups, floating windows) is saved in the browser 
 - **Auto-Align Diagram Engine**: Dedicated toolbar button and shortcut (`A`) to re-run the layout engine (ELK or Dagre) to cleanly organize all nodes according to current flowchart or stateDiagram-v2 logic while respecting the locked layout state.
 - **Magnetic Snap to Grid**: Toggleable snap grid (10px, 20px, 40px) with real-time horizontal and vertical smart alignment crosshair guides.
 - **Layout Locking**: Lock diagram layout to preserve custom manual positions across code edits or automatic re-layouts.
-- **In-Place State Selection**: Click any node on the canvas to select it; the Method Editor, Style and Documentation tabs follow the selection. When the Method Editor shares a tab group with the canvas, it opens in the background so the diagram stays visible.
+- **In-Place State Selection**: Click any node on the canvas to select it and highlight its transitions; the Method Editor and Documentation tabs follow the selection. When the Method Editor shares a tab group with the canvas, it opens in the background so the diagram stays visible.
+- **State Style Window**: Click the selected state again (or right-click it and choose *Customize Style...*) to open the State Style window beside it: background, text and border colours plus quick presets. Click the state once more, or press Esc, to close it.
+- **Transition Style**: Click a transition to select it, then click it again to open the Transition Guard window. Its *Style* card sets the line colour, width and dash pattern, and the label's fill, text colour, font size, bold / italic / underline and border.
 - **Crosshair / Jump to State**: Jump directly to any state from the sidebar, minimap, or legend with smooth centering and SVG-safe animated glowing highlight rings.
 - **Interactive Minimap**: Live bird's-eye overview of the entire diagram in the RightPanel, with a draggable viewport indicator and quick-navigation clicks.
 - **Interactive Diagram Legend**: Color-coded breakdown of states (initial, composite, logic, error sinks), transition priority markers, and note indicators.
@@ -124,8 +138,8 @@ npm run build:exe
 ```
 
 Compiled executables are output to the `release/` directory:
-- **`TcPouStatechartGenerator Setup <version>.exe`** — Standard Windows Installer with Start menu shortcuts and auto-updater support.
-- **`TcPouStatechartGenerator <version>.exe`** — Portable single-file executable (no installation required, runs directly from USB or local drive).
+- **`Kval StateScope Setup <version>.exe`** — Standard Windows Installer with Start menu shortcuts and auto-updater support.
+- **`Kval StateScope <version>.exe`** — Portable single-file executable (no installation required, runs directly from USB or local drive).
 
 ---
 

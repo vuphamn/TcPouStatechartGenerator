@@ -200,8 +200,8 @@ export function detectFoldableBlocks(code: string): FoldableBlock[] {
       }
 
       // Check for Case Branch Label: e.g. "0:", "10:", "TABLEMANAGER_INIT:", "10, 20:", "ELSE:"
-      // Must end with ':' and NOT ':=' assignment
-      const caseLabelMatch = clean.match(/^\s*([A-Za-z0-9_]+(?:\s*,\s*[A-Za-z0-9_]+)*|\d+\s*\.\.\s*\d+|ELSE)\s*:(?!:=)(.*)$/i);
+      // Must end with ':' and NOT ':=' assignment (the colon must not be followed by '=')
+      const caseLabelMatch = clean.match(/^\s*([A-Za-z0-9_]+(?:\s*,\s*[A-Za-z0-9_]+)*|\d+\s*\.\.\s*\d+|ELSE)\s*:(?!=)(.*)$/i);
       if (caseLabelMatch) {
         // If previous branch was open, close it at lineNum - 1
         if (currentCase.currentBranch) {
