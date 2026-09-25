@@ -6,6 +6,30 @@ The generator extracts state logic and transitions directly from the `doState()`
 
 ---
 
+## Workspace Layout
+
+The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable main panels separated by splitters:
+
+| Panel | Contents |
+|---|---|
+| **LeftPanel** | TwinCAT Source Files: Enum Declaration (`.TcDUT`), Function Block (`.TcPOU`), Identified States, PLC Transition Logger, How It Works |
+| **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History |
+| **RightPanel** | Tool windows stacked vertically: Style, Documentation, Mermaid Markdown · Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Diagram Legend, Notes · Minimap |
+
+The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas.
+
+### Working with tabs
+- **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
+- **Drag a tab** onto another group's tab strip or onto the middle of a group to move it there, or onto a group's left/right (MiddlePanel) or top/bottom (RightPanel) edge to create a new group. Tabs can only be moved within their own panel.
+- **Float a document**: double-click a MiddlePanel tab (or choose *Float*) to undock it into a window that can be moved and resized within the MiddlePanel. Double-click the window's title bar or use its dock button to dock it again.
+- **Close a tab** with its `×` button or a middle-click.
+- **Reopen closed tabs** from the **Window** menu in the header. A reopened tab returns to its original panel and tab group. The Window menu also shows/hides the Left and Right panels and resets the layout.
+- **Resize** panels and tab groups by dragging the splitters; double-click a side-panel splitter to restore its default width.
+
+The layout (panel widths, tab groups, floating windows) is saved in the browser and restored on the next visit. Moving a tab never reloads its content, so the diagram keeps its zoom, pan and selection.
+
+---
+
 ## Key Features
 
 ### 1. Interactive Diagram Canvas
@@ -14,9 +38,9 @@ The generator extracts state logic and transitions directly from the `doState()`
 - **Auto-Align Diagram Engine**: Dedicated toolbar button and shortcut (`A`) to re-run the layout engine (ELK or Dagre) to cleanly organize all nodes according to current flowchart or stateDiagram-v2 logic while respecting the locked layout state.
 - **Magnetic Snap to Grid**: Toggleable snap grid (10px, 20px, 40px) with real-time horizontal and vertical smart alignment crosshair guides.
 - **Layout Locking**: Lock diagram layout to preserve custom manual positions across code edits or automatic re-layouts.
-- **In-Place State Selection**: Click any node directly on the canvas to inspect its styles, incoming/outgoing transitions, and Structured Text code without unexpected viewport jumps.
+- **In-Place State Selection**: Click any node on the canvas to select it; the Method Editor, Style and Documentation tabs follow the selection. When the Method Editor shares a tab group with the canvas, it opens in the background so the diagram stays visible.
 - **Crosshair / Jump to State**: Jump directly to any state from the sidebar, minimap, or legend with smooth centering and SVG-safe animated glowing highlight rings.
-- **Floating Interactive Minimap**: Live bird's-eye overview of the entire diagram with draggable viewport indicator and quick-navigation clicks.
+- **Interactive Minimap**: Live bird's-eye overview of the entire diagram in the RightPanel, with a draggable viewport indicator and quick-navigation clicks.
 - **Interactive Diagram Legend**: Color-coded breakdown of states (initial, composite, logic, error sinks), transition priority markers, and note indicators.
 - **Canvas Sticky Notes & Annotations**: Attach custom color-coded markdown notes to states or transitions directly on the canvas.
 - **Transition Guard & Priority Overlay**: Click transition paths or priority badges to view guard conditions, trigger logic, and execution priorities.
@@ -32,6 +56,7 @@ The generator extracts state logic and transitions directly from the `doState()`
 - **State Machine Metrics**: Calculates total state counts, transition density, cyclomatic complexity index, Fan-In / Fan-Out metrics, and dead-end/unreachable state detection.
 - **Visual Complexity Heat-Map**: Overlays real-time cyclomatic complexity metrics onto diagram nodes using customizable color scales (Traffic Light, Flame/Warm, Cool/Blue, Monochrome) with instant filtering for refactor candidates.
 - **Interactive Metric Tooltips**: Hover over any state in heat-map mode to inspect LOC, branching factor, incoming transitions, and cyclomatic score.
+- **Refactor Badges**: States above the complexity threshold show an `M=` badge on the canvas; click a badge to open the Complexity Heat-Map tab.
 
 ### 4. TwinCAT Source Editors & Inspection
 - **Identified States Sidebar**: Filter states by name, logic presence in `doState()`, error sinks, or composite groups; sort alphabetically or by enum index; jump to any state with 1 click.
@@ -44,6 +69,7 @@ The generator extracts state logic and transitions directly from the `doState()`
 - **Curve Algorithms**: Customize flowchart routing curves (basis, linear, cardinal, natural, step).
 - **Mermaid Live Integration**: Open generated diagrams directly in [mermaid.live](https://mermaid.live) with 1 click.
 - **One-Click Export**: Copy Mermaid Markdown to clipboard, download `.statechart.md`, or export diagram graphics.
+- **Diagram Presets**: Save and apply combinations of layout engine, curve, theme, priority format and export settings (PNG/SVG, 1x–4x scale, dark/white/transparent background). *Export with Preset* downloads using the active preset's export settings, and the High-Res Export dialog opens with them preselected.
 
 ---
 
@@ -67,8 +93,8 @@ Test the generator immediately with 5 real-world Beckhoff TwinCAT state machine 
 ### Development
 ```bash
 # Clone the repository
-git clone https://github.com/username/tcpoustatechartgenerator.git
-cd tcpoustatechartgenerator
+git clone https://github.com/vuphamn/TcPouStatechartGenerator.git
+cd TcPouStatechartGenerator
 
 # Install dependencies
 npm install
@@ -105,7 +131,8 @@ Compiled executables are output to the `release/` directory:
 
 ## Architecture & Technology Stack
 
-- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
+- **Workspace**: Custom docking layout (`src/utils/dockLayout.ts`, `src/components/dock/`) — tab contents are rendered into persistent host elements that move between tab groups instead of remounting
 - **Diagramming Engine**: Mermaid.js, SVG DOM manipulation, dynamic SVG transform matrices
 - **Icons**: Lucide React
 - **Packaging**: Electron, electron-builder

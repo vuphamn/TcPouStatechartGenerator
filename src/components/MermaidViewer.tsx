@@ -248,6 +248,18 @@ interface ParsedPath {
   id: string;
 }
 
+/**
+ * Moves a badge's content into an inner group. The outer group is positioned with a
+ * transform="translate()" attribute, which a CSS hover transform would replace (making the badge jump),
+ * so the hover scale is applied to the inner group instead.
+ */
+function wrapBadgeContent(badgeG: SVGGElement): void {
+  const body = badgeG.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'g');
+  body.setAttribute('class', 'tc-complexity-badge-body');
+  while (badgeG.firstChild) body.appendChild(badgeG.firstChild);
+  badgeG.appendChild(body);
+}
+
 function extractPriorityFromText(text: string): { priority: number; symbol: string } | null {
   if (!text) return null;
   // Check (1) or (2)...
@@ -1034,6 +1046,7 @@ function enhanceSvgWithPriorityCircles(
             badgeText.textContent = `M=${metric.score}`;
             badgeG.appendChild(badgeText);
 
+            wrapBadgeContent(badgeG);
             node.appendChild(badgeG);
           } else {
             // Standard compact pill badge in heatmap mode
@@ -1065,6 +1078,7 @@ function enhanceSvgWithPriorityCircles(
             badgeText.textContent = `M=${metric.score}`;
             badgeG.appendChild(badgeText);
 
+            wrapBadgeContent(badgeG);
             node.appendChild(badgeG);
           }
         }

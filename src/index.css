@@ -842,12 +842,22 @@ path.state-jump-border-pulse {
   user-select: none;
   cursor: pointer;
   pointer-events: all;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), filter 0.15s ease-out;
+  transition: filter 0.15s ease-out;
 }
 
 .tc-complexity-badge:hover {
-  transform: scale(1.1);
   filter: brightness(1.2) drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
+}
+
+/* Scale the inner group: a CSS transform on the outer group would override its translate() position */
+.tc-complexity-badge-body {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tc-complexity-badge:hover .tc-complexity-badge-body {
+  transform: scale(1.1);
 }
 
 .tc-refactor-flag-badge {
