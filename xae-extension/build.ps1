@@ -22,7 +22,8 @@ Copy-Item (Join-Path $repo 'dist') $appDir -Recurse
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $msbuild = & $vswhere -latest -prerelease -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
 if (-not $msbuild) { throw 'MSBuild not found (install Visual Studio 2022 or newer)' }
-& $msbuild $project /restore /p:Configuration=$Configuration /v:minimal /nologo
+# Rebuild: an incremental build can keep a stale extension.vsixmanifest (e.g. an old version number)
+& $msbuild $project /restore /t:Rebuild /p:Configuration=$Configuration /v:minimal /nologo
 if ($LASTEXITCODE -ne 0) { throw 'MSBuild failed' }
 
 $vsix = Join-Path $PSScriptRoot "KvalStateScope.Xae\bin\$Configuration\KvalStateScope.Xae.vsix"
