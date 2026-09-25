@@ -65,6 +65,21 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 - **Transition** (right-click it, or the Transition Guard window's footer): selects the assignment that makes it, `machineState := <target>`. The assignment is looked for in the source state's branch of `doState()`, or in `preProcess()` for `[preProcess]` guards. When a branch has several, the one near the guard's text wins.
 - **How it works:** the app computes the method and line from the `.TcPOU`. The extension finds the method's node in the PLC tree and opens it like a double-click. It then places the caret through the editor window's `IVsTextView`. TwinCAT's editor numbers the declaration's lines and then the implementation's, so the line is located by its text.
 
+**Live view** (the **Live** tab) follows the POU's state variable (the `CASE` variable of `doState()`, e.g. `machineState`) in the running PLC.
+- **Go live:** the extension connects over ADS with TwinCAT's own `TcAdsDll.dll`, through the local AMS router.
+  - **Target:** the target system selected in XAE for the project. Enter an AMS NetId to use another.
+  - **Port:** the PLC's ADS port from the project's `.xti` (usually 851). Enter a port to use another.
+- **Instance:** the extension finds where the function block is instantiated from the declarations in the PLC project, e.g. `MAIN.mainStateMachine.smTableManager`. It follows the first instance the PLC actually has. With several, the others are offered in the Instance field. You can also type a path.
+- **Change notification:** the PLC sends every new value with its PLC time stamp, checked every task cycle (at most every 1 ms). A state that lasts one cycle is not missed, which polling would not guarantee.
+- **What you see:**
+  - the active state glows on the diagram, and the previous state and the transition taken are marked;
+  - *Follow* keeps the active state in view;
+  - the tab shows the current state with its time in state, and every transition with its time and dwell;
+  - transitions the diagram does not have are flagged.
+- **Transition History:** the history button opens the session's transitions there, with its analytics.
+- **Numbers to names:** values become state names through the `.TcDUT` enum, explicit `:=` values included.
+- **Stopping:** *Stop*, another POU, or closing the tab ends the session. It deletes the notification and releases the handle in the PLC.
+
 ## TwinCAT PLC tree context menu
 
 TwinCAT's PLC tree shows POUs with its own context menu, named **PlcFile**. Its numeric id is internal to Beckhoff's package, so the extension adds **Open in Kval StateScope** to that menu by name when it loads. It only does this once, and the IDE keeps the placement in its settings. The TwinCAT tree also shows that menu through its own command handling, which does not ask other extensions about their commands. A priority command target (`PriorityCommandTarget.cs`) makes sure the command is asked, so it can show itself for a `.TcPOU`.
@@ -95,12 +110,18 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - **Changed in XAE** with Reload and Keep mine, and refusal before choosing;
     - refusal while XAE has unsaved changes.
   - **Show in TwinCAT editor**, on the same copy: states and transitions from the context menu and the Transition Guard window. The target methods were closed or already open; the lines were near the top, near the end (line 496 of 508) and in `preProcess()`.
+  - **Live view**, split in two because the TwinCAT system on the test PC is not started: every ADS request there, even one to the system service, is answered "port disabled" (0x12).
+    - **Extension side:** a harness compiled from `LiveMonitor.cs` / `LiveTargets.cs` checked instance discovery on the real project (224 instance paths, nested and in GVLs) and the ADS port from the `.xti`. It also checked the error path against the local router and the decoding of notifications laid out as TcAdsDll delivers them.
+    - **App side:** the app ran in a browser with a stand-in for the XAE bridge, fed by a scripted session that included a 5 ms state and transitions the diagram does not have.
+    - **Inside VS 2022:** the Live tab, `liveStart`, and the error reported back from the router.
+    - **Not yet tested:** a real PLC (connect, notifications, stop).
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 
 ## Prototype limits
 
 - **Unsaved edits in TwinCAT's editor** are not visible to StateScope until they are saved in XAE; saving from StateScope is refused while they exist.
+- **Live view** follows integer / enum state variables of 1, 2, 4 or 8 bytes. Instances inside arrays (`ARRAY OF SM_X`) are not found automatically: type the path, e.g. `MAIN.aTables[1]`.
 - **DevTools** are enabled in the tab for diagnostics (F12). Start-up, load and save steps are logged to `%LocalAppData%\KvalStateScope\log.txt`.
 
 ## Layout
@@ -114,6 +135,8 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 | `StateScopeToolWindow.cs`, `StateScopeControl.cs` | Document tab with WebView2; message bridge to the app (`src/utils/xaeHost.ts`) |
 | `HostFiles.cs` | Dialogs, `.TcDUT` search, saving with backup and safety checks |
 | `TwinCATProject.cs` | Automation Interface: finds a file's PLC tree item, reads / writes it (changed parts only) |
+| `LiveMonitor.cs` | Live view: ADS through `TcAdsDll.dll` (P/Invoke), symbol lookup, change notification |
+| `LiveTargets.cs` | Live view: instance paths of a function block from the project's declarations; the PLC's ADS port |
 | `CodeNavigation.cs` | Show in TwinCAT editor: opens a method's editor from the PLC tree and places the caret |
 | `PriorityCommandTarget.cs` | Answers for the context-menu command in menus owned by other windows (TwinCAT's PLC tree) |
 | `VSPackage.resx` | Carries the compiled command table (IDE loads menus from `VSPackage.resources`) |

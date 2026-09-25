@@ -10,10 +10,10 @@ export interface SourceLocation {
   text: string;
 }
 
-const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** The ST implementation (CDATA text) of a method, split into lines */
-function methodLines(pouXml: string, method: string): string[] | null {
+export function methodLines(pouXml: string, method: string): string[] | null {
   const rx = new RegExp(`<Method[^>]*\\bName=["']${escapeRx(method)}["'][^>]*>([\\s\\S]*?)</Method>`, 'i');
   const m = pouXml.match(rx);
   if (!m) return null;
@@ -25,9 +25,9 @@ function methodLines(pouXml: string, method: string): string[] | null {
 }
 
 /** A CASE label line: identifiers / qualified names separated by commas (or ranges), then ':' that is not ':=' */
-const LABEL_RX = /^\s*((?:[A-Za-z_][\w.]*|\d+)(?:\s*(?:,|\.\.)\s*(?:[A-Za-z_][\w.]*|\d+))*)\s*:(?!=)/;
+export const LABEL_RX = /^\s*((?:[A-Za-z_][\w.]*|\d+)(?:\s*(?:,|\.\.)\s*(?:[A-Za-z_][\w.]*|\d+))*)\s*:(?!=)/;
 
-function labelNames(line: string): string[] {
+export function labelNames(line: string): string[] {
   const m = line.match(LABEL_RX);
   if (!m) return [];
   return m[1].split(/\s*(?:,|\.\.)\s*/).map((n) => n.split('.').pop() || n);
@@ -36,7 +36,7 @@ function labelNames(line: string): string[] {
 /** Code before a comment starts ((* *) and // comments are ignored when matching) */
 const stripComment = (line: string) => line.replace(/\(\*.*?\*\)/g, '').replace(/\/\/.*$/, '');
 
-function caseVariable(lines: string[]): string | null {
+export function caseVariable(lines: string[]): string | null {
   for (const l of lines) {
     const m = stripComment(l).match(/\bCASE\b\s*\(?\s*([A-Za-z_][\w.]*)\s*\)?\s*\bOF\b/i);
     if (m) return m[1];

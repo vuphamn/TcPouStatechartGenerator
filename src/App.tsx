@@ -39,6 +39,8 @@ import {
   Flame,
   Layers,
   StickyNote,
+  ListChecks,
+  Radio,
 } from 'lucide-react';
 import { generateStatechart, PriorityFormat } from './generator.ts';
 import {
@@ -56,7 +58,7 @@ import { TransitionFrequencyTab } from './components/TransitionFrequencyTab.tsx'
 import { TransitionHistoryTab } from './components/TransitionHistoryTab.tsx';
 import { PlcTransitionLoggerSidebarCard } from './components/PlcTransitionLoggerSidebarCard.tsx';
 import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.tsx';
-import { TransitionHistoryDataset } from './utils/transitionHistoryAnalytics.ts';
+import { TransitionHistoryDataset, analyzeChronologicalEvents } from './utils/transitionHistoryAnalytics.ts';
 import { SourceFilesHeaderItem, DutSearchStatus } from './components/SourceFilesHeaderItem.tsx';
 import { rankDutCandidates, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
 import {
@@ -68,8 +70,12 @@ import {
   canPickFolder,
   PouSource,
 } from './utils/sourceFileAccess.ts';
-import { isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
+import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
+import { LintFinding, addCaseBranch, addEnumMember, lintStateMachine } from './utils/stateMachineLint.ts';
+import { ProblemsPanel } from './components/ProblemsPanel.tsx';
+import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
+import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
 import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
@@ -996,8 +1002,39 @@ export const App: React.FC = () => {
     [applyHostVersion, showCopyToast]
   );
 
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged };
+  // ---- Live view (XAE): the POU's state variable in the running PLC, over ADS ----
+  const [liveStatus, setLiveStatus] = useState<LiveStatus>({ state: 'idle', instances: [] });
+  const [liveSession, setLiveSession] = useState<LiveSession>(EMPTY_LIVE_SESSION);
+  const liveEnumNames = useMemo(() => enumValueMap(dutContent), [dutContent]);
+  const liveNamesRef = useRef(liveEnumNames);
+  liveNamesRef.current = liveEnumNames;
+  const liveEdgesRef = useRef(availableEdges);
+  liveEdgesRef.current = availableEdges;
+  const handleLiveStatus = useCallback((m: Extract<HostMessage, { type: 'liveStatus' }>) => {
+    if (m.state === 'plcState') {
+      setLiveStatus((prev) =>
+        prev.state === 'connected' && prev.plcState !== m.plcState
+          ? { ...prev, plcState: m.plcState, message: prev.message?.replace(/\(PLC [^)]*\)$/, `(PLC ${m.plcState})`) }
+          : prev
+      );
+      return;
+    }
+    const state = m.state;
+    setLiveStatus((prev) => ({
+      state,
+      message: m.message,
+      target: m.target ?? prev.target,
+      plcState: m.plcState ?? prev.plcState,
+      instance: state === 'connected' ? m.instance : prev.instance,
+      instances: m.instances && m.instances.length ? m.instances : prev.instances,
+    }));
+  }, []);
+  const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
+    setLiveSession((prev) => applyLiveSamples(prev, events, liveNamesRef.current, liveEdgesRef.current));
+  }, []);
+
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1037,6 +1074,10 @@ export const App: React.FC = () => {
         }
         pendingHostSaveRef.current = [];
         h.showCopyToast(m.message, m.ok ? 'success' : 'error', m.ok ? 4000 : 7000);
+      } else if (m.type === 'liveStatus') {
+        h.handleLiveStatus(m);
+      } else if (m.type === 'liveValues') {
+        h.handleLiveValues(m.events);
       } else if (m.type === 'error') {
         h.showCopyToast(m.message, 'error', 7000);
       }
@@ -1091,6 +1132,161 @@ export const App: React.FC = () => {
     },
     [pouPath, pouContent, showCopyToast]
   );
+
+  // Lint findings (Problems tab); ignored ones are remembered per POU
+  const lintFindings = useMemo(
+    () => lintStateMachine(pouContent, dutContent, availableEdges),
+    [pouContent, dutContent, availableEdges]
+  );
+  const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;
+  const [lintIgnored, setLintIgnored] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(lintIgnoreStorageKey);
+      setLintIgnored(new Set(raw ? (JSON.parse(raw) as string[]) : []));
+    } catch {
+      setLintIgnored(new Set());
+    }
+  }, [lintIgnoreStorageKey]);
+  const handleToggleLintIgnore = useCallback(
+    (finding: LintFinding) => {
+      setLintIgnored((prev) => {
+        const next = new Set(prev);
+        if (next.has(finding.key)) next.delete(finding.key);
+        else next.add(finding.key);
+        try {
+          localStorage.setItem(lintIgnoreStorageKey, JSON.stringify([...next]));
+        } catch {
+          // per-viewer convenience only
+        }
+        return next;
+      });
+    },
+    [lintIgnoreStorageKey]
+  );
+  const activeLintFindings = useMemo(() => lintFindings.filter((f) => !lintIgnored.has(f.key)), [lintFindings, lintIgnored]);
+  const lintProblemMarkers = useMemo(() => {
+    const markers: Record<string, 'error' | 'warning'> = {};
+    for (const f of activeLintFindings) {
+      if (!f.stateId || f.severity === 'info') continue;
+      if (markers[f.stateId] !== 'error') markers[f.stateId] = f.severity;
+    }
+    return markers;
+  }, [activeLintFindings]);
+
+  const canNavigateInXae = isXaeHost() && !!pouPath && hostSavedContent[pouPath] !== undefined;
+  const handleLintGoToCode = useCallback(
+    (finding: LintFinding) => {
+      if (!finding.method || !finding.line) return;
+      if (finding.stateId) handleJumpToState(finding.stateId);
+      if (canNavigateInXae && pouPath) {
+        postToHost({ type: 'navigate', path: pouPath, method: finding.method, line: finding.line, text: finding.text });
+      } else {
+        handleOpenInspectorPanel('method', { method: finding.method });
+      }
+    },
+    [canNavigateInXae, pouPath, handleJumpToState, handleOpenInspectorPanel]
+  );
+  const handleLintFix = useCallback(
+    (finding: LintFinding) => {
+      const fix = finding.fix;
+      if (!fix) return;
+      if (fix.kind === 'add-enum-member') {
+        if (!dutContent.trim()) {
+          showCopyToast('Load the .TcDUT enum first', 'error');
+          return;
+        }
+        const next = addEnumMember(dutContent, fix.name);
+        if (!next) {
+          showCopyToast('The enum list was not found in the .TcDUT', 'error');
+          return;
+        }
+        handleSaveDutContent(next);
+        showCopyToast(`Added ${fix.name} to ${dutFileName || 'the enum'}`, 'success');
+      } else {
+        const code = addCaseBranch(pouContent, fix.name);
+        const result = code ? handleSaveMethodCode('doState', code) : { success: false, error: 'doState() CASE not found' };
+        if (!result?.success) {
+          showCopyToast(result?.error || 'Could not add the CASE branch', 'error');
+          return;
+        }
+        showCopyToast(`Added a CASE branch for ${fix.name} to doState()`, 'success');
+      }
+    },
+    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast]
+  );
+
+  // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
+  const liveSettingsKey = `kss.live.${pouFileName || 'POU'}`;
+  const [liveSettings, setLiveSettings] = useState<LiveSettings>({ instance: '', netId: '', port: '' });
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(liveSettingsKey);
+      setLiveSettings(raw ? { instance: '', netId: '', port: '', ...(JSON.parse(raw) as Partial<LiveSettings>) } : { instance: '', netId: '', port: '' });
+    } catch {
+      setLiveSettings({ instance: '', netId: '', port: '' });
+    }
+  }, [liveSettingsKey]);
+  const handleLiveSettingsChange = useCallback(
+    (next: LiveSettings) => {
+      setLiveSettings(next);
+      try {
+        localStorage.setItem(liveSettingsKey, JSON.stringify(next));
+      } catch {
+        // per-viewer convenience only
+      }
+    },
+    [liveSettingsKey]
+  );
+  const [liveFollow, setLiveFollow] = useState(true);
+  // Another POU: the extension stops following the old one
+  useEffect(() => {
+    setLiveSession(EMPTY_LIVE_SESSION);
+    setLiveStatus({ state: 'idle', instances: [] });
+  }, [pouPath]);
+  const handleLiveStart = useCallback(() => {
+    if (!pouPath) return;
+    setLiveSession(EMPTY_LIVE_SESSION);
+    setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting...' }));
+    const port = parseInt(liveSettings.port, 10);
+    postToHost({
+      type: 'liveStart',
+      path: pouPath,
+      stateVar: identifiedStatesResult.stateVarName || 'machineState',
+      instance: liveSettings.instance.trim() || undefined,
+      netId: liveSettings.netId.trim() || undefined,
+      port: port > 0 ? port : undefined,
+    });
+  }, [pouPath, liveSettings, identifiedStatesResult.stateVarName]);
+  const handleLiveStop = useCallback(() => {
+    postToHost({ type: 'liveStop' });
+    setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: 'Not connected' }));
+  }, []);
+  const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
+  const liveHighlight = useMemo(() => {
+    if (!liveActive || !liveSession.current) return null;
+    const last = liveSession.transitions[liveSession.transitions.length - 1];
+    return {
+      stateId: liveSession.current.state,
+      previousStateId: last && last.to === liveSession.current.state ? last.from : undefined,
+    };
+  }, [liveActive, liveSession]);
+  // Follow: keep the active state in view
+  const liveCurrentState = liveSession.current?.state;
+  useEffect(() => {
+    if (liveFollow && liveActive && liveCurrentState) mermaidViewerRef.current?.panToState(liveCurrentState, Date.now());
+  }, [liveFollow, liveActive, liveCurrentState]);
+  const handleLiveOpenHistory = useCallback(() => {
+    if (liveSession.transitions.length === 0) return;
+    const dataset = analyzeChronologicalEvents(
+      liveSession.transitions.map((t) => ({ timestamp: t.t, fromState: t.from, toState: t.to, dwellMs: t.dwellMs })),
+      identifiedStatesResult.states,
+      availableEdges,
+      `Live: ${liveStatus.instance ?? pouFileName}`
+    );
+    setHistoryDataset(dataset);
+    showDockTab('history');
+  }, [liveSession.transitions, identifiedStatesResult.states, availableEdges, liveStatus.instance, pouFileName, showDockTab]);
 
   const hostConflictActions = hostConflict
     ? {
@@ -1317,6 +1513,33 @@ export const App: React.FC = () => {
         tooltip: 'Time-series visualization of state transitions from PLC log files',
       },
       docs: { title: 'Documentation', icon: <BookOpen />, tooltip: 'State purpose, notes & documentation' },
+      live: {
+        title: 'Live',
+        icon: <Radio />,
+        tooltip: 'Follow the state machine in the running PLC (TwinCAT XAE)',
+        badge: liveActive ? <span id="live-tab-badge" className="live-dot" title={liveStatus.message} /> : undefined,
+      },
+      problems: {
+        title: 'Problems',
+        icon: <ListChecks />,
+        tooltip: 'State machine checks: enum, CASE branches, reachability, guards',
+        badge: (() => {
+          const errors = activeLintFindings.filter((f) => f.severity === 'error').length;
+          const warnings = activeLintFindings.filter((f) => f.severity === 'warning').length;
+          if (errors + warnings === 0) return undefined;
+          return (
+            <span
+              id="problems-tab-badge"
+              className={`px-1.5 rounded-full text-[10px] font-bold border ${
+                errors > 0 ? 'bg-rose-950 text-rose-300 border-rose-800' : 'bg-amber-950/60 text-amber-300 border-amber-800'
+              }`}
+              title={`${errors} errors, ${warnings} warnings`}
+            >
+              {errors + warnings}
+            </span>
+          );
+        })(),
+      },
       markdown: { title: 'Mermaid Markdown', icon: <FileText />, tooltip: 'Generated Mermaid diagram markdown' },
       search: { title: 'Keyword Search & Filter', icon: <Search /> },
       stats: {
@@ -1337,7 +1560,7 @@ export const App: React.FC = () => {
       },
       minimap: { title: 'Minimap', icon: <MapIcon /> },
     }),
-    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount]
+    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message]
   );
 
   // Canvas tool windows live in the RightPanel; the canvas renders them into these dock slots
@@ -2259,7 +2482,9 @@ export const App: React.FC = () => {
                   onClearAllCustomStyles={handleClearAllCustomStyles}
                   customEdgeStyles={customEdgeStyles}
                   onEdgeStyleChange={handleEdgeStyleChange}
-                  onShowInXae={isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined ? handleShowInXae : undefined}
+                  onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
+                  problemMarkers={lintProblemMarkers}
+                  liveHighlight={liveHighlight}
                   nodeOffsets={nodeOffsets}
                   onNodeOffsetsChange={setNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
@@ -2336,6 +2561,41 @@ export const App: React.FC = () => {
             mode
           )
       )}
+
+      {isDockTabMounted('live') &&
+        createPortal(
+          <LivePanel
+            available={canNavigateInXae}
+            stateVar={identifiedStatesResult.stateVarName || 'machineState'}
+            status={liveStatus}
+            session={liveSession}
+            hasEnumNames={liveEnumNames.size > 0}
+            settings={liveSettings}
+            onSettingsChange={handleLiveSettingsChange}
+            onStart={handleLiveStart}
+            onStop={handleLiveStop}
+            onClear={() => setLiveSession((s) => ({ ...EMPTY_LIVE_SESSION, current: s.current, clockOffset: s.clockOffset }))}
+            onSelectState={(id) => handleJumpToState(id)}
+            follow={liveFollow}
+            onFollowChange={setLiveFollow}
+            onOpenHistory={handleLiveOpenHistory}
+          />,
+          dockRegistry.nodes.live
+        )}
+
+      {isDockTabMounted('problems') &&
+        createPortal(
+          <ProblemsPanel
+            findings={lintFindings}
+            ignoredKeys={lintIgnored}
+            onToggleIgnore={handleToggleLintIgnore}
+            onSelectState={(id) => handleJumpToState(id)}
+            onGoToCode={handleLintGoToCode}
+            goToCodeLabel={canNavigateInXae ? 'Show in TwinCAT editor' : 'Open code'}
+            onApplyFix={handleLintFix}
+          />,
+          dockRegistry.nodes.problems
+        )}
 
       {isDockTabMounted('markdown') &&
         createPortal(

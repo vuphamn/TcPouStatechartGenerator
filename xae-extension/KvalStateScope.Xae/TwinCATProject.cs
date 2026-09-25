@@ -21,9 +21,13 @@ namespace KvalStateScope.Xae
         /// The PLC tree item of a .TcPOU / .TcDUT that belongs to a TwinCAT project open in the IDE, or null.
         /// The tree mirrors the folders of the PLC project: TIPC^&lt;PLC&gt;^&lt;name&gt; Project^POUs^...^SM_X
         /// </summary>
-        public static object FindTreeItem(IServiceProvider services, string filePath)
+        public static object FindTreeItem(IServiceProvider services, string filePath) => FindTreeItem(services, filePath, out _);
+
+        /// <summary>As above, with the TwinCAT project (system manager) the item was found in</summary>
+        public static object FindTreeItem(IServiceProvider services, string filePath, out object systemManager)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            systemManager = null;
             var plcproj = FindPlcProjectFile(filePath);
             if (plcproj == null) return null;
             var plcDir = Path.GetDirectoryName(plcproj);
@@ -61,13 +65,26 @@ namespace KvalStateScope.Xae
                         try
                         {
                             object item = sys.LookupTreeItem($"{plcPath}^{node}^{tail}");
-                            if (item != null) return item;
+                            if (item != null)
+                            {
+                                systemManager = sysManager;
+                                return item;
+                            }
                         }
                         catch (Exception ex) when (ex is COMException || ex is RuntimeBinderException) { }
                     }
                 }
             }
             return null;
+        }
+
+        /// <summary>The AMS NetId of the target system selected in XAE for the file's TwinCAT project, or null</summary>
+        public static string TargetNetId(IServiceProvider services, string filePath)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (FindTreeItem(services, filePath, out var sysManager) == null || sysManager == null) return null;
+            try { return (string)((dynamic)sysManager).GetTargetNetId(); }
+            catch (Exception ex) when (ex is COMException || ex is RuntimeBinderException) { return null; }
         }
 
         /// <summary>The object as XAE has it (same format as the file)</summary>

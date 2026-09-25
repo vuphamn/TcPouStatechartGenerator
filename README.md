@@ -32,7 +32,7 @@ When more than one `.TcDUT` matches, the header shows the count; click the enum 
 
 ### Inside TwinCAT XAE (prototype)
 
-`xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE, with **Save to project** for edits. See [xae-extension/README.md](xae-extension/README.md).
+`xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE. Inside XAE you get **Save to project** for edits, **Show in TwinCAT editor**, and a **Live** tab. The Live tab follows the state machine in the running PLC over ADS: the active state lights up on the diagram, and a trail lists every transition with its dwell time. See [xae-extension/README.md](xae-extension/README.md).
 
 ### Working with tabs
 - **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
@@ -76,13 +76,31 @@ The layout (panel widths, tab groups, floating windows) is saved in the browser 
 - **Interactive Metric Tooltips**: Hover over any state in heat-map mode to inspect LOC, branching factor, incoming transitions, and cyclomatic score.
 - **Refactor Badges**: States above the complexity threshold show an `M=` badge on the canvas; click a badge to open the Complexity Heat-Map tab.
 
-### 4. TwinCAT Source Editors & Inspection
+### 4. Problems (state machine checks)
+The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the rest of the POU against the `.TcDUT` enum and the diagram. The tab shows the number of errors and warnings, and states with an error or warning get a `!` badge on the canvas.
+
+| Rule | Severity | Fix |
+|---|---|---|
+| Target not in enum: a transition assigns a state the enum does not declare | Error | Add to enum |
+| CASE label not in enum | Error | Add to enum |
+| Duplicate CASE label | Error | |
+| No CASE branch: a state is entered but `doState()` has no branch for it | Warning (Info when an `ELSE` handles it) | Add CASE branch |
+| Unreachable state: nothing in the POU leads to it | Warning | |
+| Dead end: no transition out, in its branch or in `preProcess()` | Warning (Info for error-like states) | |
+| Same guard, different targets: only the first can fire | Warning | |
+| Self-transition, unused enum member, `CASE` without `ELSE` | Info | |
+
+- **Scanning:** comments, strings and nested `CASE` / `IF` blocks are skipped over, so only the state `CASE`'s own labels and `ELSE` count.
+- **Lifecycle states:** the enum members up to `…_ENABLING` are driven by the base class (enable / disable), so the unreachable and dead-end rules skip them. The diagram groups states the same way.
+- **Per finding:** *Show in diagram* selects the state. *Open code* opens the Method Editor, or TwinCAT's editor at the line inside XAE. The fix button edits the `.TcDUT` / `doState()` like the editors do. *Ignore* hides a finding for that POU, and the tab keeps a count of ignored findings.
+
+### 5. TwinCAT Source Editors & Inspection
 - **Identified States Sidebar**: Filter states by name, logic presence in `doState()`, error sinks, or composite groups; sort alphabetically or by enum index; jump to any state with 1 click.
 - **Integrated Enum Editor (`.TcDUT`)**: In-app editor for TwinCAT enum definitions with syntax checking and member management.
 - **Integrated Method Editor (`.TcPOU`)**: Embedded editor for `doState()` and `preProcess()` Structured Text blocks.
 - **Custom State Styling Inspector**: Customize fill colors, stroke colors, and borders for individual states with instant live preview.
 
-### 5. Export & Tooling
+### 6. Export & Tooling
 - **Dual Mermaid Formats**: Switch instantaneously between `flowchart TD` (with subgraphs) and `stateDiagram-v2`.
 - **Curve Algorithms**: Customize flowchart routing curves (basis, linear, cardinal, natural, step).
 - **Mermaid Live Integration**: Open generated diagrams directly in [mermaid.live](https://mermaid.live) with 1 click.

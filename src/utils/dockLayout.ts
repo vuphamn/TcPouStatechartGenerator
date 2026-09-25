@@ -20,6 +20,8 @@ export type DockTabId =
   | 'frequency'
   | 'history'
   | 'docs'
+  | 'problems'
+  | 'live'
   | 'markdown'
   | 'search'
   | 'stats'
@@ -37,6 +39,8 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'frequency',
   'history',
   'docs',
+  'problems',
+  'live',
   'markdown',
   'search',
   'stats',
@@ -54,6 +58,8 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   frequency: 'middle',
   history: 'middle',
   docs: 'right',
+  problems: 'right',
+  live: 'right',
   markdown: 'right',
   search: 'right',
   stats: 'right',
@@ -137,7 +143,7 @@ export function createDefaultDockLayout(): DockLayout {
     },
     right: {
       groups: [
-        { id: 'right-inspector', tabs: ['docs', 'markdown'], active: 'docs', size: 1.3 },
+        { id: 'right-inspector', tabs: ['docs', 'problems', 'live', 'markdown'], active: 'docs', size: 1.3 },
         { id: 'right-search', tabs: ['search', 'stats', 'heatmap', 'legend', 'notes'], active: 'search', size: 1.2 },
         { id: 'right-minimap', tabs: ['minimap'], active: 'minimap', size: 0.6 },
       ],

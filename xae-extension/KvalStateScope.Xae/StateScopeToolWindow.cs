@@ -15,5 +15,11 @@ namespace KvalStateScope.Xae
         }
 
         internal StateScopeControl Control { get; }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Control.Shutdown();
+            base.Dispose(disposing);
+        }
     }
 }

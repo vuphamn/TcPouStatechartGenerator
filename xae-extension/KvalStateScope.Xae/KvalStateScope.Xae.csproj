@@ -57,6 +57,8 @@
     <Compile Include="HostFiles.cs" />
     <Compile Include="TwinCATProject.cs" />
     <Compile Include="CodeNavigation.cs" />
+    <Compile Include="LiveMonitor.cs" />
+    <Compile Include="LiveTargets.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

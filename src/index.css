@@ -259,6 +259,85 @@ html, body, #root {
   filter: brightness(1.22) drop-shadow(0 12px 28px rgba(0, 0, 0, 0.65)) !important;
 }
 
+/* Live view: the PLC's current state, the previous one and the transition taken */
+.live-active-node > rect,
+.live-active-node > polygon,
+.live-active-node > circle,
+.live-active-node > path.basic,
+.live-active-node .outer {
+  stroke: #34d399 !important;
+  stroke-width: 4px !important;
+  stroke-dasharray: none !important;
+  animation: live-node-pulse 1.4s ease-in-out infinite !important;
+}
+@keyframes live-node-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px rgba(52, 211, 153, 0.55));
+  }
+  50% {
+    filter: drop-shadow(0 0 16px rgba(52, 211, 153, 1));
+  }
+}
+.live-previous-node > rect,
+.live-previous-node > polygon,
+.live-previous-node > circle,
+.live-previous-node > path.basic {
+  stroke: #6ee7b7 !important;
+  stroke-width: 2.5px !important;
+  stroke-dasharray: 5 3 !important;
+}
+path.live-last-edge {
+  stroke: #34d399 !important;
+  stroke-width: 3.5px !important;
+  filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.9));
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #34d399;
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+  animation: live-dot-pulse 1.4s ease-out infinite;
+}
+@keyframes live-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
+  }
+  100% {
+    box-shadow: 0 0 0 7px rgba(52, 211, 153, 0);
+  }
+}
+
+/* Lint problem badge on a state node (Problems tab) */
+.lint-problem-marker {
+  pointer-events: auto;
+}
+/* !important: Mermaid's embedded #id .node circle / text rules are more specific */
+.lint-problem-marker circle {
+  stroke: #0f172a !important;
+  stroke-width: 1.5px !important;
+}
+.lint-problem-marker text {
+  font: 700 12px ui-sans-serif, system-ui, sans-serif !important;
+  fill: #0f172a !important;
+  stroke: none !important;
+}
+.diagram-selected-node .lint-problem-marker circle,
+.complexity-heatmap-node .lint-problem-marker circle {
+  stroke: #0f172a !important;
+  stroke-width: 1.5px !important;
+  stroke-dasharray: none;
+  animation: none;
+  filter: none !important;
+}
+.lint-problem-error circle {
+  fill: #fb7185 !important;
+}
+.lint-problem-warning circle {
+  fill: #fbbf24 !important;
+}
+
 /* Selected State Node (Active Inspector Selection) */
 .diagram-selected-node rect,
 .diagram-selected-node polygon,

@@ -15,6 +15,19 @@ export type HostMessage =
   | { type: 'saveResult'; ok: boolean; message: string; files?: { path: string; content: string }[] }
   /** A loaded file changed in XAE or on disk (content is XAE's version) */
   | { type: 'sourceChanged'; path: string; name: string; content: string }
+  /** Live view: connection state (connected carries the followed instance and the instances found in the PLC) */
+  | {
+      type: 'liveStatus';
+      state: 'connecting' | 'connected' | 'error' | 'lost' | 'stopped' | 'plcState';
+      message?: string;
+      target?: string;
+      plcState?: string;
+      instance?: string;
+      instances?: string[];
+      symbolType?: string;
+    }
+  /** Live view: new values of the state variable (t: PLC time, ms since 1970) */
+  | { type: 'liveValues'; events: { t: number; value: number }[] }
   | { type: 'error'; message: string };
 
 /** Messages to the extension */
@@ -26,7 +39,10 @@ export type AppMessage =
   /** baseline: the version the edit is based on; force: overwrite a change made in XAE since then */
   | { type: 'save'; files: { path: string; content: string; baseline?: string; force?: boolean }[] }
   /** Open TwinCAT's editor of a method of the loaded POU at a line */
-  | { type: 'navigate'; path: string; method: string; line: number; text?: string };
+  | { type: 'navigate'; path: string; method: string; line: number; text?: string }
+  /** Follow the POU's state variable in the running PLC (empty fields: found from the project) */
+  | { type: 'liveStart'; path: string; stateVar: string; instance?: string; netId?: string; port?: number }
+  | { type: 'liveStop' };
 
 interface WebViewBridge {
   postMessage(message: unknown): void;

@@ -7,6 +7,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -14,8 +15,8 @@ namespace KvalStateScope.Xae
 {
     /// <summary>
     /// Hosts the Kval StateScope web app in WebView2 and answers its requests (messages as JSON objects):
-    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save
-    ///   host -> app: loadPou, dutCandidates, saveResult
+    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop
+    ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues
     /// </summary>
     internal sealed class StateScopeControl : UserControl
     {
@@ -184,6 +185,7 @@ namespace KvalStateScope.Xae
                 var duts = HostFiles.FindDutFiles(folder);
                 // XAE's copy when the POU belongs to an open TwinCAT project (same as the file unless changed in XAE)
                 var content = HostFiles.CurrentContent(_pane, pouPath);
+                if (!string.Equals(_pouPath, pouPath, StringComparison.OrdinalIgnoreCase)) StopLive(true);
                 _pouPath = pouPath;
                 _lastSeen.Clear();
                 _lastSeen[pouPath] = HostFiles.ContentKey(content);
@@ -254,6 +256,12 @@ namespace KvalStateScope.Xae
                         break;
                     case "navigate":
                         HandleNavigate(msg);
+                        break;
+                    case "liveStart":
+                        HandleLiveStart(msg);
+                        break;
+                    case "liveStop":
+                        StopLive(true);
                         break;
                 }
             }
@@ -368,6 +376,157 @@ namespace KvalStateScope.Xae
             {
                 Log.Write($"cannot watch {folder}: {ex.Message}");
             }
+        }
+
+        // ---- Live view: the POU's state variable in the running PLC, over ADS ----
+
+        private LiveMonitor _live;
+        private System.Windows.Threading.DispatcherTimer _liveTimer;
+        // Raised by every start / stop, so a connection still being made for an older request is dropped
+        private int _liveSession;
+        private int _liveTicks;
+        private bool _liveStateCheck;
+
+        /// <summary>Connects (on a worker thread), finds the instance, subscribes; values are posted every 50 ms</summary>
+        private void HandleLiveStart(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            if (path == null || !_lastSeen.ContainsKey(path)) return;
+            var stateVar = (msg.TryGetValue("stateVar", out var v) ? v as string : null) ?? "machineState";
+            var instance = msg.TryGetValue("instance", out var i) ? (i as string)?.Trim() : null;
+            var netId = msg.TryGetValue("netId", out var n) ? (n as string)?.Trim() : null;
+            var port = msg.TryGetValue("port", out var po) && po is int pi && pi > 0 && pi < 65536 ? (ushort)pi : (ushort)0;
+
+            StopLive(false);
+            var session = ++_liveSession;
+            var pouName = Path.GetFileNameWithoutExtension(path);
+            var targetNetId = string.IsNullOrEmpty(netId) ? TwinCATProject.TargetNetId(_pane, path) : netId;
+            var amsPort = port != 0 ? port : LiveTargets.PlcPort(path);
+            PostLive("connecting", $"Connecting to {targetNetId ?? "the local system"}, port {amsPort}...");
+            Log.Write($"live: start {pouName}.{stateVar} on {targetNetId ?? "local"}:{amsPort} (instance {instance ?? "auto"})");
+
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var monitor = new LiveMonitor();
+                string chosen = null, plcState = null, type = null, error = null;
+                var found = new List<string>();
+                try
+                {
+                    plcState = monitor.Connect(targetNetId, amsPort);
+                    var candidates = LiveTargets.InstancePaths(path, pouName);
+                    if (!string.IsNullOrEmpty(instance)) candidates.Insert(0, instance);
+                    LiveMonitor.SymbolInfo info = null;
+                    foreach (var c in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        var s = monitor.Probe(c + "." + stateVar);
+                        if (s == null) continue;
+                        found.Add(c);
+                        if (chosen == null) { chosen = c; info = s; }
+                    }
+                    if (chosen == null)
+                    {
+                        throw new AdsException(candidates.Count == 0
+                            ? $"No instance of {pouName} was found in the PLC project: enter its path (e.g. MAIN.fbX)"
+                            : $"The PLC ({plcState}) has none of {string.Join(", ", candidates.Take(3))}{(candidates.Count > 3 ? ", ..." : "")}: is the current program downloaded? Or enter the instance path", 0);
+                    }
+                    type = info.Type;
+                    monitor.Subscribe(chosen + "." + stateVar, info.Size);
+                }
+                catch (Exception ex) when (ex is AdsException || ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is BadImageFormatException)
+                {
+                    error = ex.Message;
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (error != null || session != _liveSession)
+                {
+                    _ = Task.Run(() => monitor.Dispose());
+                    if (error != null && session == _liveSession)
+                    {
+                        Log.Write("live: " + error);
+                        PostLive("error", error, found);
+                    }
+                    return;
+                }
+                _live = monitor;
+                _liveTicks = 0;
+                _liveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+                _liveTimer.Tick += OnLiveTick;
+                _liveTimer.Start();
+                Log.Write($"live: following {chosen}.{stateVar} ({type}) on {monitor.TargetText}, PLC {plcState}");
+                Post(new
+                {
+                    type = "liveStatus",
+                    state = "connected",
+                    message = $"{chosen}.{stateVar} on {monitor.TargetText} (PLC {plcState})",
+                    target = monitor.TargetText,
+                    plcState,
+                    instance = chosen,
+                    instances = found,
+                    symbolType = type,
+                });
+            });
+        }
+
+        private void OnLiveTick(object sender, EventArgs e)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var monitor = _live;
+            if (monitor == null) return;
+            var samples = monitor.Drain();
+            if (samples.Count > 0) Post(new { type = "liveValues", events = samples });
+            // Every 2 s: is the PLC still there and running?
+            if (++_liveTicks % 40 != 0 || _liveStateCheck) return;
+            _liveStateCheck = true;
+            var session = _liveSession;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                string state = null, error = null;
+                await TaskScheduler.Default;
+                try { state = monitor.ReadState(); }
+                catch (AdsException ex) { error = ex.Message; }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _liveStateCheck = false;
+                if (session != _liveSession) return;
+                if (error != null) Post(new { type = "liveStatus", state = "lost", message = "Connection lost: " + error });
+                else Post(new { type = "liveStatus", state = "plcState", plcState = state });
+            });
+        }
+
+        private void PostLive(string state, string message, List<string> instances = null)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            Post(new { type = "liveStatus", state, message, instances = instances ?? new List<string>() });
+        }
+
+        private void StopLive(bool notify)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            _liveSession++;
+            if (_liveTimer != null)
+            {
+                _liveTimer.Stop();
+                _liveTimer.Tick -= OnLiveTick;
+                _liveTimer = null;
+            }
+            var monitor = _live;
+            _live = null;
+            if (monitor != null)
+            {
+                // ADS calls block (up to the timeout): not on the UI thread
+                _ = Task.Run(() => monitor.Dispose());
+                Log.Write("live: stopped");
+            }
+            if (notify && _appReady) PostLive("stopped", "Not connected");
+        }
+
+        /// <summary>The tab is closing: stop the live view and the file watchers</summary>
+        internal void Shutdown()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            StopLive(false);
+            ResetWatchers();
         }
 
         private void ResetWatchers()

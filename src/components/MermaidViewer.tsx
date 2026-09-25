@@ -175,6 +175,10 @@ export interface MermaidViewerProps {
   onEdgeStyleChange?: (edgeId: string, style: EdgeDisplayProperties | null) => void;
   /** TwinCAT XAE: open a state's CASE branch / a transition in TwinCAT's editor */
   onShowInXae?: (target: { kind: 'state'; id: string } | { kind: 'edge'; edge: EdgeInfo }) => void;
+  /** States with lint problems (Problems tab): a badge on their node */
+  problemMarkers?: Record<string, 'error' | 'warning'>;
+  /** Live view: the PLC's current state (and the one it came from) are highlighted */
+  liveHighlight?: { stateId: string; previousStateId?: string } | null;
   nodeOffsets?: NodeOffsetsMap;
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -1492,6 +1496,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     customEdgeStyles,
     onEdgeStyleChange,
     onShowInXae,
+    problemMarkers,
+    liveHighlight,
     onStyleChange: onStyleChangeProp,
     onResetStateStyle: onResetStateStyleProp,
     onClearAllCustomStyles: onClearAllCustomStylesProp,
@@ -3177,6 +3183,73 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       onCanvasPositionsChange(positions);
     }
   }, [selectedEdge, effectiveNodeOffsets, edgeOffsets, layoutEngine, flowchartCurve]);
+
+  // Live view: the PLC's current state glows, the previous one and the transition taken are marked
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.live-active-node, .live-previous-node').forEach((el) => el.classList.remove('live-active-node', 'live-previous-node'));
+    svg.querySelectorAll('.live-last-edge').forEach((el) => el.classList.remove('live-last-edge'));
+    svg.classList.toggle('diagram-live-active', !!liveHighlight);
+    if (!liveHighlight) return;
+    const node = (id: string) => svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`);
+    node(liveHighlight.stateId)?.classList.add('live-active-node');
+    const prev = liveHighlight.previousStateId;
+    if (prev && prev !== liveHighlight.stateId) {
+      node(prev)?.classList.add('live-previous-node');
+      findEdgePathElement(svg, `${prev}->${liveHighlight.stateId}`, availableEdges)?.classList.add('live-last-edge');
+    }
+  }, [renderedSvg, liveHighlight, availableEdges]);
+
+  // Lint problem badges: a small marker at the top-right corner of each affected state node
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('g.lint-problem-marker').forEach((el) => el.remove());
+    const markers = problemMarkers || {};
+    if (Object.keys(markers).length === 0) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    svg.querySelectorAll('g.node[data-state-id]').forEach((node) => {
+      const severity = markers[node.getAttribute('data-state-id') || ''];
+      if (!severity) return;
+      // The node's shape in its own coordinates, from its attributes: getBBox() is 0 while the tab is hidden
+      const num = (el: Element, name: string) => parseFloat(el.getAttribute(name) || '0') || 0;
+      let box = { x: 0, y: 0, width: 0 };
+      const shape = node.querySelector(':scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, rect, polygon');
+      if (shape?.tagName === 'rect') box = { x: num(shape, 'x'), y: num(shape, 'y'), width: num(shape, 'width') };
+      else if (shape?.tagName === 'polygon') {
+        const pts = (shape.getAttribute('points') || '').trim().split(/[\s,]+/).map(Number);
+        const xs = pts.filter((_, i) => i % 2 === 0);
+        const ys = pts.filter((_, i) => i % 2 === 1);
+        if (xs.length) box = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs) };
+      } else if (shape) {
+        const r = num(shape, 'r') || num(shape, 'rx');
+        box = { x: num(shape, 'cx') - r, y: num(shape, 'cy') - (num(shape, 'r') || num(shape, 'ry')), width: 2 * r };
+      }
+      if (!box.width) {
+        try {
+          const b = (node as SVGGElement).getBBox();
+          box = { x: b.x, y: b.y, width: b.width };
+        } catch {
+          return;
+        }
+      }
+      if (!box.width) return;
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', `lint-problem-marker lint-problem-${severity}`);
+      g.setAttribute('transform', `translate(${box.x + box.width - 2}, ${box.y + 2})`);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = severity === 'error' ? 'Problem (error): see the Problems tab' : 'Problem (warning): see the Problems tab';
+      const circle = document.createElementNS(ns, 'circle');
+      circle.setAttribute('r', '9');
+      const text = document.createElementNS(ns, 'text');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'central');
+      text.textContent = '!';
+      g.append(title, circle, text);
+      node.appendChild(g);
+    });
+  }, [renderedSvg, problemMarkers]);
 
   // Custom transition line styles, applied to the rendered paths (resolved like a click on the path)
   useEffect(() => {
