@@ -65,7 +65,7 @@ import {
 } from '../utils/snapToGrid.ts';
 import { StateNodeStyleInspector, InspectorPanelMode } from './StateNodeStyleInspector.tsx';
 import { StateStylePopup } from './StateStylePopup.tsx';
-import { DiagramContextMenu } from './DiagramContextMenu.tsx';
+import { DiagramContextMenu, ContextMenuExtraItem } from './DiagramContextMenu.tsx';
 import { NoteDialog } from './NoteDialog.tsx';
 import { NotesDrawer } from './NotesDrawer.tsx';
 import { NoteOverlaysLayer } from './NoteOverlaysLayer.tsx';
@@ -179,6 +179,18 @@ export interface MermaidViewerProps {
   problemMarkers?: Record<string, 'error' | 'warning'>;
   /** Live view: the PLC's current state (and the one it came from) are highlighted */
   liveHighlight?: { stateId: string; previousStateId?: string } | null;
+  /** Details follow the selection: the first click on a transition also opens its Transition Guard window */
+  openGuardOnSelect?: boolean;
+  /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
+  diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
+  /** Paths tab: the states and transitions of the shown path(s); everything else is dimmed */
+  pathHighlight?: { states: string[]; edges: { from: string; to: string }[] } | null;
+  /** The app's extra context menu actions for a state, transition or the canvas */
+  contextMenuItems?: (target: ContextMenuTarget) => ContextMenuExtraItem[];
+  /** Connect mode (Add transition from here): the source state; the next state clicked is the target */
+  connectFrom?: string | null;
+  onConnectTo?: (stateId: string) => void;
+  onConnectCancel?: () => void;
   nodeOffsets?: NodeOffsetsMap;
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -215,8 +227,8 @@ export interface MermaidViewerProps {
   onOpenInspectorPanel?: (mode: InspectorPanelMode, options?: { method?: string; reveal?: boolean }) => void;
 }
 
-/** Canvas tool windows that can be docked as RightPanel tabs */
-export type DockedCanvasPanelId = 'search' | 'minimap' | 'stats' | 'heatmap' | 'legend' | 'notes';
+/** Canvas tool windows that can be docked as RightPanel tabs (the minimap and legend stay canvas overlays) */
+export type DockedCanvasPanelId = 'search' | 'stats' | 'heatmap' | 'notes';
 
 export interface DockedCanvasPanels {
   /** Host element each tool window is rendered into */
@@ -233,7 +245,7 @@ export interface DockedCanvasPanels {
  * layout. The setter is stable (reads docked props through a ref) because keyboard shortcut effects capture it.
  */
 function useCanvasPanelOpenState(
-  id: DockedCanvasPanelId,
+  id: DockedCanvasPanelId | 'minimap' | 'legend',
   initial: boolean,
   docked: DockedCanvasPanels | undefined
 ): [boolean, (value: React.SetStateAction<boolean>) => void] {
@@ -243,12 +255,12 @@ function useCanvasPanelOpenState(
   const setOpen = useCallback(
     (value: React.SetStateAction<boolean>) => {
       const d = dockedRef.current;
-      if (!d) return setInternal(value);
+      if (!d || id === 'minimap' || id === 'legend') return setInternal(value);
       d.onOpenChange(id, typeof value === 'function' ? value(d.visible[id]) : value);
     },
     [id]
   );
-  return [docked ? docked.open[id] : internal, setOpen];
+  return [docked && id !== 'minimap' && id !== 'legend' ? docked.open[id] : internal, setOpen];
 }
 
 interface ParsedPath {
@@ -1498,6 +1510,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onShowInXae,
     problemMarkers,
     liveHighlight,
+    openGuardOnSelect = false,
+    pathHighlight,
+    diffHighlight,
+    contextMenuItems,
+    connectFrom = null,
+    onConnectTo,
+    onConnectCancel,
     onStyleChange: onStyleChangeProp,
     onResetStateStyle: onResetStateStyleProp,
     onClearAllCustomStyles: onClearAllCustomStylesProp,
@@ -1664,7 +1683,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
    */
   const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, wasSelected: boolean) => {
     setSelectedEdge(edge);
-    if (wasSelected) {
+    if (wasSelected || openGuardOnSelect) {
       toggleConditionOverlay(edge, anchor);
     } else {
       // Selecting a different transition closes an inspector that belongs to another one
@@ -3184,6 +3203,54 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
   }, [selectedEdge, effectiveNodeOffsets, edgeOffsets, layoutEngine, flowchartCurve]);
 
+  // Connect mode: a line from the source state to the mouse, until a target state is clicked
+  const [connectLine, setConnectLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  useEffect(() => {
+    if (!connectFrom) {
+      setConnectLine(null);
+      return;
+    }
+    const svg = renderedSvg;
+    const node = svg?.querySelector(`g.node[data-state-id="${CSS.escape(connectFrom)}"]`);
+    svg?.classList.add('diagram-connect-mode');
+    const onMove = (e: MouseEvent) => {
+      const r = node?.getBoundingClientRect();
+      if (r) setConnectLine({ x1: r.x + r.width / 2, y1: r.y + r.height / 2, x2: e.clientX, y2: e.clientY });
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      svg?.classList.remove('diagram-connect-mode');
+    };
+  }, [connectFrom, renderedSvg]);
+
+  // Changes tab: what differs from the compared version
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.diff-added, .diff-changed').forEach((el) => el.classList.remove('diff-added', 'diff-changed'));
+    if (!diffHighlight) return;
+    const node = (id: string) => svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`);
+    diffHighlight.added.forEach((id) => node(id)?.classList.add('diff-added'));
+    diffHighlight.changed.forEach((id) => node(id)?.classList.add('diff-changed'));
+    diffHighlight.edgesAdded.forEach((e) => findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges)?.classList.add('diff-added'));
+    diffHighlight.edgesChanged.forEach((e) => findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges)?.classList.add('diff-changed'));
+  }, [renderedSvg, diffHighlight, availableEdges]);
+
+  // Paths tab: the path(s) between two states stand out, the rest of the diagram is dimmed
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.path-node, .path-edge, .path-edge-label').forEach((el) => el.classList.remove('path-node', 'path-edge', 'path-edge-label'));
+    svg.classList.toggle('diagram-path-active', !!pathHighlight && pathHighlight.states.length > 0);
+    if (!pathHighlight) return;
+    for (const id of pathHighlight.states) svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`)?.classList.add('path-node');
+    for (const e of pathHighlight.edges) {
+      findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges)?.classList.add('path-edge');
+      svg.querySelectorAll(`g.edgeLabel[data-from="${CSS.escape(e.from)}"][data-to="${CSS.escape(e.to)}"]`).forEach((l) => l.classList.add('path-edge-label'));
+    }
+  }, [renderedSvg, pathHighlight, availableEdges]);
+
   // Live view: the PLC's current state glows, the previous one and the transition taken are marked
   useEffect(() => {
     const svg = renderedSvg;
@@ -4005,6 +4072,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
       // Click without drag -> select state and open inspector
       if (!wasMoved && stateId) {
+        // Connect mode: this state is the new transition's target
+        if (connectFrom && onConnectTo) {
+          if (stateId !== '[*]') onConnectTo(stateId);
+          return;
+        }
         const onBadge = !!(e.target as Element).closest?.('.tc-refactor-flag-badge, .tc-complexity-badge');
         // Second click on the selected state toggles its State Style window (a badge keeps its own action)
         if (nodeSelectedBeforePressRef.current && !onBadge) {
@@ -4085,6 +4157,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           }
         }
         if (stateId && !stateId.startsWith('note_')) {
+          // Connect mode: this state is the new transition's target
+          if (connectFrom && onConnectTo) {
+            if (stateId !== '[*]') onConnectTo(stateId);
+            return;
+          }
           const stateLabel =
             nodeEl.getAttribute('data-state-label') ||
             nodeEl.querySelector('.nodeLabel')?.textContent?.trim() ||
@@ -4132,6 +4209,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             flowchartCurve
           );
         }
+        return;
+      }
+
+      // Connect mode: a click on the empty canvas cancels
+      if (connectFrom) {
+        onConnectCancel?.();
         return;
       }
 
@@ -5842,18 +5925,33 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 isOpen={isMinimapOpen}
                 onClose={() => setIsMinimapOpen(false)}
                 theme={mermaidTheme}
-                docked={Boolean(dockedPanels)}
+                docked={false}
               />
             ) : null;
-          if (!dockedPanels) return minimap;
-          return createPortal(minimap ?? <DockedPanelPlaceholder label="Minimap" />, dockedPanels.targets.minimap);
+          return minimap;
         })()}
 
-        {/* Interactive Diagram Legend (canvas overlay, or docked into the RightPanel) */}
-        {renderCanvasPanel(
-          'legend',
-          'Diagram Legend',
-          svgContent && !error ? (
+        {/* Connect mode: the new transition follows the mouse */}
+        {connectFrom && (
+          <div id="connect-mode-hint" className="absolute top-2 left-1/2 -translate-x-1/2 z-40 px-3 py-1 rounded-lg bg-violet-950/90 border border-violet-600 text-[11px] text-violet-100 shadow-lg pointer-events-none">
+            New transition from <span className="font-mono">{connectFrom}</span>: click the target state (Esc cancels)
+          </div>
+        )}
+        {connectLine &&
+          createPortal(
+            <svg className="fixed inset-0 w-screen h-screen pointer-events-none z-[70]">
+              <defs>
+                <marker id="connect-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa" />
+                </marker>
+              </defs>
+              <line x1={connectLine.x1} y1={connectLine.y1} x2={connectLine.x2} y2={connectLine.y2} stroke="#a78bfa" strokeWidth={2.5} strokeDasharray="6 4" markerEnd="url(#connect-arrow)" />
+            </svg>,
+            document.body
+          )}
+
+        {/* Interactive Diagram Legend (canvas overlay) */}
+        {svgContent && !error ? (
             <DiagramLegendOverlay
               isOpen={isLegendOpen}
               onClose={() => setIsLegendOpen(false)}
@@ -5868,10 +5966,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               availableEdges={availableEdges}
               notes={effectiveNotes}
               containerRef={containerRef}
-              docked={Boolean(dockedPanels)}
+              docked={false}
             />
-          ) : null
-        )}
+          ) : null}
 
         {/* Real-Time State Machine Statistics & Cyclomatic Analysis (overlay, or docked into the RightPanel) */}
         {renderCanvasPanel(
@@ -6315,6 +6412,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             target={contextMenuState.target}
             onAddOrEditNote={handleOpenAddNote}
             onDeleteNote={handleDeleteActiveNote}
+            extraItems={contextMenuItems?.(contextMenuState.target)}
             onShowInXae={
               onShowInXae
                 ? (target: ContextMenuTarget) => {

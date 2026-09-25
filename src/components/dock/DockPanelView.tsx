@@ -86,6 +86,14 @@ interface DockPanelViewProps {
 
 export const DockPanelView: React.FC<DockPanelViewProps> = ({ id, panel, layout, onLayoutChange, tabMeta, registry }) => {
   const state = layout[panel];
+  // A tab brought forward by the app (not a click) may sit outside a long tab strip's visible part
+  const activeTabsKey = state.groups.map((g) => g.active ?? '').join('|');
+  useEffect(() => {
+    for (const g of state.groups) {
+      if (g.active) document.getElementById(`dock-tab-${g.active}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabsKey]);
   const isRow = panel === 'middle';
   const allowFloating = panel === 'middle';
   const dragTab = useDraggedTab();

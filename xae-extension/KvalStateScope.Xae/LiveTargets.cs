@@ -195,7 +195,7 @@ namespace KvalStateScope.Xae
             return sb.ToString();
         }
 
-        private static string PlcProjectFile(string filePath)
+        internal static string PlcProjectFile(string filePath)
         {
             var dir = Path.GetDirectoryName(filePath);
             for (var depth = 0; dir != null && depth < 12; depth++, dir = Path.GetDirectoryName(dir))

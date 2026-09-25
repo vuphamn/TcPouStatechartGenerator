@@ -20,6 +20,15 @@ import {
   Unlock,
 } from 'lucide-react';
 import { ContextMenuTarget } from '../types.ts';
+
+/** An action the app adds for this target (paths, rename, add transition, open a referenced POU, ...) */
+export interface ContextMenuExtraItem {
+  id: string;
+  label: string;
+  icon?: React.ReactNode;
+  title?: string;
+  onSelect: () => void;
+}
 import { copyTextToClipboard } from '../utils/diagramExport.ts';
 
 interface DiagramContextMenuProps {
@@ -44,6 +53,8 @@ interface DiagramContextMenuProps {
   isLayoutLocked?: boolean;
   /** TwinCAT XAE: open the state's CASE branch / the transition in TwinCAT's editor */
   onShowInXae?: (target: ContextMenuTarget) => void;
+  /** The app's actions for this target, shown as their own section */
+  extraItems?: ContextMenuExtraItem[];
 }
 
 export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
@@ -55,6 +66,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
   onDeleteNote,
   onOpenStyleCustomizer,
   onShowInXae,
+  extraItems,
   onOpenMethodEditor,
   onOpenPreProcessEditor,
   onOpenMermaidLive,
@@ -183,6 +195,25 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
 
       {/* Menu Actions */}
       <div className="space-y-0.5">
+        {extraItems && extraItems.length > 0 && (
+          <div className="pb-1 mb-1 border-b border-slate-800 space-y-0.5">
+            {extraItems.map((item) => (
+              <button
+                key={item.id}
+                id={`context-menu-${item.id}`}
+                onClick={() => {
+                  onClose();
+                  item.onSelect();
+                }}
+                title={item.title}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left rounded-md hover:bg-slate-800 text-slate-300 hover:text-slate-100 transition-colors"
+              >
+                <span className="w-3.5 h-3.5 flex items-center justify-center text-violet-300 shrink-0">{item.icon}</span>
+                <span className="truncate">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {target.type !== 'canvas' && (
           <>
             <button

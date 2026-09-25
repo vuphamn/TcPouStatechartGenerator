@@ -259,6 +259,62 @@ html, body, #root {
   filter: brightness(1.22) drop-shadow(0 12px 28px rgba(0, 0, 0, 0.65)) !important;
 }
 
+/* Changes tab: added (green) / changed (amber) against the compared version */
+g.node.diff-added > rect,
+g.node.diff-added > polygon,
+g.node.diff-added > path.basic {
+  stroke: #34d399 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: none !important;
+}
+g.node.diff-changed > rect,
+g.node.diff-changed > polygon,
+g.node.diff-changed > path.basic {
+  stroke: #fbbf24 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 5 3 !important;
+}
+path.diff-added {
+  stroke: #34d399 !important;
+  stroke-width: 3px !important;
+}
+path.diff-changed {
+  stroke: #fbbf24 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 6 3 !important;
+}
+
+/* Connect mode (Add transition from here): states are the click targets */
+.diagram-connect-mode g.node {
+  cursor: crosshair !important;
+}
+.diagram-connect-mode g.node:hover > rect,
+.diagram-connect-mode g.node:hover > polygon {
+  stroke: #a78bfa !important;
+  stroke-width: 3px !important;
+}
+
+/* Paths tab: the path(s) between two states; the rest of the diagram is dimmed */
+.diagram-path-active g.node:not(.path-node),
+.diagram-path-active g.edgeLabel:not(.path-edge-label) {
+  opacity: 0.3;
+}
+.diagram-path-active g.edgePaths path:not(.path-edge) {
+  opacity: 0.15;
+}
+.path-node > rect,
+.path-node > polygon,
+.path-node > circle,
+.path-node > path.basic {
+  stroke: #a78bfa !important;
+  stroke-width: 3px !important;
+}
+path.path-edge {
+  stroke: #a78bfa !important;
+  stroke-width: 3px !important;
+  opacity: 1 !important;
+}
+
 /* Live view: the PLC's current state, the previous one and the transition taken */
 .live-active-node > rect,
 .live-active-node > polygon,

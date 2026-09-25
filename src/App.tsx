@@ -41,6 +41,15 @@ import {
   StickyNote,
   ListChecks,
   Radio,
+  GitCompare,
+  Maximize2,
+  Minimize2,
+  ArrowRightLeft,
+  PencilLine,
+  SquarePlus,
+  Link2,
+  FileStack,
+  Route,
 } from 'lucide-react';
 import { generateStatechart, PriorityFormat } from './generator.ts';
 import {
@@ -74,6 +83,20 @@ import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHo
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
+import { StatusBar } from './components/StatusBar.tsx';
+import { PathsPanel } from './components/PathsPanel.tsx';
+import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
+import { diffCharts } from './utils/chartDiff.ts';
+import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
+import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
+import { getStateCodeFromPou } from './utils/pouStateEditor.ts';
+import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
+import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
+import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
+import { findPaths } from './utils/statePaths.ts';
+import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
+import { addState, addTransition, checkNewStateName, renameEdgeKeys, renameKey, renameState } from './utils/stateEdits.ts';
+import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
 import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
 import { desktopLive } from './utils/liveHost.ts';
@@ -99,6 +122,7 @@ import {
   isDockTabVisible,
   loadDockLayout,
   revealDockTab,
+  getDockGroupOfTab,
   saveDockLayout,
 } from './utils/dockLayout.ts';
 import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
@@ -249,6 +273,54 @@ export const App: React.FC = () => {
   const [diagramSearchQuery, setDiagramSearchQuery] = useState<string>('');
   const isSidebarOpen = dockLayout.leftVisible;
   const setIsSidebarOpen = useCallback((open: boolean) => setDockLayout((l) => ({ ...l, leftVisible: open })), []);
+
+  // Details follow the selection: a selected state brings the Documentation tab forward (unless an interactive
+  // tool tab is in front), a selected transition opens its Transition Guard window on the first click
+  const [followSelection, setFollowSelection] = useState(() => {
+    try {
+      return localStorage.getItem('kss.followSelection') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('kss.followSelection', String(followSelection));
+    } catch {
+      // per-viewer convenience only
+    }
+  }, [followSelection]);
+
+  // Focus mode (Z): header, side panels and options ribbon hidden, the diagram fills the window; Z / Esc restore
+  const [focusMode, setFocusMode] = useState(false);
+  const focusRestoreRef = useRef<{ left: boolean; right: boolean } | null>(null);
+  const toggleFocusMode = useCallback(() => {
+    setFocusMode((on) => {
+      if (!on) {
+        setDockLayout((l) => {
+          focusRestoreRef.current = { left: l.leftVisible, right: l.rightVisible };
+          return activateDockTab({ ...l, leftVisible: false, rightVisible: false }, 'diagram');
+        });
+      } else {
+        const restore = focusRestoreRef.current;
+        if (restore) setDockLayout((l) => ({ ...l, leftVisible: restore.left, rightVisible: restore.right }));
+      }
+      return !on;
+    });
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+      if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === 'z' || e.key === 'Z' || (e.key === 'Escape' && focusMode)) {
+        e.preventDefault();
+        toggleFocusMode();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focusMode, toggleFocusMode]);
   const [copiedMarkdown, setCopiedMarkdown] = useState<boolean>(false);
   const [headerToolbarElement, setHeaderToolbarElement] = useState<HTMLDivElement | null>(null);
 
@@ -261,6 +333,15 @@ export const App: React.FC = () => {
   const [customEdgeStyles, setCustomEdgeStyles] = useState<CustomEdgeStylesMap>({});
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
   const [selectedStateLabel, setSelectedStateLabel] = useState<string>('');
+  useEffect(() => {
+    if (!followSelection || !selectedStateId) return;
+    setDockLayout((l) => {
+      const group = getDockGroupOfTab(l, 'docs');
+      const busy: DockTabId[] = ['live', 'problems', 'paths', 'changes'];
+      if (!group || group.active === 'docs' || (group.active && busy.includes(group.active))) return l;
+      return revealDockTab(l, 'docs', 'diagram');
+    });
+  }, [followSelection, selectedStateId]);
   // Last selected state: the Method Editor, Style & Documentation tabs stay on it when the
   // canvas selection is cleared (background click / Esc) instead of jumping to the first state
   const [lastSelectedState, setLastSelectedState] = useState<{ id: string; label: string } | null>(null);
@@ -688,6 +769,26 @@ export const App: React.FC = () => {
     ]
   );
 
+  /** New .TcPOU and / or .TcDUT text (edits made from the diagram), then the diagram regenerated once */
+  const handleReplaceSources = useCallback(
+    (newPou: string | null, newDut: string | null) => {
+      const pou = newPou ?? pouContent;
+      const dut = newDut ?? dutContent;
+      if (newPou !== null) setPouContent(newPou);
+      if (newDut !== null) setDutContent(newDut);
+      try {
+        const startTime = performance.now();
+        setGenerationError(null);
+        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat });
+        setRawMarkdown(result);
+        setGenerationStats({ statesCount: (result.match(/-->/g) || []).length, linesCount: result.split('\n').length, timeMs: Math.round(performance.now() - startTime) });
+      } catch (genErr: unknown) {
+        setGenerationError(genErr instanceof Error ? genErr.message : String(genErr));
+      }
+    },
+    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat]
+  );
+
   const handleSavePreProcessCode = useCallback(
     (newCode: string, newDeclaration?: string) => {
       try {
@@ -858,10 +959,11 @@ export const App: React.FC = () => {
       window.clearTimeout(copyToastTimeoutRef.current);
     }
     setCopyToast({ message, type });
+    // Shown in the status bar, which covers nothing: a little longer than a pop-up
     copyToastTimeoutRef.current = window.setTimeout(() => {
       setCopyToast(null);
       copyToastTimeoutRef.current = null;
-    }, durationMs);
+    }, Math.max(durationMs, type === 'error' ? 15000 : 8000));
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -1039,8 +1141,31 @@ export const App: React.FC = () => {
     setLiveSession((prev) => applyLiveSamples(prev, events, liveNamesRef.current, liveEdgesRef.current));
   }, []);
 
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues };
+  // Two-way selection (XAE): the caret in TwinCAT's doState() editor selects the state whose CASE branch it is in
+  const followSelectionRef = useRef(followSelection);
+  followSelectionRef.current = followSelection;
+  const handleEditorCaret = useCallback((m: Extract<HostMessage, { type: 'editorCaret' }>) => {
+    if (!followSelectionRef.current || m.method.toLowerCase() !== 'dostate') return;
+    const pou = pouContentRef.current;
+    const declLines = declarationLineCount(pou, 'doState');
+    const implLines = implementationLineCount(pou, 'doState');
+    if (!declLines || !implLines) return;
+    // TwinCAT's editor numbers the declaration's lines first (its line count can be one more than the file's)
+    const line = m.line - declLines;
+    if (line < 1 || line > implLines) return;
+    const state = stateAtLine(pou, line);
+    if (!state) return;
+    setSelectedStateId((prev) => {
+      if (prev !== state) {
+        setSelectedStateLabel(state);
+        mermaidViewerRef.current?.panToState(state, Date.now());
+      }
+      return state;
+    });
+  }, []);
+
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleEditorCaret });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleEditorCaret };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1084,6 +1209,8 @@ export const App: React.FC = () => {
         h.handleLiveStatus(m);
       } else if (m.type === 'liveValues') {
         h.handleLiveValues(m.events);
+      } else if (m.type === 'editorCaret') {
+        h.handleEditorCaret(m);
       } else if (m.type === 'error') {
         h.showCopyToast(m.message, 'error', 7000);
       }
@@ -1181,6 +1308,322 @@ export const App: React.FC = () => {
   }, [activeLintFindings]);
 
   const canNavigateInXae = isXaeHost() && !!pouPath && hostSavedContent[pouPath] !== undefined;
+
+  // Paths tab: every path between two states, highlighted on the diagram
+  const [pathFrom, setPathFrom] = useState('');
+  const [pathTo, setPathTo] = useState('');
+  const [pathIndex, setPathIndex] = useState<number | null>(null);
+  useEffect(() => {
+    setPathFrom('');
+    setPathTo('');
+    setPathIndex(null);
+  }, [pouFileName]);
+  const pathResult = useMemo(() => findPaths(availableEdges, pathFrom, pathTo), [availableEdges, pathFrom, pathTo]);
+  const pathHighlight = useMemo(() => {
+    if (!pathFrom || !pathTo || pathResult.paths.length === 0) return null;
+    const shown = pathIndex !== null && pathResult.paths[pathIndex] ? [pathResult.paths[pathIndex]] : pathResult.paths;
+    const states = new Set<string>();
+    const edges = new Map<string, { from: string; to: string }>();
+    for (const p of shown) for (const step of p) {
+      states.add(step.from);
+      states.add(step.to);
+      edges.set(`${step.from}->${step.to}`, { from: step.from, to: step.to });
+    }
+    return { states: [...states], edges: [...edges.values()] };
+  }, [pathFrom, pathTo, pathResult, pathIndex]);
+  const diagramStateIds = useMemo(
+    () => [...new Set([...identifiedStatesResult.states.map((s) => s.id), ...availableEdges.flatMap((e) => [e.from, e.to])])].filter((s) => s && s !== '[*]').sort(),
+    [identifiedStatesResult.states, availableEdges]
+  );
+  const findPathsFor = useCallback(
+    (stateId: string, role: 'from' | 'to') => {
+      if (role === 'from') {
+        setPathFrom(stateId);
+        setPathTo((t) => (t === stateId ? '' : t));
+      } else {
+        setPathTo(stateId);
+        setPathFrom((f) => (f === stateId ? '' : f));
+      }
+      setPathIndex(null);
+      showDockTab('paths');
+    },
+    [showDockTab]
+  );
+
+  // Compare (Changes tab): the chart against the version as loaded / saved in XAE, or the committed one (git)
+  const [compareBase, setCompareBase] = useState<CompareBase>('saved');
+  const [compareOnDiagram, setCompareOnDiagram] = useState(true);
+  const [loadedBaseline, setLoadedBaseline] = useState<{ pou: string; dut: string }>({ pou: '', dut: '' });
+  useEffect(() => {
+    // The versions as they were when this POU / enum was loaded (edits come later)
+    setLoadedBaseline({ pou: pouContent, dut: dutContent });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pouFileName, dutFileName]);
+  const [gitBaseline, setGitBaseline] = useState<{ key: string; loading: boolean; pou?: string; dut?: string; error?: string; note?: string } | null>(null);
+  const changesTabMounted = isDockTabMounted('changes');
+  const gitKey = `${pouPath ?? ''}|${dutPath ?? ''}`;
+  useEffect(() => {
+    if (!changesTabMounted || compareBase !== 'git' || gitBaseline?.key === gitKey) return;
+    if (!pouPath) {
+      setGitBaseline({ key: gitKey, loading: false, error: 'Open the POU from its folder (Browse) to compare with git' });
+      return;
+    }
+    setGitBaseline({ key: gitKey, loading: true });
+    void (async () => {
+      const pou = await fetchCommittedVersion(pouPath);
+      const dut = dutPath ? await fetchCommittedVersion(dutPath) : null;
+      setGitBaseline({
+        key: gitKey,
+        loading: false,
+        pou: pou.content,
+        dut: dut?.content,
+        error: pou.error,
+        note: !pou.error && dutPath && !dut?.content ? `The enum was not compared (${dut?.error ?? 'not committed'})` : undefined,
+      });
+    })();
+  }, [changesTabMounted, compareBase, gitKey, gitBaseline?.key, pouPath, dutPath]);
+  const savedBaseline =
+    isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined
+      ? { pou: hostSavedContent[pouPath], dut: (dutPath && hostSavedContent[dutPath]) || dutContent }
+      : loadedBaseline;
+  const chartDiff = useMemo(() => {
+    if (!changesTabMounted) return null;
+    const baseline = compareBase === 'git' ? (gitBaseline?.pou ? { pou: gitBaseline.pou, dut: gitBaseline.dut ?? dutContent } : null) : savedBaseline;
+    if (!baseline?.pou || !pouContent) return null;
+    return diffCharts(baseline, { pou: pouContent, dut: dutContent });
+  }, [changesTabMounted, compareBase, gitBaseline, savedBaseline.pou, savedBaseline.dut, pouContent, dutContent]);
+  const diffHighlight = useMemo(() => {
+    if (!compareOnDiagram || !chartDiff || chartDiff.total === 0) return null;
+    return {
+      added: chartDiff.statesAdded,
+      changed: chartDiff.statesChanged,
+      edgesAdded: chartDiff.transitionsAdded.map((t) => ({ from: t.from, to: t.to })),
+      edgesChanged: chartDiff.guardsChanged.map((t) => ({ from: t.from, to: t.to })),
+    };
+  }, [compareOnDiagram, chartDiff]);
+
+  // Project documentation: every state machine of the PLC project in one HTML document
+  const [docProgress, setDocProgress] = useState<{ done: number; total: number; name: string } | null>(null);
+  const docCancelRef = useRef(false);
+  const handleDocumentProject = useCallback(async () => {
+    setIsExportMenuOpen(false);
+    docCancelRef.current = false;
+    setDocProgress({ done: 0, total: 0, name: 'Reading the project...' });
+    try {
+      const files = await loadProjectFiles(pouPath);
+      if ('error' in files && files.error) {
+        if (files.error !== 'canceled') showCopyToast(files.error, 'error');
+        return;
+      }
+      const project = files as Exclude<typeof files, { error: string }>;
+      const doc = await buildProjectDocumentation(
+        { project: project.project ?? 'PLC project', pous: project.pous ?? [], duts: project.duts ?? [] },
+        { flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat },
+        (done, total, name) => setDocProgress({ done, total, name }),
+        () => docCancelRef.current
+      );
+      if (!doc) {
+        showCopyToast('Documentation canceled', 'error');
+        return;
+      }
+      if (doc.count === 0) {
+        showCopyToast('No state machines (POUs with a doState() CASE) were found in the project', 'error');
+        return;
+      }
+      const saved = await saveDocument(`${(project.project ?? 'project').replace(/[^\w.-]+/g, '_')}-state-machines.html`, doc.html);
+      if (saved.error) showCopyToast(`Could not save the documentation: ${saved.error}`, 'error');
+      else if (!saved.canceled) showCopyToast(`Documented ${doc.count} state machines${saved.path ? `: ${saved.path}` : ''}`, 'success', 8000);
+    } finally {
+      setDocProgress(null);
+    }
+  }, [pouPath, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
+
+  // Edits from the diagram: rename a state, add a state, add a transition (connect mode)
+  const [promptRequest, setPromptRequest] = useState<TextPromptRequest | null>(null);
+  const [connectFrom, setConnectFrom] = useState<string | null>(null);
+  useEffect(() => {
+    if (!connectFrom) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setConnectFrom(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [connectFrom]);
+  const stateVarName = identifiedStatesResult.stateVarName || 'machineState';
+  const handleRenameState = useCallback(
+    (oldName: string) =>
+      setPromptRequest({
+        title: `Rename ${oldName}`,
+        label: 'New name (the enum, CASE labels, transitions and every other use in the POU change with it)',
+        initial: oldName,
+        monospace: true,
+        submitLabel: 'Rename',
+        validate: (v) => checkNewStateName(pouContent, dutContent, v, oldName),
+        onSubmit: (newName) => {
+          const r = renameState(pouContent, dutContent, oldName, newName);
+          handleReplaceSources(r.pou, dutContent ? r.dut : null);
+          setCustomNodeStyles((m) => renameKey(m, oldName, newName) ?? m);
+          setCustomEdgeStyles((m) => renameEdgeKeys(m, oldName, newName) ?? m);
+          setNodeOffsets((m) => renameKey(m, oldName, newName) ?? m);
+          setCanvasPositions((m) => renameKey(m, oldName, newName) ?? m);
+          setDiagramNotes((n) => ({
+            ...n,
+            nodes: renameKey(n.nodes, oldName, newName) ?? n.nodes,
+            edges: renameEdgeKeys(n.edges, oldName, newName) ?? n.edges,
+            positions: renameEdgeKeys(renameKey(n.positions, oldName, newName), oldName, newName),
+            styles: renameEdgeKeys(renameKey(n.styles, oldName, newName), oldName, newName),
+          }));
+          if (selectedStateId === oldName) {
+            setSelectedStateId(newName);
+            setSelectedStateLabel(newName);
+          }
+          const where = `${r.pouCount} place${r.pouCount === 1 ? '' : 's'} in the POU${dutContent ? `, ${r.dutCount} in the enum` : ''}`;
+          showCopyToast(`Renamed ${oldName} to ${newName}: ${where}`, 'success');
+        },
+      }),
+    [pouContent, dutContent, handleReplaceSources, selectedStateId, showCopyToast]
+  );
+  const handleAddState = useCallback(
+    () =>
+      setPromptRequest({
+        title: 'Add a state',
+        label: 'Name (added to the enum, with an empty CASE branch in doState())',
+        placeholder: 'e.g. TABLEMANAGER_WAIT_FOR_DOOR',
+        monospace: true,
+        submitLabel: 'Add state',
+        validate: (v) => (v ? checkNewStateName(pouContent, dutContent, v) : 'Enter a name'),
+        onSubmit: (name) => {
+          const added = addState(pouContent, dutContent, name);
+          if (!added) {
+            showCopyToast('doState() has no CASE to add the state to', 'error');
+            return;
+          }
+          const pou = updateMethodCodeInPou(pouContent, 'doState', added.pouCode);
+          if (!pou.success) {
+            showCopyToast(pou.error || 'Could not add the state', 'error');
+            return;
+          }
+          handleReplaceSources(pou.updatedPou, added.dut);
+          showCopyToast(`Added ${name}${added.dut ? ' to the enum and' : ''} to doState(): connect it with Add transition`, 'success');
+        },
+      }),
+    [pouContent, dutContent, handleReplaceSources, showCopyToast]
+  );
+  const handleConnectTo = useCallback(
+    (to: string) => {
+      const from = connectFrom;
+      setConnectFrom(null);
+      if (!from) return;
+      setPromptRequest({
+        title: `New transition ${from} → ${to}`,
+        label: "Condition (Structured Text). The transition is added at the end of the state's branch:",
+        initial: 'TRUE',
+        monospace: true,
+        hint: `IF <condition> THEN ${stateVarName} := ${to}; END_IF`,
+        submitLabel: 'Add transition',
+        validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
+        onSubmit: (condition) => {
+          const code = addTransition(pouContent, from, to, condition, stateVarName);
+          if (!code) {
+            showCopyToast(`${from} has no CASE branch in doState()`, 'error');
+            return;
+          }
+          const result = handleSaveMethodCode('doState', code);
+          if (!result?.success) showCopyToast(result?.error || 'Could not add the transition', 'error');
+          else showCopyToast(`Added the transition ${from} → ${to}`, 'success');
+        },
+      });
+    },
+    [connectFrom, pouContent, stateVarName, handleSaveMethodCode, showCopyToast]
+  );
+
+  // Open a state machine the diagram references (its POU in the same PLC project), with Back
+  const machineMembers = useMemo(() => declaredMachineMembers(pouContent), [pouContent]);
+  const [pouHistory, setPouHistory] = useState<{ path: string; name: string }[]>([]);
+  const openPouInProject = useCallback(
+    async (typeName?: string, backPath?: string) => {
+      if (isXaeHost()) {
+        postToHost({ type: 'openPou', typeName, path: backPath });
+        return true;
+      }
+      const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: (from: string, type?: string, path?: string) => Promise<PouSource & { error?: string }> } }).tcDesktop;
+      if (desktop?.openPouInProject && pouPath) {
+        const r = await desktop.openPouInProject(pouPath, typeName, backPath);
+        if (r?.error || !r?.content) {
+          showCopyToast(r?.error || 'Could not open the POU', 'error');
+          return false;
+        }
+        applyLoadedPou(r);
+        return true;
+      }
+      showCopyToast(`Open ${typeName ?? 'the POU'}.TcPOU with Browse: the web edition cannot open project files by name`, 'error');
+      return false;
+    },
+    [pouPath, applyLoadedPou, showCopyToast]
+  );
+  const handleOpenReferenced = useCallback(
+    async (ref: ReferencedMachine) => {
+      const from = pouPath ? { path: pouPath, name: pouFileName } : null;
+      if (await openPouInProject(ref.type)) {
+        if (from) setPouHistory((h) => [...h, from].slice(-20));
+      }
+    },
+    [pouPath, pouFileName, openPouInProject]
+  );
+  const handleBackToPreviousPou = useCallback(() => {
+    const prev = pouHistory[pouHistory.length - 1];
+    if (!prev) return;
+    setPouHistory((h) => h.slice(0, -1));
+    void openPouInProject(undefined, prev.path);
+  }, [pouHistory, openPouInProject]);
+
+  // The app's own context menu actions (paths, rename, add a transition / state, open a referenced state machine)
+  const diagramContextMenuItems = useCallback(
+    (target: ContextMenuTarget): ContextMenuExtraItem[] => {
+      const items: ContextMenuExtraItem[] = [];
+      if (target.type === 'node') {
+        items.push(
+          { id: 'paths-from-btn', label: 'Paths from here', icon: <Route className="w-3.5 h-3.5" />, onSelect: () => findPathsFor(target.id, 'from') },
+          { id: 'paths-to-btn', label: 'Paths to here', icon: <Route className="w-3.5 h-3.5 rotate-180" />, onSelect: () => findPathsFor(target.id, 'to') }
+        );
+        if (target.id !== '[*]' && pouContent) {
+          items.push(
+            { id: 'add-transition-btn', label: 'Add transition from here…', icon: <ArrowRightLeft className="w-3.5 h-3.5" />, title: 'Then click the target state', onSelect: () => setConnectFrom(target.id) },
+            { id: 'rename-state-btn', label: 'Rename state…', icon: <PencilLine className="w-3.5 h-3.5" />, onSelect: () => handleRenameState(target.id) }
+          );
+        }
+      }
+      // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
+      if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
+        items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
+      }
+      // State machines this state's code / this transition's guard uses: open their charts
+      if ((target.type === 'node' || target.type === 'edge') && machineMembers.size > 0) {
+        let text = '';
+        if (target.type === 'node') {
+          try {
+            text = getStateCodeFromPou(pouContent, target.id).code ?? '';
+          } catch {
+            text = '';
+          }
+        } else {
+          const edge = availableEdges.find((e) => e.id === target.id);
+          text = `${target.label ?? ''} ${edge?.condition ?? ''} ${edge?.label ?? ''}`;
+        }
+        referencedMachines(text, machineMembers)
+          .slice(0, 6)
+          .forEach((ref) =>
+            items.push({
+              id: `open-ref-${ref.member}`,
+              label: `Open ${ref.type} (${ref.member})`,
+              icon: <Link2 className="w-3.5 h-3.5" />,
+              title: `Open the chart of ${ref.member} : ${ref.type}`,
+              onSelect: () => void handleOpenReferenced(ref),
+            })
+          );
+      }
+      return items;
+    },
+    [findPathsFor, pouContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced]
+  );
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
       if (!finding.method || !finding.line) return;
@@ -1660,7 +2103,6 @@ export const App: React.FC = () => {
         tooltip: 'State Machine Real-Time Stats (shortcut: S)',
       },
       heatmap: { title: 'Complexity Heat-Map', icon: <Flame />, tooltip: 'Complexity Heat-Map (shortcut: H)' },
-      legend: { title: 'Diagram Legend', icon: <Layers />, tooltip: 'Diagram Legend (shortcut: L)' },
       notes: {
         title: 'Notes',
         icon: <StickyNote />,
@@ -1670,14 +2112,15 @@ export const App: React.FC = () => {
             <span className="px-1.5 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-300">{notesCount}</span>
           ) : undefined,
       },
-      minimap: { title: 'Minimap', icon: <MapIcon /> },
+      changes: { title: 'Changes', icon: <GitCompare />, tooltip: 'Compare the chart with the saved or committed version' },
+      paths: { title: 'Paths', icon: <Route />, tooltip: 'Every path between two states, with the guards along it' },
     }),
     [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message]
   );
 
   // Canvas tool windows live in the RightPanel; the canvas renders them into these dock slots
   const dockedCanvasPanels = useMemo<DockedCanvasPanels>(() => {
-    const ids: DockedCanvasPanelId[] = ['search', 'minimap', 'stats', 'heatmap', 'legend', 'notes'];
+    const ids: DockedCanvasPanelId[] = ['search', 'stats', 'heatmap', 'notes'];
     const map = <T,>(fn: (id: DockedCanvasPanelId) => T) =>
       Object.fromEntries(ids.map((id) => [id, fn(id)])) as Record<DockedCanvasPanelId, T>;
     return {
@@ -1878,6 +2321,21 @@ export const App: React.FC = () => {
                   id="export-options-dropdown"
                   className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl py-1.5 z-50 text-xs text-slate-200 divide-y divide-slate-800/70"
                 >
+                  <div className="py-1">
+                    <button
+                      id="dropdown-document-project-btn"
+                      type="button"
+                      onClick={() => void handleDocumentProject()}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Every state machine of the PLC project in one HTML document: charts, states, transitions, problems"
+                    >
+                      <FileStack className="w-4 h-4 text-violet-300 shrink-0" />
+                      <div>
+                        <div className="text-white text-xs">Document all state machines…</div>
+                        <div className="text-[10px] text-slate-400">{isXaeHost() || pouPath ? 'Of this PLC project' : 'Choose the PLC project folder'}</div>
+                      </div>
+                    </button>
+                  </div>
                   <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                     High-Resolution Export
                   </div>
@@ -2057,9 +2515,20 @@ export const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen w-full bg-slate-950 text-slate-100 overflow-hidden font-sans">
       {/* Top Application Bar & Header Section */}
+      {focusMode && (
+        <button
+          id="exit-focus-mode-btn"
+          type="button"
+          onClick={toggleFocusMode}
+          className="fixed top-2 right-3 z-[60] flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-700 text-xs text-slate-300 hover:text-white hover:border-sky-500 shadow-lg"
+          title="Leave focus mode (Z or Esc)"
+        >
+          <Minimize2 className="w-3.5 h-3.5" /> Exit focus
+        </button>
+      )}
       <header
         id="app-header"
-        className="relative z-40 flex flex-col bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0"
+        className={`relative z-40 flex flex-col bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0 ${focusMode ? 'hidden' : ''}`}
       >
         {/* Row 1: Brand, Title, Sample Selector, Generate, Copy Markdown, Export */}
         <div
@@ -2079,6 +2548,15 @@ export const App: React.FC = () => {
             {isSidebarOpen ? <PanelLeftClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelLeftOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
           <WindowMenuButton layout={dockLayout} onLayoutChange={setDockLayout} tabMeta={dockTabMeta} />
+          <button
+            id="focus-mode-btn"
+            type="button"
+            onClick={toggleFocusMode}
+            className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0"
+            title="Focus mode: only the diagram (Z)"
+          >
+            <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
           <button
             id="toggle-right-panel-btn"
             type="button"
@@ -2288,7 +2766,7 @@ export const App: React.FC = () => {
           {/* Options Control Ribbon (diagram generation options, only relevant to the canvas) */}
           <div
             id="options-ribbon"
-            className="relative z-30 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 shrink-0"
+            className={`${focusMode ? 'hidden ' : ''}relative z-30 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 shrink-0`}
           >
             <div className="contents">
               <div className="flex items-center gap-1.5 text-slate-400 font-medium">
@@ -2597,6 +3075,13 @@ export const App: React.FC = () => {
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
                   liveHighlight={liveHighlight}
+                  openGuardOnSelect={followSelection}
+                  pathHighlight={pathHighlight}
+                  diffHighlight={diffHighlight}
+                  contextMenuItems={diagramContextMenuItems}
+                  connectFrom={connectFrom}
+                  onConnectTo={handleConnectTo}
+                  onConnectCancel={() => setConnectFrom(null)}
                   nodeOffsets={nodeOffsets}
                   onNodeOffsetsChange={setNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
@@ -2701,6 +3186,51 @@ export const App: React.FC = () => {
           dockRegistry.nodes.live
         )}
 
+      {changesTabMounted &&
+        createPortal(
+          <ChangesPanel
+            base={compareBase}
+            onBaseChange={(b) => {
+              if (b === 'git') setGitBaseline(null); // read it again
+              setCompareBase(b);
+            }}
+            savedLabel={isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined ? 'saved in XAE' : 'as loaded'}
+            gitAvailable={canReadGitVersions()}
+            loading={compareBase === 'git' && !!gitBaseline?.loading}
+            error={compareBase === 'git' ? gitBaseline?.error ?? null : null}
+            note={compareBase === 'git' ? gitBaseline?.note ?? null : null}
+            diff={chartDiff}
+            showOnDiagram={compareOnDiagram}
+            onShowOnDiagramChange={setCompareOnDiagram}
+            onJumpToState={(id) => handleJumpToState(id)}
+          />,
+          dockRegistry.nodes.changes
+        )}
+
+      {isDockTabMounted('paths') &&
+        createPortal(
+          <PathsPanel
+            states={diagramStateIds}
+            from={pathFrom}
+            to={pathTo}
+            onChange={(f, t) => {
+              setPathFrom(f);
+              setPathTo(t);
+              setPathIndex(null);
+            }}
+            result={pathResult}
+            selected={pathIndex}
+            onSelect={setPathIndex}
+            onJumpToState={(id) => handleJumpToState(id)}
+            onClear={() => {
+              setPathFrom('');
+              setPathTo('');
+              setPathIndex(null);
+            }}
+          />,
+          dockRegistry.nodes.paths
+        )}
+
       {isDockTabMounted('problems') &&
         createPortal(
           <ProblemsPanel
@@ -2785,67 +3315,53 @@ export const App: React.FC = () => {
         onToast={showCopyToast}
       />
 
-      {/* Floating Toast Notifications Container */}
-      <div
-        id="toast-notification-container"
-        className="fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 pointer-events-none items-end"
-      >
-        {/* Mermaid Diagram Clipboard Copy Toast */}
-        {copyToast && (
-          <div
-            id="clipboard-toast"
-            data-testid="clipboard-toast-notification"
-            className={`pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-medium border backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-200 ${
-              copyToast.type === 'success'
-                ? 'bg-slate-900/95 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/20'
-                : 'bg-slate-900/95 border-rose-500/50 text-rose-300 ring-1 ring-rose-500/20'
-            }`}
-          >
-            {copyToast.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            )}
-            <span>{copyToast.message}</span>
-            <button
-              type="button"
-              onClick={() => setCopyToast(null)}
-              className="ml-1 p-0.5 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
-              title="Dismiss notification"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
+      {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
 
-        {/* Floating PDF Toast Notification */}
-        {pdfToast && (
-          <div
-            id="pdf-export-toast"
-            data-testid="pdf-export-toast"
-            className={`pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-medium border backdrop-blur-md animate-in fade-in slide-in-from-bottom-2 duration-200 ${
-              pdfToast.type === 'success'
-                ? 'bg-slate-900/95 border-emerald-500/50 text-emerald-300 ring-1 ring-emerald-500/20'
-                : 'bg-slate-900/95 border-rose-500/50 text-rose-300 ring-1 ring-rose-500/20'
-            }`}
-          >
-            {pdfToast.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            )}
-            <span>{pdfToast.message}</span>
-            <button
-              type="button"
-              onClick={() => setPdfToast(null)}
-              className="ml-1 p-0.5 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
-              title="Dismiss notification"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+      {docProgress && (
+        <div id="doc-progress-overlay" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50">
+          <div className="w-[380px] rounded-xl bg-slate-900 border border-slate-700 shadow-2xl p-4 text-xs space-y-3">
+            <div className="font-semibold text-slate-100">Documenting the state machines</div>
+            <div id="doc-progress-text" className="text-slate-400 truncate">
+              {docProgress.total ? `${docProgress.done} / ${docProgress.total}: ${docProgress.name}` : docProgress.name}
+            </div>
+            <div className="h-1.5 rounded bg-slate-800 overflow-hidden">
+              <div className="h-full bg-violet-500 transition-all" style={{ width: `${docProgress.total ? (100 * docProgress.done) / docProgress.total : 5}%` }} />
+            </div>
+            <div className="flex justify-end">
+              <button id="doc-cancel-btn" onClick={() => (docCancelRef.current = true)} className="px-3 py-1 rounded-md text-slate-300 hover:bg-slate-800">
+                Cancel
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Status bar: messages (formerly pop-ups), file and save state, counts, problems, live view */}
+      {!focusMode && (
+        <StatusBar
+          message={copyToast ? { text: copyToast.message, type: copyToast.type } : pdfToast ? { text: pdfToast.message, type: pdfToast.type } : null}
+          onDismissMessage={() => {
+            setCopyToast(null);
+            setPdfToast(null);
+          }}
+          fileName={pouFileName}
+          unsavedCount={hostDirtyFiles.length}
+          changedInXae={!!hostConflict}
+          statesCount={identifiedStatesResult.states.length}
+          transitionsCount={availableEdges.length}
+          errors={activeLintFindings.filter((f) => f.severity === 'error').length}
+          warnings={activeLintFindings.filter((f) => f.severity === 'warning').length}
+          onOpenProblems={() => showDockTab('problems')}
+          live={liveActive ? { state: liveSession.current?.state ?? null, message: liveStatus.message } : null}
+          onOpenLive={() => showDockTab('live')}
+          changes={chartDiff && compareOnDiagram ? chartDiff.total : null}
+          onOpenChanges={() => showDockTab('changes')}
+          host={isXaeHost() ? 'XAE' : desktopLive() ? 'Desktop' : 'Web'}
+          followSelection={followSelection}
+          onFollowSelectionChange={setFollowSelection}
+          backTo={pouHistory.length ? { name: pouHistory[pouHistory.length - 1].name, onClick: handleBackToPreviousPou } : null}
+        />
+      )}
     </div>
   );
 };

@@ -80,6 +80,14 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 - **Numbers to names:** values become state names through the `.TcDUT` enum, explicit `:=` values included.
 - **Stopping:** *Stop*, another POU, or closing the tab ends the session. It deletes the notification and releases the handle in the PLC.
 
+**Selection follows TwinCAT's caret.** When the caret in TwinCAT's editor is in the loaded POU's `doState()`, the state whose `CASE` branch contains it is selected and brought into view. Together with **Show in TwinCAT editor**, selection works both ways. The extension checks the active editor window's caption and caret line every 350 ms. Turn it off with **Follow selection** in the status bar.
+
+**Open a referenced state machine.** When a state or guard uses another state machine's instance (e.g. `smOutfeedStopAxis : SM_KAxis`), the context menu offers *Open SM_KAxis (smOutfeedStopAxis)*. The extension looks for `SM_KAxis.TcPOU` under the POU's PLC project folder and opens it in the tab. **Back** in the status bar returns to the previous POU.
+
+**Compare with git.** The **Changes** tab compares the loaded POU with the version XAE has saved, or with the committed one. For *committed (git)*, the extension runs `git show HEAD:<file>` in the file's folder; git must be on the `PATH`. It only reads files StateScope has loaded.
+
+**Document all state machines** (Export menu). The extension collects every POU with a `doState()` method, and every `.TcDUT`, under the PLC project folder. The app draws and documents each state machine, and a save dialog asks where to write the HTML file, which then opens.
+
 ## TwinCAT PLC tree context menu
 
 TwinCAT's PLC tree shows POUs with its own context menu, named **PlcFile**. Its numeric id is internal to Beckhoff's package, so the extension adds **Open in Kval StateScope** to that menu by name when it loads. It only does this once, and the IDE keeps the placement in its settings. The TwinCAT tree also shows that menu through its own command handling, which does not ask other extensions about their commands. A priority command target (`PriorityCommandTarget.cs`) makes sure the command is asked, so it can show itself for a `.TcPOU`.
@@ -115,6 +123,11 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - **App side:** the app ran in a browser with a stand-in for the XAE bridge, fed by a scripted session that included a 5 ms state and transitions the diagram does not have.
     - **Inside VS 2022:** the Live tab, `liveStart`, and the error reported back from the router.
     - **Not yet tested:** a real PLC (connect, notifications, stop).
+  - **0.6.0, on the same copy in VS 2022** (made a git repository whose commit lacked one transition):
+    - selection following the caret after Show in TwinCAT editor;
+    - Changes against *committed (git)*;
+    - opening `SM_KAxis` from a guard's reference, and Back;
+    - Document all state machines through the save dialog.
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 

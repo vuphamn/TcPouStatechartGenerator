@@ -30,6 +30,13 @@ export type HostMessage =
     }
   /** Live view: new values of the state variable (t: PLC time, ms since 1970) */
   | { type: 'liveValues'; events: { t: number; value: number }[] }
+  /** The committed (git HEAD) version of a loaded file */
+  | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
+  /** Project documentation: the PLC project's state machine POUs and all its enums */
+  | { type: 'projectPous'; project?: string; pous?: { name: string; path?: string; content: string }[]; duts?: DutCandidate[]; error?: string }
+  | { type: 'saveDocumentResult'; path?: string; error?: string; canceled?: boolean }
+  /** Two-way selection: the caret in TwinCAT's editor of the loaded POU (line of the editor, both parts) */
+  | { type: 'editorCaret'; method: string; line: number; lineCount: number }
   | { type: 'error'; message: string };
 
 /** Messages to the extension */
@@ -44,7 +51,15 @@ export type AppMessage =
   | { type: 'navigate'; path: string; method: string; line: number; text?: string }
   /** Follow the POU's state variable in the running PLC (empty fields: found from the project) */
   | { type: 'liveStart'; path: string; stateVar: string; instance?: string; netId?: string; port?: number }
-  | { type: 'liveStop' };
+  | { type: 'liveStop' }
+  /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
+  | { type: 'gitShow'; path: string; requestId: number }
+  /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */
+  | { type: 'openPou'; typeName?: string; path?: string }
+  /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
+  | { type: 'projectPous' }
+  /** Save a document (a save dialog; answered with saveDocumentResult) */
+  | { type: 'saveDocument'; name: string; content: string };
 
 interface WebViewBridge {
   postMessage(message: unknown): void;

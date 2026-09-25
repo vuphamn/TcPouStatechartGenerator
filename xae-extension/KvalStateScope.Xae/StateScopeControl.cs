@@ -6,7 +6,10 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -199,6 +202,8 @@ namespace KvalStateScope.Xae
                 });
                 _pane.Caption = "StateScope: " + Path.GetFileNameWithoutExtension(pouPath);
                 Log.Write($"loaded {pouPath} with {duts.Count} .TcDUT candidate(s)");
+                _lastCaret = null;
+                StartCaretWatch();
             }
             catch (Exception ex)
             {
@@ -262,6 +267,18 @@ namespace KvalStateScope.Xae
                         break;
                     case "liveStop":
                         StopLive(true);
+                        break;
+                    case "gitShow":
+                        HandleGitShow(msg);
+                        break;
+                    case "openPou":
+                        HandleOpenPou(msg);
+                        break;
+                    case "projectPous":
+                        HandleProjectPous();
+                        break;
+                    case "saveDocument":
+                        HandleSaveDocument(msg);
                         break;
                 }
             }
@@ -376,6 +393,211 @@ namespace KvalStateScope.Xae
             {
                 Log.Write($"cannot watch {folder}: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Opens another POU of the loaded POU's PLC project in this tab: a state machine the diagram references
+        /// (typeName, e.g. "SM_KAxis") or a previous one (path, the app's Back)
+        /// </summary>
+        private void HandleOpenPou(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null)
+            {
+                Post(new { type = "error", message = "The POU is not in a PLC project folder" });
+                return;
+            }
+            var root = Path.GetDirectoryName(plcproj);
+            string target = null;
+            if (!string.IsNullOrEmpty(path))
+            {
+                var full = Path.GetFullPath(path);
+                if (full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && full.EndsWith(".TcPOU", StringComparison.OrdinalIgnoreCase) && File.Exists(full)) target = full;
+            }
+            else if (!string.IsNullOrEmpty(typeName) && System.Text.RegularExpressions.Regex.IsMatch(typeName, @"^[A-Za-z_]\w*$"))
+            {
+                try
+                {
+                    target = Directory.EnumerateFiles(root, typeName + ".TcPOU", SearchOption.AllDirectories).FirstOrDefault();
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+            }
+            if (target == null)
+            {
+                Post(new { type = "error", message = $"{(typeName ?? Path.GetFileName(path ?? ""))}.TcPOU was not found in {Path.GetFileName(plcproj)}" });
+                return;
+            }
+            Log.Write($"open: {Path.GetFileName(target)} ({(typeName != null ? "referenced by " + Path.GetFileName(_pouPath) : "back")})");
+            LoadPou(target);
+        }
+
+        /// <summary>Project documentation: the state machine POUs (with a doState method) and all enums of the PLC project</summary>
+        private void HandleProjectPous()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null)
+            {
+                Post(new { type = "projectPous", error = "The POU is not in a PLC project folder" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var root = Path.GetDirectoryName(plcproj);
+                var pous = new List<object>();
+                var duts = new List<object>();
+                var skip = new[] { "_Boot", "_CompileInfo", "_Libraries", "_Deployment" };
+                foreach (var file in Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+                {
+                    var rel = file.Substring(root.Length).TrimStart(Path.DirectorySeparatorChar);
+                    if (skip.Any(s => rel.StartsWith(s + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))) continue;
+                    var isPou = file.EndsWith(".TcPOU", StringComparison.OrdinalIgnoreCase);
+                    if (!isPou && !file.EndsWith(".TcDUT", StringComparison.OrdinalIgnoreCase)) continue;
+                    string content;
+                    try { content = File.ReadAllText(file).TrimStart('﻿'); }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { continue; }
+                    if (isPou)
+                    {
+                        if (content.IndexOf("Name=\"doState\"", StringComparison.OrdinalIgnoreCase) >= 0) pous.Add(new { name = Path.GetFileName(file), path = file, content });
+                    }
+                    else duts.Add(new { name = Path.GetFileName(file), relativePath = rel.Replace('\\', '/'), path = file, content });
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"docs: {pous.Count} state machine POU(s), {duts.Count} enum file(s) in {Path.GetFileName(plcproj)}");
+                Post(new { type = "projectPous", project = Path.GetFileNameWithoutExtension(plcproj), pous, duts });
+            });
+        }
+
+        /// <summary>Saves a document (the project documentation) where the user chooses, then opens it</summary>
+        private void HandleSaveDocument(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var name = msg.TryGetValue("name", out var n) ? n as string : null;
+            var content = msg.TryGetValue("content", out var c) ? c as string : null;
+            if (content == null)
+            {
+                Post(new { type = "saveDocumentResult", error = "Nothing to save" });
+                return;
+            }
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            var dialog = new Microsoft.Win32.SaveFileDialog
+            {
+                Title = "Save the documentation",
+                FileName = string.IsNullOrEmpty(name) ? "documentation.html" : Path.GetFileName(name),
+                Filter = "HTML document (*.html)|*.html",
+                InitialDirectory = plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null,
+            };
+            if (dialog.ShowDialog() != true)
+            {
+                Post(new { type = "saveDocumentResult", canceled = true });
+                return;
+            }
+            try
+            {
+                File.WriteAllText(dialog.FileName, content, new System.Text.UTF8Encoding(false));
+                Log.Write("docs: saved " + dialog.FileName);
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true }); }
+                catch (System.ComponentModel.Win32Exception) { }
+                Post(new { type = "saveDocumentResult", path = dialog.FileName });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Post(new { type = "saveDocumentResult", error = ex.Message });
+            }
+        }
+
+        // ---- Two-way selection: where the caret is in TwinCAT's editor of the loaded POU ----
+
+        private System.Windows.Threading.DispatcherTimer _caretTimer;
+        private string _lastCaret;
+
+        private void StartCaretWatch()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_caretTimer != null) return;
+            _caretTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+            _caretTimer.Tick += (s, e) => CheckCaret();
+            _caretTimer.Start();
+        }
+
+        private void CheckCaret()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!_appReady || _pouPath == null) return;
+            if (!(Package.GetGlobalService(typeof(SVsShellMonitorSelection)) is IVsMonitorSelection monitor)) return;
+            if (ErrorHandler.Failed(monitor.GetCurrentElementValue((uint)VSConstants.VSSELELEMID.SEID_DocumentFrame, out var frameObj)) || !(frameObj is IVsWindowFrame frame)) return;
+            if (ErrorHandler.Failed(frame.GetProperty((int)__VSFPROPID.VSFPROPID_Caption, out var captionObj)) || !(captionObj is string caption)) return;
+            // TwinCAT's method editor: "SM_X.doState" (maybe with a suffix such as " [Online]")
+            var prefix = Path.GetFileNameWithoutExtension(_pouPath) + ".";
+            if (!caption.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
+            var method = caption.Substring(prefix.Length).Split(' ')[0];
+            if (ErrorHandler.Failed(frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out var docView)) || !(docView is IVsTextView view)) return;
+            if (ErrorHandler.Failed(view.GetCaretPos(out var line, out _))) return;
+            var lineCount = 0;
+            if (ErrorHandler.Succeeded(view.GetBuffer(out var buffer)) && buffer != null) buffer.GetLineCount(out lineCount);
+            var key = $"{method}:{line}:{lineCount}";
+            if (key == _lastCaret) return;
+            _lastCaret = key;
+            Post(new { type = "editorCaret", method, line = line + 1, lineCount });
+        }
+
+        /// <summary>Compare: the committed (git HEAD) version of a loaded file, from its folder's repository</summary>
+        private void HandleGitShow(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            if (path == null || !_lastSeen.ContainsKey(path))
+            {
+                Post(new { type = "gitShowResult", requestId, error = "Not a file loaded in StateScope" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                string content = null, error = null;
+                try
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo("git", $"-C \"{Path.GetDirectoryName(path)}\" show \"HEAD:./{Path.GetFileName(path)}\"")
+                    {
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                        StandardOutputEncoding = System.Text.Encoding.UTF8,
+                        StandardErrorEncoding = System.Text.Encoding.UTF8,
+                    };
+                    using (var proc = System.Diagnostics.Process.Start(psi))
+                    {
+                        var output = proc.StandardOutput.ReadToEndAsync();
+                        var errors = proc.StandardError.ReadToEndAsync();
+                        if (!proc.WaitForExit(15000))
+                        {
+                            try { proc.Kill(); } catch (InvalidOperationException) { }
+                            error = "git did not answer";
+                        }
+                        else if (proc.ExitCode != 0)
+                        {
+                            var text = await errors;
+                            error = text.Contains("not a git repository") ? "The file is not in a git repository"
+                                : text.Contains("exists on disk, but not in") || text.Contains("does not exist in") ? "The file is not committed yet"
+                                : text.Trim().Split('\n')[0].Trim();
+                        }
+                        else content = (await output).TrimStart('﻿');
+                    }
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    error = "git is not installed (or not on the PATH)";
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"git: {Path.GetFileName(path)} at HEAD: {(error ?? $"{content.Length} chars")}");
+                Post(new { type = "gitShowResult", requestId, content, error });
+            });
         }
 
         // ---- Live view: the POU's state variable in the running PLC, over ADS ----
@@ -527,6 +749,8 @@ namespace KvalStateScope.Xae
             ThreadHelper.ThrowIfNotOnUIThread();
             StopLive(false);
             ResetWatchers();
+            _caretTimer?.Stop();
+            _caretTimer = null;
         }
 
         private void ResetWatchers()

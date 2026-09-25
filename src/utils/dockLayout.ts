@@ -10,6 +10,8 @@
  * in the tab group it was last docked in when that group still exists.
  */
 
+import { isXaeHost } from './xaeHost.ts';
+
 export type DockPanelId = 'middle' | 'right';
 
 export type DockTabId =
@@ -22,13 +24,13 @@ export type DockTabId =
   | 'docs'
   | 'problems'
   | 'live'
+  | 'changes'
+  | 'paths'
   | 'markdown'
   | 'search'
   | 'stats'
   | 'heatmap'
-  | 'legend'
-  | 'notes'
-  | 'minimap';
+  | 'notes';
 
 /** Canonical tab order; also used to pick the insert position when a tab is reopened */
 export const DOCK_TAB_ORDER: DockTabId[] = [
@@ -41,13 +43,13 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'docs',
   'problems',
   'live',
+  'changes',
+  'paths',
   'markdown',
   'search',
   'stats',
   'heatmap',
-  'legend',
   'notes',
-  'minimap',
 ];
 
 export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
@@ -60,13 +62,13 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   docs: 'right',
   problems: 'right',
   live: 'right',
+  changes: 'right',
+  paths: 'right',
   markdown: 'right',
   search: 'right',
   stats: 'right',
   heatmap: 'right',
-  legend: 'right',
   notes: 'right',
-  minimap: 'right',
 };
 
 export interface DockGroup {
@@ -94,6 +96,8 @@ export interface DockPanelState {
 
 export interface DockLayout {
   version: 1;
+  /** Layout generation: saved layouts from an older one get the current default RightPanel once */
+  revision?: number;
   middle: DockPanelState;
   right: DockPanelState;
   leftWidth: number;
@@ -111,7 +115,7 @@ export interface DockLayout {
 /** Tabs that existed before `knownTabs` was recorded */
 const LEGACY_KNOWN_TABS: DockTabId[] = [
   'diagram', 'method', 'enum', 'complexity', 'frequency', 'history',
-  'docs', 'markdown', 'search', 'minimap',
+  'docs', 'markdown', 'search',
 ];
 
 export type DockTabLocation =
@@ -119,6 +123,16 @@ export type DockTabLocation =
   | { panel: DockPanelId; kind: 'float'; floatIndex: number };
 
 const STORAGE_KEY = 'tc_statechart_dock_layout_v1';
+/** 2: one RightPanel tab group; minimap and legend are canvas overlays */
+const LAYOUT_REVISION = 2;
+
+/**
+ * Where the app runs: TwinCAT XAE's document tab is much narrower than a browser window, so it has its own
+ * compact default and keeps its own arrangement
+ */
+export type DockHost = 'default' | 'xae';
+const currentHost = (): DockHost => (isXaeHost() ? 'xae' : 'default');
+const storageKey = (host: DockHost) => (host === 'xae' ? `${STORAGE_KEY}_xae` : STORAGE_KEY);
 const MIN_GROUP_SIZE = 0.05;
 
 export const LEFT_PANEL_DEFAULT_WIDTH = 400;
@@ -127,9 +141,10 @@ export const SIDE_PANEL_MIN_WIDTH = 220;
 
 const newGroupId = () => `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
-export function createDefaultDockLayout(): DockLayout {
+export function createDefaultDockLayout(host: DockHost = currentHost()): DockLayout {
   return {
     version: 1,
+    revision: LAYOUT_REVISION,
     middle: {
       groups: [
         {
@@ -143,15 +158,18 @@ export function createDefaultDockLayout(): DockLayout {
     },
     right: {
       groups: [
-        { id: 'right-inspector', tabs: ['docs', 'problems', 'live', 'markdown'], active: 'docs', size: 1.3 },
-        { id: 'right-search', tabs: ['search', 'stats', 'heatmap', 'legend', 'notes'], active: 'search', size: 1.2 },
-        { id: 'right-minimap', tabs: ['minimap'], active: 'minimap', size: 0.6 },
+        {
+          id: 'right-main',
+          tabs: ['docs', 'problems', 'live', 'changes', 'paths', 'search', 'stats', 'heatmap', 'notes', 'markdown'],
+          active: 'docs',
+          size: 1,
+        },
       ],
       floating: [],
     },
     leftWidth: LEFT_PANEL_DEFAULT_WIDTH,
-    rightWidth: RIGHT_PANEL_DEFAULT_WIDTH,
-    leftVisible: true,
+    rightWidth: host === 'xae' ? 340 : RIGHT_PANEL_DEFAULT_WIDTH,
+    leftVisible: host !== 'xae',
     rightVisible: true,
     lastGroup: {},
     knownTabs: [...DOCK_TAB_ORDER],
@@ -484,10 +502,10 @@ function sanitizePanel(raw: unknown, panel: DockPanelId, seen: Set<DockTabId>): 
   return { groups: pruneGroups(groups.length ? groups : [{ id: newGroupId(), tabs: [], active: null, size: 1 }]), floating };
 }
 
-export function loadDockLayout(): DockLayout {
-  const fallback = createDefaultDockLayout();
+export function loadDockLayout(host: DockHost = currentHost()): DockLayout {
+  const fallback = createDefaultDockLayout(host);
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(host));
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<DockLayout>;
     if (!parsed || parsed.version !== 1) return fallback;
@@ -498,10 +516,13 @@ export function loadDockLayout(): DockLayout {
     if (!middle || !right) return fallback;
 
     const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+    // Older layouts: the current RightPanel once (one tab group), everything else as saved
+    const upgrade = (parsed.revision ?? 1) < LAYOUT_REVISION;
     const loaded: DockLayout = {
       version: 1,
+      revision: LAYOUT_REVISION,
       middle,
-      right,
+      right: upgrade ? fallback.right : { ...right, groups: right.groups.filter((g) => g.tabs.length > 0) },
       leftWidth: Math.max(SIDE_PANEL_MIN_WIDTH, num(parsed.leftWidth, LEFT_PANEL_DEFAULT_WIDTH)),
       rightWidth: Math.max(SIDE_PANEL_MIN_WIDTH, num(parsed.rightWidth, RIGHT_PANEL_DEFAULT_WIDTH)),
       leftVisible: parsed.leftVisible !== false,
@@ -510,7 +531,7 @@ export function loadDockLayout(): DockLayout {
       removedGroups: parsed.removedGroups && typeof parsed.removedGroups === 'object' ? parsed.removedGroups : {},
       knownTabs: [...DOCK_TAB_ORDER],
     };
-    const known = Array.isArray(parsed.knownTabs) ? parsed.knownTabs : LEGACY_KNOWN_TABS;
+    const known = upgrade ? [...DOCK_TAB_ORDER] : Array.isArray(parsed.knownTabs) ? parsed.knownTabs : LEGACY_KNOWN_TABS;
     return addNewTabs(loaded, fallback, known);
   } catch {
     return fallback;
@@ -535,9 +556,9 @@ function addNewTabs(layout: DockLayout, defaults: DockLayout, known: DockTabId[]
   return next;
 }
 
-export function saveDockLayout(layout: DockLayout): void {
+export function saveDockLayout(layout: DockLayout, host: DockHost = currentHost()): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
+    localStorage.setItem(storageKey(host), JSON.stringify(layout));
   } catch {
     // ignore
   }

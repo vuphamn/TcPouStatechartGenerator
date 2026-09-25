@@ -195,4 +195,48 @@ function instancePaths(pouPath, pouName) {
   return [...new Map(paths.map((p) => [p.toLowerCase(), p])).values()];
 }
 
-module.exports = { plcPort, instancePaths, DEFAULT_PLC_PORT };
+/** The .TcPOU of a POU type in the PLC project that contains `fromPath`, or null */
+function findPouInProject(fromPath, typeName) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj || !/^[A-Za-z_]\w*$/.test(typeName)) return null;
+  const wanted = `${typeName}.tcpou`.toLowerCase();
+  return listFiles(path.dirname(plcproj), (n) => n.toLowerCase() === wanted)[0] ?? null;
+}
+
+/** Is `file` a .TcPOU inside the PLC project that contains `fromPath` */
+function isInSameProject(fromPath, file) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj || typeof file !== 'string' || !file.toLowerCase().endsWith('.tcpou')) return false;
+  const root = path.dirname(plcproj) + path.sep;
+  return path.resolve(file).toLowerCase().startsWith(root.toLowerCase()) && fs.existsSync(file);
+}
+
+/**
+ * Project documentation: the state machine .TcPOU files (those with a doState method) and all .TcDUT files of the
+ * PLC project that contains `fromPath`
+ */
+function projectPous(fromPath) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj) return { error: 'The POU is not in a PLC project folder' };
+  const root = path.dirname(plcproj);
+  const read = (file) => {
+    const text = fs.readFileSync(file, 'utf8');
+    return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  };
+  const pous = [];
+  const duts = [];
+  for (const file of listFiles(root, (n) => /\.tc(pou|dut)$/i.test(n))) {
+    try {
+      const content = read(file);
+      const rel = path.relative(root, file).split(path.sep).join('/');
+      if (/\.tcpou$/i.test(file)) {
+        if (/<Method\b[^>]*\bName="doState"/i.test(content)) pous.push({ name: path.basename(file), path: file, content });
+      } else duts.push({ name: path.basename(file), relativePath: rel, path: file, content });
+    } catch {
+      // unreadable file
+    }
+  }
+  return { project: path.basename(plcproj, path.extname(plcproj)), pous, duts };
+}
+
+module.exports = { plcPort, instancePaths, findPouInProject, isInSameProject, projectPous, DEFAULT_PLC_PORT };

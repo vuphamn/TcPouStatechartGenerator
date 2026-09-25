@@ -14,9 +14,14 @@ The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable 
 |---|---|
 | **LeftPanel** | Identified States, PLC Transition Logger, How It Works |
 | **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History |
-| **RightPanel** | Tool windows stacked vertically: Documentation, Mermaid Markdown · Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Diagram Legend, Notes · Minimap |
+| **RightPanel** | One tab group of tool windows: Documentation, Problems, Live, Changes, Paths, Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Notes, Mermaid Markdown |
 
-The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas.
+The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas. The **Minimap** and the **Legend** are overlays on the canvas, opened from the diagram toolbar.
+
+- **Focus mode:** `Z`, or the focus button in the header, hides the side panels, the header and the status bar, so the diagram fills the window. Press `Z` or `Esc`, or use the exit button, to bring them back.
+- **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Selecting a transition opens its Transition Guard window. Turn this off with **Follow selection** in the status bar.
+- **Status bar:** messages appear in the status bar at the bottom rather than as pop-ups. It also shows the Live state, the number of changes and of problems, the state and transition counts, and the file with its unsaved / changed-in-XAE state. After opening a referenced state machine, it has a **Back** button.
+- **A layout per host:** the layout inside XAE is saved separately from the browser / desktop one. It starts compact, with the LeftPanel hidden and a narrower RightPanel, to suit a document tab. Layouts saved by older versions get the new RightPanel once; your other tabs are kept.
 
 ### Loading a Function Block
 
@@ -58,8 +63,8 @@ The layout (panel widths, tab groups, floating windows) is saved in the browser 
 - **State Style Window**: Click the selected state again (or right-click it and choose *Customize Style...*) to open the State Style window beside it: background, text and border colours plus quick presets. Click the state once more, or press Esc, to close it.
 - **Transition Style**: Click a transition to select it, then click it again to open the Transition Guard window. Its *Style* card sets the line colour, width and dash pattern, and the label's fill, text colour, font size, bold / italic / underline and border.
 - **Crosshair / Jump to State**: Jump directly to any state from the sidebar, minimap, or legend with smooth centering and SVG-safe animated glowing highlight rings.
-- **Interactive Minimap**: Live bird's-eye overview of the entire diagram in the RightPanel, with a draggable viewport indicator and quick-navigation clicks.
-- **Interactive Diagram Legend**: Color-coded breakdown of states (initial, composite, logic, error sinks), transition priority markers, and note indicators.
+- **Interactive Minimap**: Live bird's-eye overview of the entire diagram, as an overlay on the canvas, with a draggable viewport indicator and quick-navigation clicks.
+- **Interactive Diagram Legend**: A canvas overlay with a color-coded breakdown of states (initial, composite, logic, error sinks), transition priority markers, and note indicators.
 - **Canvas Sticky Notes & Annotations**: Attach custom color-coded markdown notes to states or transitions directly on the canvas.
 - **Transition Guard & Priority Overlay**: Click transition paths or priority badges to view guard conditions, trigger logic, and execution priorities.
 
@@ -94,13 +99,31 @@ The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the res
 - **Lifecycle states:** the enum members up to `…_ENABLING` are driven by the base class (enable / disable), so the unreachable and dead-end rules skip them. The diagram groups states the same way.
 - **Per finding:** *Show in diagram* selects the state. *Open code* opens the Method Editor, or TwinCAT's editor at the line inside XAE. The fix button edits the `.TcDUT` / `doState()` like the editors do. *Ignore* hides a finding for that POU, and the tab keeps a count of ignored findings.
 
-### 5. TwinCAT Source Editors & Inspection
+### 5. Editing from the diagram
+Right-click a state or the canvas:
+- **Add state...** adds a member to the `.TcDUT` enum and an empty `CASE` branch to `doState()`.
+- **Add transition from here** starts a line from the state. Click the target state, then enter the condition. The transition is written at the end of the source state's branch, as `IF <condition> THEN machineState := <target>; END_IF`. `Esc` or a click on empty canvas cancels.
+- **Rename state...** renames it everywhere, as a whole word: in the enum, in every method of the POU, and in its notes, styles and positions on the canvas. The name is checked against the enum and ST identifiers first.
+
+The edits land in the Method Editor and Enum Editor like hand edits, so **Save** (or **Save to project** in XAE) writes them.
+
+### 6. Paths, changes and referenced state machines
+- **Paths** tab: pick two states, or right-click a state and choose *Paths from here* / *Paths to here*. It lists the paths between them, with each step's guard, shortest first, and highlights them on the diagram. Click a path to show only that one. The search stops after 25 paths.
+- **Changes** tab: what changed compared with the saved file (in XAE: the version XAE has saved), or with the committed git version (desktop and XAE). It lists states added or removed, states whose code changed, and transitions added or removed or with a changed guard. *Show on the diagram* colors new states and transitions green and changed ones amber.
+- **Referenced state machines:** when a state's code or a transition's guard uses another state machine (a member such as `smOutfeedStopAxis : SM_KAxis`), the context menu offers *Open SM_KAxis (smOutfeedStopAxis)*. It opens that POU from the same PLC project (desktop and XAE), and **Back** in the status bar returns to the previous one.
+
+### 7. Documentation for a whole project
+**Export > Document all state machines** makes one HTML file for every state machine (every POU with a `doState()` `CASE`) in the PLC project. Each gets its chart, a table of states (description, transitions in and out, `CASE` branch present), a table of transitions with their guards, and its Problems. A contents list links to each. The file is self-contained and prints to PDF one state machine per page.
+- **Desktop and XAE:** the POUs are found in the loaded POU's PLC project, and a save dialog asks where to write the file.
+- **Web:** choose the project folder; the file is downloaded.
+
+### 8. TwinCAT Source Editors & Inspection
 - **Identified States Sidebar**: Filter states by name, logic presence in `doState()`, error sinks, or composite groups; sort alphabetically or by enum index; jump to any state with 1 click.
 - **Integrated Enum Editor (`.TcDUT`)**: In-app editor for TwinCAT enum definitions with syntax checking and member management.
 - **Integrated Method Editor (`.TcPOU`)**: Embedded editor for `doState()` and `preProcess()` Structured Text blocks.
 - **Custom State Styling Inspector**: Customize fill colors, stroke colors, and borders for individual states with instant live preview.
 
-### 6. Export & Tooling
+### 9. Export & Tooling
 - **Dual Mermaid Formats**: Switch instantaneously between `flowchart TD` (with subgraphs) and `stateDiagram-v2`.
 - **Curve Algorithms**: Customize flowchart routing curves (basis, linear, cardinal, natural, step).
 - **Mermaid Live Integration**: Open generated diagrams directly in [mermaid.live](https://mermaid.live) with 1 click.

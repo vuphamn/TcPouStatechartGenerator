@@ -437,6 +437,31 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   return findings.sort((a, b) => order[a.severity] - order[b.severity] || (a.line ?? 1e9) - (b.line ?? 1e9));
 }
 
+/**
+ * The state whose doState() CASE branch holds a line (1-based, of doState's ST implementation), or null (outside
+ * any branch: the CASE line, ELSE, code before / after the CASE)
+ */
+export function stateAtLine(pouXml: string, line: number): string | null {
+  const doState = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === 'dostate');
+  if (!doState) return null;
+  const main = scanMainCase(doState.code);
+  const branch = main?.branches.find((b) => line - 1 >= b.line && line - 1 < b.endLine);
+  return branch ? branch.labels[0] : null;
+}
+
+/** Number of lines of a method's ST implementation (TwinCAT's editor shows its declaration first) */
+export function implementationLineCount(pouXml: string, method: string): number | null {
+  const unit = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === method.toLowerCase());
+  return unit ? unit.lines.length : null;
+}
+
+/** Lines of a method's declaration; TwinCAT's editor shows them before the implementation's lines */
+export function declarationLineCount(pouXml: string, method: string): number | null {
+  const escaped = method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = pouXml.match(new RegExp(`<Method\\b[^>]*\\bName="${escaped}"[^>]*>\\s*<Declaration>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, 'i'));
+  return match ? match[1].split(/\r?\n/).length : null;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Fixes
 
