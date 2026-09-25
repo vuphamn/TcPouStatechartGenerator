@@ -56,6 +56,7 @@
     <Compile Include="StateScopeControl.cs" />
     <Compile Include="HostFiles.cs" />
     <Compile Include="TwinCATProject.cs" />
+    <Compile Include="CodeNavigation.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

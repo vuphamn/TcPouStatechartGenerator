@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6" Version="0.3.0" Language="en-US" Publisher="Kval Inc." />
+    <Identity Id="KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6" Version="0.4.0" Language="en-US" Publisher="Kval Inc." />
     <DisplayName>Kval StateScope for TwinCAT XAE</DisplayName>
     <Description xml:space="preserve">View and edit Kval SM_*.TcPOU state machines as interactive diagrams inside TwinCAT XAE. Right-click a .TcPOU and choose "Open in Kval StateScope". (Prototype)</Description>
     <Icon>Resources\icon.png</Icon>

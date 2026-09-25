@@ -24,7 +24,9 @@ export type AppMessage =
   | { type: 'findDut' }
   | { type: 'chooseDutFiles' }
   /** baseline: the version the edit is based on; force: overwrite a change made in XAE since then */
-  | { type: 'save'; files: { path: string; content: string; baseline?: string; force?: boolean }[] };
+  | { type: 'save'; files: { path: string; content: string; baseline?: string; force?: boolean }[] }
+  /** Open TwinCAT's editor of a method of the loaded POU at a line */
+  | { type: 'navigate'; path: string; method: string; line: number; text?: string };
 
 interface WebViewBridge {
   postMessage(message: unknown): void;

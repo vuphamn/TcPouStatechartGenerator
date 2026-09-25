@@ -173,6 +173,8 @@ export interface MermaidViewerProps {
   /** Custom line colour / width / pattern per transition id */
   customEdgeStyles?: CustomEdgeStylesMap;
   onEdgeStyleChange?: (edgeId: string, style: EdgeDisplayProperties | null) => void;
+  /** TwinCAT XAE: open a state's CASE branch / a transition in TwinCAT's editor */
+  onShowInXae?: (target: { kind: 'state'; id: string } | { kind: 'edge'; edge: EdgeInfo }) => void;
   nodeOffsets?: NodeOffsetsMap;
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -1489,6 +1491,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     customStyles: externalCustomStyles,
     customEdgeStyles,
     onEdgeStyleChange,
+    onShowInXae,
     onStyleChange: onStyleChangeProp,
     onResetStateStyle: onResetStateStyleProp,
     onClearAllCustomStyles: onClearAllCustomStylesProp,
@@ -6209,6 +6212,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             notes={effectiveNotes}
             onClose={() => setActiveConditionOverlay(null)}
             edgeStyle={customEdgeStyles?.[activeConditionOverlay.edge.id]}
+            onShowInXae={onShowInXae ? () => onShowInXae({ kind: 'edge', edge: activeConditionOverlay.edge }) : undefined}
             onEdgeStyleChange={
               onEdgeStyleChange ? (style) => onEdgeStyleChange(activeConditionOverlay.edge.id, style) : undefined
             }
@@ -6238,6 +6242,17 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             target={contextMenuState.target}
             onAddOrEditNote={handleOpenAddNote}
             onDeleteNote={handleDeleteActiveNote}
+            onShowInXae={
+              onShowInXae
+                ? (target: ContextMenuTarget) => {
+                    if (target.type === 'node') onShowInXae({ kind: 'state', id: target.id });
+                    else if (target.type === 'edge') {
+                      const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
+                      onShowInXae({ kind: 'edge', edge });
+                    }
+                  }
+                : undefined
+            }
             onOpenStyleCustomizer={(stateId: string) => {
               const st = availableStates.find((s) => s.id === stateId);
               handleSelectState(stateId, st?.label || stateId);

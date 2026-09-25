@@ -252,12 +252,41 @@ namespace KvalStateScope.Xae
                     case "save":
                         HandleSave(msg);
                         break;
+                    case "navigate":
+                        HandleNavigate(msg);
+                        break;
                 }
             }
             catch (Exception ex)
             {
                 Post(new { type = "error", message = ex.Message });
             }
+        }
+
+        /// <summary>Opens TwinCAT's editor of a method of the loaded POU at a line</summary>
+        private void HandleNavigate(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var method = msg.TryGetValue("method", out var m) ? m as string : null;
+            var line = msg.TryGetValue("line", out var l) && l is int li ? li : 1;
+            var text = msg.TryGetValue("text", out var t) ? t as string : null;
+            if (path == null || !_lastSeen.ContainsKey(path)) return;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                string error;
+                try
+                {
+                    error = await CodeNavigation.GoToAsync(_pane, path, method, line, text);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    error = ex.Message;
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write(error == null ? "navigate: done" : "navigate failed: " + error);
+                if (error != null) Post(new { type = "error", message = error });
+            });
         }
 
         private void SendDutCandidates(List<DutFile> duts, bool forceFirst)

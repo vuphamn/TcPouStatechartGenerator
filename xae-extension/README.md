@@ -60,6 +60,11 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
   - **Keep mine** keeps your edits, and **Save to project** then overwrites the change made in XAE.
 - **Not chosen yet:** **Save to project** is refused.
 
+**Show in TwinCAT editor** opens TwinCAT's editor at the code behind a diagram element. It is offered for a POU that belongs to a TwinCAT project open in XAE.
+- **State** (right-click it): selects its `CASE` label in `doState()`.
+- **Transition** (right-click it, or the Transition Guard window's footer): selects the assignment that makes it, `machineState := <target>`. The assignment is looked for in the source state's branch of `doState()`, or in `preProcess()` for `[preProcess]` guards. When a branch has several, the one near the guard's text wins.
+- **How it works:** the app computes the method and line from the `.TcPOU`. The extension finds the method's node in the PLC tree and opens it like a double-click. It then places the caret through the editor window's `IVsTextView`. TwinCAT's editor numbers the declaration's lines and then the implementation's, so the line is located by its text.
+
 ## TwinCAT PLC tree context menu
 
 TwinCAT's PLC tree shows POUs with its own context menu, named **PlcFile**. Its numeric id is internal to Beckhoff's package, so the extension adds **Open in Kval StateScope** to that menu by name when it loads. It only does this once, and the IDE keeps the placement in its settings. The TwinCAT tree also shows that menu through its own command handling, which does not ask other extensions about their commands. A priority command target (`PriorityCommandTarget.cs`) makes sure the command is asked, so it can show itself for a `.TcPOU`.
@@ -89,6 +94,7 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - updating from changes made in XAE (diagram and Method Editor);
     - **Changed in XAE** with Reload and Keep mine, and refusal before choosing;
     - refusal while XAE has unsaved changes.
+  - **Show in TwinCAT editor**, on the same copy: states and transitions from the context menu and the Transition Guard window. The target methods were closed or already open; the lines were near the top, near the end (line 496 of 508) and in `preProcess()`.
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 
@@ -108,5 +114,6 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 | `StateScopeToolWindow.cs`, `StateScopeControl.cs` | Document tab with WebView2; message bridge to the app (`src/utils/xaeHost.ts`) |
 | `HostFiles.cs` | Dialogs, `.TcDUT` search, saving with backup and safety checks |
 | `TwinCATProject.cs` | Automation Interface: finds a file's PLC tree item, reads / writes it (changed parts only) |
+| `CodeNavigation.cs` | Show in TwinCAT editor: opens a method's editor from the PLC tree and places the caret |
 | `PriorityCommandTarget.cs` | Answers for the context-menu command in menus owned by other windows (TwinCAT's PLC tree) |
 | `VSPackage.resx` | Carries the compiled command table (IDE loads menus from `VSPackage.resources`) |

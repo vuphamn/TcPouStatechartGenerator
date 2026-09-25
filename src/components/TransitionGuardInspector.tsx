@@ -42,6 +42,8 @@ export interface TransitionGuardInspectorProps {
   /** Custom line style of this transition; omit onEdgeStyleChange to hide the style controls */
   edgeStyle?: EdgeDisplayProperties;
   onEdgeStyleChange?: (style: EdgeDisplayProperties | null) => void;
+  /** TwinCAT XAE: open this transition's code in TwinCAT's editor */
+  onShowInXae?: () => void;
 }
 
 export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> = ({
@@ -54,6 +56,7 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
   onOpenNoteEditor,
   edgeStyle,
   onEdgeStyleChange,
+  onShowInXae,
 }) => {
   const [copied, setCopied] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
@@ -432,7 +435,20 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
 
       {/* Footer bar */}
       <div className="px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 shrink-0">
-        <span className="truncate">Click the selected transition again to close</span>
+        {onShowInXae ? (
+          <button
+            id="guard-inspector-show-in-xae-btn"
+            type="button"
+            onClick={onShowInXae}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-700/80 hover:bg-emerald-600 text-white font-medium transition-colors shrink-0"
+            title="Open the code of this transition in TwinCAT's editor"
+          >
+            <Code2 className="w-3 h-3" />
+            Show in TwinCAT editor
+          </button>
+        ) : (
+          <span className="truncate">Click the selected transition again to close</span>
+        )}
         <button
           id="guard-inspector-dismiss-btn"
           type="button"

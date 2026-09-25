@@ -69,6 +69,7 @@ import {
   PouSource,
 } from './utils/sourceFileAccess.ts';
 import { isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
+import { locateState, locateTransition } from './utils/sourceLocation.ts';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
 import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
@@ -96,7 +97,7 @@ import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
 import { getMermaidLiveUrl } from './utils/mermaidLive.ts';
-import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset, PresetExportSettings, CustomEdgeStylesMap, EdgeDisplayProperties } from './types.ts';
+import { CustomNodeStylesMap, NodeDisplayProperties, DiagramNotes, ContextMenuTarget, NotePosition, DiagramPreset, PresetExportSettings, CustomEdgeStylesMap, EdgeDisplayProperties, EdgeInfo } from './types.ts';
 import { DiagramPresetManager } from './components/DiagramPresetManager.tsx';
 import {
   DiagramOptionsState,
@@ -1071,6 +1072,25 @@ export const App: React.FC = () => {
       })),
     });
   }, [hostDirtyFiles, hostSavedContent]);
+
+  /** Opens TwinCAT's editor at a state's CASE branch or a transition's assignment (POU loaded from the project) */
+  const handleShowInXae = useCallback(
+    (target: { kind: 'state'; id: string } | { kind: 'edge'; edge: EdgeInfo }) => {
+      if (!pouPath) return;
+      const loc = target.kind === 'state' ? locateState(pouContent, target.id) : locateTransition(pouContent, target.edge);
+      if (!loc) {
+        showCopyToast(
+          target.kind === 'state'
+            ? `${target.id} has no CASE branch in doState()`
+            : `The code of ${target.edge.from} → ${target.edge.to} was not found`,
+          'error'
+        );
+        return;
+      }
+      postToHost({ type: 'navigate', path: pouPath, method: loc.method, line: loc.line, text: loc.text });
+    },
+    [pouPath, pouContent, showCopyToast]
+  );
 
   const hostConflictActions = hostConflict
     ? {
@@ -2239,6 +2259,7 @@ export const App: React.FC = () => {
                   onClearAllCustomStyles={handleClearAllCustomStyles}
                   customEdgeStyles={customEdgeStyles}
                   onEdgeStyleChange={handleEdgeStyleChange}
+                  onShowInXae={isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined ? handleShowInXae : undefined}
                   nodeOffsets={nodeOffsets}
                   onNodeOffsetsChange={setNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
