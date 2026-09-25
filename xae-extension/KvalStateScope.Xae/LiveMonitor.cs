@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -25,11 +26,48 @@ namespace KvalStateScope.Xae
         {
             public int Size;
             public string Type;
+            /// <summary>ADS data type id (ADST_*): enums have their base type's</summary>
+            public int DataType;
+        }
+
+        /// <summary>A guard variable's new value (bool, long, double or string; null when not a finite number)</summary>
+        public sealed class VarSample
+        {
+            public string id { get; set; }
+            public double t { get; set; }
+            public object v { get; set; }
+        }
+
+        /// <summary>Where a guard variable was found, or why not</summary>
+        public sealed class VarResult
+        {
+            public string id { get; set; }
+            public string symbol { get; set; }
+            public string type { get; set; }
+            public string error { get; set; }
+        }
+
+        private sealed class VarSub
+        {
+            public string Id;
+            public string Symbol;
+            public SymbolInfo Info;
+            public uint Handle;
+            public uint Notification;
+            public uint User;
         }
 
         private readonly ConcurrentQueue<Sample> _queue = new ConcurrentQueue<Sample>();
         // Kept referenced: the native side calls it for as long as the notification exists
         private readonly AdsNative.NotificationCallback _callback;
+        private readonly AdsNative.NotificationCallback _varCallback;
+        // Guard variables: by id (changed under _varLock, on one worker thread at a time) and by notification user
+        private readonly object _varLock = new object();
+        private readonly Dictionary<string, VarSub> _vars = new Dictionary<string, VarSub>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<uint, VarSub> _varsByUser = new ConcurrentDictionary<uint, VarSub>();
+        private readonly HashSet<string> _varsFailed = new HashSet<string>(StringComparer.Ordinal);
+        private readonly ConcurrentQueue<VarSample> _varQueue = new ConcurrentQueue<VarSample>();
+        private uint _nextUser = 1;
         private int _port;
         private AdsNative.AmsAddr _target;
         private uint _handle;
@@ -41,6 +79,7 @@ namespace KvalStateScope.Xae
         public LiveMonitor()
         {
             _callback = OnNotification;
+            _varCallback = OnVarNotification;
         }
 
         /// <summary>Opens an ADS port to the PLC runtime; returns its ADS state ("Run", "Stop", ...)</summary>
@@ -77,10 +116,11 @@ namespace KvalStateScope.Xae
             if (read < 30) return null;
             // AdsSymbolEntry: entryLength, iGroup, iOffs, size, dataType, flags (uint) then name/type/comment lengths (ushort)
             var size = BitConverter.ToInt32(buffer, 12);
+            var dataType = BitConverter.ToInt32(buffer, 16);
             var nameLength = BitConverter.ToUInt16(buffer, 24);
             var typeLength = BitConverter.ToUInt16(buffer, 26);
             var type = Encoding.Default.GetString(buffer, 30 + nameLength + 1, typeLength);
-            return new SymbolInfo { Size = size, Type = type };
+            return new SymbolInfo { Size = size, Type = type, DataType = dataType };
         }
 
         /// <summary>Starts the change notification; the current value is queued first</summary>
@@ -107,6 +147,166 @@ namespace KvalStateScope.Xae
             };
             Check(AdsNative.AdsSyncAddDeviceNotificationReqEx(_port, ref _target, AdsNative.SymValueByHandle, _handle, ref attrib, _callback, 0, out _notification),
                 $"Subscribing to {symbol}");
+        }
+
+        // ADS data type ids of values that can be shown as they are
+        private const int AdstInt16 = 2, AdstInt32 = 3, AdstReal32 = 4, AdstReal64 = 5, AdstInt8 = 16, AdstUInt8 = 17, AdstUInt16 = 18,
+            AdstUInt32 = 19, AdstInt64 = 20, AdstUInt64 = 21, AdstString = 30, AdstWString = 31, AdstBit = 33;
+        private const int MaxValueSize = 512;
+
+        private static bool IsSimple(SymbolInfo info)
+        {
+            if (info.Size <= 0 || info.Size > MaxValueSize) return false;
+            switch (info.DataType)
+            {
+                case AdstInt16: case AdstInt32: case AdstReal32: case AdstReal64: case AdstInt8: case AdstUInt8: case AdstUInt16:
+                case AdstUInt32: case AdstInt64: case AdstUInt64: case AdstString: case AdstWString: case AdstBit:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static object DecodeTyped(byte[] d, int dataType)
+        {
+            switch (dataType)
+            {
+                case AdstBit: return d[0] != 0;
+                case AdstInt8: return (long)(sbyte)d[0];
+                case AdstUInt8: return (long)d[0];
+                case AdstInt16: return (long)BitConverter.ToInt16(d, 0);
+                case AdstUInt16: return (long)BitConverter.ToUInt16(d, 0);
+                case AdstInt32: return (long)BitConverter.ToInt32(d, 0);
+                case AdstUInt32: return (long)BitConverter.ToUInt32(d, 0);
+                case AdstInt64: return BitConverter.ToInt64(d, 0);
+                case AdstUInt64: return (double)BitConverter.ToUInt64(d, 0);
+                case AdstReal32: { var f = BitConverter.ToSingle(d, 0); return float.IsNaN(f) || float.IsInfinity(f) ? null : (object)(double)f; }
+                case AdstReal64: { var f = BitConverter.ToDouble(d, 0); return double.IsNaN(f) || double.IsInfinity(f) ? null : (object)f; }
+                case AdstString:
+                {
+                    var end = Array.IndexOf(d, (byte)0);
+                    return Encoding.Default.GetString(d, 0, end < 0 ? d.Length : end);
+                }
+                case AdstWString:
+                {
+                    var end = 0;
+                    while (end + 1 < d.Length && (d[end] != 0 || d[end + 1] != 0)) end += 2;
+                    return Encoding.Unicode.GetString(d, 0, end);
+                }
+                default: return null;
+            }
+        }
+
+        /// <summary>
+        /// Follows exactly these guard variables (id -> candidate paths, the first the PLC has is used); the others are
+        /// released. Returns the lookup results of the newly asked ones. Blocks on ADS: call it off the UI thread.
+        /// </summary>
+        public List<VarResult> SetVars(IList<KeyValuePair<string, List<string>>> wanted)
+        {
+            var results = new List<VarResult>();
+            lock (_varLock)
+            {
+                if (_port == 0) return results;
+                var ids = new HashSet<string>(wanted.Select(w => w.Key), StringComparer.Ordinal);
+                foreach (var old in _vars.Values.Where(v => !ids.Contains(v.Id)).ToList()) ReleaseVar(old);
+                _varsFailed.RemoveWhere(id => !ids.Contains(id));
+                foreach (var w in wanted)
+                {
+                    if (_vars.ContainsKey(w.Key) || _varsFailed.Contains(w.Key)) continue;
+                    var result = new VarResult { id = w.Key };
+                    try
+                    {
+                        SymbolInfo info = null;
+                        string symbol = null;
+                        foreach (var c in w.Value)
+                        {
+                            info = Probe(c);
+                            if (info != null) { symbol = c; break; }
+                        }
+                        if (info == null)
+                        {
+                            result.error = "not in the PLC (a local of the method, a property or a method?)";
+                        }
+                        else if (!IsSimple(info))
+                        {
+                            result.symbol = symbol;
+                            result.type = info.Type;
+                            result.error = $"{info.Type} is not a simple value";
+                        }
+                        else
+                        {
+                            result.symbol = symbol;
+                            result.type = info.Type;
+                            SubscribeVar(w.Key, symbol, info);
+                        }
+                    }
+                    catch (AdsException ex)
+                    {
+                        result.error = ex.Message;
+                    }
+                    if (result.error != null) _varsFailed.Add(w.Key);
+                    results.Add(result);
+                }
+            }
+            return results;
+        }
+
+        private void SubscribeVar(string id, string symbol, SymbolInfo info)
+        {
+            var name = Encoding.Default.GetBytes(symbol + "\0");
+            var handle = new byte[4];
+            Check(AdsNative.AdsSyncReadWriteReqEx2(_port, ref _target, AdsNative.SymHandleByName, 0, 4, handle, (uint)name.Length, name, out _), $"Getting a handle for {symbol}");
+            var sub = new VarSub { Id = id, Symbol = symbol, Info = info, Handle = BitConverter.ToUInt32(handle, 0), User = _nextUser++ };
+            _vars[id] = sub;
+            var value = new byte[info.Size];
+            Check(AdsNative.AdsSyncReadReqEx2(_port, ref _target, AdsNative.SymValueByHandle, sub.Handle, (uint)info.Size, value, out _), $"Reading {symbol}");
+            _varQueue.Enqueue(new VarSample { id = id, t = (DateTime.UtcNow - Epoch).TotalMilliseconds, v = DecodeTyped(value, info.DataType) });
+            _varsByUser[sub.User] = sub;
+            var attrib = new AdsNative.NotificationAttrib
+            {
+                cbLength = (uint)info.Size,
+                nTransMode = AdsNative.TransServerOnChange,
+                nMaxDelay = 0,
+                // Every 10 ms (in 100 ns units): guard values are for people
+                nCycleTime = 100000,
+            };
+            Check(AdsNative.AdsSyncAddDeviceNotificationReqEx(_port, ref _target, AdsNative.SymValueByHandle, sub.Handle, ref attrib, _varCallback, sub.User, out sub.Notification),
+                $"Subscribing to {symbol}");
+        }
+
+        private void ReleaseVar(VarSub sub)
+        {
+            _vars.Remove(sub.Id);
+            _varsByUser.TryRemove(sub.User, out _);
+            try
+            {
+                if (sub.Notification != 0) AdsNative.AdsSyncDelDeviceNotificationReqEx(_port, ref _target, sub.Notification);
+                if (sub.Handle != 0) AdsNative.AdsSyncWriteReqEx(_port, ref _target, AdsNative.SymReleaseHandle, 0, 4, BitConverter.GetBytes(sub.Handle));
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException)) { Log.Write("live: release " + sub.Symbol + ": " + ex.Message); }
+        }
+
+        public List<VarSample> DrainVars()
+        {
+            var list = new List<VarSample>();
+            while (_varQueue.TryDequeue(out var s)) list.Add(s);
+            return list;
+        }
+
+        // ADS thread
+        private void OnVarNotification(IntPtr addr, IntPtr header, uint user)
+        {
+            try
+            {
+                if (!_varsByUser.TryGetValue(user, out var sub)) return;
+                var stamp = Marshal.ReadInt64(header, 4);
+                var sampleSize = Marshal.ReadInt32(header, 12);
+                var data = new byte[Math.Max(8, Math.Min(sampleSize, MaxValueSize))];
+                Marshal.Copy(header + 16, data, 0, Math.Min(sampleSize, MaxValueSize));
+                var t = stamp > 0 ? (DateTime.FromFileTimeUtc(stamp) - Epoch).TotalMilliseconds : (DateTime.UtcNow - Epoch).TotalMilliseconds;
+                _varQueue.Enqueue(new VarSample { id = sub.Id, t = t, v = DecodeTyped(data, sub.Info.DataType) });
+            }
+            catch (Exception) { /* never throw into the native caller */ }
         }
 
         public List<Sample> Drain()
@@ -149,6 +349,10 @@ namespace KvalStateScope.Xae
         public void Dispose()
         {
             if (_port == 0) return;
+            lock (_varLock)
+            {
+                foreach (var sub in _vars.Values.ToList()) ReleaseVar(sub);
+            }
             try
             {
                 if (_notification != 0) AdsNative.AdsSyncDelDeviceNotificationReqEx(_port, ref _target, _notification);

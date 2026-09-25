@@ -79,6 +79,12 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 - **XAE:** `LiveMonitor.cs` uses TwinCAT's `TcAdsDll.dll` through the local AMS router; `LiveTargets.cs` finds the instance paths from the project's declarations.
 - **Desktop, Link and gateway:** the shared Node code in `shared/tcAds.cjs` and `shared/liveSession.cjs` (ads-client in direct mode, no router needed). Desktop wiring is in `electron/tcLive.cjs` and `electron/tcLiveTargets.cjs`.
 - **App side:** `LivePanel.tsx`, `utils/liveView.ts`.
+- **Guard values** (the ✓ / ✗ / ? badges and values on transition labels):
+  - `generateStatechartModel()` in `generator.ts` returns the drawn edges with the transitions behind them. Each transition keeps its IF context (`GuardFrame`: the condition and the earlier branches' conditions).
+  - `utils/liveGuards.ts` parses ST conditions, evaluates them with three-valued logic, and picks the variables to follow.
+  - The app sends `liveWatch { vars: [{ id, candidates }] }`. The host answers with `liveWatchResult` (where each variable was found, or why not) and then `liveVars` (values).
+  - Hosts: `shared/liveVars.cjs` (desktop app, Link, gateway: one watcher per viewer), and `LiveMonitor.SetVars` in XAE.
+  - The canvas draws the results inside each `g.edgeLabel`, in the `liveGuards` effect of `MermaidViewer.tsx`.
 
 ## Where things live
 
@@ -99,6 +105,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 | Referenced state machines | `utils/referencedMachines.ts` |
 | Project documentation | `utils/projectDocumentation.ts`, `utils/projectFiles.ts` |
 | Live view | `LivePanel.tsx`, `utils/liveView.ts`, `utils/liveHost.ts`, `utils/liveGateway.ts`, `shared/`, `link/`, `gateway/` |
+| Live guard values | `utils/liveGuards.ts`, `generateStatechartModel` in `generator.ts`, `shared/liveVars.cjs`, `LiveMonitor.SetVars` (XAE) |
 | Toolbar overflow ("Hidden" menus) | `hooks/useToolbarOverflow.ts` |
 | Editors | `MethodStructuredTextEditor.tsx`, `DutEnumEditor.tsx`, `utils/st*.ts` |
 | Export / PDF | `utils/diagramExport.ts`, `utils/printToPdf.ts`, `ExportModal.tsx` |
@@ -112,6 +119,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 - **Mermaid ids.** Flowchart edges are `L_<from>_<to>_<n>`, and `n` is not consecutive. ELK renders edges in `g.edges.edgePath`, and the app adds the `edgePaths` class so both layouts look the same to the rest of the code.
 - **Drag performance.** Drags update the DOM directly, at most once per animation frame (`requestAnimationFrame`), and commit React state on mouse-up. Window-level drag listeners use the **capture** phase, because canvas windows stop mouse events from bubbling.
 - **Clicks on nodes** go through the node-drag handler, not only the canvas click handler. A new click mode (such as the add-transition connect mode) has to be handled in both.
+- **Guard labels are not guard conditions.** A diagram label shows `else` where an ELSIF / ELSE sits, and is escaped for Mermaid (`\:`, `#35;`). Evaluate from the model's `GuardFrame`s, never from label text. The model's edges are matched to the diagram's by source, target and label as written.
 - **TwinCAT editor line numbers.** TwinCAT's ST editor numbers a method's declaration lines first, then its implementation. Map editor lines with the declaration's line count (`declarationLineCount`), not with the editor's total line count, which can be one more than the file's.
 - **Line endings.** Many files are CRLF on Windows checkouts. Keep them that way, and make scripted edits CRLF-aware.
 - **Persisted UI state** lives in localStorage, for example `tc_statechart_dock_layout_v1` (and `..._xae` inside XAE), `tc_statechart_diagram_notes_metadata` and `kss.followSelection`. Saved dock layouts carry a `revision`; bump `LAYOUT_REVISION` in `dockLayout.ts` when the default layout changes, so old layouts are migrated. Clear site data when a layout looks wrong after pulling changes.
@@ -131,7 +139,7 @@ There is no automated test suite yet. Before opening a PR:
    - export.
 3. For desktop changes: run `npm run build:exe` and try `release/Kval StateScope <version>.exe`.
 4. For XAE changes: build with `xae-extension\build.ps1` and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
-5. Without a PLC, the Live tab can only be tested up to the connection error. Test it against a real PLC before relying on it.
+5. Without a PLC, the Live tab can only be tested up to the connection error, or against a small simulated PLC. An AMS/TCP server answering symbol info, handle, read and notification requests is enough for the desktop app, Link and the gateway (all use ads-client in direct mode). Test against a real PLC before relying on it.
 
 ## Contributing
 
@@ -144,5 +152,6 @@ There is no automated test suite yet. Before opening a PR:
 - `parseDutContent` in `utils/dutEnumEditor.ts` (used by the Enum Editor) reads only 2 members from enums written with leading commas (`, STATE_X` per line), such as the Door Dasher and 234 Feed Manager samples. The generator's `readEnumOrder` handles them correctly.
 - In Table Manager, the start transition (start → `TABLEMANAGER_DISABLED`) carries the wrong source/target tags on its SVG path.
 - Edge line drags still re-apply offsets to the whole diagram on every mouse move. Label and node drags are already frame-batched.
-- Not yet tested: Live view against a real PLC; git compare for files inside git submodules; the desktop app's save dialog for project documentation.
+- Not yet tested: Live view and guard values against a real PLC (the XAE extension's ADS part has only run without a started TwinCAT system); git compare for files inside git submodules; the desktop app's save dialog for project documentation.
+- Guard values: array elements with a variable index (`a[i].x`) are unknown. The index could be read first, then the element.
 - The repo root has an empty, accidentally committed file `State2n` that can be deleted.

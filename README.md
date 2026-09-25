@@ -12,12 +12,14 @@ The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable 
 
 | Panel | Contents |
 |---|---|
-| **LeftPanel** | Identified States, PLC Transition Logger, How It Works |
-| **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History |
+| **LeftPanel** | Identified States |
+| **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History, PLC Transition Logger |
 | **RightPanel** | One tab group of tool windows: Documentation, Problems, Live, Changes, Paths, Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Notes, Mermaid Markdown |
 
 The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas. The **Minimap** and the **Legend** are overlays on the canvas, opened from the diagram toolbar.
 
+- **Help:** hover over the `?` icon at the right end of the header for how the app works, the diagram's mouse actions, the tabs and the keyboard shortcuts. Click it to keep it open; `Esc` or a click elsewhere closes it.
+- **PLC Transition Logger** (MiddlePanel tab, also opened from Transition History): paste, drop or pick a CSV / text log of state changes, or load a sample. **Populate Transition History** sends it to the Transition History tab.
 - **Focus mode:** `Z`, or the focus button in the header, hides the side panels, the header and the status bar, so the diagram fills the window. Press `Z` or `Esc`, or use the exit button, to bring them back.
 - **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Selecting a transition opens its Transition Guard window. Turn this off with **Follow selection** in the status bar.
 - **Status bar:** messages appear in the status bar at the bottom rather than as pop-ups. It also shows the Live state, the number of changes and of problems, the state and transition counts, and the file with its unsaved / changed-in-XAE state. After opening a referenced state machine, it has a **Back** button.
@@ -218,6 +220,29 @@ The **Kval StateScope gateway** (`gateway/`) is a small Node.js service on a mac
 - **Setup:** `npm run build:gateway` assembles `release/gateway`. The rest (certificate, PLC list, ADS routes, tokens, running it as a service) is in [gateway/README.md](gateway/README.md).
 
 In the Live tab, enter your access token, choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
+
+## Live guard values
+
+While live, the diagram shows why the state machine does or doesn't leave its state. Every transition out of the active state gets a badge on its condition: ✓ (TRUE), ✗ (FALSE) or ? (unknown). The values of the condition's variables are listed under it, e.g. `cmd_bHome = TRUE`, `smOutfeedStopAxis.config_fHomePosition = 12.5`. The Live tab lists the same transitions with their results. This works in every edition: XAE, the desktop app, and the web edition through Link or the gateway.
+
+**Guard values** in the Live tab chooses what is read:
+- **Active state** (default): the variables of the transitions out of the current state, plus the `preProcess()` checks that apply to it. The set changes with the state.
+- **All transitions:** every condition gets a badge. Values are shown for the current state's transitions and the selected one.
+- **Off:** nothing extra is read.
+
+**How the result is worked out:**
+- **The whole IF context counts:** a transition in an `ELSIF` or `ELSE` branch fires only when the earlier branches' conditions are FALSE, so those are part of its condition.
+- **From the values:** the app evaluates the condition from the variables the PLC sends. `AND`, `OR`, `XOR`, `NOT`, comparisons, arithmetic, `MOD`, bit access (`nMode.3`), `T#` durations, a few functions (`ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`, type conversions) and enum values are understood.
+- **Unknowns:** a variable that can't be read makes its part unknown, but `FALSE AND ?` is still FALSE and `TRUE OR ?` is still TRUE.
+
+**Where the variables come from:**
+- **Lookup:** each variable is looked up as a member of the followed instance (`<instance>.cmd_bHome`). A dotted path such as `GVL.bX` or `MAIN.fbY.bZ` is also tried as a global path.
+- **Enum literals** (`FEEDMODE_OFF`) come from the `.TcDUT` files: the state enum, the other `.TcDUT` files next to the POU, and, in the desktop app and XAE, all of the PLC project's.
+- **Reads:** a change notification checked every 10 ms, read-only like the state variable. Values are released when the state, the setting or the session changes.
+
+**Limits:**
+- **Unreadable (shown as ?):** method and property calls (`fb.isReady()`), `VAR` / `VAR_TEMP` locals of `doState()`, array elements with a variable index, and structures. Hover over a ? to see why.
+- **Timing:** values arrive after the PLC cycle and from separate notifications. A variable changed later in the same cycle, or a timer called just before the `IF`, may differ from what the `IF` saw. Use the badges to see why a state machine is stuck, not to prove a one-cycle race.
 
 ---
 

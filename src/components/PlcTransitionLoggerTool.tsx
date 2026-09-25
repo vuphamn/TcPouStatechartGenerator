@@ -7,7 +7,6 @@ import {
   FileText,
   Copy,
   Download,
-  X,
   Play,
   Sparkles,
   Zap,
@@ -30,8 +29,6 @@ import {
 } from '../utils/transitionHistoryAnalytics.ts';
 
 export interface PlcTransitionLoggerToolProps {
-  isOpen: boolean;
-  onClose: () => void;
   states: IdentifiedPouState[];
   edges: EdgeInfo[];
   pouFileName: string;
@@ -40,8 +37,6 @@ export interface PlcTransitionLoggerToolProps {
 }
 
 export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = ({
-  isOpen,
-  onClose,
   states,
   edges,
   pouFileName,
@@ -58,14 +53,14 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize with a default sample on first open if empty
+  // Start with a sample log for the loaded POU while the log is empty
   useEffect(() => {
-    if (isOpen && !logText.trim()) {
+    if (!logText.trim()) {
       const sample = generateSampleCsvForPou(states, edges, 'unexpected', 'simple_3col');
       setLogText(sample.csvText);
       setLoadedFileName('sample_unexpected_transitions.csv');
     }
-  }, [isOpen, states, edges]);
+  }, [states, edges]);
 
   // Live parsed dataset
   const parsedDataset = useMemo<TransitionHistoryDataset>(() => {
@@ -165,7 +160,6 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
       parsedDataset,
       `Populated Transition History with ${parsedDataset.events.length} transitions (${parsedDataset.unexpectedCount} unexpected changes detected).`
     );
-    onClose();
   };
 
   // Download current CSV
@@ -191,19 +185,10 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
     });
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div
-      id="plc-transition-logger-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-150"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="flex flex-col w-full max-w-5xl max-h-[92vh] bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden">
+      <div id="plc-transition-logger-tab" className="flex flex-col h-full min-h-0 bg-slate-900 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 bg-slate-950/90 border-b border-slate-800 shrink-0">
+        <div className="flex items-center justify-between px-5 py-3 bg-slate-950/90 border-b border-slate-800 shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-400">
               <FileSpreadsheet className="w-5 h-5" />
@@ -222,15 +207,6 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
               </p>
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            title="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
         </div>
 
         {/* Tool Body */}
@@ -599,14 +575,6 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
 
           <div className="flex items-center gap-2">
             <button
-              type="button"
-              onClick={onClose}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            >
-              Cancel
-            </button>
-
-            <button
               id="populate-transition-history-btn"
               type="button"
               onClick={handleCommitToHistory}
@@ -622,6 +590,5 @@ export const PlcTransitionLoggerTool: React.FC<PlcTransitionLoggerToolProps> = (
           </div>
         </div>
       </div>
-    </div>
   );
 };

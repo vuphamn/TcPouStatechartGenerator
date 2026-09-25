@@ -18,8 +18,8 @@ namespace KvalStateScope.Xae
 {
     /// <summary>
     /// Hosts the Kval StateScope web app in WebView2 and answers its requests (messages as JSON objects):
-    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop
-    ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues
+    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch
+    ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars
     /// </summary>
     internal sealed class StateScopeControl : UserControl
     {
@@ -267,6 +267,9 @@ namespace KvalStateScope.Xae
                         break;
                     case "liveStop":
                         StopLive(true);
+                        break;
+                    case "liveWatch":
+                        HandleLiveWatch(msg);
                         break;
                     case "gitShow":
                         HandleGitShow(msg);
@@ -608,6 +611,55 @@ namespace KvalStateScope.Xae
         private int _liveSession;
         private int _liveTicks;
         private bool _liveStateCheck;
+        // Guard variables: the latest set asked for, applied on a worker thread (one at a time)
+        private List<KeyValuePair<string, List<string>>> _liveWatchWanted;
+        private bool _liveWatchRunning;
+        private static readonly System.Text.RegularExpressions.Regex SymbolPath =
+            new System.Text.RegularExpressions.Regex(@"^[A-Za-z_]\w*(\[-?\d+\]|\^)*(\.[A-Za-z_]\w*(\[-?\d+\]|\^)*)*$");
+
+        /// <summary>liveWatch: the guard variables to follow ({ id, candidates }[]), replacing the previous set</summary>
+        private void HandleLiveWatch(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!msg.TryGetValue("vars", out var raw) || !(raw is System.Collections.IEnumerable list) || raw is string) return;
+            var wanted = new List<KeyValuePair<string, List<string>>>();
+            foreach (var item in list.OfType<Dictionary<string, object>>())
+            {
+                var id = item.TryGetValue("id", out var i) ? i as string : null;
+                var candidates = item.TryGetValue("candidates", out var c) && c is System.Collections.IEnumerable cl && !(c is string)
+                    ? cl.OfType<string>().Where(p => p.Length <= 250 && SymbolPath.IsMatch(p)).Take(4).ToList()
+                    : new List<string>();
+                if (string.IsNullOrEmpty(id) || id.Length > 250 || candidates.Count == 0) continue;
+                wanted.Add(new KeyValuePair<string, List<string>>(id, candidates));
+                if (wanted.Count >= 300) break;
+            }
+            _liveWatchWanted = wanted;
+            ApplyLiveWatch();
+        }
+
+        private void ApplyLiveWatch()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var monitor = _live;
+            if (monitor == null || _liveWatchRunning || _liveWatchWanted == null) return;
+            var wanted = _liveWatchWanted;
+            _liveWatchWanted = null;
+            _liveWatchRunning = true;
+            var session = _liveSession;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                List<LiveMonitor.VarResult> results = null;
+                try { results = monitor.SetVars(wanted); }
+                catch (Exception ex) when (!(ex is OutOfMemoryException)) { Log.Write("live: watch: " + ex.Message); }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                _liveWatchRunning = false;
+                if (session != _liveSession) return;
+                if (results != null && results.Count > 0) Post(new { type = "liveWatchResult", vars = results });
+                // A newer set arrived meanwhile
+                ApplyLiveWatch();
+            });
+        }
 
         /// <summary>Connects (on a worker thread), finds the instance, subscribes; values are posted every 50 ms</summary>
         private void HandleLiveStart(Dictionary<string, object> msg)
@@ -673,6 +725,7 @@ namespace KvalStateScope.Xae
                 }
                 _live = monitor;
                 _liveTicks = 0;
+                ApplyLiveWatch();
                 _liveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
                 _liveTimer.Tick += OnLiveTick;
                 _liveTimer.Start();
@@ -698,6 +751,8 @@ namespace KvalStateScope.Xae
             if (monitor == null) return;
             var samples = monitor.Drain();
             if (samples.Count > 0) Post(new { type = "liveValues", events = samples });
+            var values = monitor.DrainVars();
+            if (values.Count > 0) Post(new { type = "liveVars", values });
             // Every 2 s: is the PLC still there and running?
             if (++_liveTicks % 40 != 0 || _liveStateCheck) return;
             _liveStateCheck = true;
@@ -726,6 +781,8 @@ namespace KvalStateScope.Xae
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             _liveSession++;
+            _liveWatchWanted = null;
+            _liveWatchRunning = false;
             if (_liveTimer != null)
             {
                 _liveTimer.Stop();

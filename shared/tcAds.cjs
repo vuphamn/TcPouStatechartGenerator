@@ -34,7 +34,52 @@ function decode(buf, size) {
   }
 }
 
-/** The symbol's size and type, or null when the PLC has no such symbol */
+// ADS data type ids (AdsSymbolEntry.dataType) of values that can be shown as they are
+const ADST = { INT16: 2, INT32: 3, REAL32: 4, REAL64: 5, INT8: 16, UINT8: 17, UINT16: 18, UINT32: 19, INT64: 20, UINT64: 21, STRING: 30, WSTRING: 31, BIT: 33 };
+const SIMPLE_TYPES = new Set(Object.values(ADST));
+/** Largest value read for a guard variable (STRING(255)) */
+const MAX_VALUE_SIZE = 512;
+
+/** A number, boolean or string variable (enums have their base type's id), small enough to follow */
+const isSimpleValue = (info) => !!info && info.size > 0 && info.size <= MAX_VALUE_SIZE && SIMPLE_TYPES.has(info.dataType);
+
+/** The value by the symbol's ADS data type: boolean, number (enums as their number) or string */
+function decodeTyped(buf, info) {
+  switch (info.dataType) {
+    case ADST.BIT: return buf.readUInt8(0) !== 0;
+    case ADST.INT8: return buf.readInt8(0);
+    case ADST.UINT8: return buf.readUInt8(0);
+    case ADST.INT16: return buf.readInt16LE(0);
+    case ADST.UINT16: return buf.readUInt16LE(0);
+    case ADST.INT32: return buf.readInt32LE(0);
+    case ADST.UINT32: return buf.readUInt32LE(0);
+    case ADST.INT64: return Number(buf.readBigInt64LE(0));
+    case ADST.UINT64: return Number(buf.readBigUInt64LE(0));
+    case ADST.REAL32: return buf.readFloatLE(0);
+    case ADST.REAL64: return buf.readDoubleLE(0);
+    case ADST.STRING: {
+      const end = buf.indexOf(0);
+      return buf.toString('latin1', 0, end < 0 ? buf.length : end);
+    }
+    case ADST.WSTRING: {
+      let end = 0;
+      while (end + 1 < buf.length && (buf[end] || buf[end + 1])) end += 2;
+      return buf.toString('utf16le', 0, end);
+    }
+    default: return null;
+  }
+}
+
+async function readTyped(client, handle, info) {
+  return decodeTyped(await client.readRaw(SYM_VALUE_BY_HANDLE, handle, info.size), info);
+}
+
+/** Subscribes on change, checked every `cycleMs` (guard values are for people: 10 ms is plenty) */
+function subscribeTyped(client, handle, info, onValue, cycleMs = 10) {
+  return client.subscribeRaw(SYM_VALUE_BY_HANDLE, handle, info.size, (data) => onValue({ t: data.timestamp.getTime(), v: decodeTyped(data.value, info) }), cycleMs, true, 0);
+}
+
+/** The symbol's size, type and ADS data type id, or null when the PLC has no such symbol */
 async function probe(client, symbol) {
   try {
     const buf = await client.readWriteRaw(SYM_INFO_BY_NAME_EX, 0, 0xffff, Buffer.from(`${symbol}\0`, 'latin1'));
@@ -42,7 +87,11 @@ async function probe(client, symbol) {
     // AdsSymbolEntry: entryLength, iGroup, iOffs, size, dataType, flags (uint32), name/type/comment lengths (uint16)
     const nameLength = buf.readUInt16LE(24);
     const typeLength = buf.readUInt16LE(26);
-    return { size: buf.readUInt32LE(12), type: buf.toString('latin1', 30 + nameLength + 1, 30 + nameLength + 1 + typeLength) };
+    return {
+      size: buf.readUInt32LE(12),
+      dataType: buf.readUInt32LE(16),
+      type: buf.toString('latin1', 30 + nameLength + 1, 30 + nameLength + 1 + typeLength),
+    };
   } catch (err) {
     const code = err?.adsError?.errorCode;
     if (code === 0x710 || code === 0x703) return null;
@@ -179,8 +228,8 @@ async function discoverInstances(client, typeName, maxPaths = 50) {
   return [...new Map(paths.map((p) => [p.toLowerCase(), p])).values()];
 }
 
-/** Valid IEC symbol path (letters, digits, _, . and [index]): nothing else is ever sent to the PLC */
-const isSymbolPath = (text) => typeof text === 'string' && text.length <= 250 && /^[A-Za-z_][\w]*(\[\d+\])*(\.[A-Za-z_][\w]*(\[\d+\])*)*$/.test(text);
+/** Valid IEC symbol path (letters, digits, _, . , [index] and ^ for a pointer): nothing else is ever sent to the PLC */
+const isSymbolPath = (text) => typeof text === 'string' && text.length <= 250 && /^[A-Za-z_][\w]*(\[-?\d+\]|\^)*(\.[A-Za-z_][\w]*(\[-?\d+\]|\^)*)*$/.test(text);
 
 module.exports = {
   ADS_STATES,
@@ -191,6 +240,10 @@ module.exports = {
   releaseHandle,
   readByHandle,
   subscribeHandle,
+  isSimpleValue,
+  decodeTyped,
+  readTyped,
+  subscribeTyped,
   discoverInstances,
   isSymbolPath,
 };

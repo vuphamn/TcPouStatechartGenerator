@@ -365,6 +365,18 @@ path.live-last-edge {
   }
 }
 
+/* Live guard values on transition labels: their colours are set on the elements; the highlight rules for
+   outgoing / incoming labels style every rect inside a label, not these */
+g.edgeLabel g.live-guard-values > rect,
+g.edgeLabel g.live-guard > circle {
+  outline: none !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
+g.edgeLabel g.live-guard {
+  cursor: help;
+}
+
 /* Lint problem badge on a state node (Problems tab) */
 .lint-problem-marker {
   pointer-events: auto;

@@ -29,6 +29,8 @@ This builds `release/link/Kval StateScope Link.exe`. It's a single file that nee
 
 Instances are found from the PLC's own symbol tables. The web app has no project files.
 
+Link also reads the **guard values** the Live tab asks for: the variables in the active state's transition conditions (see the main README). Like everything else it does, this is read-only.
+
 **Options:**
 - `--port <n>`: another port, if 48960 is taken. Enter the same port next to the pairing code.
 - `--new-code`: a new pairing code. Browsers paired with the old one have to enter the new one.

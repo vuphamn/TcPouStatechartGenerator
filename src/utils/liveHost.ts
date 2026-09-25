@@ -3,9 +3,9 @@
  * main process (electron/tcLive.cjs, through the preload bridge). Both send the same liveStatus / liveValues messages.
  */
 
-import type { HostMessage } from './xaeHost.ts';
+import type { HostMessage, LiveWatchVar } from './xaeHost.ts';
 
-export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' }>;
+export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' } | { type: 'liveWatchResult' } | { type: 'liveVars' }>;
 
 export interface DesktopLiveOptions {
   /** The .TcPOU's path: instance paths and the ADS port are found from its PLC project */
@@ -26,6 +26,8 @@ export interface DesktopLiveOptions {
 interface DesktopLiveApi {
   start: (options: DesktopLiveOptions) => Promise<void>;
   stop: () => Promise<void>;
+  /** Guard variables to follow in the running session */
+  watch?: (vars: LiveWatchVar[]) => Promise<boolean>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }
 

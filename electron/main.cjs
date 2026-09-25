@@ -119,6 +119,8 @@ ipcMain.handle('tc:live-start', (event, options) => {
   };
   live.start(send, options || {});
 });
+// Guard variables to follow in the running session (their values also come back on 'tc:live')
+ipcMain.handle('tc:live-watch', (_event, vars) => live.watch(vars));
 ipcMain.handle('tc:live-stop', (event) => {
   const contents = event.sender;
   return live.stop(true, (m) => {

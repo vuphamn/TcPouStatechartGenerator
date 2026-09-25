@@ -30,6 +30,10 @@ export type HostMessage =
     }
   /** Live view: new values of the state variable (t: PLC time, ms since 1970) */
   | { type: 'liveValues'; events: { t: number; value: number }[] }
+  /** Guard variables (liveWatch): where each was found in the PLC, or why not */
+  | { type: 'liveWatchResult'; vars: { id: string; symbol?: string; type?: string; error?: string }[] }
+  /** Guard variables: new values (null: not a finite number) */
+  | { type: 'liveVars'; values: { id: string; t: number; v: boolean | number | string | null }[] }
   /** The committed (git HEAD) version of a loaded file */
   | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
@@ -40,6 +44,12 @@ export type HostMessage =
   | { type: 'error'; message: string };
 
 /** Messages to the extension */
+/** A guard variable to follow: its id (the variable as written, lower case) and the symbol paths to try */
+export interface LiveWatchVar {
+  id: string;
+  candidates: string[];
+}
+
 export type AppMessage =
   | { type: 'ready' }
   | { type: 'browsePou' }
@@ -52,6 +62,8 @@ export type AppMessage =
   /** Follow the POU's state variable in the running PLC (empty fields: found from the project) */
   | { type: 'liveStart'; path: string; stateVar: string; instance?: string; netId?: string; port?: number }
   | { type: 'liveStop' }
+  /** Guard variables to follow (replaces the previous set): the first candidate path the PLC has is used */
+  | { type: 'liveWatch'; vars: LiveWatchVar[] }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
   | { type: 'gitShow'; path: string; requestId: number }
   /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */

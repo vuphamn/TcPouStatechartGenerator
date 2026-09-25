@@ -16,7 +16,9 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const { Client } = require('ads-client');
 // shared/ sits next to the gateway when installed, one level up in the repository
-const ads = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? require('./shared/tcAds.cjs') : require('../shared/tcAds.cjs');
+const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
+const ads = require(`${sharedDir}/tcAds.cjs`);
+const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 
 const VERSION = '1.0.0';
 const args = process.argv.slice(2);
@@ -61,6 +63,7 @@ async function init() {
     localNetId: `${ip}.1.1`,
     allowedOrigins: [],
     maxViewers: 50,
+    maxWatchedVariables: 100,
     plcs: [{ id: 'line1', name: 'Line 1 (example)', netId: '192.168.1.20.1.1', ip: '192.168.1.20', port: 851 }],
     tokens: [],
   };
@@ -331,7 +334,8 @@ function start() {
   const failures = new Map(); // ip -> [times]
   let viewerCount = 0;
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+  // liveWatch carries the guard variables with their candidate paths
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'https://gateway');
     const origin = req.headers.origin;
@@ -347,7 +351,9 @@ function start() {
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     let user = null;
-    let session = null; // { conn, entry }
+    let session = null; // { conn, entry, vars }
+    // Guard variables asked for before the session was connected
+    let desiredVars = null;
     // Raised by every start / stop / close: a start still connecting for an older request is dropped
     let startSeq = 0;
     let queue = [];
@@ -357,7 +363,11 @@ function start() {
       send,
       push: (sample) => queue.push(sample),
       lost: (message) => {
-        if (session) viewerCount--;
+        if (session) {
+          viewerCount--;
+          // The connection is closed with its handles: nothing left to release
+          session.vars.closed = true;
+        }
         session = null;
         clearInterval(flushTimer);
         send({ type: 'liveStatus', state: 'lost', message });
@@ -374,6 +384,7 @@ function start() {
         const s = session;
         session = null;
         viewerCount--;
+        await s.vars.close();
         await s.conn.unwatch(viewer);
       }
     };
@@ -409,12 +420,21 @@ function start() {
         return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
       }
 
+      // Guard variables of the running session: read like the state variable (a malformed request is ignored)
+      if (m.type === 'liveWatch') {
+        const vars = parseWatchRequest(m.vars, config.maxWatchedVariables ?? 100);
+        if (!vars) return;
+        if (session) session.vars.set(vars);
+        else desiredVars = vars;
+        return;
+      }
       if (m.type === 'liveStop') {
         await stopSession();
         return send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
       }
       if (m.type !== 'liveStart') return;
       await stopSession();
+      desiredVars = null;
       const seq = startSeq;
       const plc = plcs.get(m.plc);
       const stateVar = m.stateVar || 'machineState';
@@ -454,10 +474,13 @@ function start() {
           await conn.unwatch(viewer);
           return;
         }
-        session = { conn, entry };
+        session = { conn, entry, vars: new VarWatcher(conn.client, send) };
+        if (desiredVars) session.vars.set(desiredVars);
         viewerCount++;
         flushTimer = setInterval(() => {
           if (queue.length) send({ type: 'liveValues', events: queue.splice(0) });
+          const values = session?.vars.drain();
+          if (values) send({ type: 'liveVars', values });
         }, 50);
         log(`live: ${user} follows ${symbol} on ${plc.id} (${entry.viewers.size} viewer(s))`);
         send({

@@ -55,7 +55,8 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
   res.end(`Kval StateScope Link ${VERSION} is running. Open the Kval StateScope web app, Live tab, and choose "This computer".\n`);
 });
-const wss = new WebSocketServer({ noServer: true, maxPayload: 4096 });
+// liveWatch carries up to 300 variables with their candidate paths
+const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 server.on('upgrade', (req, socket, head) => {
   // DNS rebinding: a page on another name that resolves to 127.0.0.1 still sends its own Host
   const loopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
@@ -102,6 +103,8 @@ wss.on('connection', (ws, req) => {
       return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION });
     }
     if (m.type === 'liveStop') return session.stop(true, send);
+    // Guard variables of the running session (a malformed request is ignored)
+    if (m.type === 'liveWatch') return void session.watch(m.vars);
     if (m.type !== 'liveStart') return;
     const ident = /^[A-Za-z_]\w*$/;
     const netIdRx = /^\d{1,3}(\.\d{1,3}){5}$/;

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
+import type { EdgeGuardView } from '../utils/liveGuards.ts';
 
 export interface LiveStatus {
   state: 'idle' | 'connecting' | 'connected' | 'error' | 'lost' | 'stopped';
@@ -62,7 +63,18 @@ interface LivePanelProps {
   follow: boolean;
   onFollowChange: (follow: boolean) => void;
   onOpenHistory: () => void;
+  /** Guard values: the active state's transitions, every transition, or none */
+  guardScope?: 'active' | 'all' | 'off';
+  onGuardScopeChange?: (scope: 'active' | 'all' | 'off') => void;
+  /** The active state's transitions with their guard result and values */
+  guards?: (EdgeGuardView & { edgeId: string; to: string })[];
 }
+
+const GUARD_BADGE = {
+  true: { symbol: '\u2713', cls: 'bg-emerald-400 text-slate-950', word: 'TRUE' },
+  false: { symbol: '\u2717', cls: 'bg-slate-500 text-slate-950', word: 'FALSE' },
+  unknown: { symbol: '?', cls: 'bg-amber-400 text-slate-950', word: 'unknown' },
+} as const;
 
 const MAX_SHOWN = 200;
 
@@ -87,6 +99,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   follow,
   onFollowChange,
   onOpenHistory,
+  guardScope = 'active',
+  onGuardScopeChange,
+  guards = [],
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   const via = settings.via || defaultVia;
@@ -379,6 +394,69 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           <div className="mt-1 text-[11px] text-amber-300/80">Load the .TcDUT enum to see state names instead of numbers.</div>
         )}
       </div>
+
+      {/* Guard values of the transitions out of the current state */}
+      {onGuardScopeChange && (
+        <div id="live-guards" className="border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2 px-2.5 pt-2 pb-1.5">
+            <span className="text-[10px] uppercase tracking-wide text-slate-500">Guard values</span>
+            <div className="ml-auto flex rounded-md border border-slate-700 overflow-hidden text-[11px]" role="radiogroup" aria-label="Guard values">
+              {(['off', 'active', 'all'] as const).map((s) => (
+                <button
+                  key={s}
+                  id={`live-guards-${s}`}
+                  role="radio"
+                  aria-checked={guardScope === s}
+                  onClick={() => onGuardScopeChange(s)}
+                  className={`px-2 py-0.5 ${guardScope === s ? 'bg-sky-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}
+                  title={
+                    s === 'off'
+                      ? 'Read no guard variables'
+                      : s === 'active'
+                        ? 'Read the variables of the current state\u2019s transitions'
+                        : 'Read the variables of every transition (badges on all of them, values on the current state\u2019s and the selected one)'
+                  }
+                >
+                  {s === 'off' ? 'Off' : s === 'active' ? 'Active state' : 'All transitions'}
+                </button>
+              ))}
+            </div>
+          </div>
+          {guardScope !== 'off' && status.state === 'connected' && session.current && (
+            <div id="live-guard-list" className="max-h-56 overflow-y-auto px-2.5 pb-2 space-y-1">
+              {guards.length === 0 ? (
+                <div className="text-[11px] text-slate-500">No conditional transitions out of {session.current.state}.</div>
+              ) : (
+                guards.map((g) => {
+                  const b = GUARD_BADGE[g.result];
+                  return (
+                    <div key={g.edgeId} className="live-guard-row rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1" data-edge-id={g.edgeId}>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`live-guard-result inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px] font-bold shrink-0 ${b.cls}`} title={`Guard: ${b.word}`}>
+                          {b.symbol}
+                        </span>
+                        <ArrowRight className="w-3 h-3 text-slate-500 shrink-0" />
+                        <button onClick={() => onSelectState(g.to)} className="font-mono text-[11px] text-slate-200 hover:text-sky-300 truncate min-w-0" title={g.to}>
+                          {g.to}
+                        </button>
+                      </div>
+                      {g.vars.length > 0 && (
+                        <div className="mt-0.5 pl-5 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px]">
+                          {g.vars.map((v) => (
+                            <span key={v.name} className={v.known ? 'text-slate-400' : 'text-amber-300/90'} title={v.note}>
+                              {v.name} = <span className={v.known ? 'text-slate-100' : ''}>{v.text}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Trail */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-slate-800 shrink-0">

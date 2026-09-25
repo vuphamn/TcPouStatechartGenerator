@@ -17,7 +17,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   live: {
     start: (options) => ipcRenderer.invoke('tc:live-start', options),
     stop: () => ipcRenderer.invoke('tc:live-stop'),
-    /** Subscribes to liveStatus / liveValues messages; returns the unsubscribe function */
+    /** Guard variables to follow: [{ id, candidates }] (answered with liveWatchResult, values in liveVars) */
+    watch: (vars) => ipcRenderer.invoke('tc:live-watch', vars),
+    /** Subscribes to liveStatus / liveValues / liveWatchResult / liveVars messages; returns the unsubscribe function */
     onMessage: (handler) => {
       const listener = (_event, message) => handler(message);
       ipcRenderer.on('tc:live', listener);

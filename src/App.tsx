@@ -51,7 +51,7 @@ import {
   FileStack,
   Route,
 } from 'lucide-react';
-import { generateStatechart, PriorityFormat } from './generator.ts';
+import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
 import {
   MermaidViewer,
   MermaidViewerHandle,
@@ -65,8 +65,8 @@ import { MermaidMarkdownViewer } from './components/MermaidMarkdownViewer.tsx';
 import { PouComplexityReportTab } from './components/PouComplexityReportTab.tsx';
 import { TransitionFrequencyTab } from './components/TransitionFrequencyTab.tsx';
 import { TransitionHistoryTab } from './components/TransitionHistoryTab.tsx';
-import { PlcTransitionLoggerSidebarCard } from './components/PlcTransitionLoggerSidebarCard.tsx';
 import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.tsx';
+import { HelpButton } from './components/HelpButton.tsx';
 import { TransitionHistoryDataset, analyzeChronologicalEvents } from './utils/transitionHistoryAnalytics.ts';
 import { SourceFilesHeaderItem, DutSearchStatus } from './components/SourceFilesHeaderItem.tsx';
 import { rankDutCandidates, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
@@ -99,6 +99,17 @@ import { addState, addTransition, checkNewStateName, renameEdgeKeys, renameKey, 
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
 import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
+import {
+  buildEnumTables,
+  buildGuardEdges,
+  evaluateGuards,
+  symbolCandidates,
+  variablesToWatch,
+  type GuardInputs,
+  type LiveValue,
+  type WatchedVar,
+} from './utils/liveGuards.ts';
+import type { LiveWatchVar } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
 import { GatewayConnection, GatewayPlc, detectGatewayOrigin } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
@@ -166,6 +177,8 @@ export const App: React.FC = () => {
   // Loaded .TcPOU (full path on desktop) and the .TcDUT enums found for it in its folder tree
   const [pouPath, setPouPath] = useState<string | undefined>(undefined);
   const [dutMatches, setDutMatches] = useState<DutMatch[] | null>(null);
+  // Every .TcDUT found with the POU (not only the state enum's candidates): enum literals for live guard values
+  const [dutPool, setDutPool] = useState<string[]>([]);
   const [dutRelativePath, setDutRelativePath] = useState<string | undefined>(undefined);
   const [dutStatus, setDutStatus] = useState<DutSearchStatus>('sample');
   // Full path of the chosen .TcDUT (desktop / XAE extension)
@@ -326,7 +339,6 @@ export const App: React.FC = () => {
 
   // PLC Transition Logger & Telemetry State
   const [historyDataset, setHistoryDataset] = useState<TransitionHistoryDataset | null>(null);
-  const [isPlcLoggerModalOpen, setIsPlcLoggerModalOpen] = useState<boolean>(false);
 
   // Node display customizations
   const [customNodeStyles, setCustomNodeStyles] = useState<CustomNodeStylesMap>({});
@@ -981,6 +993,7 @@ export const App: React.FC = () => {
     (pou: string, candidates: DutCandidate[], forceFirst = false) => {
       const ranked = rankDutCandidates(pou, candidates);
       setDutMatches(ranked);
+      setDutPool(candidates.map((c) => c.content));
       if (ranked.length > 0) {
         applyDut(ranked[0]);
         setDutStatus('found');
@@ -1140,6 +1153,26 @@ export const App: React.FC = () => {
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
     setLiveSession((prev) => applyLiveSamples(prev, events, liveNamesRef.current, liveEdgesRef.current));
   }, []);
+  // Guard variables: where the host found each one, and their latest values (by variable, lower case)
+  const [liveWatched, setLiveWatched] = useState<Record<string, WatchedVar>>({});
+  const [liveVarValues, setLiveVarValues] = useState<Record<string, LiveValue>>({});
+  const handleLiveWatchResult = useCallback((vars: { id: string; symbol?: string; type?: string; error?: string }[]) => {
+    setLiveWatched((prev) => {
+      const next = { ...prev };
+      for (const v of vars) next[v.id] = { symbol: v.symbol, type: v.type, error: v.error };
+      return next;
+    });
+  }, []);
+  const handleLiveVars = useCallback((values: { id: string; t: number; v: LiveValue | null }[]) => {
+    setLiveVarValues((prev) => {
+      const next = { ...prev };
+      for (const s of values) {
+        if (s.v === null || s.v === undefined) delete next[s.id];
+        else next[s.id] = s.v;
+      }
+      return next;
+    });
+  }, []);
 
   // Two-way selection (XAE): the caret in TwinCAT's doState() editor selects the state whose CASE branch it is in
   const followSelectionRef = useRef(followSelection);
@@ -1164,8 +1197,8 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleEditorCaret });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleEditorCaret };
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1209,6 +1242,10 @@ export const App: React.FC = () => {
         h.handleLiveStatus(m);
       } else if (m.type === 'liveValues') {
         h.handleLiveValues(m.events);
+      } else if (m.type === 'liveWatchResult') {
+        h.handleLiveWatchResult(m.vars);
+      } else if (m.type === 'liveVars') {
+        h.handleLiveVars(m.values);
       } else if (m.type === 'editorCaret') {
         h.handleEditorCaret(m);
       } else if (m.type === 'error') {
@@ -1694,9 +1731,11 @@ export const App: React.FC = () => {
     if (!api) return;
     return api.onMessage((m) => {
       if (m.type === 'liveStatus') handleLiveStatus(m);
-      else handleLiveValues(m.events);
+      else if (m.type === 'liveValues') handleLiveValues(m.events);
+      else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
+      else if (m.type === 'liveVars') handleLiveVars(m.values);
     });
-  }, [handleLiveStatus, handleLiveValues]);
+  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars]);
   // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
   const liveMode: 'xae' | 'desktop' | 'web' | null = canNavigateInXae ? 'xae' : isXaeHost() ? null : desktopLive() ? 'desktop' : 'web';
   const [gatewayOrigin, setGatewayOrigin] = useState<string | null>(null);
@@ -1712,10 +1751,12 @@ export const App: React.FC = () => {
     gatewayRef.current ??= new GatewayConnection((m) => {
       if (m.type === 'liveStatus') handleLiveStatus(m);
       else if (m.type === 'liveValues') handleLiveValues(m.events);
+      else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
+      else if (m.type === 'liveVars') handleLiveVars(m.values);
       else if (m.type === 'closed') setLiveStatus((prev) => ({ ...prev, state: 'lost', message: m.message }));
     });
     return gatewayRef.current;
-  }, [handleLiveStatus, handleLiveValues]);
+  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars]);
   useEffect(() => () => gatewayRef.current?.close(), []);
   const pouTypeName = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
   // Another POU: stop following the old one (the XAE extension does that itself)
@@ -1842,6 +1883,119 @@ export const App: React.FC = () => {
     setHistoryDataset(dataset);
     showDockTab('history');
   }, [liveSession.transitions, identifiedStatesResult.states, availableEdges, liveStatus.instance, pouFileName, showDockTab]);
+
+  // ---- Live guard values: the conditions of the active state's transitions (or all), read from the PLC ----
+  const [liveGuardScope, setLiveGuardScopeState] = useState<'active' | 'all' | 'off'>(() => {
+    try {
+      const v = localStorage.getItem('kss.liveGuards');
+      return v === 'all' || v === 'off' ? v : 'active';
+    } catch {
+      return 'active';
+    }
+  });
+  const setLiveGuardScope = useCallback((scope: 'active' | 'all' | 'off') => {
+    setLiveGuardScopeState(scope);
+    try {
+      localStorage.setItem('kss.liveGuards', scope);
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
+  // A new session starts without the previous one's variables
+  useEffect(() => {
+    if (liveStatus.state === 'connecting' || liveStatus.state === 'idle') {
+      setLiveWatched({});
+      setLiveVarValues({});
+    }
+  }, [liveStatus.state]);
+  // Enum literals in conditions: the state enum, the other .TcDUT files found with the POU, and (desktop, XAE) the
+  // PLC project's, loaded once per POU while live
+  const [projectDuts, setProjectDuts] = useState<{ path: string; contents: string[] } | null>(null);
+  useEffect(() => {
+    if (!liveActive || liveGuardScope === 'off' || !pouPath || (liveMode !== 'xae' && liveMode !== 'desktop')) return;
+    if (projectDuts?.path === pouPath) return;
+    let cancelled = false;
+    setProjectDuts({ path: pouPath, contents: [] });
+    void loadProjectFiles(pouPath).then((files) => {
+      if (!cancelled && !('error' in files)) setProjectDuts({ path: pouPath, contents: files.duts.map((d) => d.content) });
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [liveActive, liveGuardScope, pouPath, liveMode, projectDuts?.path]);
+  const liveEnums = useMemo(
+    () => buildEnumTables([dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])]),
+    [dutContent, dutPool, projectDuts, pouPath]
+  );
+  const liveGuardEdges = useMemo(() => {
+    if (!liveActive || liveGuardScope === 'off') return null;
+    try {
+      const model = generateStatechartModel(dutContent, pouContent, {
+        flowchartOutput,
+        collapseErrorSinkEdges,
+        includeStateDescriptions,
+        showTransitionPriorities,
+        priorityFormat,
+      });
+      // The generator's own edges (their ids are the diagram's: notes do not change the order of the lines)
+      return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
+    } catch {
+      return null;
+    }
+  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
+  const liveGuardInputs = useMemo<GuardInputs | null>(
+    () =>
+      liveGuardEdges
+        ? {
+            values: liveVarValues,
+            watched: liveWatched,
+            stateVar: liveGuardEdges.stateVar,
+            stateValue: liveSession.current?.value ?? null,
+            currentState: liveSession.current?.state ?? null,
+            enums: liveEnums,
+          }
+        : null,
+    [liveGuardEdges, liveVarValues, liveWatched, liveSession.current, liveEnums]
+  );
+  // The variables to follow change with the active state (or the scope); the host keeps the ones still wanted
+  const liveWatchKey = useMemo(() => {
+    if (!liveGuardEdges || !liveGuardInputs || liveStatus.state !== 'connected' || !liveStatus.instance) return '';
+    return variablesToWatch(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all').sort().join('\n');
+  }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope]);
+  const sendLiveWatch = useCallback(
+    (vars: LiveWatchVar[]) => {
+      if (liveMode === 'xae') postToHost({ type: 'liveWatch', vars });
+      else if (liveMode === 'desktop') void desktopLive()?.watch?.(vars);
+      else gatewayRef.current?.watch(vars);
+    },
+    [liveMode]
+  );
+  const lastWatchRef = useRef('');
+  useEffect(() => {
+    if (liveStatus.state !== 'connected') {
+      lastWatchRef.current = '';
+      return;
+    }
+    if (liveWatchKey === lastWatchRef.current) return;
+    const instance = liveStatus.instance;
+    const timer = window.setTimeout(() => {
+      lastWatchRef.current = liveWatchKey;
+      const paths = liveWatchKey ? liveWatchKey.split('\n') : [];
+      sendLiveWatch(paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) })));
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [liveWatchKey, liveStatus.state, liveStatus.instance, sendLiveWatch]);
+  const liveGuardViews = useMemo(
+    () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
+    [liveGuardEdges, liveGuardInputs, liveGuardScope]
+  );
+  // The Live tab lists the active state's transitions with their results
+  const liveActiveGuards = useMemo(() => {
+    if (!liveGuardViews || !liveGuardEdges) return [];
+    return liveGuardEdges.edges
+      .filter((e) => liveGuardViews[e.edgeId]?.detail)
+      .map((e) => ({ edgeId: e.edgeId, to: e.to, ...liveGuardViews[e.edgeId] }));
+  }, [liveGuardViews, liveGuardEdges]);
 
   const hostConflictActions = hostConflict
     ? {
@@ -2067,6 +2221,11 @@ export const App: React.FC = () => {
         icon: <History />,
         tooltip: 'Time-series visualization of state transitions from PLC log files',
       },
+      logger: {
+        title: 'PLC Transition Logger',
+        icon: <FileSpreadsheet />,
+        tooltip: 'Load a CSV or text log of PLC state changes into Transition History',
+      },
       docs: { title: 'Documentation', icon: <BookOpen />, tooltip: 'State purpose, notes & documentation' },
       live: {
         title: 'Live',
@@ -2174,7 +2333,7 @@ export const App: React.FC = () => {
     // First entries stay visible longest
     priority: ['source', 'generate', 'sample', 'export', 'copy', 'download', 'mermaidLive', 'pdf'],
     // Row padding (2 x 16) + gap between title and actions + separator + safety margin
-    available: headerRowWidth - headerLeftWidth - 60,
+    available: headerRowWidth - headerLeftWidth - 60 - 40,
     containerRef: headerActionsRef,
     hiddenButtonSelector: '#header-hidden-controls-container',
     initialHiddenButtonWidth: 100,
@@ -2620,6 +2779,8 @@ export const App: React.FC = () => {
               hasOutput={Boolean(outputMarkdown)}
             />
           )}
+          <div className="h-4 sm:h-5 w-[1px] bg-slate-800 shrink-0" />
+          <HelpButton />
         </div>
         </div>
 
@@ -2649,35 +2810,6 @@ export const App: React.FC = () => {
               onOpenComplexityReport={() => showDockTab('complexity')}
               fill
             />
-
-            {/* Pinned to the bottom of the panel (also when Identified States is collapsed) */}
-            <div className="mt-auto flex flex-col gap-4 shrink-0">
-            {/* PLC Transition Logger Sidebar Card */}
-            <PlcTransitionLoggerSidebarCard
-              states={identifiedStatesResult.states}
-              edges={availableEdges}
-              activeDataset={historyDataset}
-              onOpenLoggerModal={() => setIsPlcLoggerModalOpen(true)}
-              onPopulateHistory={(ds, msg) => {
-                setHistoryDataset(ds);
-                showDockTab('history');
-                if (msg) showCopyToast(msg, 'success');
-              }}
-              onViewHistoryTab={() => showDockTab('history')}
-              onToast={showCopyToast}
-            />
-
-            {/* Guidance Info Card */}
-            <div className="bg-slate-900/60 border border-slate-800/80 rounded-xl p-3 text-[11px] text-slate-400 leading-relaxed">
-              <div className="font-semibold text-slate-200 mb-1 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-sky-400"></span>
-                How It Works
-              </div>
-              <p>
-                Parses <code className="text-sky-300">doState()</code> and <code className="text-sky-300">preProcess()</code> from the POU, matches enum sequences from the DUT or embedded UML composites, and emits clean Mermaid diagram markdown.
-              </p>
-            </div>
-            </div>
           </aside>
         )}
 
@@ -3078,6 +3210,7 @@ export const App: React.FC = () => {
                   openGuardOnSelect={followSelection}
                   pathHighlight={pathHighlight}
                   diffHighlight={diffHighlight}
+                  liveGuards={liveGuardViews}
                   contextMenuItems={diagramContextMenuItems}
                   connectFrom={connectFrom}
                   onConnectTo={handleConnectTo}
@@ -3182,6 +3315,9 @@ export const App: React.FC = () => {
             follow={liveFollow}
             onFollowChange={setLiveFollow}
             onOpenHistory={handleLiveOpenHistory}
+            guardScope={liveGuardScope}
+            onGuardScopeChange={setLiveGuardScope}
+            guards={liveActiveGuards}
           />,
           dockRegistry.nodes.live
         )}
@@ -3293,6 +3429,7 @@ export const App: React.FC = () => {
             edges={availableEdges}
             pouFileName={pouFileName}
             activeDataset={historyDataset}
+            onOpenLogger={() => showDockTab('logger')}
             onDatasetChange={(ds) => setHistoryDataset(ds)}
             onJumpToState={handleJumpToState}
             onToast={showCopyToast}
@@ -3300,20 +3437,21 @@ export const App: React.FC = () => {
           dockRegistry.nodes.history
         )}
 
-      {/* Dedicated PLC Transition Logger Tool Modal */}
-      <PlcTransitionLoggerTool
-        isOpen={isPlcLoggerModalOpen}
-        onClose={() => setIsPlcLoggerModalOpen(false)}
-        states={identifiedStatesResult.states}
-        edges={availableEdges}
-        pouFileName={pouFileName}
-        onPopulateHistory={(newDs, msg) => {
-          setHistoryDataset(newDs);
-          showDockTab('history');
-          if (msg) showCopyToast(msg, 'success');
-        }}
-        onToast={showCopyToast}
-      />
+      {isDockTabMounted('logger') &&
+        createPortal(
+          <PlcTransitionLoggerTool
+            states={identifiedStatesResult.states}
+            edges={availableEdges}
+            pouFileName={pouFileName}
+            onPopulateHistory={(newDs, msg) => {
+              setHistoryDataset(newDs);
+              showDockTab('history');
+              if (msg) showCopyToast(msg, 'success');
+            }}
+            onToast={showCopyToast}
+          />,
+          dockRegistry.nodes.logger
+        )}
 
       {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
 

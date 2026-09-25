@@ -14,7 +14,7 @@ For a single person on a computer that can reach the PLC, the local helper [Kval
 **What it does and doesn't do:**
 - **PLCs:** browsers can only choose from the PLCs in `config.json`, never an arbitrary address.
 - **Read-only:** the gateway reads variables (symbol info, handle, change notification). It writes nothing to a PLC except releasing its own variable handle.
-- **Connections:** one ADS connection per PLC. Everyone following the same variable shares one change notification.
+- **Connections:** one ADS connection per PLC. Everyone following the same state variable shares one change notification. Guard values (the variables of the active state's transitions, see the main README) are read per viewer, at most `maxWatchedVariables` each.
 - **Access tokens:** every browser needs one. Only their SHA-256 hashes are stored. Connections and "go live" requests are logged with the token's name.
 
 ## Install
@@ -39,9 +39,11 @@ Requires Node.js 20 or later on the gateway machine.
        { "id": "line202", "name": "Line 202", "netId": "192.168.1.20.1.1", "ip": "192.168.1.20", "port": 851 }
      ],
      "maxViewers": 50,
+     "maxWatchedVariables": 100,
      "allowedOrigins": []
    }
    ```
+   - `maxWatchedVariables`: the most guard variables one viewer may follow (a larger request is ignored).
    - `localNetId`: the AMS NetId the gateway uses (its IP + `.1.1` by default). A PLC entry can override it.
    - `ip`: defaults to the first four numbers of `netId`. Use `host:port` for a forwarded ADS port.
    - `port`: the PLC runtime's ADS port (851 for the first PLC).

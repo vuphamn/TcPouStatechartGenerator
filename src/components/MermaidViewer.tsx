@@ -97,6 +97,7 @@ import {
   EdgeDisplayProperties,
 } from '../types.ts';
 import { applyEdgeStylesToSvg } from '../utils/edgeStyles.ts';
+import type { EdgeGuardView } from '../utils/liveGuards.ts';
 import { extractStateNodesFromMermaid } from '../utils/nodeStyles.ts';
 import {
   extractEdgesFromMermaid,
@@ -183,6 +184,8 @@ export interface MermaidViewerProps {
   openGuardOnSelect?: boolean;
   /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
   diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
+  /** Live view: each transition's guard result (TRUE / FALSE / unknown) and its variables' values, by edge id */
+  liveGuards?: Record<string, EdgeGuardView> | null;
   /** Paths tab: the states and transitions of the shown path(s); everything else is dimmed */
   pathHighlight?: { states: string[]; edges: { from: string; to: string }[] } | null;
   /** The app's extra context menu actions for a state, transition or the canvas */
@@ -1513,6 +1516,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     openGuardOnSelect = false,
     pathHighlight,
     diffHighlight,
+    liveGuards,
     contextMenuItems,
     connectFrom = null,
     onConnectTo,
@@ -3267,6 +3271,102 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       findEdgePathElement(svg, `${prev}->${liveHighlight.stateId}`, availableEdges)?.classList.add('live-last-edge');
     }
   }, [renderedSvg, liveHighlight, availableEdges]);
+
+  // Live guard values: a TRUE / FALSE / ? badge on each transition's label, and the values of its variables
+  // under it (the active state's transitions, and the selected one). Drawn inside the label's group, so they move
+  // with the label when it is dragged and pan / zoom with the diagram.
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('g.live-guard, g.live-guard-values').forEach((el) => el.remove());
+    if (!liveGuards) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    const colors = { true: '#34d399', false: '#64748b', unknown: '#fbbf24' } as const;
+    const symbols = { true: '\u2713', false: '\u2717', unknown: '?' } as const;
+    const words = { true: 'TRUE', false: 'FALSE', unknown: 'unknown' } as const;
+    const MAX_LINES = 6;
+    const CHAR_W = 6.1;
+    const LINE_H = 13;
+    const num = (el: Element | null, name: string) => parseFloat(el?.getAttribute(name) || '0') || 0;
+    const shorten = (s: string, max: number) => (s.length > max ? `\u2026${s.slice(s.length - max + 1)}` : s);
+    for (const [edgeId, view] of Object.entries(liveGuards)) {
+      const label = svg.querySelector(`g.edgeLabel[data-edge-id="${CSS.escape(edgeId)}"]`);
+      if (!label) continue;
+      // The label's box in its group's coordinates, background included; getBBox() is 0 while the tab is hidden:
+      // then from the label's attributes
+      let box = { x: 0, y: 0, w: 0, h: 0 };
+      try {
+        const b = (label as SVGGElement).getBBox();
+        box = { x: b.x, y: b.y, w: b.width, h: b.height };
+      } catch {
+        // not rendered
+      }
+      if (!box.w) {
+        const inner = label.querySelector(':scope > g.label, g.label');
+        const fo = label.querySelector('foreignObject');
+        const t = (inner?.getAttribute('transform') || '').match(/translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)/);
+        box = { x: t ? parseFloat(t[1]) : 0, y: t ? parseFloat(t[2]) : 0, w: num(fo, 'width'), h: num(fo, 'height') };
+      }
+      if (!box.w || !box.h) continue;
+
+      const badge = document.createElementNS(ns, 'g');
+      badge.setAttribute('class', `live-guard live-guard-${view.result}`);
+      badge.setAttribute('data-guard-result', view.result);
+      // On the label's top-left corner: the label's styled background can reach past its box
+      badge.setAttribute('transform', `translate(${box.x - 4}, ${box.y - 4})`);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = [`Guard: ${words[view.result]}`, ...view.vars.map((v) => `${v.name} = ${v.text}${v.note ? ` (${v.note})` : ''}`)].join('\n');
+      const circle = document.createElementNS(ns, 'circle');
+      circle.setAttribute('r', '8');
+      circle.setAttribute('fill', colors[view.result]);
+      circle.setAttribute('stroke', '#0f172a');
+      circle.setAttribute('stroke-width', '1.5');
+      const text = document.createElementNS(ns, 'text');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'central');
+      text.setAttribute('fill', '#0f172a');
+      text.setAttribute('font-size', '11');
+      text.setAttribute('font-weight', '700');
+      text.textContent = symbols[view.result];
+      badge.append(title, circle, text);
+      label.appendChild(badge);
+
+      const detail = view.detail || selectedEdge?.id === edgeId;
+      if (!detail || view.vars.length === 0) continue;
+      const lines = view.vars.slice(0, MAX_LINES).map((v) => ({ text: `${shorten(v.name, 34)} = ${shorten(v.text, 22)}`, known: v.known, note: v.note }));
+      if (view.vars.length > MAX_LINES) lines.push({ text: `+${view.vars.length - MAX_LINES} more`, known: true, note: undefined });
+      const width = Math.max(...lines.map((l) => l.text.length)) * CHAR_W + 12;
+      const height = lines.length * LINE_H + 6;
+      const values = document.createElementNS(ns, 'g');
+      values.setAttribute('class', 'live-guard-values');
+      values.setAttribute('transform', `translate(${box.x + box.w / 2 - width / 2}, ${box.y + box.h + 3})`);
+      const bg = document.createElementNS(ns, 'rect');
+      bg.setAttribute('width', String(width));
+      bg.setAttribute('height', String(height));
+      bg.setAttribute('rx', '4');
+      bg.setAttribute('fill', 'rgba(15, 23, 42, 0.92)');
+      bg.setAttribute('stroke', colors[view.result]);
+      bg.setAttribute('stroke-opacity', '0.7');
+      values.appendChild(bg);
+      lines.forEach((l, i) => {
+        const tx = document.createElementNS(ns, 'text');
+        tx.setAttribute('x', '6');
+        tx.setAttribute('y', String(3 + (i + 0.5) * LINE_H));
+        tx.setAttribute('dominant-baseline', 'central');
+        tx.setAttribute('font-family', 'ui-monospace, Consolas, monospace');
+        tx.setAttribute('font-size', '10');
+        tx.setAttribute('fill', l.known ? '#e2e8f0' : '#fbbf24');
+        tx.textContent = l.text;
+        if (l.note) {
+          const tt = document.createElementNS(ns, 'title');
+          tt.textContent = l.note;
+          tx.appendChild(tt);
+        }
+        values.appendChild(tx);
+      });
+      label.appendChild(values);
+    }
+  }, [renderedSvg, liveGuards, selectedEdge]);
 
   // Lint problem badges: a small marker at the top-right corner of each affected state node
   useEffect(() => {

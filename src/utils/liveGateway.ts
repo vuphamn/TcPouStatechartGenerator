@@ -6,6 +6,7 @@
  */
 
 import type { LiveMessage } from './liveHost.ts';
+import type { LiveWatchVar } from './xaeHost.ts';
 
 export interface GatewayPlc {
   id: string;
@@ -117,6 +118,11 @@ export class GatewayConnection {
 
   start(options: GatewayStartOptions): void {
     this.ws?.send(JSON.stringify({ type: 'liveStart', ...options }));
+  }
+
+  /** Guard variables to follow in the running session */
+  watch(vars: LiveWatchVar[]): void {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'liveWatch', vars }));
   }
 
   stop(): void {

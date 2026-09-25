@@ -41,13 +41,14 @@ import {
   parsePlcHistoryLog,
   generateSyntheticHistoryLog,
 } from '../utils/transitionHistoryAnalytics.ts';
-import { PlcTransitionLoggerTool } from './PlcTransitionLoggerTool.tsx';
 
 export interface TransitionHistoryTabProps {
   states: IdentifiedPouState[];
   edges: EdgeInfo[];
   pouFileName: string;
   activeDataset?: TransitionHistoryDataset | null;
+  /** Opens the PLC Transition Logger tab */
+  onOpenLogger?: () => void;
   onDatasetChange?: (dataset: TransitionHistoryDataset) => void;
   onJumpToState: (stateId: string, label?: string) => void;
   onToast?: (message: string, type?: 'success' | 'error') => void;
@@ -58,6 +59,7 @@ export const TransitionHistoryTab: React.FC<TransitionHistoryTabProps> = ({
   edges,
   pouFileName,
   activeDataset,
+  onOpenLogger,
   onDatasetChange,
   onJumpToState,
   onToast,
@@ -72,10 +74,21 @@ export const TransitionHistoryTab: React.FC<TransitionHistoryTabProps> = ({
     return activeDataset || generateSyntheticHistoryLog(states, edges, 'unexpected_anomalies');
   });
 
-  // Sync with activeDataset if passed from parent
+  // Sync with activeDataset if passed from parent. One the tab did not make itself (from the PLC Transition
+  // Logger) starts the timeline over at its first unexpected transition.
+  const datasetRef = useRef(dataset);
+  datasetRef.current = dataset;
   useEffect(() => {
-    if (activeDataset) {
-      setDataset(activeDataset);
+    if (!activeDataset) return;
+    const fromOutside = activeDataset !== datasetRef.current;
+    setDataset(activeDataset);
+    if (fromOutside) {
+      setScrubberSec(0);
+      setIsPlaying(false);
+      if (activeDataset.events.length > 0) {
+        const firstUnexpected = activeDataset.events.find((e) => e.isUnexpected);
+        setSelectedEventId(firstUnexpected ? firstUnexpected.id : activeDataset.events[0].id);
+      }
     }
   }, [activeDataset]);
 
@@ -114,8 +127,6 @@ export const TransitionHistoryTab: React.FC<TransitionHistoryTabProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const playbackTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Dedicated PLC Transition Logger Tool Modal
-  const [isLoggerToolOpen, setIsLoggerToolOpen] = useState<boolean>(false);
   const [copiedReport, setCopiedReport] = useState<boolean>(false);
 
   // Hovered item for tooltip
@@ -449,9 +460,9 @@ export const TransitionHistoryTab: React.FC<TransitionHistoryTabProps> = ({
             <button
               id="open-plc-transition-logger-btn"
               type="button"
-              onClick={() => setIsLoggerToolOpen(true)}
+              onClick={onOpenLogger}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer"
-              title="Open PLC Transition Logger tool to upload small CSV or text log files [Timestamp, FromState, ToState]"
+              title="Open the PLC Transition Logger tab to load a CSV or text log [Timestamp, FromState, ToState]"
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
               <span>PLC Transition Logger</span>
@@ -1440,28 +1451,6 @@ export const TransitionHistoryTab: React.FC<TransitionHistoryTabProps> = ({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* PLC TRANSITION LOGGER TOOL MODAL */}
-      {/* ========================================================================= */}
-      <PlcTransitionLoggerTool
-        isOpen={isLoggerToolOpen}
-        onClose={() => setIsLoggerToolOpen(false)}
-        states={states}
-        edges={edges}
-        pouFileName={pouFileName}
-        onPopulateHistory={(newDs, msg) => {
-          setDataset(newDs);
-          onDatasetChange?.(newDs);
-          setScrubberSec(0);
-          setIsPlaying(false);
-          if (newDs.events.length > 0) {
-            const firstUnexpected = newDs.events.find((e) => e.isUnexpected);
-            setSelectedEventId(firstUnexpected ? firstUnexpected.id : newDs.events[0].id);
-          }
-          if (msg) onToast?.(msg, 'success');
-        }}
-        onToast={onToast}
-      />
     </div>
   );
 };

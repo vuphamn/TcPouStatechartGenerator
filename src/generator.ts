@@ -12,10 +12,36 @@ export interface GeneratorOptions {
   priorityFormat?: PriorityFormat;
 }
 
+/** One enclosing IF level of an assignment: its condition (null: ELSE) and the earlier branches' conditions */
+export interface GuardFrame {
+  cond: string | null;
+  /** Conditions of the IF / ELSIF branches before this one: all of them were FALSE */
+  prior: string[];
+}
+
+/** A drawn transition (as extracted from the Mermaid code: sanitized ids, label as written) */
+export interface ModelEdge {
+  from: string;
+  to: string;
+  /** The label exactly as in the Mermaid code ('' when unlabeled) */
+  label: string;
+  source: string;
+  /** The transitions in the code this edge stands for (several when edges were merged into a composite's) */
+  members: { from: string; frames: GuardFrame[] }[];
+}
+
+export interface StatechartModel {
+  markdown: string;
+  stateVar: string;
+  edges: ModelEdge[];
+}
+
 export interface Transition {
   from: string;
   to: string;
   guard: string | null;
+  /** The IF levels around the assignment, outermost first */
+  frames?: GuardFrame[];
   priority?: number | null;
   source: string;
   redirectedFrom?: string | null;
@@ -179,6 +205,9 @@ function parenthesizeCondition(c: string): string {
   }
   return `(${trimmed})`;
 }
+
+const snapshotFrames = (s: IfFrame[]): GuardFrame[] =>
+  s.map((f) => ({ cond: f.currentCond, prior: f.negatedPriorConds.filter((c): c is string => !!c) }));
 
 function buildGuard(s: IfFrame[]): string | null {
   if (s.length === 0) return null;
@@ -350,6 +379,7 @@ function parseDoState(
           from: currentState,
           to: target,
           guard,
+          frames: snapshotFrames(ifStack),
           priority: currentPrio,
           source: 'doState',
           effectiveFrom: currentState,
@@ -423,6 +453,7 @@ function parsePreProcess(
         from: Any,
         to: target,
         guard: buildResetGuard(ifStack, stateVarName),
+        frames: snapshotFrames(ifStack),
         source: 'preProcess',
         scopeLower: pendingLower,
         scopeUpper: pendingUpper,
@@ -1110,7 +1141,8 @@ function buildMermaid(
   stateDescriptions?: Map<string, string>,
   flowchartOutput = false,
   showTransitionPriorities = true,
-  priorityFormat: PriorityFormat = 'paren'
+  priorityFormat: PriorityFormat = 'paren',
+  emitted?: ModelEdge[]
 ): string {
   const firstStateToGroup = new Map<string, string>();
   for (const [k, v] of groups.groupFirstState.entries()) {
@@ -1257,6 +1289,23 @@ function buildMermaid(
     return lbl;
   };
 
+  // The transitions of the code behind a drawn edge: the same target, guard and origin, and the ones folded into
+  // a composite's border exit
+  const recordEdge = (t: Transition, label: string) => {
+    if (!emitted) return;
+    const members = tr
+      .filter(
+        (m) =>
+          m.effectiveTo === t.effectiveTo &&
+          (m.guard ?? '') === (t.guard ?? '') &&
+          m.source === t.source &&
+          (!showTransitionPriorities || (m.priority ?? '') === (t.priority ?? '')) &&
+          (m.effectiveFrom === t.effectiveFrom || (redundant.has(m) && groups.stateToGroup.get(m.from) === t.effectiveFrom))
+      )
+      .map((m) => ({ from: m.from, frames: m.frames ?? [] }));
+    emitted.push({ from: san(t.effectiveFrom), to: san(t.effectiveTo), label: label.trim(), source: t.source, members });
+  };
+
   if (flowchartOutput) {
     const lines: string[] = ['flowchart TD'];
     const declared = new Set<string>();
@@ -1292,6 +1341,7 @@ function buildMermaid(
       } else {
         lines.push(`    ${san(t.effectiveFrom)} -->|"${flowLabel(lbl)}"| ${san(t.effectiveTo)}`);
       }
+      recordEdge(t, lbl ? flowLabel(lbl) : '');
     }
 
     return lines.join('\n');
@@ -1321,6 +1371,7 @@ function buildMermaid(
       } else {
         lines.push(`    ${san(t.effectiveFrom)} --> ${san(t.effectiveTo)}: ${esc(lbl)}`);
       }
+      recordEdge(t, lbl ? esc(lbl) : '');
     }
 
     if (stateDescriptions && stateDescriptions.size > 0) {
@@ -1344,6 +1395,15 @@ export function generateStatechart(
   tcPouContent: string,
   options: GeneratorOptions = {}
 ): string {
+  return generateStatechartModel(tcDutContent, tcPouContent, options).markdown;
+}
+
+/** The Mermaid code, the state variable, and the drawn edges with the code's transitions (and their IF context) */
+export function generateStatechartModel(
+  tcDutContent: string,
+  tcPouContent: string,
+  options: GeneratorOptions = {}
+): StatechartModel {
   const collapseErrorSinkEdges = options.collapseErrorSinkEdges ?? DefaultCollapseErrorSinkEdges;
   const flowchartOutput = options.flowchartOutput ?? false;
   const includeStateDescriptions = options.includeStateDescriptions ?? false;
@@ -1403,13 +1463,16 @@ export function generateStatechart(
   determineCompositeStartStates(transitions, groups);
   extractErrorSinkStates(transitions, groups, collapseErrorSinkEdges);
 
-  return buildMermaid(
+  const edges: ModelEdge[] = [];
+  const markdown = buildMermaid(
     transitions,
     states,
     groups,
     stateDescriptions,
     flowchartOutput,
     showTransitionPriorities,
-    priorityFormat
+    priorityFormat,
+    edges
   );
+  return { markdown, stateVar: stateVarName, edges };
 }

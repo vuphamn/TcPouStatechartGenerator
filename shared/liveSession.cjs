@@ -7,6 +7,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
+const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
 
@@ -85,7 +86,8 @@ function createLiveSession(hooks = {}) {
       timeoutDelay: 3000,
       hideConsoleWarnings: true,
     });
-    const s = { id, client, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null };
+    // desired: guard variables asked for before the connection was made (liveWatch)
+    const s = { id, client, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null };
     session = s;
     const found = [];
     try {
@@ -132,8 +134,12 @@ function createLiveSession(hooks = {}) {
       s.queue.push({ t: Date.now(), value: await ads.readByHandle(client, s.handle, info.size) });
       s.subscription = await ads.subscribeHandle(client, s.handle, info.size, (sample) => s.queue.push(sample));
       if (id !== sessionId) throw new Error('stopped');
+      s.vars = new VarWatcher(client, send);
+      if (s.desired) s.vars.set(s.desired);
       s.timer = setInterval(() => {
         if (s.queue.length) send({ type: 'liveValues', events: s.queue.splice(0) });
+        const values = s.vars?.drain();
+        if (values) send({ type: 'liveVars', values });
       }, 50);
       s.stateTimer = setInterval(async () => {
         try {
@@ -160,6 +166,7 @@ function createLiveSession(hooks = {}) {
     clearInterval(s.timer);
     clearInterval(s.stateTimer);
     const client = s.client;
+    if (s.vars) await s.vars.close();
     try {
       if (s.subscription) await client.unsubscribe(s.subscription);
       if (s.handle) await ads.releaseHandle(client, s.handle);
@@ -173,6 +180,17 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /** Guard variables to follow in the running session (liveWatch): [{ id, candidates }]; false when malformed */
+  function watch(vars) {
+    const parsed = parseWatchRequest(vars);
+    if (!parsed) return false;
+    const s = session;
+    if (!s) return true;
+    if (s.vars) s.vars.set(parsed);
+    else s.desired = parsed;
+    return true;
+  }
+
   async function stop(notify, send) {
     sessionId++;
     const s = session;
@@ -181,7 +199,7 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
-  return { start, stop };
+  return { start, stop, watch };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId };

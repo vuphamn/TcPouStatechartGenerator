@@ -79,6 +79,7 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 - **Transition History:** the history button opens the session's transitions there, with its analytics.
 - **Numbers to names:** values become state names through the `.TcDUT` enum, explicit `:=` values included.
 - **Stopping:** *Stop*, another POU, or closing the tab ends the session. It deletes the notification and releases the handle in the PLC.
+- **Guard values:** the app asks for the variables in the conditions of the active state's transitions (`liveWatch`). The extension looks each one up (as a member of the instance, or as a global path), then follows it with a change notification checked every 10 ms (`liveWatchResult`, `liveVars`). The diagram shows TRUE / FALSE / ? and the values next to each condition; see *Live guard values* in the main README. Variables no longer asked for are released.
 
 **Selection follows TwinCAT's caret.** When the caret in TwinCAT's editor is in the loaded POU's `doState()`, the state whose `CASE` branch contains it is selected and brought into view. Together with **Show in TwinCAT editor**, selection works both ways. The extension checks the active editor window's caption and caret line every 350 ms. Turn it off with **Follow selection** in the status bar.
 
@@ -128,6 +129,7 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - Changes against *committed (git)*;
     - opening `SM_KAxis` from a guard's reference, and Back;
     - Document all state machines through the save dialog.
+  - **Guard values (0.7.0):** the app side ran in a browser, with a stand-in for the XAE bridge answering `liveWatch`. The same watching code in the desktop app, Link and the gateway ran against a simulated PLC. The extension's own ADS part (`LiveMonitor.SetVars`) compiles but was not run: this PC's TwinCAT system is not started (see Live view above).
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 
