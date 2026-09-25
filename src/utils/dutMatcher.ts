@@ -7,6 +7,8 @@ export interface DutCandidate {
   /** Path relative to the .TcPOU's folder, for display (e.g. "DUTs/E_Feed_States.TcDUT") */
   relativePath: string;
   content: string;
+  /** Full path (desktop app / XAE extension) */
+  path?: string;
 }
 
 export interface DutMatch extends DutCandidate {

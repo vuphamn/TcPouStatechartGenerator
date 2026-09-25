@@ -30,6 +30,10 @@ The state enum is found automatically. By convention the `.TcDUT` sits in the sa
 
 When more than one `.TcDUT` matches, the header shows the count; click the enum name to pick another one.
 
+### Inside TwinCAT XAE (prototype)
+
+`xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE, with **Save to project** for edits. See [xae-extension/README.md](xae-extension/README.md).
+
 ### Working with tabs
 - **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
 - **Drag a tab** onto another group's tab strip or onto the middle of a group to move it there, or onto a group's left/right (MiddlePanel) or top/bottom (RightPanel) edge to create a new group. Tabs can only be moved within their own panel.

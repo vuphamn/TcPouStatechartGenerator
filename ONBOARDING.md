@@ -61,6 +61,7 @@ The app opens on a bundled sample, so you can use it without any PLC files. Pick
 | Editors | `MethodStructuredTextEditor.tsx`, `DutEnumEditor.tsx`, `utils/st*.ts` |
 | Export / PDF | `utils/diagramExport.ts`, `utils/printToPdf.ts`, `ExportModal.tsx` |
 | Desktop | `electron/main.cjs`, `electron/preload.cjs`, `electron/tcSourceFiles.cjs` |
+| TwinCAT XAE extension (prototype) | `xae-extension/` (C# VSIX hosting the app in WebView2; bridge in `src/utils/xaeHost.ts`); see its README |
 | Icon | source art `public/icon.svg` (32 px and up) and `public/favicon.svg` (16–32 px); packaged `build/icon.ico`, `electron/assets/icon.ico` |
 
 ## Things that bite

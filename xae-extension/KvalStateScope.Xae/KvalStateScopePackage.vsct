@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidKvalStateScopePackage">
+    <Groups>
+      <!-- Right-click on a project item (Solution Explorer); extra parents are added in CommandPlacements -->
+      <Group guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
+      <Group guid="guidKvalStateScopeCmdSet" id="grpTools" priority="0x0600">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidKvalStateScopeCmdSet" id="cmdOpenSelected" priority="0x0100" type="Button">
+        <Parent guid="guidKvalStateScopeCmdSet" id="grpContext" />
+        <CommandFlag>DynamicVisibility</CommandFlag>
+        <CommandFlag>DefaultInvisible</CommandFlag>
+        <Strings>
+          <ButtonText>Open in Kval StateScope</ButtonText>
+          <CanonicalName>KvalStateScope.OpenSelected</CanonicalName>
+          <LocCanonicalName>KvalStateScope.OpenSelected</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidKvalStateScopeCmdSet" id="cmdOpenFromTools" priority="0x0100" type="Button">
+        <Parent guid="guidKvalStateScopeCmdSet" id="grpTools" />
+        <!-- Command Window: KvalStateScope.Open C:\Path\SM_X.TcPOU -->
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>Kval StateScope...</ButtonText>
+          <CanonicalName>KvalStateScope.Open</CanonicalName>
+          <LocCanonicalName>KvalStateScope.Open</LocCanonicalName>
+        </Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <CommandPlacements>
+    <!-- Right-click on an open document's tab (e.g. a POU opened in the TwinCAT editor) -->
+    <CommandPlacement guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
+      <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_EZDOCWINTAB" />
+    </CommandPlacement>
+    <!--
+      TwinCAT PLC project tree: its context menu has its own id. Find it with command logging (see
+      xae-extension/README.md), then add a placement here, e.g.
+      <CommandPlacement guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
+        <Parent guid="guidTwinCATPlcContextMenu" id="idTwinCATPlcPouContextMenu" />
+      </CommandPlacement>
+      and define guidTwinCATPlcContextMenu / idTwinCATPlcPouContextMenu in Symbols.
+    -->
+  </CommandPlacements>
+
+  <Symbols>
+    <GuidSymbol name="guidKvalStateScopePackage" value="{e0718790-a072-4c96-ba71-67161c7fdaa6}" />
+    <GuidSymbol name="guidKvalStateScopeCmdSet" value="{98c96b86-2fe9-4ee8-b8c5-1bcb0d95d6c5}">
+      <IDSymbol name="grpContext" value="0x1020" />
+      <IDSymbol name="grpTools" value="0x1021" />
+      <IDSymbol name="cmdOpenSelected" value="0x0100" />
+      <IDSymbol name="cmdOpenFromTools" value="0x0101" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

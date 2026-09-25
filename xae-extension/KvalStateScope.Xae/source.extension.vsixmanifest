@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6" Version="0.1.0" Language="en-US" Publisher="Kval Inc." />
+    <DisplayName>Kval StateScope for TwinCAT XAE</DisplayName>
+    <Description xml:space="preserve">View and edit Kval SM_*.TcPOU state machines as interactive diagrams inside TwinCAT XAE. Right-click a .TcPOU and choose "Open in Kval StateScope". (Prototype)</Description>
+    <Icon>Resources\icon.png</Icon>
+    <Tags>TwinCAT; PLC; state machine; Kval</Tags>
+  </Metadata>
+  <Installation>
+    <!-- Same target as Beckhoff's own XAE extensions: TcXaeShell 64-bit, Visual Studio 2022 and 2026 -->
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0,19.0)">
+      <ProductArchitecture>amd64</ProductArchitecture>
+    </InstallationTarget>
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
+  </Dependencies>
+  <Prerequisites>
+    <!-- Also declared by Beckhoff's own XAE extensions, so TcXaeShell satisfies it -->
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[17.0,19.0)" DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+  </Assets>
+</PackageManifest>

@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp } from 'lucide-react';
+import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save } from 'lucide-react';
 import { DockMenu, DockMenuItem } from './dock/DockMenu.tsx';
 import { DutMatch } from '../utils/dutMatcher.ts';
 
@@ -26,6 +26,8 @@ export interface SourceFilesHeaderItemProps {
   onFindDut: () => void;
   onChooseDutFiles: () => void;
   onSelectDut: (match: DutMatch) => void;
+  /** TwinCAT XAE extension: write the edited .TcPOU / .TcDUT back into the project */
+  hostSave?: { dirtyCount: number; onSave: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -42,6 +44,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   onFindDut,
   onChooseDutFiles,
   onSelectDut,
+  hostSave,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -178,6 +181,27 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         {pouFileName || 'No file loaded'}
       </span>
       {(pouFileName || dutStatus !== 'sample') && enumChip}
+      {hostSave && (
+        <button
+          id="xae-save-to-project-btn"
+          type="button"
+          onClick={hostSave.onSave}
+          disabled={hostSave.dirtyCount === 0}
+          className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap transition-colors ${
+            hostSave.dirtyCount > 0
+              ? 'bg-sky-600 hover:bg-sky-500 text-white'
+              : 'bg-slate-900/70 text-slate-500 border border-slate-700 cursor-default'
+          }`}
+          title={
+            hostSave.dirtyCount > 0
+              ? `Write ${hostSave.dirtyCount === 1 ? 'the edited file' : 'both edited files'} back into the TwinCAT project (a backup is kept)`
+              : 'No unsaved edits'
+          }
+        >
+          <Save className="w-3 h-3 shrink-0" />
+          Save to project{hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
+        </button>
+      )}
       {menuAnchor && (
         <DockMenu
           id="tcdut-match-menu"

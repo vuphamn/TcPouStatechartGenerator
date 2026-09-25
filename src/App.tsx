@@ -68,6 +68,7 @@ import {
   canPickFolder,
   PouSource,
 } from './utils/sourceFileAccess.ts';
+import { isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
 import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
@@ -131,6 +132,10 @@ export const App: React.FC = () => {
   const [dutMatches, setDutMatches] = useState<DutMatch[] | null>(null);
   const [dutRelativePath, setDutRelativePath] = useState<string | undefined>(undefined);
   const [dutStatus, setDutStatus] = useState<DutSearchStatus>('sample');
+  // Full path of the chosen .TcDUT (desktop / XAE extension)
+  const [dutPath, setDutPath] = useState<string | undefined>(undefined);
+  // Inside the TwinCAT XAE extension: file content as last loaded from / saved to the project, per path
+  const [hostSavedContent, setHostSavedContent] = useState<Record<string, string>>({});
 
   // Configuration options matching C# LauncherForm & active User/Builtin Preset
   const initialPreset = useMemo(() => {
@@ -811,6 +816,7 @@ export const App: React.FC = () => {
     setPouPath(undefined);
     setDutMatches(null);
     setDutRelativePath(undefined);
+    setDutPath(undefined);
     setDutStatus('sample');
   };
 
@@ -849,10 +855,11 @@ export const App: React.FC = () => {
   // ---------------------------------------------------------------------------
   // Source files: a browsed .TcPOU, and its state enum found among the .TcDUT files in its folder tree
   // ---------------------------------------------------------------------------
-  const applyDut = useCallback((dut: { name: string; relativePath: string; content: string } | null) => {
+  const applyDut = useCallback((dut: { name: string; relativePath: string; content: string; path?: string } | null) => {
     setDutFileName(dut?.name ?? '');
     setDutContent(dut?.content ?? '');
     setDutRelativePath(dut?.relativePath);
+    setDutPath(dut?.path);
   }, []);
 
   /** Picks the enum that declares the most doState() states; `forceFirst` keeps a hand-picked file without a match */
@@ -903,6 +910,10 @@ export const App: React.FC = () => {
   );
 
   const handleBrowsePou = useCallback(async () => {
+    if (isXaeHost()) {
+      postToHost({ type: 'browsePou' });
+      return;
+    }
     try {
       const src = await browseForPou();
       if (src) applyLoadedPou(src);
@@ -919,6 +930,10 @@ export const App: React.FC = () => {
   );
 
   const handleFindDut = useCallback(async () => {
+    if (isXaeHost()) {
+      postToHost({ type: 'findDut' });
+      return;
+    }
     try {
       const candidates = await findDutCandidates();
       if (candidates) applyDutCandidates(pouContent, candidates);
@@ -928,9 +943,70 @@ export const App: React.FC = () => {
   }, [applyDutCandidates, pouContent, showCopyToast]);
 
   const handleChooseDutFiles = useCallback(async () => {
+    if (isXaeHost()) {
+      postToHost({ type: 'chooseDutFiles' });
+      return;
+    }
     const candidates = await chooseDutFiles();
     if (candidates) applyDutCandidates(pouContent, candidates, true);
   }, [applyDutCandidates, pouContent]);
+
+  // ---------------------------------------------------------------------------
+  // TwinCAT XAE extension: it opens the right-clicked .TcPOU here and saves edits back into the project
+  // ---------------------------------------------------------------------------
+  const pouContentRef = useRef(pouContent);
+  pouContentRef.current = pouContent;
+  const pendingHostSaveRef = useRef<{ path: string; content: string }[]>([]);
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast };
+
+  useEffect(() => {
+    if (!isXaeHost()) return;
+    const remember = (files: { path?: string; content: string }[]) =>
+      setHostSavedContent((prev) => {
+        const next = { ...prev };
+        for (const f of files) if (f.path) next[f.path] = f.content;
+        return next;
+      });
+    const off = onHostMessage((m) => {
+      const h = hostHandlersRef.current;
+      if (m.type === 'loadPou') {
+        setHostSavedContent({});
+        remember([{ path: m.source.path, content: m.source.content }, ...(m.source.dutCandidates ?? [])]);
+        h.applyLoadedPou(m.source);
+      } else if (m.type === 'dutCandidates') {
+        remember(m.candidates);
+        h.applyDutCandidates(pouContentRef.current, m.candidates, m.forceFirst);
+      } else if (m.type === 'saveResult') {
+        if (m.ok) remember(pendingHostSaveRef.current);
+        pendingHostSaveRef.current = [];
+        h.showCopyToast(m.message, m.ok ? 'success' : 'error', m.ok ? 4000 : 7000);
+      } else if (m.type === 'error') {
+        h.showCopyToast(m.message, 'error', 7000);
+      }
+    });
+    postToHost({ type: 'ready' });
+    return off;
+  }, []);
+
+  /** Edited files that came from the project (a sample or a dropped file cannot be saved back) */
+  const hostDirtyFiles = useMemo(() => {
+    if (!isXaeHost()) return [];
+    const files: { path: string; content: string }[] = [];
+    if (pouPath && hostSavedContent[pouPath] !== undefined && hostSavedContent[pouPath] !== pouContent) {
+      files.push({ path: pouPath, content: pouContent });
+    }
+    if (dutPath && hostSavedContent[dutPath] !== undefined && hostSavedContent[dutPath] !== dutContent) {
+      files.push({ path: dutPath, content: dutContent });
+    }
+    return files;
+  }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent]);
+
+  const handleSaveToProject = useCallback(() => {
+    if (hostDirtyFiles.length === 0) return;
+    pendingHostSaveRef.current = hostDirtyFiles;
+    postToHost({ type: 'save', files: hostDirtyFiles });
+  }, [hostDirtyFiles]);
 
   useEffect(() => {
     return () => {
@@ -1237,7 +1313,8 @@ export const App: React.FC = () => {
             dutRelativePath={dutRelativePath}
             dutMatches={dutMatches}
             dutStatus={dutStatus}
-            canSearchFolder={isDesktopApp() || canPickFolder()}
+            canSearchFolder={isDesktopApp() || canPickFolder() || isXaeHost()}
+            hostSave={isXaeHost() && pouPath ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject } : undefined}
             onBrowsePou={handleBrowsePou}
             onDropPou={handleDropPou}
             onFindDut={handleFindDut}
