@@ -11,7 +11,10 @@ import { PouSource } from './sourceFileAccess.ts';
 export type HostMessage =
   | { type: 'loadPou'; source: PouSource }
   | { type: 'dutCandidates'; candidates: DutCandidate[]; forceFirst: boolean }
-  | { type: 'saveResult'; ok: boolean; message: string }
+  /** files: XAE's version of each saved file (it can differ slightly from what was sent) */
+  | { type: 'saveResult'; ok: boolean; message: string; files?: { path: string; content: string }[] }
+  /** A loaded file changed in XAE or on disk (content is XAE's version) */
+  | { type: 'sourceChanged'; path: string; name: string; content: string }
   | { type: 'error'; message: string };
 
 /** Messages to the extension */
@@ -20,7 +23,8 @@ export type AppMessage =
   | { type: 'browsePou' }
   | { type: 'findDut' }
   | { type: 'chooseDutFiles' }
-  | { type: 'save'; files: { path: string; content: string }[] };
+  /** baseline: the version the edit is based on; force: overwrite a change made in XAE since then */
+  | { type: 'save'; files: { path: string; content: string; baseline?: string; force?: boolean }[] };
 
 interface WebViewBridge {
   postMessage(message: unknown): void;

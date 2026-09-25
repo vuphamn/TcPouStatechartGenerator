@@ -28,6 +28,8 @@ export interface SourceFilesHeaderItemProps {
   onSelectDut: (match: DutMatch) => void;
   /** TwinCAT XAE extension: write the edited .TcPOU / .TcDUT back into the project */
   hostSave?: { dirtyCount: number; onSave: () => void };
+  /** TwinCAT XAE extension: a file with unsaved edits here was changed in XAE */
+  hostConflict?: { name: string; onReload: () => void; onKeepMine: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -45,6 +47,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   onChooseDutFiles,
   onSelectDut,
   hostSave,
+  hostConflict,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -181,6 +184,34 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         {pouFileName || 'No file loaded'}
       </span>
       {(pouFileName || dutStatus !== 'sample') && enumChip}
+      {hostConflict && (
+        <div
+          id="xae-conflict"
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap"
+          title={`${hostConflict.name} was changed in XAE while you have unsaved edits of it here`}
+        >
+          <AlertTriangle className="w-3 h-3 shrink-0 text-amber-400" />
+          <span className="font-semibold">Changed in XAE</span>
+          <button
+            id="xae-conflict-reload-btn"
+            type="button"
+            onClick={hostConflict.onReload}
+            className="px-1.5 rounded bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 font-semibold"
+            title="Take XAE's version and discard your edits of this file"
+          >
+            Reload
+          </button>
+          <button
+            id="xae-conflict-keep-btn"
+            type="button"
+            onClick={hostConflict.onKeepMine}
+            className="px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200"
+            title="Keep your edits; Save to project will overwrite the change made in XAE"
+          >
+            Keep mine
+          </button>
+        </div>
+      )}
       {hostSave && (
         <button
           id="xae-save-to-project-btn"

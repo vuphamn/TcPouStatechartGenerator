@@ -55,6 +55,7 @@
     <Compile Include="StateScopeToolWindow.cs" />
     <Compile Include="StateScopeControl.cs" />
     <Compile Include="HostFiles.cs" />
+    <Compile Include="TwinCATProject.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">
@@ -86,6 +87,8 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Xaml" />
     <Reference Include="WindowsBase" />
   </ItemGroup>

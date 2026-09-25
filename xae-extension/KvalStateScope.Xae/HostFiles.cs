@@ -129,37 +129,115 @@ namespace KvalStateScope.Xae
             return dialog.FileNames.Select(f => new DutFile { name = Path.GetFileName(f), relativePath = Path.GetFileName(f), path = f, content = ReadText(f) }).ToList();
         }
 
+        /// <summary>A file to write back: its new text, the content key when StateScope loaded it, and whether a change made
+        /// in XAE since then may be overwritten (the user chose to keep their edits)</summary>
+        internal sealed class SaveRequest
+        {
+            public string Path;
+            public string Content;
+            public string LoadedKey;
+            public bool Force;
+        }
+
         /// <summary>
-        /// Writes edited files back into the project. Refuses when XAE holds unsaved changes for a file, or when the
-        /// file changed on disk since StateScope loaded it. A copy of each original is kept under
-        /// %LocalAppData%\KvalStateScope\Backups. Returns null on success, else the reason.
+        /// Writes edited files back. A file of an open TwinCAT project goes through the Automation Interface
+        /// (DocumentXml), so XAE's project is updated and TwinCAT writes the file; other files are written directly.
+        /// Refused when XAE holds unsaved changes for a file, or when it changed in XAE / on disk since StateScope loaded it
+        /// (unless Force). A copy of each original is kept under %LocalAppData%\KvalStateScope\Backups.
+        /// Returns null on success, else the reason; <paramref name="viaXae"/> lists the files written through XAE.
         /// </summary>
-        public static string Save(IServiceProvider services, IList<(string path, string content, string loadedHash)> files)
+        public static string Save(IServiceProvider services, IList<SaveRequest> files, out List<string> viaXae)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            viaXae = new List<string>();
             if (files.Count == 0) return "Nothing to save";
             var rdt = services.GetService(typeof(SVsRunningDocumentTable)) as IVsRunningDocumentTable;
 
             // Check everything before writing anything
-            foreach (var (path, _, loadedHash) in files)
+            var items = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in files)
             {
-                if (!File.Exists(path)) return $"{Path.GetFileName(path)} no longer exists";
-                if (IsDirtyInIde(rdt, path))
-                    return $"{Path.GetFileName(path)} has unsaved changes in XAE. Save or close it there first.";
-                if (loadedHash != null && Hash(path) != loadedHash)
-                    return $"{Path.GetFileName(path)} was changed outside Kval StateScope since it was loaded. Reopen it in StateScope first.";
+                var name = System.IO.Path.GetFileName(f.Path);
+                if (!File.Exists(f.Path)) return $"{name} no longer exists";
+                if (IsDirtyInIde(rdt, f.Path))
+                    return $"{name} has unsaved changes in XAE. Save or close it there first.";
+                var item = TwinCATProject.FindTreeItem(services, f.Path);
+                items[f.Path] = item;
+                var current = item != null ? TwinCATProject.ReadXml(item) : ReadText(f.Path);
+                if (!f.Force && f.LoadedKey != null && ContentKey(current) != f.LoadedKey)
+                    return $"{name} was changed in XAE since it was loaded into Kval StateScope. Reload it first, or keep your edits to overwrite it.";
             }
 
-            var backupDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            var backupDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "KvalStateScope", "Backups", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
             Directory.CreateDirectory(backupDir);
-            foreach (var (path, content, _) in files)
+            foreach (var f in files)
             {
-                File.Copy(path, Path.Combine(backupDir, Path.GetFileName(path)), overwrite: true);
-                var hadBom = HasUtf8Bom(path);
-                File.WriteAllText(path, content, new UTF8Encoding(hadBom));
+                File.Copy(f.Path, System.IO.Path.Combine(backupDir, System.IO.Path.GetFileName(f.Path)), overwrite: true);
+                var item = items[f.Path];
+                if (item != null)
+                {
+                    var wasOpen = IsOpenInIde(rdt, f.Path);
+                    var mode = TwinCATProject.WriteChanges(item, f.Content, out var partsWritten);
+                    viaXae.Add(f.Path);
+                    Log.Write(mode == "parts"
+                        ? $"written through the Automation Interface ({partsWritten} part(s), ids kept): {TwinCATProject.TreePath(item)}"
+                        : $"written through the Automation Interface (whole object): {TwinCATProject.TreePath(item)}");
+                    // Replacing the whole object closes an open editor of it: open it again afterwards
+                    if (mode == "document" && wasOpen) ReopenInIde(services, f.Path);
+                }
+                else
+                {
+                    var hadBom = HasUtf8Bom(f.Path);
+                    File.WriteAllText(f.Path, f.Content, new UTF8Encoding(hadBom));
+                    Log.Write($"written to disk (not part of an open TwinCAT project): {f.Path}");
+                }
             }
             return null;
+        }
+
+        /// <summary>The text of a file as XAE has it (its project object), or from disk when it is not in an open project</summary>
+        public static string CurrentContent(IServiceProvider services, string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var item = TwinCATProject.FindTreeItem(services, path);
+            return item != null ? TwinCATProject.ReadXml(item) : ReadText(path);
+        }
+
+        /// <summary>Compares texts by content: XAE's copy and the file can differ in BOM and line endings only</summary>
+        public static string ContentKey(string text)
+        {
+            var normalized = (text ?? "").TrimStart('﻿').Replace("\r\n", "\n").TrimEnd();
+            using (var sha = SHA256.Create())
+                return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(normalized)));
+        }
+
+        private static bool IsOpenInIde(IVsRunningDocumentTable rdt, string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (rdt == null) return false;
+            IntPtr docData = IntPtr.Zero;
+            try
+            {
+                return ErrorHandler.Succeeded(rdt.FindAndLockDocument((uint)_VSRDTFLAGS.RDT_NoLock, path, out _, out _, out docData, out _)) && docData != IntPtr.Zero;
+            }
+            finally
+            {
+                if (docData != IntPtr.Zero) System.Runtime.InteropServices.Marshal.Release(docData);
+            }
+        }
+
+        private static void ReopenInIde(IServiceProvider services, string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                (services.GetService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2)?.ItemOperations.OpenFile(path);
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is ArgumentException)
+            {
+                Log.Write($"could not reopen {path}: {ex.Message}");
+            }
         }
 
         private static bool HasUtf8Bom(string path)

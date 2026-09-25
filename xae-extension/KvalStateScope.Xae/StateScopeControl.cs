@@ -31,8 +31,11 @@ namespace KvalStateScope.Xae
         private bool _appReady;
         private string _pendingPou;
         private string _pouPath;
-        // Content hash of each file when it was sent to the app (detects changes made elsewhere before saving)
-        private readonly Dictionary<string, string> _loadedHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Files sent to the app (only these can be saved), with the content key last seen for each (change detection)
+        private readonly Dictionary<string, string> _lastSeen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Folders watched for changes made in XAE or on disk (TwinCAT save, git pull, ...)
+        private readonly Dictionary<string, FileSystemWatcher> _watchers = new Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _pendingChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public StateScopeControl(ToolWindowPane pane)
         {
@@ -179,14 +182,18 @@ namespace KvalStateScope.Xae
             {
                 var folder = Path.GetDirectoryName(pouPath);
                 var duts = HostFiles.FindDutFiles(folder);
+                // XAE's copy when the POU belongs to an open TwinCAT project (same as the file unless changed in XAE)
+                var content = HostFiles.CurrentContent(_pane, pouPath);
                 _pouPath = pouPath;
-                _loadedHashes.Clear();
-                _loadedHashes[pouPath] = HostFiles.Hash(pouPath);
-                foreach (var d in duts) _loadedHashes[d.path] = HostFiles.Hash(d.path);
+                _lastSeen.Clear();
+                _lastSeen[pouPath] = HostFiles.ContentKey(content);
+                foreach (var d in duts) _lastSeen[d.path] = HostFiles.ContentKey(d.content);
+                ResetWatchers();
+                Watch(folder);
                 Post(new
                 {
                     type = "loadPou",
-                    source = new { name = Path.GetFileName(pouPath), path = pouPath, content = HostFiles.ReadText(pouPath), dutCandidates = duts },
+                    source = new { name = Path.GetFileName(pouPath), path = pouPath, content, dutCandidates = duts },
                 });
                 _pane.Caption = "StateScope: " + Path.GetFileNameWithoutExtension(pouPath);
                 Log.Write($"loaded {pouPath} with {duts.Count} .TcDUT candidate(s)");
@@ -256,14 +263,18 @@ namespace KvalStateScope.Xae
         private void SendDutCandidates(List<DutFile> duts, bool forceFirst)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            foreach (var d in duts) _loadedHashes[d.path] = HostFiles.Hash(d.path);
+            foreach (var d in duts)
+            {
+                _lastSeen[d.path] = HostFiles.ContentKey(d.content);
+                Watch(Path.GetDirectoryName(d.path));
+            }
             Post(new { type = "dutCandidates", candidates = duts, forceFirst });
         }
 
         private void HandleSave(Dictionary<string, object> msg)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
-            var files = new List<(string path, string content, string loadedHash)>();
+            var files = new List<HostFiles.SaveRequest>();
             // JavaScriptSerializer turns JSON arrays into ArrayList
             if (msg.TryGetValue("files", out var raw) && raw is System.Collections.IEnumerable list && !(raw is string))
             {
@@ -271,23 +282,107 @@ namespace KvalStateScope.Xae
                 {
                     var path = item.TryGetValue("path", out var p) ? p as string : null;
                     var content = item.TryGetValue("content", out var c) ? c as string : null;
+                    // The version the app last loaded / saved: a change in XAE since then is a conflict
+                    var baseline = item.TryGetValue("baseline", out var b) ? b as string : null;
+                    var force = item.TryGetValue("force", out var fo) && fo is bool fb && fb;
                     // Only files this window loaded can be written
-                    if (path == null || content == null || !_loadedHashes.ContainsKey(path)) continue;
-                    files.Add((path, content, _loadedHashes[path]));
+                    if (path == null || content == null || !_lastSeen.ContainsKey(path)) continue;
+                    files.Add(new HostFiles.SaveRequest { Path = path, Content = content, LoadedKey = baseline != null ? HostFiles.ContentKey(baseline) : null, Force = force });
                 }
             }
-            Log.Write($"save requested: {files.Count} file(s) {string.Join(", ", files.Select(f => Path.GetFileName(f.path)))}");
-            var error = HostFiles.Save(_pane, files);
+            Log.Write($"save requested: {files.Count} file(s) {string.Join(", ", files.Select(f => Path.GetFileName(f.Path)))}");
+            var error = HostFiles.Save(_pane, files, out var viaXae);
             Log.Write(error == null ? "saved" : "save refused: " + error);
             if (error == null)
             {
-                foreach (var f in files) _loadedHashes[f.path] = HostFiles.Hash(f.path);
-                Post(new { type = "saveResult", ok = true, message = $"Saved {string.Join(", ", files.Select(f => Path.GetFileName(f.path)))}. A backup is in %LocalAppData%\\KvalStateScope\\Backups." });
+                // What XAE holds now (it can differ slightly from what was sent) is the new saved version; recording it
+                // keeps our own write from coming back as a change made in XAE
+                var confirmed = files.Select(f => new { path = f.Path, content = HostFiles.CurrentContent(_pane, f.Path) }).ToList();
+                foreach (var c in confirmed) _lastSeen[c.path] = HostFiles.ContentKey(c.content);
+                var names = string.Join(", ", files.Select(f => Path.GetFileName(f.Path)));
+                var where = viaXae.Count == files.Count
+                    ? "into the TwinCAT project (XAE updated it and wrote the file)"
+                    : viaXae.Count == 0 ? "to disk (not part of an open TwinCAT project)" : "into the TwinCAT project / to disk";
+                Post(new { type = "saveResult", ok = true, files = confirmed, message = $"Saved {names} {where}. A backup is in %LocalAppData%\\KvalStateScope\\Backups." });
             }
             else
             {
                 Post(new { type = "saveResult", ok = false, message = error });
             }
+        }
+
+        // ---------------------------------------------------------------------------------------------------------
+        // Changes made in XAE / on disk: a loaded file that changes is sent to the app, which refreshes the diagram
+        // (or asks, when it has unsaved edits of that file)
+        // ---------------------------------------------------------------------------------------------------------
+        private void Watch(string folder)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder) || _watchers.ContainsKey(folder)) return;
+            // A folder already watched with its subfolders covers this one
+            var sep = Path.DirectorySeparatorChar;
+            if (_watchers.Keys.Any(w => (folder + sep).StartsWith(w.TrimEnd(sep) + sep, StringComparison.OrdinalIgnoreCase))) return;
+            try
+            {
+                var watcher = new FileSystemWatcher(folder)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+                };
+                watcher.Changed += OnFileEvent;
+                watcher.Created += OnFileEvent;
+                watcher.Renamed += OnFileEvent;
+                watcher.EnableRaisingEvents = true;
+                _watchers[folder] = watcher;
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException)
+            {
+                Log.Write($"cannot watch {folder}: {ex.Message}");
+            }
+        }
+
+        private void ResetWatchers()
+        {
+            foreach (var w in _watchers.Values) w.Dispose();
+            _watchers.Clear();
+        }
+
+        // Watcher thread: collect the path, then check it on the UI thread once the writes have settled
+        private void OnFileEvent(object sender, FileSystemEventArgs e)
+        {
+            var path = e.FullPath;
+            lock (_pendingChecks)
+            {
+                if (!_pendingChecks.Add(path)) return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await Task.Delay(600);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                lock (_pendingChecks) _pendingChecks.Remove(path);
+                CheckForChange(path);
+            });
+        }
+
+        private void CheckForChange(string path)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!_lastSeen.TryGetValue(path, out var lastKey) || !File.Exists(path)) return;
+            string content;
+            try
+            {
+                content = HostFiles.CurrentContent(_pane, path);
+            }
+            catch (IOException)
+            {
+                // Still being written: the next event checks again
+                return;
+            }
+            var key = HostFiles.ContentKey(content);
+            if (key == lastKey) return;
+            _lastSeen[path] = key;
+            Log.Write($"changed in XAE / on disk: {path}");
+            Post(new { type = "sourceChanged", path, name = Path.GetFileName(path), content });
         }
     }
 

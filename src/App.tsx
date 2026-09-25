@@ -957,8 +957,46 @@ export const App: React.FC = () => {
   const pouContentRef = useRef(pouContent);
   pouContentRef.current = pouContent;
   const pendingHostSaveRef = useRef<{ path: string; content: string }[]>([]);
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast };
+  // A loaded file changed in XAE while it has unsaved edits here: the user picks reload or keep
+  const [hostConflict, setHostConflict] = useState<{ path: string; name: string; content: string } | null>(null);
+  // Files whose XAE change the user chose to overwrite with their edits (sent as "force" on save)
+  const keepMineRef = useRef<Set<string>>(new Set());
+  const hostStateRef = useRef({ pouPath, dutPath, pouContent, dutContent, saved: hostSavedContent });
+  hostStateRef.current = { pouPath, dutPath, pouContent, dutContent, saved: hostSavedContent };
+
+  /** Takes XAE's version of a loaded file: it becomes the content and the saved version */
+  const applyHostVersion = useCallback((path: string, content: string) => {
+    const st = hostStateRef.current;
+    setHostSavedContent((prev) => ({ ...prev, [path]: content }));
+    if (path === st.pouPath) setPouContent(content);
+    else if (path === st.dutPath) setDutContent(content);
+    keepMineRef.current.delete(path);
+  }, []);
+
+  /** A loaded file changed in XAE / on disk: refresh, or ask when it has unsaved edits here */
+  const handleSourceChanged = useCallback(
+    (path: string, name: string, content: string) => {
+      const st = hostStateRef.current;
+      const inUse = path === st.pouPath || path === st.dutPath;
+      if (!inUse) {
+        // Another .TcDUT candidate: just keep its saved version current
+        setHostSavedContent((prev) => (prev[path] === undefined ? prev : { ...prev, [path]: content }));
+        return;
+      }
+      const current = path === st.pouPath ? st.pouContent : st.dutContent;
+      const saved = st.saved[path];
+      if (saved === undefined || current === saved || current === content) {
+        applyHostVersion(path, content);
+        showCopyToast(`${name} was changed in XAE: the diagram is updated`, 'success', 4000);
+      } else {
+        setHostConflict({ path, name, content });
+      }
+    },
+    [applyHostVersion, showCopyToast]
+  );
+
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -972,13 +1010,30 @@ export const App: React.FC = () => {
       const h = hostHandlersRef.current;
       if (m.type === 'loadPou') {
         setHostSavedContent({});
+        setHostConflict(null);
+        keepMineRef.current.clear();
         remember([{ path: m.source.path, content: m.source.content }, ...(m.source.dutCandidates ?? [])]);
         h.applyLoadedPou(m.source);
       } else if (m.type === 'dutCandidates') {
         remember(m.candidates);
         h.applyDutCandidates(pouContentRef.current, m.candidates, m.forceFirst);
+      } else if (m.type === 'sourceChanged') {
+        h.handleSourceChanged(m.path, m.name, m.content);
       } else if (m.type === 'saveResult') {
-        if (m.ok) remember(pendingHostSaveRef.current);
+        if (m.ok) {
+          const sent = pendingHostSaveRef.current;
+          const confirmed = m.files && m.files.length ? m.files : sent;
+          remember(confirmed);
+          // No typing since Save was pressed: XAE's version also becomes the content, so nothing looks unsaved
+          const st = hostStateRef.current;
+          for (const f of confirmed) {
+            const wasSent = sent.find((x) => x.path === f.path)?.content;
+            if (f.path === st.pouPath && st.pouContent === wasSent) setPouContent(f.content);
+            if (f.path === st.dutPath && st.dutContent === wasSent) setDutContent(f.content);
+            keepMineRef.current.delete(f.path);
+          }
+          setHostConflict(null);
+        }
         pendingHostSaveRef.current = [];
         h.showCopyToast(m.message, m.ok ? 'success' : 'error', m.ok ? 4000 : 7000);
       } else if (m.type === 'error') {
@@ -1005,8 +1060,33 @@ export const App: React.FC = () => {
   const handleSaveToProject = useCallback(() => {
     if (hostDirtyFiles.length === 0) return;
     pendingHostSaveRef.current = hostDirtyFiles;
-    postToHost({ type: 'save', files: hostDirtyFiles });
-  }, [hostDirtyFiles]);
+    // The saved version tells the extension what this edit was based on; a change in XAE since then is refused
+    // unless the user chose to keep their edits
+    postToHost({
+      type: 'save',
+      files: hostDirtyFiles.map((f) => ({
+        ...f,
+        baseline: hostSavedContent[f.path],
+        force: keepMineRef.current.has(f.path),
+      })),
+    });
+  }, [hostDirtyFiles, hostSavedContent]);
+
+  const hostConflictActions = hostConflict
+    ? {
+        name: hostConflict.name,
+        onReload: () => {
+          applyHostVersion(hostConflict.path, hostConflict.content);
+          setHostConflict(null);
+          showCopyToast(`Reloaded ${hostConflict.name} from XAE (your edits were discarded)`, 'success', 4000);
+        },
+        onKeepMine: () => {
+          keepMineRef.current.add(hostConflict.path);
+          setHostConflict(null);
+          showCopyToast(`Kept your edits: Save to project will overwrite the change made in XAE`, 'success', 5000);
+        },
+      }
+    : undefined;
 
   useEffect(() => {
     return () => {
@@ -1315,6 +1395,7 @@ export const App: React.FC = () => {
             dutStatus={dutStatus}
             canSearchFolder={isDesktopApp() || canPickFolder() || isXaeHost()}
             hostSave={isXaeHost() && pouPath ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject } : undefined}
+            hostConflict={hostConflictActions}
             onBrowsePou={handleBrowsePou}
             onDropPou={handleDropPou}
             onFindDut={handleFindDut}

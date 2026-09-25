@@ -46,9 +46,19 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
 
 The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcPOU`'s folder and subfolders is ranked by how many `doState()` states its enum declares.
 
-**Save to project** (header, next to the file name) writes edited `.TcPOU` / `.TcDUT` files back to disk.
-- A copy of each original is kept in `%LocalAppData%\KvalStateScope\Backups`.
-- Saving is refused when XAE has unsaved changes for that file, or when the file changed on disk after StateScope loaded it.
+**Save to project** (header, next to the file name) writes the edited `.TcPOU` / `.TcDUT` back into the TwinCAT project.
+- **Through XAE:** when the file belongs to a TwinCAT project open in the IDE, the change goes through Beckhoff's Automation Interface. XAE updates its project and TwinCAT writes the file, so there is no separate save in XAE.
+- **Only the changed parts are written:** the declarations and ST implementations that changed, on the POU, its methods, actions and property accessors, or the DUT. That keeps the object ids, so git diffs stay clean, and an open TwinCAT editor stays open. If the structure changed (a method added or removed, non-ST code edited), the whole object is replaced. TwinCAT then assigns new ids and closes its editor, which StateScope opens again.
+- **Files outside an open TwinCAT project** are written to disk directly.
+- **Backups:** a copy of each original is kept in `%LocalAppData%\KvalStateScope\Backups`. Writes through the Automation Interface are not in XAE's undo history.
+- **Refused** when XAE has unsaved changes for that file. Save or close it in XAE first.
+
+**Staying in sync with XAE.** StateScope watches the loaded files. When one changes in XAE or on disk (edited and saved in TwinCAT, a git pull, ...):
+- **No unsaved edits of it in StateScope:** the diagram and editors update, and a message says so.
+- **Unsaved edits in StateScope:** the header shows **Changed in XAE** with two choices:
+  - **Reload** takes XAE's version and discards your edits.
+  - **Keep mine** keeps your edits, and **Save to project** then overwrites the change made in XAE.
+- **Not chosen yet:** **Save to project** is refused.
 
 ## TwinCAT PLC tree context menu
 
@@ -74,12 +84,17 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 - **Visual Studio 2022 (17.14) and 2026 (18.10)**, in their experimental instances with TwinCAT integration installed.
   - Tools command with a path argument, document tab, WebView2 start-up, and loading a `.TcPOU` with its `.TcDUT` found in `DUTs\`.
   - Editing, **Save to project** (file written, backup kept), and refusal after an outside change.
+  - **Phase 2**, on a copy of a real TwinCAT project in VS 2022:
+    - saving through the Automation Interface (parts only, object ids kept, XAE and file updated, an open editor stays open);
+    - updating from changes made in XAE (diagram and Method Editor);
+    - **Changed in XAE** with Reload and Keep mine, and refusal before choosing;
+    - refusal while XAE has unsaved changes.
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 
 ## Prototype limits
 
-- **Saving writes the files directly.** XAE usually notices the change and offers to reload an open POU. If it doesn't, reopen the POU. Phase 2 moves saving to Beckhoff's Automation Interface, so XAE's in-memory project stays in sync (undo, dirty state).
+- **Unsaved edits in TwinCAT's editor** are not visible to StateScope until they are saved in XAE; saving from StateScope is refused while they exist.
 - **DevTools** are enabled in the tab for diagnostics (F12). Start-up, load and save steps are logged to `%LocalAppData%\KvalStateScope\log.txt`.
 
 ## Layout
@@ -92,4 +107,6 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 | `SelectionHelper.cs` | Finds the `.TcPOU` behind the selection / active document |
 | `StateScopeToolWindow.cs`, `StateScopeControl.cs` | Document tab with WebView2; message bridge to the app (`src/utils/xaeHost.ts`) |
 | `HostFiles.cs` | Dialogs, `.TcDUT` search, saving with backup and safety checks |
+| `TwinCATProject.cs` | Automation Interface: finds a file's PLC tree item, reads / writes it (changed parts only) |
+| `PriorityCommandTarget.cs` | Answers for the context-menu command in menus owned by other windows (TwinCAT's PLC tree) |
 | `VSPackage.resx` | Carries the compiled command table (IDE loads menus from `VSPackage.resources`) |
