@@ -46,6 +46,8 @@ export interface DiagramLegendOverlayProps {
   availableEdges?: EdgeInfo[];
   notes?: DiagramNotes;
   containerRef?: React.RefObject<HTMLDivElement | null>;
+  /** Fill a docked RightPanel tab: no floating position, drag handle, collapse or close controls */
+  docked?: boolean;
 }
 
 interface CustomColorGroup {
@@ -65,6 +67,7 @@ export const DiagramLegendOverlay: React.FC<DiagramLegendOverlayProps> = ({
   availableEdges = [],
   notes,
   containerRef,
+  docked = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<LegendTab>('all');
@@ -235,7 +238,7 @@ export const DiagramLegendOverlay: React.FC<DiagramLegendOverlayProps> = ({
   };
 
   // If collapsed: show compact bottom-left pill
-  if (isCollapsed) {
+  if (isCollapsed && !docked) {
     return (
       <div
         id="diagram-legend-collapsed"
@@ -278,11 +281,11 @@ export const DiagramLegendOverlay: React.FC<DiagramLegendOverlayProps> = ({
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
       style={
-        position
+        !docked && position
           ? { left: `${position.x}px`, top: `${position.y}px` }
           : undefined
       }
-      className={`z-30 flex flex-col w-[360px] sm:w-[410px] max-w-[94vw] max-h-[70vh] rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-150 ring-1 ring-black/40 ${
+      className={docked ? 'flex-1 min-h-0 flex flex-col w-full bg-slate-900 overflow-hidden select-none' : `z-30 flex flex-col w-[360px] sm:w-[410px] max-w-[94vw] max-h-[70vh] rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-150 ring-1 ring-black/40 ${
         position ? 'fixed' : 'absolute bottom-4 left-4'
       }`}
     >
@@ -292,7 +295,7 @@ export const DiagramLegendOverlay: React.FC<DiagramLegendOverlayProps> = ({
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onMouseDown={handleMouseDown}
-        className={`flex items-center justify-between px-3 py-2 bg-slate-950/90 border-b border-slate-800 text-xs text-slate-300 shrink-0 touch-none ${
+        className={`${docked ? 'hidden' : 'flex'} items-center justify-between px-3 py-2 bg-slate-950/90 border-b border-slate-800 text-xs text-slate-300 shrink-0 touch-none ${
           isDragging ? 'cursor-grabbing bg-slate-900' : 'cursor-grab'
         }`}
         title="Click and drag to reposition legend"

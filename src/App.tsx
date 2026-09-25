@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Play,
   Download,
@@ -29,9 +30,28 @@ import {
   History,
   FileSpreadsheet,
   Bookmark,
+  Workflow,
+  BookOpen,
+  FileText,
+  Search,
+  Map as MapIcon,
+  PanelRightClose,
+  PanelRightOpen,
+  ChartColumn,
+  Flame,
+  Layers,
+  StickyNote,
 } from 'lucide-react';
 import { generateStatechart, PriorityFormat } from './generator.ts';
-import { MermaidViewer, MermaidViewerHandle, LayoutEngine, FlowchartCurve, MermaidTheme } from './components/MermaidViewer.tsx';
+import {
+  MermaidViewer,
+  MermaidViewerHandle,
+  LayoutEngine,
+  FlowchartCurve,
+  MermaidTheme,
+  DockedCanvasPanels,
+  DockedCanvasPanelId,
+} from './components/MermaidViewer.tsx';
 import { MermaidMarkdownViewer } from './components/MermaidMarkdownViewer.tsx';
 import { PouComplexityReportTab } from './components/PouComplexityReportTab.tsx';
 import { TransitionFrequencyTab } from './components/TransitionFrequencyTab.tsx';
@@ -41,7 +61,25 @@ import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.ts
 import { TransitionHistoryDataset } from './utils/transitionHistoryAnalytics.ts';
 import { FileDropzone } from './components/FileDropzone.tsx';
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
-import { StateNodeStyleInspector } from './components/StateNodeStyleInspector.tsx';
+import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
+import { DockPanelView, DockTabMeta } from './components/dock/DockPanelView.tsx';
+import { DockSplitter } from './components/dock/DockSplitter.tsx';
+import { useDockHostRegistry } from './components/dock/DockHost.tsx';
+import { WindowMenuButton } from './components/dock/WindowMenuButton.tsx';
+import {
+  DOCK_TAB_ORDER,
+  DockTabId,
+  LEFT_PANEL_DEFAULT_WIDTH,
+  RIGHT_PANEL_DEFAULT_WIDTH,
+  SIDE_PANEL_MIN_WIDTH,
+  activateDockTab,
+  closeDockTab,
+  isDockTabOpen,
+  isDockTabVisible,
+  loadDockLayout,
+  revealDockTab,
+  saveDockLayout,
+} from './utils/dockLayout.ts';
 import { HeaderHiddenControls } from './components/HeaderHiddenControls.tsx';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
@@ -143,10 +181,43 @@ export const App: React.FC = () => {
     }
   }, [lockDiagramLayout]);
 
-  // UI tabs & states
-  const [activeTab, setActiveTab] = useState<'diagram' | 'markdown' | 'complexity' | 'frequency' | 'history'>('diagram');
+  // Workspace docking layout: LeftPanel (sources), MiddlePanel (documents), RightPanel (tool windows)
+  const [dockLayout, setDockLayout] = useState(() => loadDockLayout());
+  const dockLayoutRef = useRef(dockLayout);
+  dockLayoutRef.current = dockLayout;
+  const dockRegistry = useDockHostRegistry();
+
+  useEffect(() => {
+    saveDockLayout(dockLayout);
+  }, [dockLayout]);
+
+  const showDockTab = useCallback((tabId: DockTabId) => {
+    setDockLayout((l) => activateDockTab(l, tabId));
+  }, []);
+
+  // Tab contents mount the first time they are shown and unmount when closed (the diagram stays mounted)
+  const [shownDockTabs, setShownDockTabs] = useState<Set<DockTabId>>(
+    () => new Set(DOCK_TAB_ORDER.filter((t) => isDockTabVisible(dockLayout, t)))
+  );
+  useEffect(() => {
+    const newlyShown = DOCK_TAB_ORDER.filter((t) => isDockTabVisible(dockLayout, t) && !shownDockTabs.has(t));
+    if (newlyShown.length > 0) setShownDockTabs((prev) => new Set([...prev, ...newlyShown]));
+  }, [dockLayout, shownDockTabs]);
+  const isDockTabMounted = (tabId: DockTabId) => isDockTabOpen(dockLayout, tabId) && shownDockTabs.has(tabId);
+
+  /** Runs an action that needs the diagram canvas on screen, showing the Diagram Canvas tab first if needed */
+  const runWithDiagramVisible = useCallback((action: () => void, delayMs = 50) => {
+    if (isDockTabVisible(dockLayoutRef.current, 'diagram')) {
+      action();
+    } else {
+      setDockLayout((l) => activateDockTab(l, 'diagram'));
+      setTimeout(action, delayMs);
+    }
+  }, []);
+
   const [diagramSearchQuery, setDiagramSearchQuery] = useState<string>('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
+  const isSidebarOpen = dockLayout.leftVisible;
+  const setIsSidebarOpen = useCallback((open: boolean) => setDockLayout((l) => ({ ...l, leftVisible: open })), []);
   const [copiedMarkdown, setCopiedMarkdown] = useState<boolean>(false);
   const [headerToolbarElement, setHeaderToolbarElement] = useState<HTMLDivElement | null>(null);
 
@@ -159,40 +230,36 @@ export const App: React.FC = () => {
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
   const [selectedStateLabel, setSelectedStateLabel] = useState<string>('');
 
-  // Unified Multi-Tabbed Editor Modal (Edit Enum, Method Editor, Documentation, Style)
-  const [unifiedEditor, setUnifiedEditor] = useState<{
-    isOpen: boolean;
-    initialMode: 'enum' | 'method' | 'docs' | 'style';
-    initialMethod?: string;
-    initialEnumMember?: string;
-  }>({
-    isOpen: false,
-    initialMode: 'method',
-    initialMethod: 'doState()',
-    initialEnumMember: undefined,
+  // Inspector tabs: Method Editor & Enum Editor (MiddlePanel), Style & Documentation (RightPanel)
+  const [inspectorRequest, setInspectorRequest] = useState<{ method: string; enumMember?: string }>({
+    method: 'doState()',
   });
 
   const handleOpenMethodEditorModal = useCallback((methodName: string = 'doState()') => {
-    setUnifiedEditor({
-      isOpen: true,
-      initialMode: 'method',
-      initialMethod: methodName,
-      initialEnumMember: undefined,
-    });
+    setInspectorRequest((prev) => ({ ...prev, method: methodName }));
+    setDockLayout((l) => activateDockTab(l, 'method'));
   }, []);
 
   const handleOpenEnumEditorModal = useCallback((memberName?: string) => {
-    setUnifiedEditor((prev) => ({
-      isOpen: true,
-      initialMode: 'enum',
-      initialMethod: prev.initialMethod || 'doState()',
-      initialEnumMember: memberName || selectedStateId || undefined,
-    }));
+    setInspectorRequest((prev) => ({ ...prev, enumMember: memberName || selectedStateId || undefined }));
+    setDockLayout((l) => activateDockTab(l, 'enum'));
   }, [selectedStateId]);
 
-  const handleCloseUnifiedEditor = useCallback(() => {
-    setUnifiedEditor((prev) => ({ ...prev, isOpen: false }));
-  }, []);
+  const handleOpenInspectorPanel = useCallback(
+    (mode: InspectorPanelMode, options?: { method?: string; reveal?: boolean }) => {
+      if (mode === 'enum') return handleOpenEnumEditorModal();
+      if (mode === 'method') {
+        if (options?.method) setInspectorRequest((prev) => ({ ...prev, method: options.method! }));
+        // Selecting a node opens the Method Editor without hiding the canvas when both share a tab group
+        setDockLayout((l) =>
+          options?.reveal === false ? revealDockTab(l, 'method', 'diagram') : activateDockTab(l, 'method')
+        );
+        return;
+      }
+      setDockLayout((l) => activateDockTab(l, mode));
+    },
+    [handleOpenEnumEditorModal]
+  );
 
   // Diagram notes and state documentation state with localStorage persistence
   const [diagramNotes, setDiagramNotes] = useState<DiagramNotes>(() => {
@@ -237,7 +304,7 @@ export const App: React.FC = () => {
 
   // Jump to state from sidebar list
   const handleJumpToState = useCallback((stateId: string, label?: string) => {
-    setActiveTab('diagram');
+    setDockLayout((l) => activateDockTab(l, 'diagram'));
     setSelectedStateId(stateId);
     if (label) {
       setSelectedStateLabel(label);
@@ -823,50 +890,23 @@ export const App: React.FC = () => {
 
   const handleOpenExportDialog = (format: 'png' | 'svg' = exportSettings.format) => {
     setIsExportMenuOpen(false);
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(() => {
-        mermaidViewerRef.current?.openExportModal(format);
-      }, 50);
-    } else {
-      mermaidViewerRef.current?.openExportModal(format);
-    }
+    runWithDiagramVisible(() => mermaidViewerRef.current?.openExportModal(format));
   };
 
   // One-click export using the active preset's format, scale & background
   const handleExportWithPresetSettings = () => {
     setIsExportMenuOpen(false);
-    const trigger = () => mermaidViewerRef.current?.exportWithSettings(exportSettings);
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(trigger, 50);
-    } else {
-      trigger();
-    }
+    runWithDiagramVisible(() => mermaidViewerRef.current?.exportWithSettings(exportSettings));
   };
 
   const handleQuickDownloadPng = (scale: 1 | 2 | 3 | 4 = 2) => {
     setIsExportMenuOpen(false);
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(() => {
-        mermaidViewerRef.current?.quickDownloadPng(scale);
-      }, 50);
-    } else {
-      mermaidViewerRef.current?.quickDownloadPng(scale);
-    }
+    runWithDiagramVisible(() => mermaidViewerRef.current?.quickDownloadPng(scale));
   };
 
   const handleQuickDownloadSvg = (scale: 1 | 2 | 3 | 4 = 1) => {
     setIsExportMenuOpen(false);
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(() => {
-        mermaidViewerRef.current?.quickDownloadSvg(scale);
-      }, 50);
-    } else {
-      mermaidViewerRef.current?.quickDownloadSvg(scale);
-    }
+    runWithDiagramVisible(() => mermaidViewerRef.current?.quickDownloadSvg(scale));
   };
 
   const handleQuickCopyPng = (scale: 1 | 2 | 3 | 4 = 2) => {
@@ -883,12 +923,7 @@ export const App: React.FC = () => {
       }
     };
 
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(trigger, 80);
-    } else {
-      trigger();
-    }
+    runWithDiagramVisible(trigger, 80);
   };
 
   const handleQuickCopySvg = () => {
@@ -905,12 +940,7 @@ export const App: React.FC = () => {
       }
     };
 
-    if (activeTab !== 'diagram') {
-      setActiveTab('diagram');
-      setTimeout(trigger, 80);
-    } else {
-      trigger();
-    }
+    runWithDiagramVisible(trigger, 80);
   };
 
   const handlePrintToPdf = async () => {
@@ -939,6 +969,90 @@ export const App: React.FC = () => {
       setIsPrintingPdf(false);
     }
   };
+
+  const notesCount = useMemo(
+    () =>
+      Object.values(diagramNotes.nodes).filter((t) => t && t.trim()).length +
+      Object.values(diagramNotes.edges).filter((t) => t && t.trim()).length,
+    [diagramNotes]
+  );
+
+  // Titles, icons & badges for every dockable tab
+  const dockTabMeta = useMemo<Record<DockTabId, DockTabMeta>>(
+    () => ({
+      diagram: { title: 'Diagram Canvas', icon: <Workflow />, tooltip: 'Interactive statechart diagram canvas' },
+      method: {
+        title: 'Method Editor',
+        icon: <FileCode />,
+        tooltip: `Structured Text methods in ${pouFileName || 'POU'}${selectedStateId ? ` — state ${selectedStateId}` : ''}`,
+      },
+      enum: { title: 'Enum Editor', icon: <Code2 />, tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
+      complexity: {
+        title: 'Complexity Report',
+        icon: <Activity />,
+        badge:
+          pouComplexityReport.refactorCandidatesCount > 0 ? (
+            <span
+              className="px-1.5 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800"
+              title={`${pouComplexityReport.refactorCandidatesCount} refactoring candidates flagged`}
+            >
+              {pouComplexityReport.refactorCandidatesCount}
+            </span>
+          ) : undefined,
+      },
+      frequency: {
+        title: 'Transition Frequency',
+        icon: <TrendingUp />,
+        tooltip: 'Analyze transition frequency over time from PLC logs or view static State Hit Count heatmap',
+      },
+      history: {
+        title: 'Transition History',
+        icon: <History />,
+        tooltip: 'Time-series visualization of state transitions from PLC log files',
+      },
+      style: { title: 'Style', icon: <Palette />, tooltip: 'State Node Appearance / Style' },
+      docs: { title: 'Documentation', icon: <BookOpen />, tooltip: 'State purpose, notes & documentation' },
+      markdown: { title: 'Mermaid Markdown', icon: <FileText />, tooltip: 'Generated Mermaid diagram markdown' },
+      search: { title: 'Keyword Search & Filter', icon: <Search /> },
+      stats: {
+        title: 'Real-Time Stats',
+        icon: <ChartColumn />,
+        tooltip: 'State Machine Real-Time Stats (shortcut: S)',
+      },
+      heatmap: { title: 'Complexity Heat-Map', icon: <Flame />, tooltip: 'Complexity Heat-Map (shortcut: H)' },
+      legend: { title: 'Diagram Legend', icon: <Layers />, tooltip: 'Diagram Legend (shortcut: L)' },
+      notes: {
+        title: 'Notes',
+        icon: <StickyNote />,
+        tooltip: 'Notes attached to states and transitions',
+        badge:
+          notesCount > 0 ? (
+            <span className="px-1.5 rounded-full text-[10px] font-mono bg-amber-500/20 text-amber-300">{notesCount}</span>
+          ) : undefined,
+      },
+      minimap: { title: 'Minimap', icon: <MapIcon /> },
+    }),
+    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount]
+  );
+
+  // Canvas tool windows live in the RightPanel; the canvas renders them into these dock slots
+  const dockedCanvasPanels = useMemo<DockedCanvasPanels>(() => {
+    const ids: DockedCanvasPanelId[] = ['search', 'minimap', 'stats', 'heatmap', 'legend', 'notes'];
+    const map = <T,>(fn: (id: DockedCanvasPanelId) => T) =>
+      Object.fromEntries(ids.map((id) => [id, fn(id)])) as Record<DockedCanvasPanelId, T>;
+    return {
+      targets: map((id) => dockRegistry.nodes[id]),
+      open: map((id) => isDockTabOpen(dockLayout, id)),
+      visible: map((id) => isDockTabVisible(dockLayout, id)),
+      onOpenChange: (id, open) => setDockLayout((l) => (open ? activateDockTab(l, id) : closeDockTab(l, id))),
+    };
+  }, [dockRegistry, dockLayout]);
+
+  // Left / Right panel splitters resize the DOM directly while dragging, then commit the width
+  const leftPanelRef = useRef<HTMLElement>(null);
+  const rightPanelRef = useRef<HTMLElement>(null);
+  const sidePanelDragStartRef = useRef<number>(0);
+  const clampSidePanelWidth = (w: number) => Math.round(Math.max(SIDE_PANEL_MIN_WIDTH, Math.min(w, window.innerWidth * 0.6)));
 
   const handleOpenMermaidLive = () => {
     const md = getLatestFullMarkdown() || outputMarkdown;
@@ -969,9 +1083,19 @@ export const App: React.FC = () => {
             type="button"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
             className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0"
-            title={isSidebarOpen ? 'Collapse inputs' : 'Expand inputs'}
+            title={isSidebarOpen ? 'Hide left panel (TwinCAT source files)' : 'Show left panel (TwinCAT source files)'}
           >
             {isSidebarOpen ? <PanelLeftClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelLeftOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
+          </button>
+          <WindowMenuButton layout={dockLayout} onLayoutChange={setDockLayout} tabMeta={dockTabMeta} />
+          <button
+            id="toggle-right-panel-btn"
+            type="button"
+            onClick={() => setDockLayout((l) => ({ ...l, rightVisible: !l.rightVisible }))}
+            className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0"
+            title={dockLayout.rightVisible ? 'Hide right panel (tool windows)' : 'Show right panel (tool windows)'}
+          >
+            {dockLayout.rightVisible ? <PanelRightClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelRightOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
 
           <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0">
@@ -1304,309 +1428,18 @@ export const App: React.FC = () => {
         </div>
         </div>
 
-        {/* Row 2: Diagram Toolbar Container */}
-        <div
-          id="header-toolbar-container"
-          ref={setHeaderToolbarElement}
-          className={`relative z-30 items-center justify-between bg-slate-950/95 text-xs text-slate-300 overflow-visible shrink-0 ${
-            activeTab === 'diagram' ? 'flex px-2 sm:px-3 py-0.5 min-h-[34px] border-b border-slate-800/80' : 'hidden'
-          }`}
-        >
-          {/* Portaled from MermaidViewer */}
-        </div>
       </header>
-
-      {/* Options Control Ribbon */}
-      <div
-        id="options-ribbon"
-        className="relative z-30 flex flex-wrap items-center justify-between px-3 sm:px-4 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 gap-2 shrink-0"
-      >
-        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
-          <div className="flex items-center gap-1.5 text-slate-400 font-medium">
-            <Settings2 className="w-3.5 h-3.5 text-sky-400" />
-            <span>Options:</span>
-          </div>
-
-          {/* User Preset Quick Toggle & Manager */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 text-[11px] font-medium hidden md:inline">Preset:</span>
-            <DiagramPresetManager
-              currentOptions={currentDiagramOptions}
-              onApplyPreset={handleApplyPreset}
-              onExportSettingsChange={setExportSettings}
-            />
-          </div>
-
-          <div className="h-4 w-px bg-slate-800 hidden sm:block"></div>
-
-          {/* Format Toggle */}
-          <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
-            <button
-              id="format-flowchart-btn"
-              type="button"
-              onClick={() => setFlowchartOutput(true)}
-              title="Flowchart format (TD): Direct transition arrows with subgraph hierarchy"
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-                flowchartOutput ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              flowchart TD
-            </button>
-            <button
-              id="format-statediagram-btn"
-              type="button"
-              onClick={() => setFlowchartOutput(false)}
-              title="State diagram format (v2): Standard UML statechart notation"
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-                !flowchartOutput ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              stateDiagram-v2
-            </button>
-          </div>
-
-          {/* Collapse error sink edges */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              id="collapse-errors-checkbox"
-              type="checkbox"
-              checked={collapseErrorSinkEdges}
-              onChange={(e) => setCollapseErrorSinkEdges(e.target.checked)}
-              className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
-            />
-            <span className="text-slate-300">Collapse error-sink edges</span>
-          </label>
-
-          {/* Include state description */}
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              id="include-descriptions-checkbox"
-              type="checkbox"
-              checked={includeStateDescriptions}
-              onChange={(e) => setIncludeStateDescriptions(e.target.checked)}
-              className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
-            />
-            <span className="text-slate-300">Include state descriptions</span>
-          </label>
-
-          {/* Show transition priorities & format */}
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                id="show-priorities-checkbox"
-                type="checkbox"
-                checked={showTransitionPriorities}
-                onChange={(e) => setShowTransitionPriorities(e.target.checked)}
-                className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
-              />
-              <span className="text-slate-300">Priorities</span>
-            </label>
-
-            {showTransitionPriorities && (
-              <div
-                id="priority-format-toggle"
-                className="flex items-center bg-slate-950 p-0.5 rounded-md border border-slate-800 text-[11px]"
-              >
-                <button
-                  id="prio-format-paren"
-                  type="button"
-                  onClick={() => setPriorityFormat('paren')}
-                  title="Parentheses format: (1) - clean, standard text, universal font support in mermaid.live"
-                  className={`px-2 py-0.5 rounded font-mono transition-colors ${
-                    priorityFormat === 'paren'
-                      ? 'bg-sky-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  (1)
-                </button>
-                <button
-                  id="prio-format-bracket"
-                  type="button"
-                  onClick={() => setPriorityFormat('bracket')}
-                  title="Bracket format: [1] - standard UML index notation"
-                  className={`px-2 py-0.5 rounded font-mono transition-colors ${
-                    priorityFormat === 'bracket'
-                      ? 'bg-sky-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  [1]
-                </button>
-                <button
-                  id="prio-format-circled"
-                  type="button"
-                  onClick={() => setPriorityFormat('circled')}
-                  title="Circled Unicode format: ① - TwinCAT visual circled style"
-                  className={`px-2 py-0.5 rounded font-mono transition-colors ${
-                    priorityFormat === 'circled'
-                      ? 'bg-sky-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  ①
-                </button>
-              </div>
-            )}
-          </div>
-          {/* Layout Engine: Dagre vs ELK */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 text-[11px] font-medium">Engine:</span>
-            <div
-              id="layout-engine-toggle"
-              className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px]"
-            >
-              <button
-                id="layout-engine-dagre"
-                type="button"
-                onClick={() => setLayoutEngine('dagre')}
-                title="Dagre layout engine: classic Mermaid hierarchical DAG layout"
-                className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
-                  layoutEngine === 'dagre'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Dagre
-              </button>
-              <button
-                id="layout-engine-elk"
-                type="button"
-                onClick={() => setLayoutEngine('elk')}
-                title="ELK (Eclipse Layout Kernel) engine: advanced layered routing matching mermaid.live ELK option"
-                className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
-                  layoutEngine === 'elk'
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                ELK
-              </button>
-            </div>
-          </div>
-
-          {/* Flowchart Curve Interpolation */}
-          {flowchartOutput && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 text-[11px] font-medium">Curve:</span>
-              <select
-                id="flowchart-curve-select"
-                value={flowchartCurve}
-                onChange={(e) => setFlowchartCurve(e.target.value as FlowchartCurve)}
-                className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-                title="Flowchart link curve interpolation (basis, linear, cardinal, stepAfter, etc.)"
-              >
-                <option value="basis">basis (Smooth Spline)</option>
-                <option value="linear">linear (Straight Lines)</option>
-                <option value="cardinal">cardinal (Pass-through)</option>
-                <option value="stepAfter">stepAfter (Stepped Orthogonal)</option>
-                <option value="monotoneX">monotoneX (Monotone Smooth)</option>
-                <option value="natural">natural (Natural Spline)</option>
-              </select>
-            </div>
-          )}
-
-          {/* Theme Preset Dropdown */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 text-[11px] font-medium">Theme:</span>
-            <select
-              id="mermaid-theme-select"
-              value={mermaidTheme}
-              onChange={(e) => setMermaidTheme(e.target.value as MermaidTheme)}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-              title="Mermaid theme preset (dark, base, forest, neutral, default)"
-            >
-              <option value="dark">dark</option>
-              <option value="base">base</option>
-              <option value="forest">forest</option>
-              <option value="neutral">neutral</option>
-              <option value="default">default</option>
-            </select>
-          </div>
-
-          {/* Lock Diagram Layout Toggle */}
-          <button
-            id="lock-diagram-layout-toggle-btn"
-            type="button"
-            onClick={() => setLockDiagramLayout((prev) => !prev)}
-            title={
-              lockDiagramLayout
-                ? 'Diagram layout is LOCKED: automatic re-layout is disabled on code edits, preserving custom node positions. Click to unlock.'
-                : 'Lock diagram layout: disables automatic re-layout triggered by edits, allowing you to maintain custom node positions when tweaking code logic.'
-            }
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
-              lockDiagramLayout
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/60 shadow-xs ring-1 ring-amber-500/30'
-                : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800'
-            }`}
-          >
-            {lockDiagramLayout ? (
-              <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            ) : (
-              <Unlock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            )}
-            <span>{lockDiagramLayout ? 'Layout Locked' : 'Lock Layout'}</span>
-            {lockDiagramLayout && (
-              <span className="text-[9px] font-bold px-1 rounded bg-amber-400 text-slate-950 leading-none">
-                LOCKED
-              </span>
-            )}
-          </button>
-
-          {/* Custom Node Styles Count Badge */}
-          {customizedStatesCount > 0 && (
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-sky-950/60 border border-sky-800/60 text-sky-400 text-[11px]">
-              <Palette className="w-3 h-3" />
-              <span>
-                {customizedStatesCount} custom state{customizedStatesCount > 1 ? 's' : ''}
-              </span>
-              <button
-                type="button"
-                onClick={handleClearAllCustomStyles}
-                className="ml-1 p-0.5 text-slate-400 hover:text-rose-400 transition-colors"
-                title="Reset all custom state node styles"
-              >
-                <RotateCcw className="w-2.5 h-2.5" />
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Stats & Live update toggle */}
-        <div className="flex items-center gap-3">
-          {generationStats && (
-            <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono">
-              <span className="flex items-center gap-1 text-emerald-400">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Valid
-              </span>
-              <span>•</span>
-              <span>{generationStats.linesCount} lines</span>
-              <span>•</span>
-              <span>{generationStats.timeMs}ms</span>
-            </div>
-          )}
-
-          <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none">
-            <input
-              id="live-update-checkbox"
-              type="checkbox"
-              checked={liveUpdate}
-              onChange={(e) => setLiveUpdate(e.target.checked)}
-              className="rounded bg-slate-950 border-slate-700 text-sky-500"
-            />
-            <span>Auto-refresh</span>
-          </label>
-        </div>
-      </div>
 
       {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Side: File Inputs Drawer */}
-        {isSidebarOpen && (
+        {/* LeftPanel: TwinCAT source files */}
+        {dockLayout.leftVisible && (
           <aside
             id="source-files-sidebar"
-            className="w-full sm:w-80 md:w-96 lg:w-[420px] bg-slate-950/90 border-r border-slate-800/80 flex flex-col shrink-0 overflow-y-auto p-4 gap-4"
+            data-panel="LeftPanel"
+            ref={leftPanelRef}
+            style={{ width: clampSidePanelWidth(dockLayout.leftWidth) }}
+            className="bg-slate-950/90 flex flex-col shrink-0 overflow-y-auto p-4 gap-4"
           >
             <div className="flex items-center justify-between pb-1 border-b border-slate-800">
               <div className="flex items-center gap-2">
@@ -1682,9 +1515,7 @@ export const App: React.FC = () => {
               onOpenEnumEditor={() => {
                 handleOpenEnumEditorModal(selectedStateId || undefined);
               }}
-              onOpenComplexityReport={() => {
-                setActiveTab('complexity');
-              }}
+              onOpenComplexityReport={() => showDockTab('complexity')}
             />
 
             {/* PLC Transition Logger Sidebar Card */}
@@ -1695,10 +1526,10 @@ export const App: React.FC = () => {
               onOpenLoggerModal={() => setIsPlcLoggerModalOpen(true)}
               onPopulateHistory={(ds, msg) => {
                 setHistoryDataset(ds);
-                setActiveTab('history');
+                showDockTab('history');
                 if (msg) showCopyToast(msg, 'success');
               }}
-              onViewHistoryTab={() => setActiveTab('history')}
+              onViewHistoryTab={() => showDockTab('history')}
               onToast={showCopyToast}
             />
 
@@ -1715,228 +1546,526 @@ export const App: React.FC = () => {
           </aside>
         )}
 
-        {/* Right Side: Output Viewer */}
-        <main id="output-workspace" className="flex-1 flex flex-col min-w-0 bg-slate-950 px-2.5 pt-1.5 pb-2 overflow-hidden">
-          {/* Output View Tabs */}
-          <div className="flex items-center justify-between pb-1.5 shrink-0">
-            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-0.5 rounded-lg text-xs">
-              <button
-                id="tab-diagram-btn"
-                type="button"
-                onClick={() => setActiveTab('diagram')}
-                className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  activeTab === 'diagram'
-                    ? 'bg-slate-800 text-sky-400 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Diagram Canvas
-              </button>
-              <button
-                id="tab-markdown-btn"
-                type="button"
-                onClick={() => setActiveTab('markdown')}
-                className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  activeTab === 'markdown'
-                    ? 'bg-slate-800 text-sky-400 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                Mermaid Markdown
-              </button>
-              <button
-                id="tab-complexity-btn"
-                type="button"
-                onClick={() => setActiveTab('complexity')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  activeTab === 'complexity'
-                    ? 'bg-slate-800 text-sky-400 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Activity className="w-3.5 h-3.5" />
-                <span>Complexity Report</span>
-                {pouComplexityReport.refactorCandidatesCount > 0 && (
-                  <span
-                    className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-rose-950 text-rose-300 border border-rose-800"
-                    title={`${pouComplexityReport.refactorCandidatesCount} refactoring candidates flagged`}
+        {dockLayout.leftVisible && (
+          <DockSplitter
+            id="left-panel-splitter"
+            orientation="vertical"
+            title="Drag to resize the left panel (double-click to reset)"
+            onDragStart={() => (sidePanelDragStartRef.current = leftPanelRef.current?.offsetWidth ?? dockLayout.leftWidth)}
+            onDrag={(d) => {
+              if (leftPanelRef.current) leftPanelRef.current.style.width = `${clampSidePanelWidth(sidePanelDragStartRef.current + d)}px`;
+            }}
+            onDragEnd={() => {
+              const w = leftPanelRef.current?.offsetWidth;
+              if (w) setDockLayout((l) => ({ ...l, leftWidth: w }));
+            }}
+            onDoubleClick={() => setDockLayout((l) => ({ ...l, leftWidth: LEFT_PANEL_DEFAULT_WIDTH }))}
+          />
+        )}
+
+        {/* MiddlePanel: document tab groups (Diagram Canvas, editors, reports) */}
+        <main id="output-workspace" data-panel="MiddlePanel" className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden">
+          {generationError && (
+            <div className="flex items-center gap-1.5 px-3 py-1 text-xs text-rose-400 bg-rose-950/50 border-b border-rose-900/50 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span className="font-medium truncate">{generationError}</span>
+            </div>
+          )}
+          <DockPanelView
+            id="middle-panel"
+            panel="middle"
+            layout={dockLayout}
+            onLayoutChange={setDockLayout}
+            tabMeta={dockTabMeta}
+            registry={dockRegistry}
+          />
+        </main>
+
+        {/* RightPanel: tool windows stacked vertically */}
+        {dockLayout.rightVisible && (
+          <>
+            <DockSplitter
+              id="right-panel-splitter"
+              orientation="vertical"
+              title="Drag to resize the right panel (double-click to reset)"
+              onDragStart={() => (sidePanelDragStartRef.current = rightPanelRef.current?.offsetWidth ?? dockLayout.rightWidth)}
+              onDrag={(d) => {
+                if (rightPanelRef.current) rightPanelRef.current.style.width = `${clampSidePanelWidth(sidePanelDragStartRef.current - d)}px`;
+              }}
+              onDragEnd={() => {
+                const w = rightPanelRef.current?.offsetWidth;
+                if (w) setDockLayout((l) => ({ ...l, rightWidth: w }));
+              }}
+              onDoubleClick={() => setDockLayout((l) => ({ ...l, rightWidth: RIGHT_PANEL_DEFAULT_WIDTH }))}
+            />
+            <aside
+              id="right-panel"
+              data-panel="RightPanel"
+              ref={rightPanelRef}
+              style={{ width: clampSidePanelWidth(dockLayout.rightWidth) }}
+              className="flex flex-col shrink-0 min-h-0 bg-slate-950 overflow-hidden"
+            >
+              <DockPanelView
+                id="right-dock-panel"
+                panel="right"
+                layout={dockLayout}
+                onLayoutChange={setDockLayout}
+                tabMeta={dockTabMeta}
+                registry={dockRegistry}
+              />
+            </aside>
+          </>
+        )}
+      </div>
+
+      {/* Dock tab contents: rendered once and portaled into persistent host nodes that the dock layout
+          moves between tab groups, so moving a tab never remounts its content */}
+      {createPortal(
+        <div className="flex flex-col h-full w-full min-h-0">
+          {/* Diagram toolbar (search, view & editing controls), portaled from MermaidViewer */}
+          <div
+            id="header-toolbar-container"
+            ref={setHeaderToolbarElement}
+            className="relative z-40 flex items-center justify-between px-2 py-0.5 min-h-[34px] bg-slate-950/95 border-b border-slate-800/80 text-xs text-slate-300 overflow-visible shrink-0"
+          />
+          {/* Options Control Ribbon (diagram generation options, only relevant to the canvas) */}
+          <div
+            id="options-ribbon"
+            className="relative z-30 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 shrink-0"
+          >
+            <div className="contents">
+              <div className="flex items-center gap-1.5 text-slate-400 font-medium">
+                <Settings2 className="w-3.5 h-3.5 text-sky-400" />
+                <span>Options:</span>
+              </div>
+
+              {/* User Preset Quick Toggle & Manager */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px] font-medium hidden md:inline">Preset:</span>
+                <DiagramPresetManager
+                  currentOptions={currentDiagramOptions}
+                  onApplyPreset={handleApplyPreset}
+                  onExportSettingsChange={setExportSettings}
+                />
+              </div>
+
+              <div className="h-4 w-px bg-slate-800 hidden sm:block"></div>
+
+              {/* Format Toggle */}
+              <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+                <button
+                  id="format-flowchart-btn"
+                  type="button"
+                  onClick={() => setFlowchartOutput(true)}
+                  title="Flowchart format (TD): Direct transition arrows with subgraph hierarchy"
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    flowchartOutput ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  flowchart TD
+                </button>
+                <button
+                  id="format-statediagram-btn"
+                  type="button"
+                  onClick={() => setFlowchartOutput(false)}
+                  title="State diagram format (v2): Standard UML statechart notation"
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    !flowchartOutput ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  stateDiagram-v2
+                </button>
+              </div>
+
+              {/* Collapse error sink edges */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  id="collapse-errors-checkbox"
+                  type="checkbox"
+                  checked={collapseErrorSinkEdges}
+                  onChange={(e) => setCollapseErrorSinkEdges(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                />
+                <span className="text-slate-300">Collapse error-sink edges</span>
+              </label>
+
+              {/* Include state description */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  id="include-descriptions-checkbox"
+                  type="checkbox"
+                  checked={includeStateDescriptions}
+                  onChange={(e) => setIncludeStateDescriptions(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                />
+                <span className="text-slate-300">Include state descriptions</span>
+              </label>
+
+              {/* Show transition priorities & format */}
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    id="show-priorities-checkbox"
+                    type="checkbox"
+                    checked={showTransitionPriorities}
+                    onChange={(e) => setShowTransitionPriorities(e.target.checked)}
+                    className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                  />
+                  <span className="text-slate-300">Priorities</span>
+                </label>
+
+                {showTransitionPriorities && (
+                  <div
+                    id="priority-format-toggle"
+                    className="flex items-center bg-slate-950 p-0.5 rounded-md border border-slate-800 text-[11px]"
                   >
-                    {pouComplexityReport.refactorCandidatesCount}
+                    <button
+                      id="prio-format-paren"
+                      type="button"
+                      onClick={() => setPriorityFormat('paren')}
+                      title="Parentheses format: (1) - clean, standard text, universal font support in mermaid.live"
+                      className={`px-2 py-0.5 rounded font-mono transition-colors ${
+                        priorityFormat === 'paren'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      (1)
+                    </button>
+                    <button
+                      id="prio-format-bracket"
+                      type="button"
+                      onClick={() => setPriorityFormat('bracket')}
+                      title="Bracket format: [1] - standard UML index notation"
+                      className={`px-2 py-0.5 rounded font-mono transition-colors ${
+                        priorityFormat === 'bracket'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      [1]
+                    </button>
+                    <button
+                      id="prio-format-circled"
+                      type="button"
+                      onClick={() => setPriorityFormat('circled')}
+                      title="Circled Unicode format: ① - TwinCAT visual circled style"
+                      className={`px-2 py-0.5 rounded font-mono transition-colors ${
+                        priorityFormat === 'circled'
+                          ? 'bg-sky-600 text-white shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      ①
+                    </button>
+                  </div>
+                )}
+              </div>
+              {/* Layout Engine: Dagre vs ELK */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px] font-medium">Engine:</span>
+                <div
+                  id="layout-engine-toggle"
+                  className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px]"
+                >
+                  <button
+                    id="layout-engine-dagre"
+                    type="button"
+                    onClick={() => setLayoutEngine('dagre')}
+                    title="Dagre layout engine: classic Mermaid hierarchical DAG layout"
+                    className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
+                      layoutEngine === 'dagre'
+                        ? 'bg-sky-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Dagre
+                  </button>
+                  <button
+                    id="layout-engine-elk"
+                    type="button"
+                    onClick={() => setLayoutEngine('elk')}
+                    title="ELK (Eclipse Layout Kernel) engine: advanced layered routing matching mermaid.live ELK option"
+                    className={`px-2.5 py-0.5 rounded-md font-medium transition-colors ${
+                      layoutEngine === 'elk'
+                        ? 'bg-sky-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    ELK
+                  </button>
+                </div>
+              </div>
+
+              {/* Flowchart Curve Interpolation */}
+              {flowchartOutput && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400 text-[11px] font-medium">Curve:</span>
+                  <select
+                    id="flowchart-curve-select"
+                    value={flowchartCurve}
+                    onChange={(e) => setFlowchartCurve(e.target.value as FlowchartCurve)}
+                    className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
+                    title="Flowchart link curve interpolation (basis, linear, cardinal, stepAfter, etc.)"
+                  >
+                    <option value="basis">basis (Smooth Spline)</option>
+                    <option value="linear">linear (Straight Lines)</option>
+                    <option value="cardinal">cardinal (Pass-through)</option>
+                    <option value="stepAfter">stepAfter (Stepped Orthogonal)</option>
+                    <option value="monotoneX">monotoneX (Monotone Smooth)</option>
+                    <option value="natural">natural (Natural Spline)</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Theme Preset Dropdown */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400 text-[11px] font-medium">Theme:</span>
+                <select
+                  id="mermaid-theme-select"
+                  value={mermaidTheme}
+                  onChange={(e) => setMermaidTheme(e.target.value as MermaidTheme)}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
+                  title="Mermaid theme preset (dark, base, forest, neutral, default)"
+                >
+                  <option value="dark">dark</option>
+                  <option value="base">base</option>
+                  <option value="forest">forest</option>
+                  <option value="neutral">neutral</option>
+                  <option value="default">default</option>
+                </select>
+              </div>
+
+              {/* Lock Diagram Layout Toggle */}
+              <button
+                id="lock-diagram-layout-toggle-btn"
+                type="button"
+                onClick={() => setLockDiagramLayout((prev) => !prev)}
+                title={
+                  lockDiagramLayout
+                    ? 'Diagram layout is LOCKED: automatic re-layout is disabled on code edits, preserving custom node positions. Click to unlock.'
+                    : 'Lock diagram layout: disables automatic re-layout triggered by edits, allowing you to maintain custom node positions when tweaking code logic.'
+                }
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all ${
+                  lockDiagramLayout
+                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/60 shadow-xs ring-1 ring-amber-500/30'
+                    : 'bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800'
+                }`}
+              >
+                {lockDiagramLayout ? (
+                  <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                ) : (
+                  <Unlock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                )}
+                <span>{lockDiagramLayout ? 'Layout Locked' : 'Lock Layout'}</span>
+                {lockDiagramLayout && (
+                  <span className="text-[9px] font-bold px-1 rounded bg-amber-400 text-slate-950 leading-none">
+                    LOCKED
                   </span>
                 )}
               </button>
-              <button
-                id="tab-frequency-btn"
-                type="button"
-                onClick={() => setActiveTab('frequency')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  activeTab === 'frequency'
-                    ? 'bg-slate-800 text-sky-400 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Analyze transition frequency over time from PLC logs or view static State Hit Count heatmap"
-              >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Transition Frequency</span>
-              </button>
-              <button
-                id="tab-history-btn"
-                type="button"
-                onClick={() => setActiveTab('history')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  activeTab === 'history'
-                    ? 'bg-slate-800 text-indigo-400 shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-                title="Process PLC log files to generate a time-series visualization showing state transitions chronologically and identify unexpected state changes"
-              >
-                <History className="w-3.5 h-3.5" />
-                <span>Transition History</span>
-              </button>
+
+              {/* Custom Node Styles Count Badge */}
+              {customizedStatesCount > 0 && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-sky-950/60 border border-sky-800/60 text-sky-400 text-[11px]">
+                  <Palette className="w-3 h-3" />
+                  <span>
+                    {customizedStatesCount} custom state{customizedStatesCount > 1 ? 's' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleClearAllCustomStyles}
+                    className="ml-1 p-0.5 text-slate-400 hover:text-rose-400 transition-colors"
+                    title="Reset all custom state node styles"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+              )}
             </div>
 
-            {generationError && (
-              <div className="flex items-center gap-1.5 text-xs text-rose-400 bg-rose-950/50 border border-rose-900/50 px-2.5 py-1 rounded-lg">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                <span className="font-medium truncate max-w-sm">{generationError}</span>
-              </div>
-            )}
-          </div>
+            {/* Stats & Live update toggle */}
+            <div className="flex items-center gap-3 ml-auto">
+              {generationStats && (
+                <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 font-mono">
+                  <span className="flex items-center gap-1 text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Valid
+                  </span>
+                  <span>•</span>
+                  <span>{generationStats.linesCount} lines</span>
+                  <span>•</span>
+                  <span>{generationStats.timeMs}ms</span>
+                </div>
+              )}
 
-          {/* Tab Content */}
-          <div className="flex-1 min-h-0 relative">
-            <div className={`h-full w-full ${activeTab === 'diagram' ? '' : 'hidden'}`}>
-              <MermaidViewer
-                ref={mermaidViewerRef}
-                toolbarPortalTarget={headerToolbarElement}
-                focusStateRequest={jumpRequest}
-                code={styledMarkdown}
-                layoutEngine={layoutEngine}
-                flowchartCurve={flowchartCurve}
-                mermaidTheme={mermaidTheme}
-                exportSettings={exportSettings}
-                searchQuery={diagramSearchQuery}
-                onSearchQueryChange={setDiagramSearchQuery}
-                selectedStateId={selectedStateId}
-                selectedStateLabel={selectedStateLabel}
-                onSelectState={(id, label) => {
-                  setSelectedStateId(id);
-                  if (label) setSelectedStateLabel(label);
-                }}
-                customStyles={customNodeStyles}
-                onStyleChange={handleStyleChange}
-                onResetStateStyle={handleResetStateStyle}
-                onClearAllCustomStyles={handleClearAllCustomStyles}
-                nodeOffsets={nodeOffsets}
-                onNodeOffsetsChange={setNodeOffsets}
-                onCanvasPositionsChange={setCanvasPositions}
-                notes={diagramNotes}
-                onSaveNote={handleSaveNote}
-                onDeleteNote={handleDeleteNote}
-                onClearAllNotes={handleClearAllNotes}
-                onUpdateNotePosition={handleUpdateNotePosition}
-                onUpdateNoteStyle={handleUpdateNoteStyle}
-                onOpenMermaidLive={handleOpenMermaidLive}
-                fileName={pouFileName.replace(/\.TcPOU$/i, '') || 'statechart'}
-                tcPouContent={pouContent}
-                tcPouFileName={pouFileName}
-                tcDutContent={dutContent}
-                tcDutFileName={dutFileName}
-                onSaveDutContent={handleSaveDutContent}
-                onOpenEnumEditor={(memberName) => {
-                  handleOpenEnumEditorModal(memberName);
-                }}
-                onOpenMethodEditor={(methodName) => {
-                  handleOpenMethodEditorModal(methodName || 'doState()');
-                }}
-                onSaveMethodCode={handleSaveMethodCode}
-                onSaveStateCode={handleSaveStateCode}
-                onSavePreProcessCode={handleSavePreProcessCode}
-                priorityFormat={priorityFormat}
-                layoutLocked={lockDiagramLayout}
-                onLayoutLockedChange={setLockDiagramLayout}
-                onToast={showCopyToast}
-                onSwitchToDiagramTab={() => setActiveTab('diagram')}
-              />
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none">
+                <input
+                  id="live-update-checkbox"
+                  type="checkbox"
+                  checked={liveUpdate}
+                  onChange={(e) => setLiveUpdate(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500"
+                />
+                <span>Auto-refresh</span>
+              </label>
             </div>
-            {activeTab === 'markdown' && (
-              <MermaidMarkdownViewer
-                code={outputMarkdown}
-                fileName={`${pouFileName.replace(/\.TcPOU$/i, '') || 'statechart'}.statechart.md`}
-                searchQuery={diagramSearchQuery}
-                onSearchQueryChange={setDiagramSearchQuery}
-                onToast={showCopyToast}
-              />
-            )}
-            {activeTab === 'complexity' && (
-              <PouComplexityReportTab
-                report={pouComplexityReport}
-                onJumpToState={handleJumpToState}
-                onOpenStateEditor={(stateId) => handleOpenEnumEditorModal(stateId)}
-                onOpenMethodEditor={(methodName) => handleOpenMethodEditorModal(methodName)}
-                onToast={showCopyToast}
-              />
-            )}
-            {activeTab === 'frequency' && (
-              <TransitionFrequencyTab
-                states={identifiedStatesResult.states}
-                edges={availableEdges}
-                pouContent={pouContent}
-                pouFileName={pouFileName}
-                onJumpToState={handleJumpToState}
-                onApplyHeatmapStyles={(styles) => {
-                  setCustomNodeStyles((prev) => ({ ...prev, ...styles }));
-                  setActiveTab('diagram');
-                }}
-                onToast={showCopyToast}
-              />
-            )}
-            {activeTab === 'history' && (
-              <TransitionHistoryTab
-                states={identifiedStatesResult.states}
-                edges={availableEdges}
-                pouFileName={pouFileName}
-                activeDataset={historyDataset}
-                onDatasetChange={(ds) => setHistoryDataset(ds)}
-                onJumpToState={handleJumpToState}
-                onToast={showCopyToast}
-              />
-            )}
           </div>
-        </main>
-      </div>
 
-      {/* Unified Multi-Tabbed Editor & Inspector Window (Edit Enum, Method Editor, Documentation, Style) */}
-      {unifiedEditor.isOpen && (
-        <StateNodeStyleInspector
-          selectedStateId={selectedStateId}
-          selectedStateLabel={selectedStateLabel}
-          availableStates={identifiedStatesResult.states}
-          customStyles={customNodeStyles}
-          onStyleChange={handleStyleChange}
-          onResetStateStyle={handleResetStateStyle}
-          onClearAllCustomStyles={handleClearAllCustomStyles}
-          onSelectState={(id, label) => {
-            handleJumpToState(id, label);
-          }}
-          onClose={handleCloseUnifiedEditor}
-          tcPouContent={pouContent}
-          tcPouFileName={pouFileName || 'POU.TcPOU'}
-          tcDutContent={dutContent}
-          tcDutFileName={dutFileName || 'EnumDeclaration.TcDUT'}
-          onSaveDutContent={handleSaveDutContent}
-          onSaveMethodCode={handleSaveMethodCode}
-          onSaveStateCode={handleSaveStateCode}
-          onSavePreProcessCode={handleSavePreProcessCode}
-          initialMode={unifiedEditor.initialMode}
-          initialMethod={unifiedEditor.initialMethod}
-          initialEnumMember={unifiedEditor.initialEnumMember}
-          notes={diagramNotes}
-          onSaveNote={handleSaveNote}
-          onDeleteNote={handleDeleteNote}
-          onUpdateNoteStyle={handleUpdateNoteStyle}
-        />
+          <div className="relative flex-1 min-h-0">
+            <div className="absolute inset-0">
+                <MermaidViewer
+                  ref={mermaidViewerRef}
+                  toolbarPortalTarget={headerToolbarElement}
+                  focusStateRequest={jumpRequest}
+                  code={styledMarkdown}
+                  layoutEngine={layoutEngine}
+                  flowchartCurve={flowchartCurve}
+                  mermaidTheme={mermaidTheme}
+                  exportSettings={exportSettings}
+                  searchQuery={diagramSearchQuery}
+                  onSearchQueryChange={setDiagramSearchQuery}
+                  selectedStateId={selectedStateId}
+                  selectedStateLabel={selectedStateLabel}
+                  onSelectState={(id, label) => {
+                    setSelectedStateId(id);
+                    if (label) setSelectedStateLabel(label);
+                  }}
+                  customStyles={customNodeStyles}
+                  onStyleChange={handleStyleChange}
+                  onResetStateStyle={handleResetStateStyle}
+                  onClearAllCustomStyles={handleClearAllCustomStyles}
+                  nodeOffsets={nodeOffsets}
+                  onNodeOffsetsChange={setNodeOffsets}
+                  onCanvasPositionsChange={setCanvasPositions}
+                  notes={diagramNotes}
+                  onSaveNote={handleSaveNote}
+                  onDeleteNote={handleDeleteNote}
+                  onClearAllNotes={handleClearAllNotes}
+                  onUpdateNotePosition={handleUpdateNotePosition}
+                  onUpdateNoteStyle={handleUpdateNoteStyle}
+                  onOpenMermaidLive={handleOpenMermaidLive}
+                  fileName={pouFileName.replace(/\.TcPOU$/i, '') || 'statechart'}
+                  tcPouContent={pouContent}
+                  tcPouFileName={pouFileName}
+                  tcDutContent={dutContent}
+                  tcDutFileName={dutFileName}
+                  onSaveDutContent={handleSaveDutContent}
+                  onOpenEnumEditor={(memberName) => {
+                    handleOpenEnumEditorModal(memberName);
+                  }}
+                  onOpenMethodEditor={(methodName) => {
+                    handleOpenMethodEditorModal(methodName || 'doState()');
+                  }}
+                  onSaveMethodCode={handleSaveMethodCode}
+                  onSaveStateCode={handleSaveStateCode}
+                  onSavePreProcessCode={handleSavePreProcessCode}
+                  priorityFormat={priorityFormat}
+                  layoutLocked={lockDiagramLayout}
+                  onLayoutLockedChange={setLockDiagramLayout}
+                  onToast={showCopyToast}
+                  onSwitchToDiagramTab={() => showDockTab('diagram')}
+                  dockedPanels={dockedCanvasPanels}
+                  onOpenInspectorPanel={handleOpenInspectorPanel}
+                />
+            </div>
+          </div>
+        </div>,
+        dockRegistry.nodes.diagram
       )}
+
+      {(['method', 'enum', 'style', 'docs'] as const).map(
+        (mode) =>
+          isDockTabMounted(mode) &&
+          createPortal(
+            <StateNodeStyleInspector
+              key={mode}
+              panelMode={mode}
+              selectedStateId={selectedStateId}
+              selectedStateLabel={selectedStateLabel}
+              availableStates={identifiedStatesResult.states}
+              customStyles={customNodeStyles}
+              onStyleChange={handleStyleChange}
+              onResetStateStyle={handleResetStateStyle}
+              onClearAllCustomStyles={handleClearAllCustomStyles}
+              onSelectState={(id, label) => {
+                handleJumpToState(id, label);
+              }}
+              onClose={() => setDockLayout((l) => closeDockTab(l, mode))}
+              tcPouContent={pouContent}
+              tcPouFileName={pouFileName || 'POU.TcPOU'}
+              tcDutContent={dutContent}
+              tcDutFileName={dutFileName || 'EnumDeclaration.TcDUT'}
+              onSaveDutContent={handleSaveDutContent}
+              onSaveMethodCode={handleSaveMethodCode}
+              onSaveStateCode={handleSaveStateCode}
+              onSavePreProcessCode={handleSavePreProcessCode}
+              initialMethod={inspectorRequest.method}
+              initialEnumMember={inspectorRequest.enumMember}
+              notes={diagramNotes}
+              onSaveNote={handleSaveNote}
+              onDeleteNote={handleDeleteNote}
+              onUpdateNoteStyle={handleUpdateNoteStyle}
+            />,
+            dockRegistry.nodes[mode],
+            mode
+          )
+      )}
+
+      {isDockTabMounted('markdown') &&
+        createPortal(
+          <MermaidMarkdownViewer
+            code={outputMarkdown}
+            fileName={`${pouFileName.replace(/\.TcPOU$/i, '') || 'statechart'}.statechart.md`}
+            searchQuery={diagramSearchQuery}
+            onSearchQueryChange={setDiagramSearchQuery}
+            onToast={showCopyToast}
+          />,
+          dockRegistry.nodes.markdown
+        )}
+
+      {isDockTabMounted('complexity') &&
+        createPortal(
+          <PouComplexityReportTab
+            report={pouComplexityReport}
+            onJumpToState={handleJumpToState}
+            onOpenStateEditor={(stateId) => handleOpenEnumEditorModal(stateId)}
+            onOpenMethodEditor={(methodName) => handleOpenMethodEditorModal(methodName)}
+            onToast={showCopyToast}
+          />,
+          dockRegistry.nodes.complexity
+        )}
+
+      {isDockTabMounted('frequency') &&
+        createPortal(
+          <TransitionFrequencyTab
+            states={identifiedStatesResult.states}
+            edges={availableEdges}
+            pouContent={pouContent}
+            pouFileName={pouFileName}
+            onJumpToState={handleJumpToState}
+            onApplyHeatmapStyles={(styles) => {
+              setCustomNodeStyles((prev) => ({ ...prev, ...styles }));
+              showDockTab('diagram');
+            }}
+            onToast={showCopyToast}
+          />,
+          dockRegistry.nodes.frequency
+        )}
+
+      {isDockTabMounted('history') &&
+        createPortal(
+          <TransitionHistoryTab
+            states={identifiedStatesResult.states}
+            edges={availableEdges}
+            pouFileName={pouFileName}
+            activeDataset={historyDataset}
+            onDatasetChange={(ds) => setHistoryDataset(ds)}
+            onJumpToState={handleJumpToState}
+            onToast={showCopyToast}
+          />,
+          dockRegistry.nodes.history
+        )}
 
       {/* Dedicated PLC Transition Logger Tool Modal */}
       <PlcTransitionLoggerTool
@@ -1947,7 +2076,7 @@ export const App: React.FC = () => {
         pouFileName={pouFileName}
         onPopulateHistory={(newDs, msg) => {
           setHistoryDataset(newDs);
-          setActiveTab('history');
+          showDockTab('history');
           if (msg) showCopyToast(msg, 'success');
         }}
         onToast={showCopyToast}

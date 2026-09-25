@@ -39,6 +39,8 @@ export interface DiagramSearchPanelProps {
   onPanToElement?: (element: Element) => void;
   isStatsOpen?: boolean;
   diagramVersionKey?: string | number;
+  /** Fill a docked tool window: no floating position, drag handle, collapse or close controls */
+  docked?: boolean;
 }
 
 export type SearchFilterScope = 'all' | 'states' | 'transitions';
@@ -111,6 +113,7 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
   onPanToElement,
   isStatsOpen = false,
   diagramVersionKey,
+  docked = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [filterScope, setFilterScope] = useState<SearchFilterScope>('all');
@@ -369,7 +372,7 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
   // ---------------------------------------------------------------------------
   // COLLAPSED BADGE STATE (Positioned below statistics panel)
   // ---------------------------------------------------------------------------
-  if (isCollapsed) {
+  if (isCollapsed && !docked) {
     return (
       <div
         id="diagram-search-collapsed"
@@ -429,17 +432,20 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
       style={
-        position
+        docked
+          ? undefined
+          : position
           ? { left: `${position.x}px`, top: `${position.y}px` }
           : { top: `${autoDockTop}px`, right: '16px' }
       }
-      className={`z-30 flex flex-col w-[360px] sm:w-[420px] max-w-[94vw] max-h-[75vh] rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none ring-1 ring-black/40 ${
+      className={docked ? 'flex-1 min-h-0 flex flex-col w-full bg-slate-900 overflow-hidden select-none' : `z-30 flex flex-col w-[360px] sm:w-[420px] max-w-[94vw] max-h-[75vh] rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none ring-1 ring-black/40 ${
         isAnimatingEntrance
           ? 'animate-stats-entrance'
           : 'animate-in fade-in slide-in-from-top-2 duration-150'
       } ${position ? 'fixed' : 'absolute'}`}
     >
       {/* Panel Header & Drag Handle */}
+      {!docked && (
       <div
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
@@ -495,6 +501,7 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
           </button>
         </div>
       </div>
+      )}
 
       {/* Search Input Bar with Controls */}
       <div className="p-3 bg-slate-900 border-b border-slate-800/70 space-y-2">

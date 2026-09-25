@@ -33,6 +33,8 @@ export interface DiagramMinimapProps {
   isOpen?: boolean;
   onClose?: () => void;
   theme?: string;
+  /** Fill a docked tool window (size follows the window) instead of floating over the canvas */
+  docked?: boolean;
 }
 
 /**
@@ -92,6 +94,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   isOpen = true,
   onClose,
   theme = 'dark',
+  docked = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -103,6 +106,29 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   });
 
   const minimapBodyRef = useRef<HTMLDivElement>(null);
+  const dockedBodyRef = useRef<HTMLDivElement>(null);
+  const [dockedSize, setDockedSize] = useState<{ width: number; height: number } | null>(null);
+  const [layoutTick, setLayoutTick] = useState<number>(0);
+
+  useEffect(() => {
+    if (!docked) return;
+    const el = dockedBodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        setDockedSize({ width: el.clientWidth, height: el.clientHeight });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [docked, isOpen]);
+
+  useEffect(() => {
+    if (!containerElement) return;
+    const ro = new ResizeObserver(() => setLayoutTick((t) => t + 1));
+    ro.observe(containerElement);
+    return () => ro.disconnect();
+  }, [containerElement]);
   const clonedSvgContainerRef = useRef<HTMLDivElement>(null);
 
   // Compute diagram bounds
@@ -162,6 +188,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
 
   // Calculate minimap container dimensions based on diagram aspect ratio
   const minimapDimensions = useMemo(() => {
+    if (docked && dockedSize) return dockedSize;
     const defaultW = 240;
     const minH = 110;
     const maxH = 170;
@@ -175,7 +202,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
     height = Math.max(minH, Math.min(maxH, height));
 
     return { width: defaultW, height };
-  }, [diagramBounds]);
+  }, [diagramBounds, docked, dockedSize]);
 
   // Geometry calculation for viewport rectangle & screen-to-minimap coordinate mapping
   const geometry = useMemo(() => {
@@ -247,7 +274,8 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
         height: Math.max(10, rectH),
       },
     };
-  }, [svgElement, containerElement, diagramBounds, minimapDimensions, pan, zoom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [svgElement, containerElement, diagramBounds, minimapDimensions, pan, zoom, layoutTick]);
 
   // Center canvas at specific SVG coordinate
   const centerCanvasAtSvgCoordinate = useCallback(
@@ -387,7 +415,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   }
 
   // If collapsed: show compact bottom-right floating pill
-  if (isCollapsed) {
+  if (isCollapsed && !docked) {
     return (
       <div
         id="diagram-minimap-collapsed"
@@ -422,11 +450,15 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
       onClick={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
-      className="absolute bottom-4 right-4 z-30 flex flex-col rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-150 ring-1 ring-black/40"
-      style={{ width: `${minimapDimensions.width}px` }}
+      className={
+        docked
+          ? 'flex-1 min-h-0 flex flex-col w-full bg-slate-900 overflow-hidden select-none'
+          : 'absolute bottom-4 right-4 z-30 flex flex-col rounded-xl bg-slate-900/95 border border-slate-700/80 shadow-2xl backdrop-blur-md overflow-hidden select-none animate-in fade-in slide-in-from-bottom-2 duration-150 ring-1 ring-black/40'
+      }
+      style={docked ? undefined : { width: `${minimapDimensions.width}px` }}
     >
-      {/* Minimap Header */}
-      <div className="flex items-center justify-between px-2.5 py-1.5 bg-slate-950/90 border-b border-slate-800 text-xs text-slate-300">
+      {/* Minimap Header (the dock tab provides title & close when docked) */}
+      <div className={`${docked ? 'hidden' : 'flex'} items-center justify-between px-2.5 py-1.5 bg-slate-950/90 border-b border-slate-800 text-xs text-slate-300`}>
         <div className="flex items-center gap-1.5 min-w-0">
           <Map className="w-3.5 h-3.5 text-sky-400 shrink-0" />
           <span className="font-semibold text-[11px] text-slate-200 truncate">Minimap</span>
@@ -476,6 +508,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
       </div>
 
       {/* Minimap Body: Cloned SVG Canvas & Interactive Viewport Rectangle */}
+      <div ref={dockedBodyRef} className={docked ? 'relative flex-1 min-h-0 overflow-hidden' : 'contents'}>
       <div
         ref={minimapBodyRef}
         id="diagram-minimap-canvas"
@@ -490,7 +523,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
         {/* Cloned SVG Graphic Container */}
         <div
           ref={clonedSvgContainerRef}
-          className="absolute inset-0 w-full h-full pointer-events-none opacity-85 select-none"
+          className="absolute inset-2 pointer-events-none opacity-85 select-none"
         />
 
         {/* Selected State Marker & Beacon */}
@@ -538,6 +571,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
           </div>
         )}
       </div>
+      </div>
 
       {/* Minimap Footer / Info Bar */}
       <div className="flex items-center justify-between px-2.5 py-1 bg-slate-950 border-t border-slate-800 text-[10px] font-mono text-slate-400 select-none">
@@ -548,6 +582,16 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
         <span className="text-[9px] text-slate-500 font-sans">
           {isDragging ? 'Panning canvas...' : 'Click or drag to navigate'}
         </span>
+        {docked && (
+          <button
+            type="button"
+            onClick={onResetZoom}
+            className="p-0.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Reset View & Fit Diagram (100%)"
+          >
+            <RotateCcw className="w-3 h-3" />
+          </button>
+        )}
       </div>
     </div>
   );

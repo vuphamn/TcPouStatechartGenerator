@@ -49,6 +49,8 @@ export interface ComplexityHeatmapPanelProps {
   onChangeRefactorThreshold?: (threshold: number) => void;
   showComplexityBadges?: boolean;
   onToggleShowComplexityBadges?: (show: boolean) => void;
+  /** Fill a docked RightPanel tab: no floating position, drag handle, collapse or close controls */
+  docked?: boolean;
 }
 
 export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
@@ -69,6 +71,7 @@ export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
   onChangeRefactorThreshold,
   showComplexityBadges = true,
   onToggleShowComplexityBadges,
+  docked = false,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [searchFilter, setSearchFilter] = useState<string>('');
@@ -171,7 +174,7 @@ export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
     <div
       ref={panelRef}
       id="complexity-heatmap-panel"
-      style={stylePosition}
+      style={docked ? undefined : stylePosition}
       onMouseDown={(e) => {
         // Prevent canvas panning or dragging from initiating when clicking anywhere inside panel
         e.stopPropagation();
@@ -180,14 +183,20 @@ export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
         // Prevent canvas zoom in/out when scrolling wheel inside heatmap panel
         e.stopPropagation();
       }}
-      className={`w-96 max-w-[92vw] bg-slate-900/95 backdrop-blur-md border border-amber-500/30 rounded-xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200 select-none ${
-        isDragging ? 'ring-2 ring-amber-500/60 shadow-amber-500/20' : ''
-      }`}
+      className={
+        docked
+          ? 'flex-1 min-h-0 flex flex-col w-full bg-slate-900 overflow-y-auto select-none'
+          : `w-96 max-w-[92vw] bg-slate-900/95 backdrop-blur-md border border-amber-500/30 rounded-xl shadow-2xl flex flex-col overflow-hidden transition-all duration-200 select-none ${
+              isDragging ? 'ring-2 ring-amber-500/60 shadow-amber-500/20' : ''
+            }`
+      }
     >
       {/* Panel Drag Header */}
       <div
-        onMouseDown={handleMouseDown}
-        className="flex items-center justify-between px-3.5 py-2.5 bg-gradient-to-r from-amber-950/80 via-slate-900 to-slate-900 border-b border-amber-500/20 cursor-move"
+        onMouseDown={docked ? undefined : handleMouseDown}
+        className={`flex items-center justify-between px-3.5 py-2.5 bg-gradient-to-r from-amber-950/80 via-slate-900 to-slate-900 border-b border-amber-500/20 shrink-0 ${
+          docked ? '' : 'cursor-move'
+        }`}
       >
         <div className="flex items-center gap-2">
           <div className={`p-1.5 rounded-lg ${isHeatmapActive ? 'bg-amber-500/20 text-amber-400 animate-pulse' : 'bg-slate-800 text-slate-400'}`}>
@@ -223,22 +232,26 @@ export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
           >
             <HelpCircle className="w-3.5 h-3.5" />
           </button>
-          <button
-            type="button"
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
-            title={isCollapsed ? 'Expand panel' : 'Collapse panel'}
-          >
-            {isCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded transition-colors"
-            title="Close Heat-Map Panel"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          {!docked && (
+            <>
+            <button
+              type="button"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="p-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"
+              title={isCollapsed ? 'Expand panel' : 'Collapse panel'}
+            >
+              {isCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 text-slate-400 hover:text-rose-300 hover:bg-rose-950/40 rounded transition-colors"
+              title="Close Heat-Map Panel"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+              </>
+          )}
         </div>
       </div>
 

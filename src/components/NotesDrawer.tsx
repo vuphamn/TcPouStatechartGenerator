@@ -11,6 +11,8 @@ interface NotesDrawerProps {
   onClearAllNotes: () => void;
   onSelectTarget?: (target: ContextMenuTarget) => void;
   onOpenMermaidLive?: () => void;
+  /** Render the notes list inside a docked RightPanel tab instead of a slide-over drawer */
+  docked?: boolean;
 }
 
 export const NotesDrawer: React.FC<NotesDrawerProps> = ({
@@ -22,6 +24,7 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
   onClearAllNotes,
   onSelectTarget,
   onOpenMermaidLive,
+  docked = false,
 }) => {
   if (!isOpen) return null;
 
@@ -29,17 +32,14 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
   const edgeEntries = Object.entries(notes.edges).filter(([, text]) => Boolean(text && text.trim()));
   const totalNotes = nodeEntries.length + edgeEntries.length;
 
-  return (
-    <div
-      id="notes-drawer-overlay"
-      className="fixed inset-0 z-40 flex justify-end bg-slate-950/40 backdrop-blur-[2px] animate-in fade-in duration-150"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+  const panel = (
       <div
         id="notes-drawer-panel"
-        className="w-full max-w-sm h-full bg-slate-900 border-l border-slate-700/80 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
+        className={
+          docked
+            ? 'flex-1 min-h-0 w-full bg-slate-900 flex flex-col'
+            : 'w-full max-w-sm h-full bg-slate-900 border-l border-slate-700/80 shadow-2xl flex flex-col animate-in slide-in-from-right duration-200'
+        }
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800 bg-slate-800/40">
@@ -59,12 +59,14 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-200 hover:bg-slate-800 p-1 rounded-lg transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          {!docked && (
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-200 hover:bg-slate-800 p-1 rounded-lg transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
         {/* Content List */}
@@ -218,6 +220,19 @@ export const NotesDrawer: React.FC<NotesDrawerProps> = ({
           </div>
         )}
       </div>
+  );
+
+  if (docked) return panel;
+
+  return (
+    <div
+      id="notes-drawer-overlay"
+      className="fixed inset-0 z-40 flex justify-end bg-slate-950/40 backdrop-blur-[2px] animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {panel}
     </div>
   );
 };

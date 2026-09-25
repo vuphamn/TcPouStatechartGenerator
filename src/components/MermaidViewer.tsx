@@ -62,7 +62,7 @@ import {
   calculateSnappedPosition,
   SnapResult,
 } from '../utils/snapToGrid.ts';
-import { StateNodeStyleInspector } from './StateNodeStyleInspector.tsx';
+import { StateNodeStyleInspector, InspectorPanelMode } from './StateNodeStyleInspector.tsx';
 import { DiagramContextMenu } from './DiagramContextMenu.tsx';
 import { NoteDialog } from './NoteDialog.tsx';
 import { NotesDrawer } from './NotesDrawer.tsx';
@@ -195,6 +195,46 @@ export interface MermaidViewerProps {
   onToast?: (message: string, type: 'success' | 'error') => void;
   toolbarPortalTarget?: HTMLElement | null;
   onSwitchToDiagramTab?: () => void;
+  /** Render the Keyword Search panel and Minimap into external dock panels instead of canvas overlays */
+  dockedPanels?: DockedCanvasPanels;
+  /** Open a docked inspector tab instead of the floating inspector window. `reveal: false` avoids covering the canvas */
+  onOpenInspectorPanel?: (mode: InspectorPanelMode, options?: { method?: string; reveal?: boolean }) => void;
+}
+
+/** Canvas tool windows that can be docked as RightPanel tabs */
+export type DockedCanvasPanelId = 'search' | 'minimap' | 'stats' | 'heatmap' | 'legend' | 'notes';
+
+export interface DockedCanvasPanels {
+  /** Host element each tool window is rendered into */
+  targets: Record<DockedCanvasPanelId, HTMLElement>;
+  /** Tab is open (content rendered, possibly behind another tab) */
+  open: Record<DockedCanvasPanelId, boolean>;
+  /** Tab is on screen; toggles close a visible tab and bring a hidden one forward */
+  visible: Record<DockedCanvasPanelId, boolean>;
+  onOpenChange: (id: DockedCanvasPanelId, open: boolean) => void;
+}
+
+/**
+ * Open/closed state of a canvas tool window. Floating: local state. Docked: owned by the workspace
+ * layout. The setter is stable (reads docked props through a ref) because keyboard shortcut effects capture it.
+ */
+function useCanvasPanelOpenState(
+  id: DockedCanvasPanelId,
+  initial: boolean,
+  docked: DockedCanvasPanels | undefined
+): [boolean, (value: React.SetStateAction<boolean>) => void] {
+  const [internal, setInternal] = useState<boolean>(initial);
+  const dockedRef = useRef(docked);
+  dockedRef.current = docked;
+  const setOpen = useCallback(
+    (value: React.SetStateAction<boolean>) => {
+      const d = dockedRef.current;
+      if (!d) return setInternal(value);
+      d.onOpenChange(id, typeof value === 'function' ? value(d.visible[id]) : value);
+    },
+    [id]
+  );
+  return [docked ? docked.open[id] : internal, setOpen];
 }
 
 interface ParsedPath {
@@ -1301,6 +1341,18 @@ function enhanceSvgWithPriorityCircles(
   }
 }
 
+/** Shown in a docked tool window while the diagram has not rendered yet */
+const DockedPanelPlaceholder: React.FC<{ label: string }> = ({ label }) => (
+  <div
+    // Portaled into a dock panel, but React events still bubble to the canvas pan handlers
+    onMouseDown={(e) => e.stopPropagation()}
+    onWheel={(e) => e.stopPropagation()}
+    className="flex-1 flex items-center justify-center p-4 text-center text-xs text-slate-500 bg-slate-900"
+  >
+    {label} is available once the diagram has rendered.
+  </div>
+);
+
 export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>((props, ref) => {
   const {
     code,
@@ -1347,6 +1399,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onToast: onToastProp,
     toolbarPortalTarget,
     onSwitchToDiagramTab,
+    dockedPanels,
+    onOpenInspectorPanel,
   } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1385,10 +1439,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const [methodModalInitialMethod, setMethodModalInitialMethod] = useState<string>('doState()');
   const [isEnumModalOpen, setIsEnumModalOpen] = useState<boolean>(false);
   const [enumModalInitialMember, setEnumModalInitialMember] = useState<string | undefined>(undefined);
-  const [isMinimapOpen, setIsMinimapOpen] = useState<boolean>(true);
-  const [isLegendOpen, setIsLegendOpen] = useState<boolean>(false);
-  const [isStatsOpen, setIsStatsOpen] = useState<boolean>(false);
-  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState<boolean>(true);
+  // Canvas tool windows: floating overlays, or RightPanel tabs when docked
+  const [isMinimapOpen, setIsMinimapOpen] = useCanvasPanelOpenState('minimap', true, dockedPanels);
+  const [isLegendOpen, setIsLegendOpen] = useCanvasPanelOpenState('legend', false, dockedPanels);
+  const [isStatsOpen, setIsStatsOpen] = useCanvasPanelOpenState('stats', false, dockedPanels);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useCanvasPanelOpenState('search', true, dockedPanels);
   const [isSearchFocused, setIsSearchFocused] = useState<boolean>(false);
   const [canvasNodePositions, setCanvasNodePositions] = useState<CanvasNodePositionsMap>({});
 
@@ -1592,7 +1647,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   } | null>(null);
   const [isNoteDialogOpen, setIsNoteDialogOpen] = useState<boolean>(false);
   const [activeNoteTarget, setActiveNoteTarget] = useState<ContextMenuTarget | null>(null);
-  const [isNotesDrawerOpen, setIsNotesDrawerOpen] = useState<boolean>(false);
+  const [isNotesDrawerOpen, setIsNotesDrawerOpen] = useCanvasPanelOpenState('notes', false, dockedPanels);
 
   useEffect(() => {
     if (!containerRef.current || !svgContent) {
@@ -1797,7 +1852,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // Complexity Heat-Map & Refactoring State & Calculation
   const [isHeatmapActive, setIsHeatmapActive] = useState<boolean>(false);
-  const [isHeatmapPanelOpen, setIsHeatmapPanelOpen] = useState<boolean>(false);
+  const [isHeatmapPanelOpen, setIsHeatmapPanelOpen] = useCanvasPanelOpenState('heatmap', false, dockedPanels);
   const [heatmapPalette, setHeatmapPalette] = useState<HeatmapPalette>('traffic');
   const [heatmapOnlyRefactor, setHeatmapOnlyRefactor] = useState<boolean>(false);
   const [complexityThreshold, setComplexityThreshold] = useState<number>(5);
@@ -2992,7 +3047,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (label) setInternalSelectedStateLabel(label);
     }
     if (stateId) {
-      setIsInspectorOpen(true);
+      if (onOpenInspectorPanel) onOpenInspectorPanel('method', { reveal: false });
+      else setIsInspectorOpen(true);
     }
   };
 
@@ -3006,6 +3062,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   };
 
   const handleToggleInspector = () => {
+    if (onOpenInspectorPanel) {
+      if (!effectiveSelectedStateId && availableStates.length > 0) {
+        handleSelectState(availableStates[0].id, availableStates[0].label);
+      }
+      onOpenInspectorPanel('style');
+      return;
+    }
     if (isInspectorOpen) {
       handleCloseInspector();
     } else {
@@ -3553,6 +3616,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         const stateLabel = targetNode?.getAttribute('data-state-label') || stateId;
         handleSelectState(stateId, stateLabel);
         setSelectedEdge(null);
+        // Clicking a node's complexity / refactor badge also opens the Complexity Heat-Map
+        if ((e.target as Element).closest?.('.tc-refactor-flag-badge, .tc-complexity-badge')) {
+          setIsHeatmapPanelOpen(true);
+        }
         return;
       }
 
@@ -4500,7 +4567,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const toolbarContent = (
     <div
       id="mermaid-toolbar"
-      className="relative flex flex-nowrap items-center justify-between gap-1.5 px-1 sm:px-2 py-0.5 text-xs text-slate-300 z-20 shrink-0 w-full overflow-visible"
+      className="relative flex flex-wrap items-center justify-between gap-x-1.5 gap-y-1 px-1 sm:px-2 py-0.5 text-xs text-slate-300 z-20 shrink-0 w-full overflow-visible"
     >
       <div className="flex items-center gap-2 min-w-0 shrink-0">
         {/* Search Input for States and Transitions (Shrunk by default; expands longer when clicked/focused) */}
@@ -4687,7 +4754,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       </div>
 
       {/* Right Side: Logically Grouped Toolbar Controls */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto">
         {/* Hidden Controls Menu (Accessible across all monitor sizes; hosts controls moved from toolbar) */}
         <ToolbarHiddenControls
           isInteractiveMode={isInteractiveMode}
@@ -4949,6 +5016,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     </div>
   );
 
+  const renderCanvasPanel = (id: DockedCanvasPanelId, label: string, element: React.ReactNode) => {
+    if (!dockedPanels) return element;
+    return createPortal(element ?? <DockedPanelPlaceholder label={label} />, dockedPanels.targets[id]);
+  };
+
   const effectivePortalTarget =
     toolbarPortalTarget ||
     (typeof document !== 'undefined' ? document.getElementById('header-toolbar-container') : null);
@@ -5102,97 +5174,123 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           </div>
         )}
 
-        {/* Interactive Diagram Minimap Overlay */}
-        {svgContent && !error && (
-          <DiagramMinimap
-            svgElement={renderedSvg || getDiagramSvg()}
-            containerElement={containerRef.current}
-            pan={pan}
-            zoom={zoom}
-            onPanChange={setPan}
-            onResetZoom={handleResetZoom}
-            selectedStateId={effectiveSelectedStateId}
-            selectedStateLabel={effectiveSelectedStateLabel}
-            availableStatesCount={availableStates.length}
-            canvasPositions={canvasNodePositions}
-            onSelectState={(id) => {
-              handleSelectState(id);
-              panToState(id);
-            }}
-            isOpen={isMinimapOpen}
-            onClose={() => setIsMinimapOpen(false)}
-            theme={mermaidTheme}
-          />
+        {/* Interactive Diagram Minimap (canvas overlay, or docked into the RightPanel) */}
+        {(() => {
+          const minimap =
+            svgContent && !error ? (
+              <DiagramMinimap
+                svgElement={renderedSvg || getDiagramSvg()}
+                containerElement={containerRef.current}
+                pan={pan}
+                zoom={zoom}
+                onPanChange={setPan}
+                onResetZoom={handleResetZoom}
+                selectedStateId={effectiveSelectedStateId}
+                selectedStateLabel={effectiveSelectedStateLabel}
+                availableStatesCount={availableStates.length}
+                canvasPositions={canvasNodePositions}
+                onSelectState={(id) => {
+                  handleSelectState(id);
+                  panToState(id);
+                }}
+                isOpen={isMinimapOpen}
+                onClose={() => setIsMinimapOpen(false)}
+                theme={mermaidTheme}
+                docked={Boolean(dockedPanels)}
+              />
+            ) : null;
+          if (!dockedPanels) return minimap;
+          return createPortal(minimap ?? <DockedPanelPlaceholder label="Minimap" />, dockedPanels.targets.minimap);
+        })()}
+
+        {/* Interactive Diagram Legend (canvas overlay, or docked into the RightPanel) */}
+        {renderCanvasPanel(
+          'legend',
+          'Diagram Legend',
+          svgContent && !error ? (
+            <DiagramLegendOverlay
+              isOpen={isLegendOpen}
+              onClose={() => setIsLegendOpen(false)}
+              customStyles={effectiveCustomStyles}
+              availableStates={availableStates}
+              selectedStateId={effectiveSelectedStateId}
+              onSelectState={(id) => {
+                handleSelectState(id);
+                panToState(id);
+              }}
+              priorityFormat={priorityFormat}
+              availableEdges={availableEdges}
+              notes={effectiveNotes}
+              containerRef={containerRef}
+              docked={Boolean(dockedPanels)}
+            />
+          ) : null
         )}
 
-        {/* Interactive Diagram Legend Overlay */}
-        {svgContent && !error && (
-          <DiagramLegendOverlay
-            isOpen={isLegendOpen}
-            onClose={() => setIsLegendOpen(false)}
-            customStyles={effectiveCustomStyles}
-            availableStates={availableStates}
-            selectedStateId={effectiveSelectedStateId}
-            onSelectState={(id) => {
-              handleSelectState(id);
-              panToState(id);
-            }}
-            priorityFormat={priorityFormat}
-            availableEdges={availableEdges}
-            notes={effectiveNotes}
-            containerRef={containerRef}
-          />
+        {/* Real-Time State Machine Statistics & Cyclomatic Analysis (overlay, or docked into the RightPanel) */}
+        {renderCanvasPanel(
+          'stats',
+          'State Machine Real-Time Stats',
+          svgContent && !error ? (
+            <StateMachineStatsPanel
+              isOpen={isStatsOpen}
+              onClose={() => setIsStatsOpen(false)}
+              availableStates={availableStates}
+              availableEdges={availableEdges}
+              tcPouContent={tcPouContent}
+              selectedStateId={effectiveSelectedStateId}
+              onSelectState={(id) => {
+                handleSelectState(id);
+                panToState(id);
+              }}
+              onPanToState={panToState}
+              onOpenComplexityHeatmap={() => {
+                setIsHeatmapActive(true);
+                setIsHeatmapPanelOpen(true);
+              }}
+              diagramVersionKey={`${fileName}_${code}_${availableEdges.length}_${availableStates.length}`}
+              docked={Boolean(dockedPanels)}
+            />
+          ) : null
         )}
 
-        {/* Real-Time State Machine Statistics & Cyclomatic Analysis Panel */}
-        {svgContent && !error && (
-          <StateMachineStatsPanel
-            isOpen={isStatsOpen}
-            onClose={() => setIsStatsOpen(false)}
-            availableStates={availableStates}
-            availableEdges={availableEdges}
-            tcPouContent={tcPouContent}
-            selectedStateId={effectiveSelectedStateId}
-            onSelectState={(id) => {
-              handleSelectState(id);
-              panToState(id);
-            }}
-            onPanToState={panToState}
-            onOpenComplexityHeatmap={() => {
-              setIsHeatmapActive(true);
-              setIsHeatmapPanelOpen(true);
-            }}
-            diagramVersionKey={`${fileName}_${code}_${availableEdges.length}_${availableStates.length}`}
-          />
-        )}
-
-        {/* Real-Time Complexity Heat-Map Control Panel */}
-        {svgContent && !error && (
-          <ComplexityHeatmapPanel
-            isOpen={isHeatmapPanelOpen}
-            onClose={() => setIsHeatmapPanelOpen(false)}
-            heatmapResult={complexityHeatmapResult}
-            isHeatmapActive={isHeatmapActive}
-            onToggleHeatmap={(active) => setIsHeatmapActive(active)}
-            selectedPalette={heatmapPalette}
-            onChangePalette={(p) => setHeatmapPalette(p)}
-            onlyShowRefactorCandidates={heatmapOnlyRefactor}
-            onToggleOnlyShowRefactorCandidates={(val) => setHeatmapOnlyRefactor(val)}
-            selectedStateId={effectiveSelectedStateId}
-            onSelectState={(id) => {
-              handleSelectState(id);
-              panToState(id);
-            }}
-            onPanToState={panToState}
-            onOpenMethodEditorForState={(stateId) => {
-              setMethodModalInitialMethod(`doState() for ${stateId}`);
-              setIsMethodModalOpen(true);
-            }}
-            refactorThreshold={complexityThreshold}
-            onChangeRefactorThreshold={(th) => setComplexityThreshold(th)}
-            showComplexityBadges={showComplexityBadges}
-            onToggleShowComplexityBadges={(show) => setShowComplexityBadges(show)}
-          />
+        {/* Real-Time Complexity Heat-Map Control Panel (overlay, or docked into the RightPanel) */}
+        {renderCanvasPanel(
+          'heatmap',
+          'Complexity Heat-Map',
+          svgContent && !error ? (
+            <ComplexityHeatmapPanel
+              isOpen={isHeatmapPanelOpen}
+              onClose={() => setIsHeatmapPanelOpen(false)}
+              heatmapResult={complexityHeatmapResult}
+              isHeatmapActive={isHeatmapActive}
+              onToggleHeatmap={(active) => setIsHeatmapActive(active)}
+              selectedPalette={heatmapPalette}
+              onChangePalette={(p) => setHeatmapPalette(p)}
+              onlyShowRefactorCandidates={heatmapOnlyRefactor}
+              onToggleOnlyShowRefactorCandidates={(val) => setHeatmapOnlyRefactor(val)}
+              selectedStateId={effectiveSelectedStateId}
+              onSelectState={(id) => {
+                handleSelectState(id);
+                panToState(id);
+              }}
+              onPanToState={panToState}
+              onOpenMethodEditorForState={(stateId) => {
+                if (onOpenInspectorPanel) {
+                  handleSelectState(stateId);
+                  onOpenInspectorPanel('method', { method: 'doState()' });
+                  return;
+                }
+                setMethodModalInitialMethod(`doState() for ${stateId}`);
+                setIsMethodModalOpen(true);
+              }}
+              refactorThreshold={complexityThreshold}
+              onChangeRefactorThreshold={(th) => setComplexityThreshold(th)}
+              showComplexityBadges={showComplexityBadges}
+              onToggleShowComplexityBadges={(show) => setShowComplexityBadges(show)}
+              docked={Boolean(dockedPanels)}
+            />
+          ) : null
         )}
 
         {/* Complexity Heat-map / Refactor Badge Hover Tooltip */}
@@ -5372,38 +5470,47 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Real-Time Keyword Search & Highlighting Panel (Positioned below Statistics Panel) */}
-        {svgContent && !error && (
-          <DiagramSearchPanel
-            isOpen={isSearchPanelOpen}
-            onClose={() => setIsSearchPanelOpen(false)}
-            searchQuery={effectiveSearchQuery}
-            onSearchChange={handleSearchChange}
-            onClearSearch={clearSearch}
-            matches={matches}
-            activeMatchIndex={activeMatchIndex}
-            matchesBreakdown={matchesBreakdown}
-            onSelectMatch={switchActiveMatch}
-            onNextMatch={goToNextMatch}
-            onPrevMatch={goToPrevMatch}
-            availableStates={availableStates}
-            availableEdges={availableEdges}
-            onSelectState={(id, label) => {
-              handleSelectState(id, label);
-            }}
-            onSelectEdge={(edge) => {
-              setSelectedEdge(edge);
-            }}
-            onPanToElement={(el) => {
-              panToElement(el);
-              if (el.classList.contains('node') || el.closest('g.node')) {
-                const nodeG = (el.classList.contains('node') ? el : el.closest('g.node')) as SVGGElement;
-                if (nodeG) triggerNodeJumpHighlight(nodeG);
-              }
-            }}
-            isStatsOpen={isStatsOpen}
-            diagramVersionKey={`${fileName}_${code}_${availableEdges.length}_${availableStates.length}`}
-          />
-        )}
+        {(() => {
+          const searchPanel =
+            svgContent && !error ? (
+              <DiagramSearchPanel
+                isOpen={isSearchPanelOpen}
+                onClose={() => setIsSearchPanelOpen(false)}
+                searchQuery={effectiveSearchQuery}
+                onSearchChange={handleSearchChange}
+                onClearSearch={clearSearch}
+                matches={matches}
+                activeMatchIndex={activeMatchIndex}
+                matchesBreakdown={matchesBreakdown}
+                onSelectMatch={switchActiveMatch}
+                onNextMatch={goToNextMatch}
+                onPrevMatch={goToPrevMatch}
+                availableStates={availableStates}
+                availableEdges={availableEdges}
+                onSelectState={(id, label) => {
+                  handleSelectState(id, label);
+                }}
+                onSelectEdge={(edge) => {
+                  setSelectedEdge(edge);
+                }}
+                onPanToElement={(el) => {
+                  panToElement(el);
+                  if (el.classList.contains('node') || el.closest('g.node')) {
+                    const nodeG = (el.classList.contains('node') ? el : el.closest('g.node')) as SVGGElement;
+                    if (nodeG) triggerNodeJumpHighlight(nodeG);
+                  }
+                }}
+                isStatsOpen={isStatsOpen}
+                diagramVersionKey={`${fileName}_${code}_${availableEdges.length}_${availableStates.length}`}
+                docked={Boolean(dockedPanels)}
+              />
+            ) : null;
+          if (!dockedPanels) return searchPanel;
+          return createPortal(
+            searchPanel ?? <DockedPanelPlaceholder label="Keyword Search & Filter" />,
+            dockedPanels.targets.search
+          );
+        })()}
 
         {/* Floating State Node Style Inspector */}
         {isInspectorOpen && (
@@ -5537,13 +5644,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             onOpenStyleCustomizer={(stateId: string) => {
               const st = availableStates.find((s) => s.id === stateId);
               handleSelectState(stateId, st?.label || stateId);
-              setIsInspectorOpen(true);
+              if (onOpenInspectorPanel) onOpenInspectorPanel('style');
+              else setIsInspectorOpen(true);
             }}
             onOpenMethodEditor={(m) => {
+              if (onOpenInspectorPanel) return onOpenInspectorPanel('method', { method: m || undefined });
               if (m) setMethodModalInitialMethod(m);
               setIsMethodModalOpen(true);
             }}
             onOpenPreProcessEditor={() => {
+              if (onOpenInspectorPanel) return onOpenInspectorPanel('method', { method: 'preProcess()' });
               setMethodModalInitialMethod('preProcess()');
               setIsMethodModalOpen(true);
             }}
@@ -5629,35 +5739,40 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           onClose={() => setIsNoteDialogOpen(false)}
         />
 
-        {/* Notes Drawer */}
-        <NotesDrawer
-          isOpen={isNotesDrawerOpen}
-          notes={effectiveNotes}
-          onSelectTarget={(target: ContextMenuTarget) => {
-            if (target.type === 'node') {
-              handleSelectState(target.id, target.label || target.id);
-              panToState(target.id);
-            } else if (target.type === 'edge') {
-              const edge = availableEdges.find((e) => e.id === target.id);
-              if (edge) setSelectedEdge(edge);
-              panToEdge(target.id);
-            }
-          }}
-          onEditNote={(target: ContextMenuTarget) => {
-            setActiveNoteTarget(target);
-            setIsNoteDialogOpen(true);
-          }}
-          onDeleteNote={(target: ContextMenuTarget) => {
-            handleDeleteActiveNote(target);
-          }}
-          onClearAllNotes={() => {
-            onClearAllNotes?.();
-          }}
-          onOpenMermaidLive={() => {
-            onOpenMermaidLive?.();
-          }}
-          onClose={() => setIsNotesDrawerOpen(false)}
-        />
+        {/* Notes (slide-over drawer, or docked into the RightPanel) */}
+        {renderCanvasPanel(
+          'notes',
+          'Notes',
+          <NotesDrawer
+            isOpen={isNotesDrawerOpen}
+            notes={effectiveNotes}
+            onSelectTarget={(target: ContextMenuTarget) => {
+              if (target.type === 'node') {
+                handleSelectState(target.id, target.label || target.id);
+                panToState(target.id);
+              } else if (target.type === 'edge') {
+                const edge = availableEdges.find((e) => e.id === target.id);
+                if (edge) setSelectedEdge(edge);
+                panToEdge(target.id);
+              }
+            }}
+            onEditNote={(target: ContextMenuTarget) => {
+              setActiveNoteTarget(target);
+              setIsNoteDialogOpen(true);
+            }}
+            onDeleteNote={(target: ContextMenuTarget) => {
+              handleDeleteActiveNote(target);
+            }}
+            onClearAllNotes={() => {
+              onClearAllNotes?.();
+            }}
+            onOpenMermaidLive={() => {
+              onOpenMermaidLive?.();
+            }}
+            onClose={() => setIsNotesDrawerOpen(false)}
+            docked={Boolean(dockedPanels)}
+          />
+        )}
       </div>
     </div>
   );
