@@ -50,6 +50,7 @@
     <Compile Include="PackageGuids.cs" />
     <Compile Include="KvalStateScopePackage.cs" />
     <Compile Include="OpenInStateScopeCommand.cs" />
+    <Compile Include="PriorityCommandTarget.cs" />
     <Compile Include="SelectionHelper.cs" />
     <Compile Include="StateScopeToolWindow.cs" />
     <Compile Include="StateScopeControl.cs" />
@@ -76,6 +77,7 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
     <Reference Include="System" />

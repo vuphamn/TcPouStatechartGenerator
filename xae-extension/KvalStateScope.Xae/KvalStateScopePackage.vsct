@@ -44,12 +44,8 @@
       <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_EZDOCWINTAB" />
     </CommandPlacement>
     <!--
-      TwinCAT PLC project tree: its context menu has its own id. Find it with command logging (see
-      xae-extension/README.md), then add a placement here, e.g.
-      <CommandPlacement guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
-        <Parent guid="guidTwinCATPlcContextMenu" id="idTwinCATPlcPouContextMenu" />
-      </CommandPlacement>
-      and define guidTwinCATPlcContextMenu / idTwinCATPlcPouContextMenu in Symbols.
+      TwinCAT's PLC tree: the POU context menu ("PlcFile") gets the command at run time, by name
+      (OpenInStateScopeCommand.AddToTwinCATPouMenu): its numeric id is internal to Beckhoff's package.
     -->
   </CommandPlacements>
 

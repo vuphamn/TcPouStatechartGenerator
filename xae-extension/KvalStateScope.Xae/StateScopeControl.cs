@@ -22,7 +22,10 @@ namespace KvalStateScope.Xae
         private const string AppHost = "statescope.example";
 
         private readonly ToolWindowPane _pane;
-        private readonly WebView2 _web = new WebView2();
+        private readonly Grid _grid = new Grid();
+        // Replaced by a fresh control when a start attempt fails (a failed WebView2 control cannot be initialized again)
+        private WebView2 _web;
+        private Task _initialization;
         private readonly TextBlock _status = new TextBlock { Margin = new System.Windows.Thickness(12), Foreground = Brushes.Gainsboro, TextWrapping = System.Windows.TextWrapping.Wrap };
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private bool _appReady;
@@ -38,22 +41,82 @@ namespace KvalStateScope.Xae
             _status.Text = "Starting Kval StateScope...";
             // WebView2 only initializes once it is in the visual tree (it needs a window handle), so it is part of
             // the layout from the start. It is a native window WPF cannot draw over: the status line gets its own row.
-            var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition { Height = System.Windows.GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
+            _grid.RowDefinitions.Add(new RowDefinition { Height = System.Windows.GridLength.Auto });
+            _grid.RowDefinitions.Add(new RowDefinition { Height = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
             Grid.SetRow(_status, 0);
-            Grid.SetRow(_web, 1);
-            _web.DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x02, 0x06, 0x17);
-            grid.Children.Add(_status);
-            grid.Children.Add(_web);
-            Content = grid;
+            _grid.Children.Add(_status);
+            NewWebView();
+            Content = _grid;
             Loaded += OnLoaded;
+        }
+
+        private void NewWebView()
+        {
+            if (_web != null)
+            {
+                _grid.Children.Remove(_web);
+                _web.Dispose();
+            }
+            _web = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(0x02, 0x06, 0x17) };
+            Grid.SetRow(_web, 1);
+            _grid.Children.Add(_web);
+        }
+
+        /// <summary>Session-only profiles ("WebView2-&lt;pid&gt;") of IDE processes that are gone</summary>
+        private static void RemoveStaleSessionProfiles(string userData)
+        {
+            try
+            {
+                var parent = Path.GetDirectoryName(userData);
+                var prefix = Path.GetFileName(userData) + "-";
+                foreach (var dir in Directory.GetDirectories(parent, prefix + "*"))
+                {
+                    if (!int.TryParse(Path.GetFileName(dir).Substring(prefix.Length), out var pid)) continue;
+                    var alive = false;
+                    try { alive = !System.Diagnostics.Process.GetProcessById(pid).HasExited; } catch (ArgumentException) { }
+                    if (alive) continue;
+                    try { Directory.Delete(dir, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         private void OnLoaded(object sender, System.Windows.RoutedEventArgs e)
         {
+            // Loaded fires again whenever the tab is shown: start (at most) once
+            if (_initialization != null) return;
             Log.Write("window loaded");
-            _ = ThreadHelper.JoinableTaskFactory.RunAsync(InitializeAsync);
+            _initialization = ThreadHelper.JoinableTaskFactory.RunAsync(InitializeAsync).Task;
+        }
+
+        /// <summary>
+        /// Creates the WebView2. "Not in the correct state" (0x8007139F) means the browser profile is still held by a
+        /// WebView2 that is shutting down (e.g. an IDE that just closed): wait and retry with a fresh control, and in the
+        /// end fall back to a profile of this session only.
+        /// </summary>
+        private async Task StartWebViewAsync(string userData)
+        {
+            const int ProfileBusy = unchecked((int)0x8007139F);
+            RemoveStaleSessionProfiles(userData);
+            for (var attempt = 1; ; attempt++)
+            {
+                var profile = attempt <= 6 ? userData : $"{userData}-{System.Diagnostics.Process.GetCurrentProcess().Id}";
+                try
+                {
+                    var env = await CoreWebView2Environment.CreateAsync(null, profile);
+                    await _web.EnsureCoreWebView2Async(env);
+                    if (profile != userData) Log.Write("using a session-only browser profile: " + profile);
+                    return;
+                }
+                catch (System.Runtime.InteropServices.COMException ex) when (ex.HResult == ProfileBusy && attempt <= 6)
+                {
+                    Log.Write($"browser profile busy (attempt {attempt}), retrying");
+                    _status.Text = "Starting Kval StateScope... (waiting for a previous session to close)";
+                    NewWebView();
+                    await Task.Delay(1500);
+                }
+            }
         }
 
         private static string ExtensionDir => Path.GetDirectoryName(typeof(StateScopeControl).Assembly.Location);
@@ -70,8 +133,7 @@ namespace KvalStateScope.Xae
                 // The IDE's install folder is read-only: keep the browser profile per user
                 var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalStateScope", "WebView2");
                 Log.Write($"creating WebView2 environment (runtime {CoreWebView2Environment.GetAvailableBrowserVersionString()}, profile {userData})");
-                var env = await CoreWebView2Environment.CreateAsync(null, userData);
-                await _web.EnsureCoreWebView2Async(env);
+                await StartWebViewAsync(userData);
                 Log.Write("WebView2 ready");
 
                 var core = _web.CoreWebView2;
@@ -98,7 +160,9 @@ namespace KvalStateScope.Xae
             catch (Exception ex)
             {
                 Log.Write("start failed: " + ex);
-                _status.Text = $"Kval StateScope could not start: {ex.GetType().Name}: {ex.Message}";
+                _status.Text = $"Kval StateScope could not start: {ex.GetType().Name}: {ex.Message}. Close and reopen this tab to try again.";
+                NewWebView();
+                _initialization = null;
             }
         }
 

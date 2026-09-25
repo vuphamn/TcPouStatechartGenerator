@@ -42,6 +42,47 @@ namespace KvalStateScope.Xae
                 new CommandID(PackageGuids.CommandSet, CommandIds.OpenFromTools));
             openFromTools.ParametersDescription = "$";
             commands.AddCommand(openFromTools);
+
+            // Context menus owned by other windows (TwinCAT's PLC tree) only ask a priority command target
+            PriorityCommandTarget.Register(package, path => Run(package, path, askIfNone: false));
+            AddToTwinCATPouMenu(package);
+        }
+
+        /// <summary>
+        /// TwinCAT's PLC tree shows POUs with its "PlcFile" menu. Its numeric id cannot be read from outside Beckhoff's
+        /// package, so the command is added to that menu by name (once; the IDE keeps the placement in its settings).
+        /// Does nothing where TwinCAT is not installed.
+        /// </summary>
+        private static void AddToTwinCATPouMenu(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                if (!(services.GetService(typeof(EnvDTE.DTE)) is EnvDTE80.DTE2 dte)) return;
+                dynamic bars = dte.CommandBars;
+                dynamic menu;
+                try
+                {
+                    menu = bars["PlcFile"];
+                }
+                catch (ArgumentException)
+                {
+                    Log.Write("TwinCAT POU menu (PlcFile) not found: no TwinCAT PLC integration in this IDE");
+                    return;
+                }
+                dynamic controls = menu.Controls;
+                for (var i = 1; i <= (int)controls.Count; i++)
+                {
+                    if (((string)controls[i].Caption ?? "").Contains("Kval StateScope")) return;
+                }
+                var command = dte.Commands.Item(PackageGuids.CommandSet.ToString("B"), CommandIds.OpenSelected);
+                command.AddControl(menu, 1);
+                Log.Write("added Open in Kval StateScope to TwinCAT's POU menu (PlcFile)");
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Log.Write("could not add the command to TwinCAT's POU menu: " + ex.Message);
+            }
         }
 
         private static void Run(KvalStateScopePackage package, string pouPath, bool askIfNone)

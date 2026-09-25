@@ -44,9 +44,12 @@ namespace KvalStateScope.Xae
             {
                 if (dte?.SelectedItems != null)
                 {
+                    var solutionFolder = GetSolutionFolder(services);
                     foreach (SelectedItem item in dte.SelectedItems)
                     {
-                        var path = FromProjectItem(item.ProjectItem);
+                        var path = FromProjectItem(item.ProjectItem)
+                            // TwinCAT PLC tree items report no file names: "SM_X (FB)" -> SM_X.TcPOU below the solution
+                            ?? LookupByName(item.ProjectItem?.Name ?? item.Name, solutionFolder);
                         if (path != null) return path;
                     }
                 }
@@ -139,10 +142,21 @@ namespace KvalStateScope.Xae
                 if (path != null) return path;
             }
 
-            // Last resort: "SM_TableManager (FB)" -> SM_TableManager.TcPOU somewhere below the project folder
+            // Last resort: "SM_TableManager (FB)" -> SM_TableManager.TcPOU below the project folder (or the solution)
             var name = GetStringProperty(hierarchy, itemId, (int)__VSHPROPID.VSHPROPID_Name);
-            var projectDir = ProjectFolder(hierarchy);
-            return LookupByName(name, projectDir);
+            return LookupByName(name, ProjectFolder(hierarchy)) ?? LookupByName(name, SolutionFolderOf(hierarchy));
+        }
+
+        private static string SolutionFolderOf(IVsHierarchy hierarchy)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            try
+            {
+                return hierarchy.GetSite(out var site) == VSConstants.S_OK && site != null
+                    ? GetSolutionFolder(new ServiceProvider(site))
+                    : null;
+            }
+            catch (COMException) { return null; }
         }
 
         private static string ProjectFolder(IVsHierarchy hierarchy)

@@ -13,7 +13,9 @@ namespace KvalStateScope.Xae
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
     [Guid(PackageGuids.PackageString)]
-    [ProvideMenuResource("Menus.ctmenu", 1)]
+    // The version makes the IDE re-merge the menus: raise it whenever KvalStateScopePackage.vsct changes
+    // (TcXaeShell otherwise keeps its cached menus, as it has no /updateconfiguration)
+    [ProvideMenuResource("Menus.ctmenu", 3)]
     // The context-menu command hides itself unless a .TcPOU is selected, which needs the package loaded: load it
     // (in the background) once a solution is open
     [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
