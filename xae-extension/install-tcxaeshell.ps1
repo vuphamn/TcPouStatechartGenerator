@@ -16,11 +16,15 @@
   .\install-tcxaeshell.ps1
 .EXAMPLE
   .\install-tcxaeshell.ps1 -Uninstall
+.EXAMPLE
+  .\install-tcxaeshell.ps1 -Quiet   (from the Kval StateScope installer: no prompts, the exit code tells the result)
 #>
 param(
   [string]$Vsix = (Join-Path $PSScriptRoot 'KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix'),
   [string]$ShellRoot = 'C:\Program Files\Beckhoff\TcXaeShell',
   [switch]$Uninstall,
+  # No prompts: errors only set the exit code (1: failed, 2: TcXaeShell is running, 3: TcXaeShell is not installed)
+  [switch]$Quiet,
   # Internal: the elevated copy step
   [switch]$CopyOnly
 )
@@ -31,7 +35,10 @@ $shellExe = Join-Path $ShellRoot 'Common7\IDE\TcXaeShell.exe'
 $target = Join-Path $ShellRoot 'Common7\IDE\Extensions\Kval Inc\Kval StateScope'
 # Touched after a change: TcXaeShell compares its timestamp at start-up and then re-merges the extension registrations
 $marker = Join-Path $ShellRoot 'Common7\IDE\Extensions\extensions.configurationchanged'
-if (-not (Test-Path $shellExe)) { throw "TcXaeShell not found: $shellExe" }
+if (-not (Test-Path $shellExe)) {
+  if ($Quiet) { Write-Host "TcXaeShell not found: $shellExe"; exit 3 }
+  throw "TcXaeShell not found: $shellExe"
+}
 
 function Test-Admin {
   ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -57,12 +64,15 @@ if ($CopyOnly) {
     exit 0
   } catch {
     Write-Host $_ -ForegroundColor Red
-    Read-Host 'Press Enter to close'
+    if (-not $Quiet) { Read-Host 'Press Enter to close' }
     exit 1
   }
 }
 
-if (Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue) { throw 'Close TcXaeShell first.' }
+if (Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue) {
+  if ($Quiet) { Write-Host 'Close TcXaeShell first.'; exit 2 }
+  throw 'Close TcXaeShell first.'
+}
 if (-not $Uninstall) {
   if (-not (Test-Path $Vsix)) { throw "VSIX not found: $Vsix (run .\build.ps1 first)" }
   $Vsix = (Resolve-Path $Vsix).Path
@@ -71,6 +81,7 @@ if (-not $Uninstall) {
 # 1. copy (elevated)
 $copyArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-CopyOnly', '-Vsix', "`"$Vsix`"", '-ShellRoot', "`"$ShellRoot`"")
 if ($Uninstall) { $copyArgs += '-Uninstall' }
+if ($Quiet) { $copyArgs += '-Quiet' }
 if (Test-Admin) {
   & powershell.exe @($copyArgs | ForEach-Object { $_.Trim('"') })
 } else {

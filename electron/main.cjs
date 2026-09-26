@@ -1,10 +1,54 @@
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { readPouWithDutCandidates } = require('./tcSourceFiles.cjs');
 const live = require('./tcLive.cjs');
 
+// ---- Opening a .TcPOU from Windows Explorer ("Open in Kval StateScope", or a file dropped on the exe) ----
+
+/** The .TcPOU in a command line (the packaged exe gets it as its first argument, `electron .` after the dot) */
+function pouFromArgs(argv) {
+  for (let i = argv.length - 1; i >= 1; i--) {
+    const a = argv[i];
+    if (/\.tcpou$/i.test(a) && fs.existsSync(a)) return path.resolve(a);
+  }
+  return null;
+}
+
+async function readPouForApp(file) {
+  try {
+    return await readPouWithDutCandidates(file);
+  } catch (err) {
+    return { error: `Could not open ${path.basename(file)}: ${err.message}` };
+  }
+}
+
+// One window: a second start (another file opened from Explorer) hands its file to the running app
+const isFirstInstance = app.requestSingleInstanceLock();
+if (!isFirstInstance) app.quit();
+let mainWindow = null;
+// Opened when the page asks for it (the app is not loaded yet when the window opens)
+let startupPou = pouFromArgs(process.argv);
+
+app.on('second-instance', async (_event, argv) => {
+  const file = pouFromArgs(argv);
+  if (!mainWindow) {
+    startupPou = file ?? startupPou;
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+  if (file) mainWindow.webContents.send('tc:open-pou-file', await readPouForApp(file));
+});
+
+ipcMain.handle('tc:startup-pou', async () => {
+  const file = startupPou;
+  startupPou = null;
+  return file ? readPouForApp(file) : null;
+});
+
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
     minWidth: 960,
@@ -28,6 +72,9 @@ function createWindow() {
       return { action: 'deny' };
     }
     return { action: 'allow' };
+  });
+  mainWindow.on('closed', () => {
+    mainWindow = null;
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -135,6 +182,7 @@ app.on('before-quit', () => {
 if (process.platform === 'win32') app.setAppUserModelId('com.kval.statescope');
 
 app.whenReady().then(() => {
+  if (!isFirstInstance) return;
   createWindow();
 
   app.on('activate', () => {

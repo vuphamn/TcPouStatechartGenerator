@@ -5,6 +5,14 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   isDesktop: true,
   /** Native open dialog for a .TcPOU; resolves with its content and the .TcDUT files in its folder tree, or null */
   openPou: () => ipcRenderer.invoke('tc:open-pou'),
+  /** The .TcPOU the app was started with (Explorer's Open in Kval StateScope), once; null when none */
+  startupPou: () => ipcRenderer.invoke('tc:startup-pou'),
+  /** A .TcPOU opened from Explorer while the app runs; returns the unsubscribe function */
+  onOpenPouFile: (handler) => {
+    const listener = (_event, source) => handler(source);
+    ipcRenderer.on('tc:open-pou-file', listener);
+    return () => ipcRenderer.removeListener('tc:open-pou-file', listener);
+  },
   /** Another POU of the same PLC project, by type name or path: a PouSource or { error } */
   openPouInProject: (fromPath, typeName, filePath) => ipcRenderer.invoke('tc:open-pou-in-project', fromPath, typeName, filePath),
   /** Project documentation: the state machine POUs and enums of the PLC project that contains the file */

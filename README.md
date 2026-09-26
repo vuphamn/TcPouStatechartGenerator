@@ -177,16 +177,35 @@ npm run preview
 
 ## Build Windows 11 Desktop Application (.exe)
 
-You can package the application as a standalone, offline Windows desktop application via Electron:
+You can package the application as a standalone, offline Windows desktop application via Electron. One script builds everything the installer ships, then the installer:
 
-```powershell
-# Build Windows Installer (.exe) and Portable standalone executable
-npm run build:exe
+```bat
+build.cmd          :: the XAE extension (VSIX), the web app, Link, the gateway, then the installer
+build.cmd noxae    :: the same, keeping the existing VSIX (no Visual Studio build tools on this PC)
 ```
 
+`npm run build:exe` does the same except the VSIX: it uses the one in `xae-extension\KvalStateScope.Xae\bin\Release`, building it only when it is missing. Building the extension needs Visual Studio 2022 / 2026 with the extension development workload.
+
 Compiled executables are output to the `release/` directory:
-- **`Kval StateScope Setup <version>.exe`** — Standard Windows Installer with Start menu shortcuts and auto-updater support.
+- **`Kval StateScope Setup <version>.exe`** — the Windows installer, with Start menu shortcuts and auto-updater support.
 - **`Kval StateScope <version>.exe`** — Portable single-file executable (no installation required, runs directly from USB or local drive).
+
+### What the installer sets up
+
+After the install folder, the installer offers **Additional components**:
+
+| Option | What it does |
+|---|---|
+| **Open in Kval StateScope** (on by default) | Adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files in Windows Explorer. It works whatever program `.TcPOU` files open with. On Windows 11 it is under **Show more options** (or Shift+right-click). |
+| **Visual Studio** | Installs the TwinCAT XAE extension in every Visual Studio 2022 / 2026 found (listed on the page). Close Visual Studio first; the installer asks you to. |
+| **TcXaeShell 64-bit** | Installs the extension in TcXaeShell (asks for administrator rights). Close TcXaeShell first. |
+| **Kval StateScope Link** | The web edition's helper for a browser on this computer, with a Start menu shortcut. |
+| **Kval StateScope gateway** | The web edition's shared server, in `%LocalAppData%\KvalStateScope\Gateway` (or `C:\ProgramData\KvalStateScope\Gateway` for all users), with its dependencies. It runs on Node.js 20+; set it up with [gateway/README.md](gateway/README.md) (`node gateway.cjs init`). |
+
+Options for software that is not on the computer are greyed out. Running the installer again shows your earlier choices; an update keeps them.
+
+- **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in that window.
+- **Uninstalling** removes the menu entry, the extensions and Link. It removes the gateway's program files but keeps its `config.json`, certificate and key.
 
 ### Live view in the desktop app
 The desktop app's **Live** tab follows a state machine in a PLC on another computer. The Electron main process talks ADS straight to the PLC's router over TCP 48898 (`electron/tcLive.cjs`, with [ads-client](https://github.com/jisotalo/ads-client)), so TwinCAT is not needed on the laptop. The display is the same as in XAE: the active state glows on the diagram, and the tab lists every transition with its dwell and flags those that aren't in the diagram.

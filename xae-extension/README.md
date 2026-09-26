@@ -17,6 +17,8 @@ Output: `xae-extension\KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix`
 
 ## Install
 
+The simplest way is the Kval StateScope **Desktop installer** (`build.cmd` at the repository root builds it). Its *Additional components* page offers Visual Studio 2022 / 2026 and TcXaeShell, and installs into those found on the computer. By hand:
+
 - **Visual Studio 2022 / 2026:** double-click the `.vsix`, then restart Visual Studio.
 - **TcXaeShell:** close it, then run:
 

@@ -29,14 +29,15 @@ npm run dev            # web app on http://localhost:3000
 | `npm run lint` | Type check only (`tsc --noEmit`). There is no ESLint setup |
 | `npm run build` | Type check + production web build into `dist/` |
 | `npm run electron:dev` | Desktop app against the running dev server (start `npm run dev` first) |
-| `npm run build:exe` | Web build + Windows installer and portable exe into `release/` |
+| `build.cmd` | Everything the Desktop installer ships (VSIX, web app, Link, gateway), then the installer; `build.cmd noxae` keeps the existing VSIX |
+| `npm run build:exe` | Web build, the installer's components (`scripts/prepare-installer.cjs`), then the Windows installer and portable exe into `release/` |
 | `npm run build:gateway` | Web build + the gateway package (see `gateway/README.md`) |
 | `npm run build:link` | `Kval StateScope Link.exe`, a single-file Node executable (see `link/README.md`, which also covers code signing) |
 | `xae-extension\build.ps1` | Web build, copied into the VSIX, then the VSIX (needs Visual Studio's MSBuild; see `xae-extension/README.md`) |
 
 The app opens on a bundled sample, so you can use it without any PLC files. Pick others from the **Sample** dropdown in the header. They live in `src/samples/samplesData.ts`.
 
-**VS Code gotcha:** VS Code terminals can set `ELECTRON_RUN_AS_NODE=1`, which makes Electron start as plain Node and exit immediately. Clear the variable before `electron:dev` or before launching the built exe from that terminal.
+**VS Code gotcha:** VS Code terminals can set `ELECTRON_RUN_AS_NODE=1`, which makes Electron start as plain Node and exit immediately. Clear the variable before `electron:dev`. The built app ignores it: its `runAsNode` fuse is off (`build.electronFuses` in `package.json`).
 
 ## How it works
 
@@ -109,7 +110,8 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 | Toolbar overflow ("Hidden" menus) | `hooks/useToolbarOverflow.ts` |
 | Editors | `MethodStructuredTextEditor.tsx`, `DutEnumEditor.tsx`, `utils/st*.ts` |
 | Export / PDF | `utils/diagramExport.ts`, `utils/printToPdf.ts`, `ExportModal.tsx` |
-| Desktop | `electron/main.cjs`, `electron/preload.cjs`, `electron/tcSourceFiles.cjs`, `electron/tcLive*.cjs` |
+| Desktop | `electron/main.cjs` (also: one instance, a `.TcPOU` on the command line), `electron/preload.cjs`, `electron/tcSourceFiles.cjs`, `electron/tcLive*.cjs` |
+| Desktop installer | `build/installer.nsh` (NSIS additions: Explorer menu entry, Additional components page), `build/installer/vs-extension.ps1`, `scripts/prepare-installer.cjs` (stages `release/installer-extras`) |
 | TwinCAT XAE extension | `xae-extension/` (see its README for the file layout) |
 | Icon | source art `public/icon.svg` (32 px and up) and `public/favicon.svg` (16–32 px); packaged `build/icon.ico`, `electron/assets/icon.ico` |
 
@@ -137,7 +139,7 @@ There is no automated test suite yet. Before opening a PR:
    - drag states, edges, labels and notes;
    - right-click a state for Paths, Add transition and Rename, and check the Problems, Paths and Changes tabs;
    - export.
-3. For desktop changes: run `npm run build:exe` and try `release/Kval StateScope <version>.exe`.
+3. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval StateScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval StateScope, and its options change Visual Studio, TcXaeShell and Explorer.
 4. For XAE changes: build with `xae-extension\build.ps1` and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
 5. Without a PLC, the Live tab can only be tested up to the connection error, or against a small simulated PLC. An AMS/TCP server answering symbol info, handle, read and notification requests is enough for the desktop app, Link and the gateway (all use ads-client in direct mode). Test against a real PLC before relying on it.
 

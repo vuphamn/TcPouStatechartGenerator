@@ -1049,6 +1049,22 @@ export const App: React.FC = () => {
     }
   }, [applyLoadedPou, showCopyToast]);
 
+  // Desktop: a .TcPOU opened from Windows Explorer ("Open in Kval StateScope"): at start-up, or later in this window
+  useEffect(() => {
+    type Opened = PouSource | { error: string } | null;
+    const d = (window as unknown as { tcDesktop?: { startupPou?: () => Promise<Opened>; onOpenPouFile?: (h: (s: Opened) => void) => () => void } }).tcDesktop;
+    if (!d?.startupPou || !d.onOpenPouFile) return;
+    // Through the ref: the handlers of the latest render
+    const open = (src: Opened) => {
+      if (!src) return;
+      if ('error' in src) hostHandlersRef.current.showCopyToast(src.error, 'error');
+      else hostHandlersRef.current.applyLoadedPou(src);
+    };
+    const off = d.onOpenPouFile(open);
+    void d.startupPou().then(open);
+    return off;
+  }, []);
+
   const handleDropPou = useCallback(
     async (file: File) => {
       applyLoadedPou(await readDroppedPou(file));
@@ -2726,7 +2742,8 @@ export const App: React.FC = () => {
             {dockLayout.rightVisible ? <PanelRightClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelRightOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
 
-            <img src="/icon.svg" alt="Kval StateScope" className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" draggable={false} />
+            {/* Relative to the app (BASE_URL): the desktop app loads it from file:// */}
+            <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Kval StateScope" className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" draggable={false} />
           </div>
             {/* Title shrinks and truncates first when the header runs out of room */}
             <div className="min-w-0 overflow-hidden">
