@@ -105,6 +105,8 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'liveStop') return session.stop(true, send);
     // Guard variables of the running session (a malformed request is ignored)
     if (m.type === 'liveWatch') return void session.watch(m.vars);
+    // Symbol browser: a symbol's members in the connected PLC
+    if (m.type === 'liveBrowse') return void session.browse(send, m);
     if (m.type !== 'liveStart') return;
     const ident = /^[A-Za-z_]\w*$/;
     const netIdRx = /^\d{1,3}(\.\d{1,3}){5}$/;

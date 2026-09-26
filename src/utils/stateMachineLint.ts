@@ -5,6 +5,7 @@
  */
 
 import type { EdgeInfo } from '../types.ts';
+import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
 import { LABEL_RX, escapeRx, labelNames, locateTransition } from './sourceLocation.ts';
 import { extractCleanGuardText } from './stateMachineStats.ts';
@@ -510,6 +511,7 @@ export function addCaseBranch(pouXml: string, name: string): string | null {
   if (insertAt === null) return null;
   const labelIndent = main.branches[0] ? lines[main.branches[0].line].match(/^[ \t]*/)![0] : '\t';
   const bodyIndent = labelIndent + '\t';
-  lines.splice(insertAt, 0, `${labelIndent}${name}:`, `${bodyIndent};`, '');
+  // Written like the other labels (a qualified_only enum needs "E_X.STATE:")
+  lines.splice(insertAt, 0, `${labelIndent}${stateQualifier(method.code)}${name}:`, `${bodyIndent};`, '');
   return lines.join(eol);
 }

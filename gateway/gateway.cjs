@@ -115,6 +115,7 @@ class PlcConnection {
     this.plc = plc;
     this.localNetId = plc.localNetId || localNetId;
     this.client = null;
+    this.dtCache = null; // symbol browser: the next connection may have another program
     this.connecting = null;
     this.symbols = new Map(); // symbol (lower case) -> { symbol, handle, size, type, subscription, viewers, last }
     this.discovered = new Map(); // type name -> { at, paths }
@@ -253,6 +254,7 @@ class PlcConnection {
     clearTimeout(this.idleTimer);
     const client = this.client;
     this.client = null;
+    this.dtCache = null; // symbol browser: the next connection may have another program
     this.viewers.clear();
     for (const entry of this.symbols.values()) await this.unwatchEntry(entry);
     this.symbols.clear();
@@ -426,6 +428,22 @@ function start() {
         if (!vars) return;
         if (session) session.vars.set(vars);
         else desiredVars = vars;
+        return;
+      }
+      // Symbol browser: a symbol's members in the PLC this viewer follows (config.allowBrowse: false turns it off)
+      if (m.type === 'liveBrowse') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const symbolPath = typeof m.path === 'string' ? m.path.trim() : '';
+        const stateVar = typeof m.stateVar === 'string' && /^[A-Za-z_]\w*$/.test(m.stateVar) ? m.stateVar : 'machineState';
+        if (config.allowBrowse === false) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Symbol browsing is turned off on this gateway' });
+        if (!ads.isSymbolPath(symbolPath)) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not a symbol path' });
+        if (!session?.conn.client) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not connected' });
+        try {
+          session.conn.dtCache ??= new Map();
+          send({ type: 'liveBrowseResult', requestId, ...(await ads.browseSymbol(session.conn.client, symbolPath, { stateVar, cache: session.conn.dtCache })) });
+        } catch (err) {
+          send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: ads.adsErrorText(err) });
+        }
         return;
       }
       if (m.type === 'liveStop') {

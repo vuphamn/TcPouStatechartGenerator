@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     ipcRenderer.on('tc:open-pou-file', listener);
     return () => ipcRenderer.removeListener('tc:open-pou-file', listener);
   },
+  /** The POU this window shows and the PLC instance it follows (Explorer / Open instance bring this window forward) */
+  reportPou: (filePath, instance) => ipcRenderer.send('tc:current-pou', filePath || null, instance || null),
+  /**
+   * A new window, empty or with a .TcPOU (one already open in a window brings that window forward). launch:
+   * { instance, live } follows that PLC instance of it; { handoff } takes a POU the page handed over
+   */
+  newWindow: (filePath, launch) => ipcRenderer.invoke('tc:new-window', filePath || null, launch || null),
   /** Another POU of the same PLC project, by type name or path: a PouSource or { error } */
   openPouInProject: (fromPath, typeName, filePath) => ipcRenderer.invoke('tc:open-pou-in-project', fromPath, typeName, filePath),
   /** Project documentation: the state machine POUs and enums of the PLC project that contains the file */
@@ -27,6 +34,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     stop: () => ipcRenderer.invoke('tc:live-stop'),
     /** Guard variables to follow: [{ id, candidates }] (answered with liveWatchResult, values in liveVars) */
     watch: (vars) => ipcRenderer.invoke('tc:live-watch', vars),
+    /** Symbol browser: { requestId, path, stateVar } (answered with liveBrowseResult) */
+    browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
     /** Subscribes to liveStatus / liveValues / liveWatchResult / liveVars messages; returns the unsubscribe function */
     onMessage: (handler) => {
       const listener = (_event, message) => handler(message);

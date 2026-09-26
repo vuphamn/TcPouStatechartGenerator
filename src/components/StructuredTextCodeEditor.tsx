@@ -1,4 +1,5 @@
-import React, { useRef, useMemo, useEffect, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useMemo, useEffect, useLayoutEffect, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
+import { useEditorZoom } from '../hooks/useEditorZoom.ts';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { highlightStructuredText } from '../utils/stSyntaxHighlighter.ts';
 import {
@@ -75,6 +76,86 @@ export const StructuredTextCodeEditor = forwardRef<
     const preRef = useRef<HTMLPreElement>(null);
     const gutterRef = useRef<HTMLDivElement>(null);
     const [scrollTop, setScrollTop] = useState<number>(0);
+    const containerRef = useRef<HTMLDivElement>(null);
+    // Text size (Ctrl+mouse wheel, as in Visual Studio / TwinCAT XAE): 100% is 12px text on 20px lines
+    const [zoom, setZoom] = useEditorZoom();
+    const lineH = 20 * zoom;
+    const lineHRef = useRef(lineH);
+    lineHRef.current = lineH;
+    const fontPx = 12 * zoom;
+    // The line at the top when zooming: kept at the top at the new size
+    const zoomAnchorRef = useRef<number | null>(null);
+    const [zoomShownAt, setZoomShownAt] = useState(0);
+    // (a ref: wheel events come faster than renders)
+    const zoomRef = useRef(zoom);
+    zoomRef.current = zoom;
+    const zoomBy = useCallback(
+      (delta: number) => {
+        const ta = textareaRef.current;
+        // The first zoom of a burst sets the anchor (the line at the top before it)
+        if (ta && zoomAnchorRef.current === null) zoomAnchorRef.current = ta.scrollTop / (20 * zoomRef.current);
+        zoomRef.current = setZoom(zoomRef.current + delta);
+        setZoomShownAt(Date.now());
+      },
+      [setZoom]
+    );
+    useEffect(() => {
+      const el = containerRef.current;
+      if (!el) return;
+      // Not passive: Ctrl+wheel must not zoom the whole page
+      const onWheel = (e: WheelEvent) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        if (e.deltaY !== 0) zoomBy(e.deltaY < 0 ? 0.1 : -0.1);
+      };
+      el.addEventListener('wheel', onWheel, { passive: false });
+      return () => el.removeEventListener('wheel', onWheel);
+    }, [zoomBy]);
+    useLayoutEffect(() => {
+      const ta = textareaRef.current;
+      const anchor = zoomAnchorRef.current;
+      zoomAnchorRef.current = null;
+      if (!ta || anchor === null) return;
+      ta.scrollTop = anchor * lineH;
+      // The layers follow the textarea (also on the next frame: the browser may still adjust it after the font change)
+      const sync = () => {
+        if (preRef.current) {
+          preRef.current.scrollTop = ta.scrollTop;
+          preRef.current.scrollLeft = ta.scrollLeft;
+        }
+        if (gutterRef.current) gutterRef.current.scrollTop = ta.scrollTop;
+        setScrollTop(ta.scrollTop);
+      };
+      sync();
+      const raf = requestAnimationFrame(sync);
+      return () => cancelAnimationFrame(raf);
+    }, [lineH]);
+    // The zoom level shows for a moment after a change (and stays while it is not 100%)
+    const [, setTick] = useState(0);
+    useEffect(() => {
+      if (!zoomShownAt) return;
+      const t = window.setTimeout(() => setTick((n) => n + 1), 1300);
+      return () => window.clearTimeout(t);
+    }, [zoomShownAt]);
+    const showZoom = zoom !== 1 || Date.now() - zoomShownAt < 1200;
+    // The caret's line (view line index), highlighted like Visual Studio's / TwinCAT XAE's current line
+    const [caretViewLine, setCaretViewLine] = useState<number | null>(null);
+    const [focused, setFocused] = useState(false);
+    const updateCaretLine = useCallback(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      // The end the caret is at (a selection made upwards has it at its start)
+      const pos = ta.selectionDirection === 'backward' ? ta.selectionStart : ta.selectionEnd;
+      let line = 0;
+      for (let i = ta.value.indexOf('\n'); i >= 0 && i < pos; i = ta.value.indexOf('\n', i + 1)) line++;
+      setCaretViewLine((prev) => (prev === line ? prev : line));
+    }, []);
+    // Every caret move while focused: keys, clicks, drags, jumps (setSelectionRange), edits
+    useEffect(() => {
+      if (!focused) return;
+      document.addEventListener('selectionchange', updateCaretLine);
+      return () => document.removeEventListener('selectionchange', updateCaretLine);
+    }, [focused, updateCaretLine]);
 
     // Compute folded view model (or standard fallback)
     const viewModel = useMemo(() => {
@@ -153,7 +234,7 @@ export const StructuredTextCodeEditor = forwardRef<
           // Fallback to approximate line position
           targetViewIdx = Math.max(0, originalLineNum - 1);
         }
-        const targetTop = Math.max(0, targetViewIdx * 20 - 40);
+        const targetTop = Math.max(0, targetViewIdx * lineHRef.current - 2 * lineHRef.current);
         textareaRef.current.scrollTo({
           top: targetTop,
           behavior: smooth ? 'smooth' : 'auto',
@@ -174,12 +255,14 @@ export const StructuredTextCodeEditor = forwardRef<
         if (targetViewIdx < 0) {
           targetViewIdx = Math.max(0, scrollToLine - 1);
         }
-        const targetTop = Math.max(0, targetViewIdx * 20 - 40);
+        const targetTop = Math.max(0, targetViewIdx * lineHRef.current - 2 * lineHRef.current);
         textareaRef.current.scrollTo({
           top: targetTop,
           behavior: 'smooth',
         });
       }
+    // (not on a zoom: the line height is read from the ref)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [scrollToLine, lineEntries]);
 
     // Synchronize scrolling across textarea, pre, and gutter
@@ -246,6 +329,14 @@ export const StructuredTextCodeEditor = forwardRef<
         }
       }
 
+      // Zoom from the keyboard, as in Visual Studio: Ctrl+Shift+. / Ctrl+Shift+, and Ctrl+0 for 100%
+      if (e.ctrlKey && !e.altKey && (e.key === '0' || (e.shiftKey && (e.key === '>' || e.key === '.' || e.key === '<' || e.key === ',')))) {
+        e.preventDefault();
+        if (e.key === '0') zoomBy(1 - zoom);
+        else zoomBy(e.key === '>' || e.key === '.' ? 0.1 : -0.1);
+        return;
+      }
+
       if (e.key === 'Tab') {
         e.preventDefault();
         const textarea = textareaRef.current;
@@ -287,6 +378,7 @@ export const StructuredTextCodeEditor = forwardRef<
 
     return (
       <div
+        ref={containerRef}
         onWheel={(e) => e.stopPropagation()}
         className={`relative flex-1 min-h-0 flex font-mono text-xs overflow-hidden bg-slate-950 ${className}`}
       >
@@ -296,18 +388,26 @@ export const StructuredTextCodeEditor = forwardRef<
           aria-hidden="true"
           className={`${
             enableCodeFolding ? 'w-14' : 'w-11'
-          } bg-slate-950/95 py-2 select-none border-r border-slate-800/80 overflow-hidden font-mono text-[11px] text-slate-500 shrink-0 select-none z-10`}
+          } bg-slate-950/95 py-2 select-none border-r border-slate-800/80 overflow-hidden font-mono text-slate-500 shrink-0 select-none z-10`}
+          style={{ fontSize: `${11 * zoom}px`, width: zoom > 1 ? `${(enableCodeFolding ? 56 : 44) * Math.min(zoom, 2)}px` : undefined }}
         >
           {lineEntries.map((entry, idx) => {
             const isHighlighted =
               highlightedViewLineIndex !== null && highlightedViewLineIndex === idx;
+            const isCaretLine = caretViewLine === idx;
 
             return (
               <div
                 key={`line-row-${idx}`}
-                className={`leading-5 h-5 flex items-center justify-between transition-colors px-1 rounded-sm group/gutter-row ${
+                data-caret-line={isCaretLine ? (focused ? 'focused' : 'blurred') : undefined}
+                style={{ height: `${lineH}px`, lineHeight: `${lineH}px` }}
+                className={`st-gutter-row flex items-center justify-between transition-colors px-1 rounded-sm group/gutter-row ${
                   isHighlighted
                     ? 'bg-sky-500/30 text-sky-300 font-bold ring-1 ring-sky-400'
+                    : isCaretLine
+                    ? focused
+                      ? 'bg-slate-700/45'
+                      : 'bg-slate-800/40'
                     : 'hover:bg-slate-900/60'
                 }`}
               >
@@ -359,7 +459,7 @@ export const StructuredTextCodeEditor = forwardRef<
                 )}
 
                 {/* Right: Line Number and Find Match Indicator */}
-                <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono text-[10px] gap-1">
+                <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
                   {matchingViewLines.has(idx) && (
                     <span
                       className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 shadow-[0_0_6px_rgba(251,191,36,0.8)]"
@@ -370,6 +470,10 @@ export const StructuredTextCodeEditor = forwardRef<
                     className={`${
                       isHighlighted
                         ? 'text-sky-300 font-bold'
+                        : isCaretLine
+                        ? focused
+                          ? 'text-slate-100 font-semibold'
+                          : 'text-slate-300'
                         : entry.isPlaceholder
                         ? 'text-amber-400 font-semibold'
                         : matchingViewLines.has(idx)
@@ -387,13 +491,24 @@ export const StructuredTextCodeEditor = forwardRef<
 
         {/* Code Viewport with Syntax-Highlighted Pre + Transparent Editable Textarea */}
         <div className="relative flex-1 min-h-0 overflow-hidden bg-slate-950">
+          {/* The caret's line (as in Visual Studio / TwinCAT XAE): a band with a frame, dimmer when not focused */}
+          {caretViewLine !== null && caretViewLine < lineEntries.length && (
+            <div
+              id={id ? `${id}-caret-line` : undefined}
+              className={`st-caret-line absolute left-0 right-0 pointer-events-none z-0 border-y ${
+                focused ? 'bg-slate-600/30 border-slate-500/60' : 'bg-slate-700/15 border-slate-700/60'
+              }`}
+              style={{ top: `${caretViewLine * lineH + 8 - scrollTop}px`, height: `${lineH}px` }}
+            />
+          )}
+
           {/* Highlight line overlay */}
           {highlightedViewLineIndex !== null && (
             <div
               className="absolute left-0 right-0 pointer-events-none transition-all duration-300 bg-sky-500/15 border-l-2 border-sky-400 z-0"
               style={{
-                top: `${highlightedViewLineIndex * 20 + 8 - scrollTop}px`,
-                height: '20px',
+                top: `${highlightedViewLineIndex * lineH + 8 - scrollTop}px`,
+                height: `${lineH}px`,
               }}
             />
           )}
@@ -403,8 +518,8 @@ export const StructuredTextCodeEditor = forwardRef<
             ref={preRef}
             aria-hidden="true"
             tabIndex={-1}
-            style={{ tabSize: 4, MozTabSize: 4 }}
-            className="absolute inset-0 m-0 p-2 font-mono text-xs leading-5 whitespace-pre overflow-hidden pointer-events-none select-none text-slate-100 z-0 custom-scrollbar"
+            style={{ tabSize: 4, MozTabSize: 4, fontSize: `${fontPx}px`, lineHeight: `${lineH}px` }}
+            className="absolute inset-0 m-0 p-2 font-mono whitespace-pre overflow-hidden pointer-events-none select-none text-slate-100 z-0 custom-scrollbar"
             dangerouslySetInnerHTML={{ __html: highlightedHtml + '<br/>' }}
           />
 
@@ -415,7 +530,15 @@ export const StructuredTextCodeEditor = forwardRef<
             value={activeViewCode}
             onChange={(e) => handleTextareaChange(e.target.value)}
             onClick={handleTextareaClickOrSelect}
-            onSelect={handleTextareaClickOrSelect}
+            onSelect={() => {
+              updateCaretLine();
+              handleTextareaClickOrSelect();
+            }}
+            onFocus={() => {
+              setFocused(true);
+              updateCaretLine();
+            }}
+            onBlur={() => setFocused(false)}
             onScroll={handleScroll}
             onWheel={(e) => e.stopPropagation()}
             onKeyDown={handleKeyDownInternal}
@@ -426,9 +549,21 @@ export const StructuredTextCodeEditor = forwardRef<
             autoCorrect="off"
             placeholder={placeholder}
             aria-label={ariaLabel}
-            style={{ tabSize: 4, MozTabSize: 4 }}
-            className="absolute inset-0 w-full h-full p-2 font-mono text-xs leading-5 whitespace-pre bg-transparent text-transparent caret-sky-400 resize-none outline-none overflow-auto custom-scrollbar selection:bg-sky-500/30 selection:text-transparent z-10"
+            style={{ tabSize: 4, MozTabSize: 4, fontSize: `${fontPx}px`, lineHeight: `${lineH}px` }}
+            className="absolute inset-0 w-full h-full p-2 font-mono whitespace-pre bg-transparent text-transparent caret-sky-400 resize-none outline-none overflow-auto custom-scrollbar selection:bg-sky-500/30 selection:text-transparent z-10"
           />
+          {/* Zoom level (bottom left, as in Visual Studio): click for 100% */}
+          {showZoom && (
+            <button
+              type="button"
+              id={id ? `${id}-zoom` : undefined}
+              onClick={() => zoomBy(1 - zoom)}
+              className="st-editor-zoom absolute left-2 bottom-2 z-20 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900/90 font-sans text-[10px] text-slate-300 hover:text-sky-300 hover:border-sky-600"
+              title="Text size (Ctrl+mouse wheel, Ctrl+Shift+. / Ctrl+Shift+,). Click for 100% (Ctrl+0)"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+          )}
         </div>
       </div>
     );

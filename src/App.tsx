@@ -15,6 +15,7 @@ import {
   PanelLeftOpen,
   Palette,
   Code2,
+  Blocks,
   Lock,
   Unlock,
   Printer,
@@ -63,6 +64,8 @@ import {
   DockedCanvasPanelId,
 } from './components/MermaidViewer.tsx';
 import { MermaidMarkdownViewer } from './components/MermaidMarkdownViewer.tsx';
+import { PouCodeEditor } from './components/PouCodeEditor.tsx';
+import { updatePouBody } from './utils/pouBody.ts';
 import { PouComplexityReportTab } from './components/PouComplexityReportTab.tsx';
 import { TransitionFrequencyTab } from './components/TransitionFrequencyTab.tsx';
 import { TransitionHistoryTab } from './components/TransitionHistoryTab.tsx';
@@ -110,11 +113,17 @@ import {
   type LiveValue,
   type WatchedVar,
 } from './utils/liveGuards.ts';
-import type { LiveWatchVar } from './utils/xaeHost.ts';
+import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
 import { GatewayConnection, GatewayPlc, detectGatewayOrigin } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
+import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
+import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
 
+/** Guard variables and Symbols values followed at once (a gateway allows 100 by default) */
+const MAX_WATCHED = 100;
+/** A symbol path the hosts accept (as shared/tcAds.cjs isSymbolPath) */
+const isSymbolPathText = (t: string) => t.length <= 250 && /^[A-Za-z_]\w*(\[-?\d+\]|\^)*(\.[A-Za-z_]\w*(\[-?\d+\]|\^)*)*$/.test(t);
 const DEFAULT_LIVE_SETTINGS: LiveSettings = { instance: '', netId: '', port: '', ip: '', localNetId: '', gateway: '', plc: '', via: '', linkPort: '' };
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
@@ -165,6 +174,45 @@ import {
 import { copyTextToClipboard } from './utils/diagramExport.ts';
 import { exportDiagramVisibleAreaToPdf } from './utils/printToPdf.ts';
 import { updateStateCodeInPou, updatePreProcessCodeInPou, updateMethodCodeInPou } from './utils/pouStateEditor.ts';
+
+
+/** Diagram notes in localStorage: one entry per POU, "<this key>:<POU path or file name>" */
+const NOTES_STORAGE_KEY = 'tc_statechart_diagram_notes_metadata';
+
+/**
+ * The POU's stored notes. Before they were kept per POU, all notes were one entry: the first POU whose states it
+ * names takes it over.
+ */
+function readStoredNotes(key: string, pouContent: string): DiagramNotes {
+  // Only what the app can show: text notes (damaged or foreign data must not break the diagram)
+  const clean = (v: unknown): DiagramNotes | null => {
+    if (!v || typeof v !== 'object' || !('nodes' in (v as object))) return null;
+    const o = v as Partial<DiagramNotes>;
+    const texts = (m: unknown) =>
+      Object.fromEntries(Object.entries(m && typeof m === 'object' ? m : {}).filter(([, t]) => typeof t === 'string')) as Record<string, string>;
+    return { ...o, nodes: texts(o.nodes), edges: texts(o.edges) } as DiagramNotes;
+  };
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const notes = clean(JSON.parse(raw));
+      if (notes) return notes;
+    }
+    const legacy = localStorage.getItem(NOTES_STORAGE_KEY);
+    if (legacy) {
+      const notes = clean(JSON.parse(legacy));
+      const ids = notes ? Object.keys(notes.nodes) : [];
+      if (notes && ids.length > 0 && ids.every((id) => pouContent.includes(id))) {
+        localStorage.setItem(key, JSON.stringify(notes));
+        localStorage.removeItem(NOTES_STORAGE_KEY);
+        return notes;
+      }
+    }
+  } catch {
+    // storage unavailable or damaged
+  }
+  return { nodes: {}, edges: {} };
+}
 
 export const App: React.FC = () => {
   // Active sample or custom state
@@ -395,33 +443,71 @@ export const App: React.FC = () => {
     [handleOpenEnumEditorModal]
   );
 
-  // Diagram notes and state documentation state with localStorage persistence
-  const [diagramNotes, setDiagramNotes] = useState<DiagramNotes>(() => {
-    try {
-      const stored = localStorage.getItem('tc_statechart_diagram_notes_metadata');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && typeof parsed === 'object' && parsed.nodes) {
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return {
-      nodes: {},
-      edges: {},
-    };
-  });
-
-  // Sync diagram notes and state documentation changes to localStorage
+  // Diagram notes and state documentation, kept per POU in localStorage. Several StateScopes (browser tabs, desktop
+  // windows, XAE tabs) share that storage: each keeps its own POU's notes, and picks up changes another one saves.
+  const notesKey = `${NOTES_STORAGE_KEY}:${pouPath || pouFileName || 'POU'}`;
+  const [diagramNotes, setDiagramNotes] = useState<DiagramNotes>({ nodes: {}, edges: {} });
+  // The key the notes in state belong to, and the JSON last saved / loaded (no write back of what was just read)
+  const notesLoadedKeyRef = useRef<string | null>(null);
+  const notesSavedRef = useRef<string>('');
+  // The notes object the load put in state: nothing is saved until the state holds it (until then diagramNotes is
+  // still the previous POU's, or the initial empty one)
+  const notesLoadedRef = useRef<DiagramNotes | null>(null);
+  const notesReadyRef = useRef(false);
+  // Save (declared before the load: when the POU changes, the old POU's notes are not written to the new key)
   useEffect(() => {
-    try {
-      localStorage.setItem('tc_statechart_diagram_notes_metadata', JSON.stringify(diagramNotes));
-    } catch {
-      // ignore
+    if (notesLoadedKeyRef.current !== notesKey) return;
+    if (!notesReadyRef.current) {
+      if (diagramNotes !== notesLoadedRef.current) return;
+      notesReadyRef.current = true;
     }
-  }, [diagramNotes]);
+    const json = JSON.stringify(diagramNotes);
+    if (json === notesSavedRef.current) return;
+    notesSavedRef.current = json;
+    try {
+      localStorage.setItem(notesKey, json);
+    } catch {
+      // storage unavailable: notes live in memory only
+    }
+  }, [diagramNotes, notesKey]);
+  // Load the POU's notes
+  useEffect(() => {
+    const notes = readStoredNotes(notesKey, pouContent);
+    notesLoadedKeyRef.current = notesKey;
+    notesSavedRef.current = JSON.stringify(notes);
+    notesLoadedRef.current = notes;
+    notesReadyRef.current = false;
+    setDiagramNotes(notes);
+    // Only when the POU changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notesKey]);
+  // Another instance saved notes of the same POU
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== notesKey || e.newValue === null || e.newValue === notesSavedRef.current) return;
+      try {
+        const parsed = JSON.parse(e.newValue);
+        if (parsed && typeof parsed === 'object' && parsed.nodes) {
+          notesSavedRef.current = e.newValue;
+          setDiagramNotes(parsed);
+        }
+      } catch {
+        // not ours
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [notesKey]);
+
+  // (The window title and the POU reported to the desktop app are set next to the live view, with the instance)
+  // Window menu: another StateScope for another POU (desktop app: a window; web edition: a browser tab). In XAE each
+  // POU opened from the PLC tree gets its own tab.
+  const desktopNewWindow = (window as unknown as { tcDesktop?: { newWindow?: (p?: string) => Promise<void> } }).tcDesktop?.newWindow;
+  const openNewInstance = isXaeHost()
+    ? null
+    : desktopNewWindow
+      ? () => void desktopNewWindow()
+      : () => void window.open(window.location.href.split('#')[0], '_blank', 'noopener');
 
   // Node drag offsets and canvas extracted positions
   const [nodeOffsets, setNodeOffsets] = useState<NodeOffsetsMap>({});
@@ -725,6 +811,17 @@ export const App: React.FC = () => {
     ]
   );
 
+  // POU Editor: the POU's own declaration and body (its methods stay as they are)
+  const handleSavePouBody = useCallback(
+    (declaration: string, implementation: string | null) => {
+      const r = updatePouBody(pouContent, declaration, implementation);
+      if (!r.success) return { success: false, error: r.error };
+      setPouContent(r.updatedPou);
+      return { success: true };
+    },
+    [pouContent]
+  );
+
   const handleSaveMethodCode = useCallback(
     (methodName: string, newCode: string, newDeclaration?: string) => {
       try {
@@ -933,7 +1030,7 @@ export const App: React.FC = () => {
     setIncludeStateDescriptions(sample.defaultIncludeDescriptions);
     setCustomNodeStyles({});
     setCustomEdgeStyles({});
-    setDiagramNotes({ nodes: {}, edges: {} });
+    // (Notes are not cleared: the sample's own notes are loaded, see notesKey)
     setNodeOffsets({});
     setCanvasPositions({});
     setSelectedStateId(null);
@@ -944,6 +1041,8 @@ export const App: React.FC = () => {
     setDutRelativePath(undefined);
     setDutPath(undefined);
     setDutStatus('sample');
+    setWindowInstance(null);
+    setAutoLivePending(false);
   };
 
   // Helper to extract the most up-to-date canvas positions and generate the full exported markdown
@@ -1019,8 +1118,17 @@ export const App: React.FC = () => {
     [showCopyToast, applyDut]
   );
 
+  // The PLC instance this window follows, when it was opened for one (Live: Open instance): per window, so two windows
+  // on the same POU follow different instances. null: the POU's saved live settings choose.
+  const [windowInstance, setWindowInstance] = useState<string | null>(null);
+  // Go live once the POU (and its live settings) are loaded
+  const [autoLivePending, setAutoLivePending] = useState(false);
+
   const applyLoadedPou = useCallback(
-    (src: PouSource) => {
+    (src: PouSource, launch?: InstanceLaunch) => {
+      setWindowInstance(launch?.instance?.trim() || null);
+      setAutoLivePending(!!launch?.live);
+      if (launch?.connection) adoptLiveConnection(src.name, launch.connection);
       setPouFileName(src.name);
       setPouContent(src.content);
       setPouPath(src.path);
@@ -1052,18 +1160,38 @@ export const App: React.FC = () => {
 
   // Desktop: a .TcPOU opened from Windows Explorer ("Open in Kval StateScope"): at start-up, or later in this window
   useEffect(() => {
-    type Opened = PouSource | { error: string } | null;
+    // launch: the window was opened to follow one PLC instance (Live: Open instance)
+    type Opened = (PouSource & { launch?: InstanceLaunch }) | { error: string } | null;
     const d = (window as unknown as { tcDesktop?: { startupPou?: () => Promise<Opened>; onOpenPouFile?: (h: (s: Opened) => void) => () => void } }).tcDesktop;
     if (!d?.startupPou || !d.onOpenPouFile) return;
     // Through the ref: the handlers of the latest render
     const open = (src: Opened) => {
       if (!src) return;
       if ('error' in src) hostHandlersRef.current.showCopyToast(src.error, 'error');
-      else hostHandlersRef.current.applyLoadedPou(src);
+      else hostHandlersRef.current.applyLoadedPou(src, src.launch);
     };
     const off = d.onOpenPouFile(open);
     void d.startupPou().then(open);
     return off;
+  }, []);
+
+  // Opened by another window to follow a PLC instance, with the POU handed over (web edition; desktop: a sample or a
+  // dropped file)
+  useEffect(() => {
+    const h = takeHandoff();
+    if (!h) return;
+    const sample = h.sampleId ? SAMPLES.find((s) => s.id === h.sampleId) : undefined;
+    if (sample) {
+      handleSelectSample(sample);
+      setWindowInstance(h.instance?.trim() || null);
+      setAutoLivePending(!!h.live);
+      if (h.connection) adoptLiveConnection(sample.pouName, h.connection);
+    } else if (h.pou) {
+      const dut = h.dutCandidates ?? (h.dut ? [{ name: h.dut.name, relativePath: h.dut.name, content: h.dut.content, path: h.dut.path }] : null);
+      applyLoadedPou({ name: h.pou.name, content: h.pou.content, path: h.pou.path, dutCandidates: dut }, h);
+    }
+    // At start-up only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleDropPou = useCallback(
@@ -1191,6 +1319,15 @@ export const App: React.FC = () => {
     });
   }, []);
 
+  // Symbol browser (Live > Symbols): answers to liveBrowse, by request id
+  const browseWaitersRef = useRef(new Map<number, (r: LiveBrowseResult) => void>());
+  const handleLiveBrowseResult = useCallback((m: LiveBrowseResult) => {
+    const waiter = browseWaitersRef.current.get(m.requestId);
+    if (!waiter) return;
+    browseWaitersRef.current.delete(m.requestId);
+    waiter(m);
+  }, []);
+
   // Two-way selection (XAE): the caret in TwinCAT's doState() editor selects the state whose CASE branch it is in
   const followSelectionRef = useRef(followSelection);
   followSelectionRef.current = followSelection;
@@ -1214,8 +1351,8 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret };
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1232,7 +1369,7 @@ export const App: React.FC = () => {
         setHostConflict(null);
         keepMineRef.current.clear();
         remember([{ path: m.source.path, content: m.source.content }, ...(m.source.dutCandidates ?? [])]);
-        h.applyLoadedPou(m.source);
+        h.applyLoadedPou(m.source, { instance: m.instance, live: m.live, connection: m.connection });
       } else if (m.type === 'dutCandidates') {
         remember(m.candidates);
         h.applyDutCandidates(pouContentRef.current, m.candidates, m.forceFirst);
@@ -1263,6 +1400,8 @@ export const App: React.FC = () => {
         h.handleLiveWatchResult(m.vars);
       } else if (m.type === 'liveVars') {
         h.handleLiveVars(m.values);
+      } else if (m.type === 'liveBrowseResult') {
+        h.handleLiveBrowseResult(m);
       } else if (m.type === 'editorCaret') {
         h.handleEditorCaret(m);
       } else if (m.type === 'error') {
@@ -1724,7 +1863,9 @@ export const App: React.FC = () => {
 
   // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
   const liveSettingsKey = `kss.live.${pouFileName || 'POU'}`;
-  const [liveSettings, setLiveSettings] = useState<LiveSettings>(DEFAULT_LIVE_SETTINGS);
+  const [storedLiveSettings, setLiveSettings] = useState<LiveSettings>(DEFAULT_LIVE_SETTINGS);
+  // The key whose saved settings are in state (auto go-live waits for them)
+  const [liveSettingsLoadedKey, setLiveSettingsLoadedKey] = useState<string | null>(null);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(liveSettingsKey);
@@ -1732,17 +1873,43 @@ export const App: React.FC = () => {
     } catch {
       setLiveSettings(DEFAULT_LIVE_SETTINGS);
     }
+    setLiveSettingsLoadedKey(liveSettingsKey);
   }, [liveSettingsKey]);
+  // Opened by another window (Open instance, Watch): the same PLC, so its connection becomes this POU's
+  function adoptLiveConnection(pouName: string, connection: Record<string, string>) {
+    const key = `kss.live.${pouName || 'POU'}`;
+    let saved: Partial<LiveSettings> = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(key) || '{}') as Partial<LiveSettings>;
+    } catch {
+      // none saved
+    }
+    const merged = { ...DEFAULT_LIVE_SETTINGS, ...saved, ...connectionOf(connection) } as LiveSettings;
+    setLiveSettings(merged);
+    try {
+      localStorage.setItem(key, JSON.stringify(merged));
+    } catch {
+      // per-viewer convenience only
+    }
+  }
+  // A window opened for one instance follows it; the target and the other settings are the POU's
+  const liveSettings = useMemo(
+    () => (windowInstance !== null ? { ...storedLiveSettings, instance: windowInstance } : storedLiveSettings),
+    [storedLiveSettings, windowInstance]
+  );
   const handleLiveSettingsChange = useCallback(
     (next: LiveSettings) => {
-      setLiveSettings(next);
+      // This window's instance stays in this window (other windows on the POU follow theirs)
+      const toStore = windowInstance !== null ? { ...next, instance: storedLiveSettings.instance } : next;
+      if (windowInstance !== null) setWindowInstance(next.instance);
+      setLiveSettings(toStore);
       try {
-        localStorage.setItem(liveSettingsKey, JSON.stringify(next));
+        localStorage.setItem(liveSettingsKey, JSON.stringify(toStore));
       } catch {
         // per-viewer convenience only
       }
     },
-    [liveSettingsKey]
+    [liveSettingsKey, windowInstance, storedLiveSettings.instance]
   );
   const [liveFollow, setLiveFollow] = useState(true);
   // Desktop app: the main process talks ADS to the PLC and sends the same messages as the XAE extension
@@ -1754,8 +1921,9 @@ export const App: React.FC = () => {
       else if (m.type === 'liveValues') handleLiveValues(m.events);
       else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
       else if (m.type === 'liveVars') handleLiveVars(m.values);
+      else if (m.type === 'liveBrowseResult') handleLiveBrowseResult(m);
     });
-  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars]);
+  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
   // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
   const liveMode: 'xae' | 'desktop' | 'web' | null = canNavigateInXae ? 'xae' : isXaeHost() ? null : desktopLive() ? 'desktop' : 'web';
   const [gatewayOrigin, setGatewayOrigin] = useState<string | null>(null);
@@ -1773,10 +1941,11 @@ export const App: React.FC = () => {
       else if (m.type === 'liveValues') handleLiveValues(m.events);
       else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
       else if (m.type === 'liveVars') handleLiveVars(m.values);
+      else if (m.type === 'liveBrowseResult') handleLiveBrowseResult(m);
       else if (m.type === 'closed') setLiveStatus((prev) => ({ ...prev, state: 'lost', message: m.message }));
     });
     return gatewayRef.current;
-  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars]);
+  }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
   useEffect(() => () => gatewayRef.current?.close(), []);
   const pouTypeName = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
   // Another POU: stop following the old one (the XAE extension does that itself)
@@ -1872,6 +2041,177 @@ export const App: React.FC = () => {
       port: port > 0 ? port : undefined,
     });
   }, [pouPath, pouTypeName, liveSettings, identifiedStatesResult.stateVarName, liveMode, gatewayOrigin, gatewayToken, linkCode, liveVia, gatewayConnection, handleLiveSettingsChange]);
+  // Opened to follow an instance: go live once the POU and its live settings are loaded
+  useEffect(() => {
+    if (!autoLivePending || !pouContent || !liveMode || liveSettingsLoadedKey !== liveSettingsKey) return;
+    setAutoLivePending(false);
+    handleLiveStart();
+  }, [autoLivePending, pouContent, liveMode, liveSettingsLoadedKey, liveSettingsKey, handleLiveStart]);
+  // Live: another window / tab on this POU that follows another of its PLC instances (XAE: a tab, desktop: a window,
+  // web: a browser tab). The POU goes along: XAE and the desktop app load it from its file, else it is handed over.
+  const handleOpenInstance = useCallback(
+    (instance: string) => {
+      if (isXaeHost()) {
+        if (pouPath) postToHost({ type: 'openInstance', path: pouPath, instance, connection: connectionOf(liveSettings) });
+        return;
+      }
+      const newWindow = (window as unknown as { tcDesktop?: { newWindow?: (p: string | null, launch?: InstanceLaunch & { handoff?: string }) => Promise<void> } }).tcDesktop?.newWindow;
+      if (newWindow && pouPath) {
+        void newWindow(pouPath, { instance, live: true, connection: connectionOf(liveSettings) });
+        return;
+      }
+      const sample = selectedSampleId ? SAMPLES.find((s) => s.id === selectedSampleId && s.pouContent === pouContent && s.dutContent === dutContent) : undefined;
+      const id = putHandoff({
+        instance,
+        live: true,
+        connection: connectionOf(liveSettings),
+        sampleId: sample?.id,
+        pou: sample ? undefined : { name: pouFileName, content: pouContent, path: pouPath },
+        dut: !sample && dutContent ? { name: dutFileName, content: dutContent, path: dutPath } : undefined,
+      });
+      if (!id) {
+        showCopyToast('Cannot hand the POU to another window: this browser blocks local storage', 'error');
+        return;
+      }
+      if (newWindow) {
+        void newWindow(null, { handoff: id });
+        return;
+      }
+      const url = new URL(window.location.href);
+      url.hash = '';
+      url.searchParams.set('handoff', id);
+      window.open(url.toString(), '_blank', 'noopener');
+    },
+    [pouPath, pouFileName, pouContent, dutFileName, dutContent, dutPath, selectedSampleId, showCopyToast, liveSettings]
+  );
+  // ---- Live > Symbols: the PLC's symbols from a root, with values; Watch follows a state machine in its own window ----
+  const [symbolsOpen, setSymbolsOpen] = useState(false);
+  const [symbolRoot, setSymbolRootState] = useState<string>(() => {
+    try {
+      return localStorage.getItem('kss.symbols.root') || DEFAULT_SYMBOL_ROOT;
+    } catch {
+      return DEFAULT_SYMBOL_ROOT;
+    }
+  });
+  const setSymbolRoot = useCallback((root: string) => {
+    setSymbolRootState(root);
+    try {
+      localStorage.setItem('kss.symbols.root', root);
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
+  // The value symbols on show in the window (followed with the guard variables)
+  const [symbolPaths, setSymbolPaths] = useState<string[]>([]);
+  const handleSymbolPaths = useCallback((paths: string[]) => setSymbolPaths((prev) => (prev.join('\n') === paths.join('\n') ? prev : paths)), []);
+  const liveStateVar = identifiedStatesResult.stateVarName || 'machineState';
+  const browseSeqRef = useRef(0);
+  const browseTargetRef = useRef({ liveMode, stateVar: liveStateVar });
+  browseTargetRef.current = { liveMode, stateVar: liveStateVar };
+  // Stable (the window reloads its tree when this changes)
+  const liveBrowse = useCallback(
+    (path: string) =>
+      new Promise<LiveBrowseResult>((resolve) => {
+        const requestId = ++browseSeqRef.current;
+        const { liveMode: mode, stateVar } = browseTargetRef.current;
+        const req = { requestId, path, stateVar };
+        browseWaitersRef.current.set(requestId, resolve);
+        window.setTimeout(() => {
+          if (browseWaitersRef.current.delete(requestId)) resolve({ requestId, path, error: 'No answer from the PLC connection (does the host support browsing? update it)' });
+        }, 15000);
+        if (mode === 'xae') postToHost({ type: 'liveBrowse', ...req });
+        else if (mode === 'desktop') void desktopLive()?.browse?.(req);
+        else if (!gatewayRef.current?.browse(req)) {
+          browseWaitersRef.current.delete(requestId);
+          resolve({ requestId, path, error: 'Not connected' });
+        }
+      }),
+    []
+  );
+  // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
+  const handleWatchMachine = useCallback(
+    (node: SymbolChild) => {
+      const typeName = node.type.trim().split('.').pop() ?? '';
+      if (!/^[A-Za-z_]\w*$/.test(typeName)) {
+        showCopyToast(`${node.type} is not a function block type`, 'error');
+        return;
+      }
+      // This POU: another instance of it
+      if (pouTypeName && typeName.toLowerCase() === pouTypeName.toLowerCase()) {
+        handleOpenInstance(node.path);
+        return;
+      }
+      if (isXaeHost()) {
+        postToHost({ type: 'openInstance', typeName, instance: node.path, connection: connectionOf(liveSettings) });
+        return;
+      }
+      const d = (window as unknown as {
+        tcDesktop?: {
+          openPouInProject?: (fromPath: string | undefined, typeName: string) => Promise<PouSource | { error: string }>;
+          newWindow?: (p: string | null, launch?: InstanceLaunch & { handoff?: string }) => Promise<void>;
+        };
+      }).tcDesktop;
+      const handOver = (src: PouSource) => {
+        if (d?.newWindow && src.path) {
+          void d.newWindow(src.path, { instance: node.path, live: true, connection: connectionOf(liveSettings) });
+          return;
+        }
+        const dut = src.dutCandidates ?? undefined;
+        const id = putHandoff({ instance: node.path, live: true, connection: connectionOf(liveSettings), pou: { name: src.name, content: src.content, path: src.path }, dutCandidates: dut });
+        if (!id) {
+          showCopyToast('Cannot hand the POU to another window: this browser blocks local storage', 'error');
+          return;
+        }
+        if (d?.newWindow) {
+          void d.newWindow(null, { handoff: id });
+          return;
+        }
+        const url = new URL(window.location.href);
+        url.hash = '';
+        url.searchParams.set('handoff', id);
+        window.open(url.toString(), '_blank', 'noopener');
+      };
+      // Pick the .TcPOU (web edition, or no PLC project to find it in)
+      const pick = () => {
+        showCopyToast(`Choose ${typeName}.TcPOU to watch ${node.path}`, 'success', 5000);
+        browseForPou()
+          .then((src) => {
+            if (!src) return;
+            if (src.name.replace(/\.TcPOU$/i, '').toLowerCase() !== typeName.toLowerCase()) {
+              showCopyToast(`${src.name} is not ${typeName}.TcPOU: ${node.path} is a ${typeName}`, 'error', 7000);
+              return;
+            }
+            handOver(src);
+          })
+          .catch((e: unknown) => showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error'));
+      };
+      if (d?.openPouInProject && pouPath) {
+        void d.openPouInProject(pouPath, typeName).then((src) => {
+          if ('error' in src) pick();
+          else handOver(src);
+        });
+        return;
+      }
+      pick();
+    },
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings]
+  );
+  // Stop following the window's values when it closes or the connection ends
+  useEffect(() => {
+    if (!symbolsOpen) setSymbolPaths([]);
+  }, [symbolsOpen]);
+
+  // The POU and the followed instance in the window / tab title, to tell several StateScopes apart
+  const shownInstance = (liveStatus.state === 'connected' || liveStatus.state === 'lost' ? liveStatus.instance : undefined) ?? windowInstance ?? undefined;
+  useEffect(() => {
+    const pou = pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : '';
+    document.title = pou ? `${pou}${shownInstance ? ` (${shownInstance})` : ''} - Kval StateScope` : 'Kval StateScope';
+  }, [pouFileName, shownInstance]);
+  // Desktop app: the main process opens a POU (and an instance of it) in the window that shows it
+  useEffect(() => {
+    (window as unknown as { tcDesktop?: { reportPou?: (p: string | null, instance?: string | null) => void } }).tcDesktop?.reportPou?.(pouPath ?? null, shownInstance ?? null);
+  }, [pouPath, shownInstance]);
+
   const handleLiveStop = useCallback(() => {
     if (isXaeHost()) postToHost({ type: 'liveStop' });
     else if (desktopLive()) void desktopLive()!.stop();
@@ -1996,15 +2336,20 @@ export const App: React.FC = () => {
       lastWatchRef.current = '';
       return;
     }
-    if (liveWatchKey === lastWatchRef.current) return;
+    // With the Symbols window's values (full paths, ids "sym:<path>")
+    const key = `${liveWatchKey}\n#symbols\n${symbolPaths.join('\n')}`;
+    if (key === lastWatchRef.current) return;
     const instance = liveStatus.instance;
     const timer = window.setTimeout(() => {
-      lastWatchRef.current = liveWatchKey;
-      const paths = liveWatchKey ? liveWatchKey.split('\n') : [];
-      sendLiveWatch(paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) })));
+      lastWatchRef.current = key;
+      const paths = liveWatchKey && instance ? liveWatchKey.split('\n') : [];
+      const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
+      const symbols = symbolPaths.filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
+      // The guards first; a gateway follows at most 100 by default (a longer request is refused)
+      sendLiveWatch([...guards, ...symbols].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [liveWatchKey, liveStatus.state, liveStatus.instance, sendLiveWatch]);
+  }, [liveWatchKey, symbolPaths, liveStatus.state, liveStatus.instance, sendLiveWatch]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -2216,6 +2561,11 @@ export const App: React.FC = () => {
         title: 'Method Editor',
         icon: <FileCode />,
         tooltip: `Structured Text methods in ${pouFileName || 'POU'}${selectedStateId ? ` — state ${selectedStateId}` : ''}`,
+      },
+      pou: {
+        title: 'POU Editor',
+        icon: <Blocks />,
+        tooltip: `The declaration and body of ${pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : 'the POU'} (Structured Text)`,
       },
       enum: { title: 'Enum Editor', icon: <Code2 />, tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
       complexity: {
@@ -2727,7 +3077,13 @@ export const App: React.FC = () => {
           >
             {isSidebarOpen ? <PanelLeftClose className="w-4 h-4 sm:w-5 sm:h-5" /> : <PanelLeftOpen className="w-4 h-4 sm:w-5 sm:h-5" />}
           </button>
-          <WindowMenuButton layout={dockLayout} onLayoutChange={setDockLayout} tabMeta={dockTabMeta} />
+          <WindowMenuButton
+            layout={dockLayout}
+            onLayoutChange={setDockLayout}
+            tabMeta={dockTabMeta}
+            onNewWindow={openNewInstance ?? undefined}
+            newWindowLabel={desktopNewWindow ? 'New Window' : 'New Tab'}
+          />
           <button
             id="focus-mode-btn"
             type="button"
@@ -3327,6 +3683,18 @@ export const App: React.FC = () => {
           )
       )}
 
+      {isDockTabMounted('pou') &&
+        createPortal(
+          <PouCodeEditor
+            pouContent={pouContent}
+            pouFileName={pouFileName || 'POU.TcPOU'}
+            onSave={handleSavePouBody}
+            onToast={showCopyToast}
+            onOpenMethod={handleOpenMethodEditorModal}
+          />,
+          dockRegistry.nodes.pou
+        )}
+
       {isDockTabMounted('live') &&
         createPortal(
           <LivePanel
@@ -3353,9 +3721,29 @@ export const App: React.FC = () => {
             guardScope={liveGuardScope}
             onGuardScopeChange={setLiveGuardScope}
             guards={liveActiveGuards}
+            onOpenInstance={liveMode ? handleOpenInstance : undefined}
+            openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+            onOpenSymbols={liveMode ? () => setSymbolsOpen(true) : undefined}
           />,
           dockRegistry.nodes.live
         )}
+
+      {symbolsOpen && (
+        <SymbolBrowserWindow
+          onClose={() => setSymbolsOpen(false)}
+          connected={liveStatus.state === 'connected'}
+          root={symbolRoot}
+          onRootChange={setSymbolRoot}
+          browse={liveBrowse}
+          values={liveVarValues}
+          watched={liveWatched}
+          onVisibleValues={handleSymbolPaths}
+          currentInstance={liveStatus.instance}
+          stateVar={liveStateVar}
+          onWatch={handleWatchMachine}
+          openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+        />
+      )}
 
       {changesTabMounted &&
         createPortal(

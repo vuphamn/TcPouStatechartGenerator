@@ -1,6 +1,7 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
+import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
 
 export type PriorityFormat = 'paren' | 'bracket' | 'circled';
 
@@ -170,9 +171,22 @@ function toLogicalLines(code: string): string[] {
   return flat.split('\n');
 }
 
-function looksLikeStateLabel(label: string): boolean {
+// A CASE label: MEMBER or E_Type.MEMBER (an enum with {attribute 'qualified_only'}), several separated by commas
+const STATE_LABELS = STATE_LABELS_SRC;
+/** "LABELS:" alone on the line (a trailing // comment allowed) */
+const CASE_LABEL_LINE = new RegExp(`^\\s*(${STATE_LABELS})\\s*:(?!=)\\s*(\\/\\/.*)?$`);
+/** "LABELS: code" on one line */
+const CASE_LABEL_WITH_CODE = new RegExp(`^\\s*(${STATE_LABELS})\\s*:(?!=)\\s*(\\S.*)$`);
+
+/**
+ * A CASE label of states: E_Type.MEMBER, a member of the enum, or (without the enum) an upper-case name with "_"
+ */
+function looksLikeStateLabel(label: string, members?: Set<string>): boolean {
   for (const part of label.split(',')) {
-    const p = part.trim();
+    const raw = part.trim();
+    if (/^[A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*$/.test(raw)) continue;
+    const p = raw;
+    if (members && members.has(p)) continue;
     if (p.length === 0 || !p.includes('_')) return false;
     for (let i = 0; i < p.length; i++) {
       const c = p[i];
@@ -240,7 +254,6 @@ function parseStateDescriptions(st: string | null): Map<string, string> {
 
   const code = stripComments(st);
   const lines = code.replace(/\r/g, '').split('\n');
-  const labelRx = /^\s*([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:\s*$/;
   const assignRx = /getStateDescription\s*:=\s*'([^']*)'/i;
 
   let pendingLabels: string[] = [];
@@ -248,21 +261,18 @@ function parseStateDescriptions(st: string | null): Map<string, string> {
     const line = raw.trim();
     if (line.length === 0) continue;
 
-    const am = line.match(assignRx);
+    // "LABEL:" then the assignment on the next line, or "LABEL: getStateDescription := '...';" on one line
+    const lm = line.match(CASE_LABEL_LINE) || line.match(CASE_LABEL_WITH_CODE);
+    const rest = lm && lm[2] && !lm[2].startsWith('//') ? lm[2] : line;
+    if (lm) {
+      pendingLabels = lm[1].split(',').map((p) => unqualifyState(p));
+    }
+    const am = rest.match(assignRx);
     if (am && pendingLabels.length > 0) {
       for (const lbl of pendingLabels) {
         map.set(lbl, am[1].trim());
       }
       pendingLabels = [];
-      continue;
-    }
-
-    const lm = line.match(labelRx);
-    if (lm) {
-      pendingLabels = [];
-      for (const part of lm[1].split(',')) {
-        pendingLabels.push(part.trim());
-      }
     }
   }
   return map;
@@ -284,6 +294,20 @@ function preprocessDoStateLines(code: string): string[] {
         result.push(accumulated);
         accumulated = '';
         inCondition = false;
+      }
+      continue;
+    }
+
+    // "LABEL: code" on one line: the label and the code as two lines
+    const labelled = line.match(CASE_LABEL_WITH_CODE);
+    if (labelled && !/^(ELSE|THEN|DO|OF)$/i.test(labelled[1].trim()) && !labelled[2].startsWith('//')) {
+      result.push(`${labelled[1]}:`);
+      const rest = labelled[2];
+      if (/^\s*(?:IF\b|ELSIF\b)/i.test(rest) && !/\bTHEN\b/i.test(rest)) {
+        inCondition = true;
+        accumulated = rest;
+      } else {
+        result.push(rest);
       }
       continue;
     }
@@ -311,28 +335,33 @@ function parseDoState(
   st: string,
   stateVarName: string,
   transitions: Transition[],
-  states: Set<string>
+  states: Set<string>,
+  members?: Set<string>
 ) {
   const code = stripComments(st);
   const lines = preprocessDoStateLines(code);
   let currentStates: string[] = [];
   const statePriorityCounters = new Map<string, number>();
   const ifStack: IfFrame[] = [];
-  const caseRx = /^\s*([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:\s*(\/\/.*)?$/;
+  const caseRx = CASE_LABEL_LINE;
   const assign = new RegExp(`\\b(${stateVarName})\\s*:=\\s*([A-Za-z_][A-Za-z0-9_\\.]*)`, 'g');
   const ifRx = /^\s*IF\b(.*?)\bTHEN\b/i;
   const elsifRx = /^\s*ELSIF\b(.*?)\bTHEN\b/i;
   const elseRx = /^\s*ELSE\b/i;
   const endIfRx = /^\s*END_IF\b/i;
 
+  // Only the outer CASE's labels are states: a CASE nested in a state's branch has labels of its own
+  let caseDepth = 0;
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
+    if (/^CASE\b[\s\S]*\bOF\b/i.test(line)) caseDepth++;
+    else if (/^END_CASE\b/i.test(line)) caseDepth = Math.max(0, caseDepth - 1);
 
     const cm = line.match(caseRx);
-    if (cm && looksLikeStateLabel(cm[1])) {
+    if (cm && caseDepth <= 1 && looksLikeStateLabel(cm[1], members)) {
       currentStates = [];
-      for (const lbl of cm[1].split(',').map((s) => s.trim())) {
+      for (const lbl of cm[1].split(',').map((s) => unqualifyState(s))) {
         currentStates.push(lbl);
         states.add(lbl);
         statePriorityCounters.set(lbl, 0);
@@ -367,7 +396,7 @@ function parseDoState(
     let match: RegExpExecArray | null;
     assign.lastIndex = 0;
     while ((match = assign.exec(line)) !== null) {
-      const target = match[2];
+      const target = unqualifyState(match[2]);
       for (const currentState of currentStates) {
         if (target === currentState) continue;
         states.add(target);
@@ -404,8 +433,8 @@ function parsePreProcess(
   const elseRx = /^\s*ELSE\b/i;
   const endIfRx = /^\s*END_IF\b/i;
   const assign = new RegExp(`\\b(${stateVarName})\\s*:=\\s*([A-Za-z_][A-Za-z0-9_\\.]*)`, 'g');
-  const lowerRx = new RegExp(`\\b(${stateVarName})\\s*(>=|>)\\s*([A-Za-z_][A-Za-z0-9_]*)`, 'i');
-  const upperRx = new RegExp(`\\b(${stateVarName})\\s*(<=|<)\\s*([A-Za-z_][A-Za-z0-9_]*)`, 'i');
+  const lowerRx = new RegExp(`\\b(${stateVarName})\\s*(>=|>)\\s*([A-Za-z_][A-Za-z0-9_.]*)`, 'i');
+  const upperRx = new RegExp(`\\b(${stateVarName})\\s*(<=|<)\\s*([A-Za-z_][A-Za-z0-9_.]*)`, 'i');
   const Any = 'AnyState';
 
   let pendingLower: string | null = null;
@@ -439,14 +468,14 @@ function parsePreProcess(
     }
 
     const lo = line.match(lowerRx);
-    if (lo) pendingLower = lo[3];
+    if (lo) pendingLower = unqualifyState(lo[3]);
     const hi = line.match(upperRx);
-    if (hi) pendingUpper = hi[3];
+    if (hi) pendingUpper = unqualifyState(hi[3]);
 
     let am: RegExpExecArray | null;
     assign.lastIndex = 0;
     while ((am = assign.exec(line)) !== null) {
-      const target = am[2];
+      const target = unqualifyState(am[2]);
       states.add(target);
       states.add(Any);
       const tr: Transition = {
@@ -1441,11 +1470,12 @@ export function generateStatechartModel(
   const transitions: Transition[] = [];
   const states = new Set<string>();
 
-  if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states);
-  if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states);
-
+  // The enum first: its members are CASE labels even without "_" (DISABLED, ENABLED)
   const decl = extractDeclaration(tcDutContent);
   const enumOrder = readEnumOrder(decl);
+
+  if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder));
+  if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states);
 
   const groups =
     tryLoadUmlGrouping(doc) ?? loadEnumGrouping(decl) ?? {

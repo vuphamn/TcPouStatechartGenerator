@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
+import { useEditorZoom } from '../hooks/useEditorZoom.ts';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-markdown.js';
 import 'prismjs/components/prism-mermaid.js';
@@ -39,6 +40,56 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
   const [activeMatchIndex, setActiveMatchIndex] = useState<number>(0);
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // The current line (as the caret line of an editor): a click puts it there, the arrow keys move it
+  const [currentLine, setCurrentLine] = useState<number | null>(null);
+  const [focused, setFocused] = useState(false);
+  // Text size, shared with the code editors (Ctrl+mouse wheel)
+  const [zoom, setZoom] = useEditorZoom();
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const zoomAnchorRef = useRef<number | null>(null);
+  const [zoomShownAt, setZoomShownAt] = useState(0);
+  const zoomBy = useCallback(
+    (delta: number) => {
+      const el = scrollRef.current;
+      // The line at the top stays at the top
+      if (el && zoomAnchorRef.current === null) {
+        let top = 0;
+        for (const [idx, row] of lineRefs.current) if (row.offsetTop <= el.scrollTop + 1) top = Math.max(top, idx);
+        zoomAnchorRef.current = top;
+      }
+      zoomRef.current = setZoom(zoomRef.current + delta);
+      setZoomShownAt(Date.now());
+    },
+    [setZoom]
+  );
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // Not passive: Ctrl+wheel must not zoom the whole page
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (e.deltaY !== 0) zoomBy(e.deltaY < 0 ? 0.1 : -0.1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoomBy]);
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    const el = scrollRef.current;
+    const row = anchor !== null ? lineRefs.current.get(anchor) : undefined;
+    if (el && row) el.scrollTop = row.offsetTop;
+  }, [zoom]);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!zoomShownAt) return;
+    const t = window.setTimeout(() => setTick((n) => n + 1), 1300);
+    return () => window.clearTimeout(t);
+  }, [zoomShownAt]);
+  const showZoom = zoom !== 1 || Date.now() - zoomShownAt < 1200;
 
   const effectiveSearchQuery = externalSearchQuery !== undefined ? externalSearchQuery : internalSearchQuery;
 
@@ -96,6 +147,7 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
   // Scroll active match into view
   const scrollToLine = (lineIdx: number) => {
     const element = lineRefs.current.get(lineIdx);
+    setCurrentLine(lineIdx);
     if (element) {
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -113,6 +165,33 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
     const prevIdx = (activeMatchIndex - 1 + matchingLineIndices.length) % matchingLineIndices.length;
     setActiveMatchIndex(prevIdx);
     scrollToLine(matchingLineIndices[prevIdx]);
+  };
+
+  // Keys of the code view: the current line (arrows, pages, Ctrl+Home / Ctrl+End) and zoom (as in the editors)
+  const handleCodeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.ctrlKey && !e.altKey && (e.key === '0' || (e.shiftKey && (e.key === '>' || e.key === '.' || e.key === '<' || e.key === ',')))) {
+      e.preventDefault();
+      if (e.key === '0') zoomBy(1 - zoomRef.current);
+      else zoomBy(e.key === '>' || e.key === '.' ? 0.1 : -0.1);
+      return;
+    }
+    if (!rawLines.length) return;
+    const el = scrollRef.current;
+    const rowH = lineRefs.current.get(0)?.offsetHeight || 20;
+    const page = el ? Math.max(1, Math.floor(el.clientHeight / rowH) - 1) : 10;
+    const at = currentLine ?? -1;
+    let next: number | null = null;
+    if (e.key === 'ArrowDown') next = at + 1;
+    else if (e.key === 'ArrowUp') next = at < 0 ? 0 : at - 1;
+    else if (e.key === 'PageDown') next = at + page;
+    else if (e.key === 'PageUp') next = at - page;
+    else if (e.key === 'Home' && e.ctrlKey) next = 0;
+    else if (e.key === 'End' && e.ctrlKey) next = rawLines.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    const line = Math.min(rawLines.length - 1, Math.max(0, next));
+    setCurrentLine(line);
+    lineRefs.current.get(line)?.scrollIntoView({ block: 'nearest' });
   };
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -340,9 +419,20 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
       </div>
 
       {/* Code Container with Line Numbers & Prism Syntax Highlighting */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         id="markdown-code-scroll-container"
-        className="flex-1 overflow-auto bg-slate-950 p-3 select-text font-mono text-xs leading-relaxed custom-scrollbar"
+        ref={scrollRef}
+        tabIndex={0}
+        onKeyDown={handleCodeKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        onMouseDown={(e) => {
+          const row = (e.target as HTMLElement).closest('[data-line]');
+          if (row) setCurrentLine(Number(row.getAttribute('data-line')));
+        }}
+        style={{ fontSize: `${12 * zoom}px` }}
+        className="relative flex-1 overflow-auto bg-slate-950 p-3 select-text font-mono leading-relaxed custom-scrollbar outline-none"
       >
         {rawLines.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500 py-12">
@@ -356,6 +446,13 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
               const isHighlightedMatch = matchingLineIndices.includes(idx);
               const isActiveMatch =
                 matchingLineIndices.length > 0 && matchingLineIndices[activeMatchIndex] === idx;
+              // The current line: a frame (and, off the search matches, a band), dimmer when the view is not focused
+              const isCurrent = currentLine === idx;
+              const currentCls = isCurrent
+                ? focused
+                  ? `ring-1 ring-inset ring-slate-500/60 ${isActiveMatch || isHighlightedMatch ? '' : 'bg-slate-600/30'}`
+                  : `ring-1 ring-inset ring-slate-700/60 ${isActiveMatch || isHighlightedMatch ? '' : 'bg-slate-700/15'}`
+                : '';
 
               return (
                 <div
@@ -364,21 +461,30 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
                     if (el) lineRefs.current.set(idx, el);
                     else lineRefs.current.delete(idx);
                   }}
-                  className={`flex items-start group rounded transition-colors duration-150 ${
+                  data-line={idx}
+                  data-current-line={isCurrent ? (focused ? 'focused' : 'blurred') : undefined}
+                  className={`flex items-start group rounded transition-colors duration-150 ${currentCls} ${
                     isActiveMatch
                       ? 'bg-amber-950/60 border-l-2 border-amber-400 pl-1'
                       : isHighlightedMatch
                       ? 'bg-sky-950/40 border-l-2 border-sky-400/80 pl-1'
+                      : isCurrent
+                      ? 'pl-1.5'
                       : 'hover:bg-slate-900/70 pl-1.5'
                   }`}
                 >
                   {/* Line Number Gutter */}
                   <span
-                    className={`w-10 shrink-0 text-right pr-3.5 select-none font-mono text-[11px] transition-colors ${
+                    style={{ fontSize: `${11 * zoom}px`, width: `${2.5 * Math.max(1, zoom)}rem` }}
+                    className={`shrink-0 text-right pr-3.5 select-none font-mono transition-colors ${
                       isActiveMatch
                         ? 'text-amber-400 font-bold'
                         : isHighlightedMatch
                         ? 'text-sky-300 font-medium'
+                        : isCurrent
+                        ? focused
+                          ? 'text-slate-100 font-semibold'
+                          : 'text-slate-300'
                         : 'text-slate-600 group-hover:text-slate-400'
                     }`}
                   >
@@ -387,7 +493,7 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
 
                   {/* Syntax Highlighted Code Line */}
                   <div
-                    className={`flex-1 font-mono text-xs ${
+                    className={`flex-1 font-mono ${
                       wrapLines ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'
                     }`}
                     dangerouslySetInnerHTML={{
@@ -399,6 +505,19 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
             })}
           </div>
         )}
+      </div>
+      {/* Zoom level (bottom left, as in the editors): click for 100% */}
+      {showZoom && (
+        <button
+          type="button"
+          id="markdown-code-zoom"
+          onClick={() => zoomBy(1 - zoomRef.current)}
+          className="absolute left-2 bottom-2 z-20 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900/90 font-sans text-[10px] text-slate-300 hover:text-sky-300 hover:border-sky-600"
+          title="Text size (Ctrl+mouse wheel, Ctrl+Shift+. / Ctrl+Shift+,). Click for 100% (Ctrl+0)"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+      )}
       </div>
     </div>
   );

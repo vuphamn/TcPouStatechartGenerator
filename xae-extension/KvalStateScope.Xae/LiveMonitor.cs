@@ -149,6 +149,150 @@ namespace KvalStateScope.Xae
                 $"Subscribing to {symbol}");
         }
 
+        // ---- Symbol browser: a symbol's members, one level (same rules as shared/tcAds.cjs browseSymbol) ----
+
+        /// <summary>A member of a browsed symbol (value: shown with its value; struct / array: has members)</summary>
+        public sealed class BrowseChild
+        {
+            public string name { get; set; }
+            public string path { get; set; }
+            public string type { get; set; }
+            public string kind { get; set; }
+            public bool stateMachine { get; set; }
+        }
+
+        public sealed class BrowseResult
+        {
+            public string path { get; set; }
+            /// <summary>The symbol's type (not "type": that is the message's)</summary>
+            public string symbolType { get; set; }
+            public string kind { get; set; }
+            public bool stateMachine { get; set; }
+            public bool truncated { get; set; }
+            public List<BrowseChild> children { get; set; } = new List<BrowseChild>();
+            public string error { get; set; }
+        }
+
+        private sealed class DataType
+        {
+            public string Name, Type;
+            public int Size, AdsType;
+            public List<KeyValuePair<int, int>> Bounds = new List<KeyValuePair<int, int>>(); // (low, count)
+            public List<DataType> SubItems = new List<DataType>();
+        }
+
+        private const int AdstBigType = 65, MaxBrowseChildren = 500, MaxArrayChildren = 100;
+        // Data types by name for this connection (null: the PLC has none)
+        private readonly Dictionary<string, DataType> _dataTypes = new Dictionary<string, DataType>(StringComparer.OrdinalIgnoreCase);
+        private static readonly System.Text.RegularExpressions.Regex ArrayRx =
+            new System.Text.RegularExpressions.Regex(@"^ARRAY\s*\[\s*(-?\d+)\s*\.\.\s*(-?\d+)\s*\]\s*OF\s+(.+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        private static DataType ParseDataType(byte[] b, int at, out int length)
+        {
+            length = BitConverter.ToInt32(b, at);
+            var dt = new DataType { Size = BitConverter.ToInt32(b, at + 16), AdsType = BitConverter.ToInt32(b, at + 24) };
+            int nameLength = BitConverter.ToUInt16(b, at + 32), typeLength = BitConverter.ToUInt16(b, at + 34), commentLength = BitConverter.ToUInt16(b, at + 36);
+            int arrayDim = BitConverter.ToUInt16(b, at + 38), subCount = BitConverter.ToUInt16(b, at + 40);
+            var p = at + 42;
+            dt.Name = Encoding.Default.GetString(b, p, nameLength);
+            p += nameLength + 1;
+            dt.Type = Encoding.Default.GetString(b, p, typeLength);
+            p += typeLength + 1 + commentLength + 1;
+            for (var i = 0; i < arrayDim; i++, p += 8) dt.Bounds.Add(new KeyValuePair<int, int>(BitConverter.ToInt32(b, p), BitConverter.ToInt32(b, p + 4)));
+            for (var i = 0; i < subCount && p + 42 <= at + length; i++)
+            {
+                dt.SubItems.Add(ParseDataType(b, p, out var subLength));
+                if (subLength <= 0) break;
+                p += subLength;
+            }
+            return dt;
+        }
+
+        private DataType DataTypeInfo(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return null;
+            if (_dataTypes.TryGetValue(name, out var cached)) return cached;
+            var request = Encoding.Default.GetBytes(name + "\0");
+            var buffer = new byte[0xFFFF];
+            var err = AdsNative.AdsSyncReadWriteReqEx2(_port, ref _target, AdsNative.DtInfoByNameEx, 0, (uint)buffer.Length, buffer, (uint)request.Length, request, out var read);
+            DataType dt = null;
+            if (err == 0 && read >= 42) dt = ParseDataType(buffer, 0, out _);
+            else if (err != AdsNative.ErrSymbolNotFound && err != AdsNative.ErrInvalidIndexOffset && err != 0x707) Check(err, $"Reading the data type {name}");
+            _dataTypes[name] = dt;
+            return dt;
+        }
+
+        private static string LastSegment(string type) => (type ?? "").Trim().Split('.').Last();
+
+        /// <summary>The type's members, with those of the function block it extends (when the PLC lists them there)</summary>
+        private List<DataType> MembersOf(DataType dt, int depth = 0)
+        {
+            if (dt == null) return new List<DataType>();
+            var own = dt.SubItems;
+            if (depth > 6 || string.IsNullOrEmpty(dt.Type) || string.Equals(LastSegment(dt.Type), LastSegment(dt.Name), StringComparison.OrdinalIgnoreCase)
+                || System.Text.RegularExpressions.Regex.IsMatch(dt.Type, @"^(ARRAY|POINTER|REFERENCE)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return own;
+            var baseType = DataTypeInfo(dt.Type);
+            if (baseType == null || baseType.SubItems.Count == 0) return own;
+            var names = new HashSet<string>(own.Select(m => m.Name), StringComparer.OrdinalIgnoreCase);
+            return MembersOf(baseType, depth + 1).Where(m => !names.Contains(m.Name)).Concat(own).ToList();
+        }
+
+        private static string Kind(string type, int size, int adsType, List<KeyValuePair<int, int>> bounds)
+        {
+            type = type ?? "";
+            if (System.Text.RegularExpressions.Regex.IsMatch(type, @"^(POINTER|REFERENCE)\s+TO\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || System.Text.RegularExpressions.Regex.IsMatch(type, @"^(PVOID|ITC\w*|I_\w+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return "other";
+            if (type.StartsWith("ARRAY", StringComparison.OrdinalIgnoreCase) || (bounds != null && bounds.Count > 0))
+                return ArrayRx.IsMatch(type) || (bounds != null && bounds.Count == 1) ? "array" : "other";
+            if (IsSimple(new SymbolInfo { Size = size, DataType = adsType })) return "value";
+            return adsType == AdstBigType ? "struct" : "other";
+        }
+
+        private bool HoldsStateVar(string type, string stateVar) =>
+            MembersOf(DataTypeInfo(type)).Any(m => string.Equals(m.Name, stateVar, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The symbol and its members (or array elements), one level</summary>
+        public BrowseResult Browse(string symbolPath, string stateVar)
+        {
+            lock (_varLock)
+            {
+                var info = Probe(symbolPath);
+                if (info == null) return new BrowseResult { path = symbolPath, error = $"{symbolPath} is not in the PLC" };
+                var node = new BrowseResult { path = symbolPath, symbolType = info.Type, kind = Kind(info.Type, info.Size, info.DataType, null) };
+                BrowseChild Describe(string name, string childPath, string type, int size, int adsType, List<KeyValuePair<int, int>> bounds)
+                {
+                    var kind = Kind(type, size, adsType, bounds);
+                    return new BrowseChild { name = name, path = childPath, type = type, kind = kind, stateMachine = kind == "struct" && HoldsStateVar(type, stateVar) };
+                }
+                if (node.kind == "array")
+                {
+                    int low, high;
+                    string element;
+                    var m = ArrayRx.Match(info.Type);
+                    var dt = DataTypeInfo(info.Type);
+                    if (m.Success) { low = int.Parse(m.Groups[1].Value); high = int.Parse(m.Groups[2].Value); element = m.Groups[3].Value.Trim(); }
+                    else if (dt != null && dt.Bounds.Count == 1) { low = dt.Bounds[0].Key; high = low + dt.Bounds[0].Value - 1; element = dt.Type; }
+                    else return node;
+                    var el = DataTypeInfo(element);
+                    var last = Math.Min(high, low + MaxArrayChildren - 1);
+                    node.truncated = last < high;
+                    for (var i = low; i <= last; i++)
+                        node.children.Add(Describe($"[{i}]", $"{symbolPath}[{i}]", element, el?.Size ?? 0, el?.AdsType ?? AdstBigType, el?.Bounds));
+                    return node;
+                }
+                if (node.kind != "struct") return node;
+                var members = MembersOf(DataTypeInfo(info.Type));
+                node.stateMachine = members.Any(x => string.Equals(x.Name, stateVar, StringComparison.OrdinalIgnoreCase));
+                node.truncated = members.Count > MaxBrowseChildren;
+                foreach (var x in members.Take(MaxBrowseChildren))
+                {
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(x.Name, @"^[A-Za-z_]\w*$")) continue;
+                    node.children.Add(Describe(x.Name, $"{symbolPath}.{x.Name}", x.Type, x.Size, x.AdsType, x.Bounds));
+                }
+                return node;
+            }
+        }
+
         // ADS data type ids of values that can be shown as they are
         private const int AdstInt16 = 2, AdstInt32 = 3, AdstReal32 = 4, AdstReal64 = 5, AdstInt8 = 16, AdstUInt8 = 17, AdstUInt16 = 18,
             AdstUInt32 = 19, AdstInt64 = 20, AdstUInt64 = 21, AdstString = 30, AdstWString = 31, AdstBit = 33;
@@ -413,6 +557,7 @@ namespace KvalStateScope.Xae
         public const uint SymValueByHandle = 0xF005;
         public const uint SymReleaseHandle = 0xF006;
         public const uint SymInfoByNameEx = 0xF009;
+        public const uint DtInfoByNameEx = 0xF011;
         public const int TransServerOnChange = 4;
         public const int ErrInvalidIndexOffset = 0x703;
         public const int ErrSymbolNotFound = 0x710;

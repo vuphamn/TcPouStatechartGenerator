@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2 } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree } from 'lucide-react';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
+import { sameInstance } from '../utils/instanceLaunch.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
 
 export interface LiveStatus {
@@ -68,6 +69,12 @@ interface LivePanelProps {
   onGuardScopeChange?: (scope: 'active' | 'all' | 'off') => void;
   /** The active state's transitions with their guard result and values */
   guards?: (EdgeGuardView & { edgeId: string; to: string })[];
+  /** Another instance of the POU in its own tab / window, live (a POU can be declared several times) */
+  onOpenInstance?: (instance: string) => void;
+  /** What Open makes: a tab (XAE, web) or a window (desktop) */
+  openTarget?: 'tab' | 'window';
+  /** Opens the Symbols window (the PLC's symbols and values) */
+  onOpenSymbols?: () => void;
 }
 
 const GUARD_BADGE = {
@@ -102,8 +109,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   guardScope = 'active',
   onGuardScopeChange,
   guards = [],
+  onOpenInstance,
+  openTarget = 'window',
+  onOpenSymbols,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
+  // The instance this window follows (or will), and the others the PLC has
+  const following = status.state === 'connected' || status.state === 'lost' ? status.instance ?? settings.instance : settings.instance || status.instances[0];
+  const others = status.instances.filter((i) => !sameInstance(i, following));
   const via = settings.via || defaultVia;
   const viaGateway = mode === 'web' && via === 'gateway';
   // ADS from this computer: the desktop app, or the web edition through the local helper
@@ -167,6 +180,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {status.state === 'connected' && <span className="live-dot shrink-0" />}
             <span className="truncate">{status.message || 'Not connected'}</span>
           </span>
+          {onOpenSymbols && status.state === 'connected' && (
+            <button
+              id="live-symbols-btn"
+              onClick={onOpenSymbols}
+              className="ml-auto shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+              title="Browse the PLC's symbols and their values; watch another state machine"
+            >
+              <ListTree className="w-3 h-3" /> Symbols
+            </button>
+          )}
         </div>
         {/* Settings apply on Go live: hidden while running, so the trail has the room */}
         {!running && (
@@ -362,9 +385,58 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             )}
           </div>
         )}
-        {status.instances.length > 1 && status.state === 'connected' && (
-          <div className="text-[11px] text-slate-500">
-            {status.instances.length} instances in the PLC: pick one above and go live again to switch.
+        {status.instances.length > 1 && (
+          <div id="live-instances" className="rounded border border-slate-800 bg-slate-950/50">
+            <div className="flex items-center gap-2 px-2 py-1 border-b border-slate-800">
+              <Layers className="w-3 h-3 text-slate-500" />
+              <span className="text-slate-300 font-semibold">{status.instances.length} instances in the PLC</span>
+              {onOpenInstance && others.length > 1 && (
+                <button
+                  id="live-open-all-instances"
+                  onClick={() => others.forEach((i) => onOpenInstance(i))}
+                  className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-sky-300 hover:bg-slate-800"
+                  title={`Follow each of the other ${others.length} instances in its own ${openTarget}`}
+                >
+                  <ExternalLink className="w-3 h-3" /> Open all
+                </button>
+              )}
+            </div>
+            <div className="max-h-32 overflow-y-auto">
+              {status.instances.map((i) => {
+                const here = sameInstance(i, following);
+                return (
+                  <div key={i} className="live-instance-row flex items-center gap-1.5 px-2 py-0.5 font-mono text-[11px]" data-instance={i}>
+                    <span className={`truncate min-w-0 ${here ? 'text-emerald-300' : 'text-slate-300'}`} title={i}>
+                      {i}
+                    </span>
+                    {here ? (
+                      <span className="ml-auto shrink-0 font-sans text-[10px] text-slate-500">this {openTarget}</span>
+                    ) : (
+                      <span className="ml-auto flex shrink-0 gap-0.5 font-sans">
+                        {!running && (
+                          <button
+                            onClick={() => onSettingsChange({ ...settings, instance: i })}
+                            className="px-1.5 rounded text-[11px] text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                            title={`Follow ${i} here (then Go live)`}
+                          >
+                            Use
+                          </button>
+                        )}
+                        {onOpenInstance && (
+                          <button
+                            onClick={() => onOpenInstance(i)}
+                            className="live-open-instance flex items-center gap-1 px-1.5 rounded text-[11px] text-sky-300 hover:bg-slate-800"
+                            title={`Follow ${i} in a new ${openTarget}, next to this one`}
+                          >
+                            <ExternalLink className="w-3 h-3" /> Open
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </div>

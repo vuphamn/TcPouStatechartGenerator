@@ -5,7 +5,7 @@
 
 import type { HostMessage, LiveWatchVar } from './xaeHost.ts';
 
-export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' } | { type: 'liveWatchResult' } | { type: 'liveVars' }>;
+export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' } | { type: 'liveWatchResult' } | { type: 'liveVars' } | { type: 'liveBrowseResult' }>;
 
 export interface DesktopLiveOptions {
   /** The .TcPOU's path: instance paths and the ADS port are found from its PLC project */
@@ -28,6 +28,8 @@ interface DesktopLiveApi {
   stop: () => Promise<void>;
   /** Guard variables to follow in the running session */
   watch?: (vars: LiveWatchVar[]) => Promise<boolean>;
+  /** Symbol browser: a symbol's members (answered with liveBrowseResult) */
+  browse?: (req: { requestId: number; path: string; stateVar: string }) => Promise<void>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }
 

@@ -4,6 +4,7 @@
  */
 
 import { addCaseBranch, addEnumMember, blankComments, enumMembers } from './stateMachineLint.ts';
+import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
 import { escapeRx } from './sourceLocation.ts';
 
@@ -112,6 +113,8 @@ export function addTransition(pouXml: string, from: string, to: string, conditio
   const body = lines.slice(start + 1, end).find((l) => l.trim());
   const indent = body ? body.match(/^[ \t]*/)![0] : labelIndent + '\t';
   const cond = condition.trim() || 'TRUE';
-  lines.splice(last + 1, 0, `${indent}IF ${cond} THEN`, `${indent}\t${stateVar} := ${to};`, `${indent}END_IF`);
+  // The target like the other assignments (a qualified_only enum needs "E_X.STATE")
+  const target = `${stateQualifier(method.code, stateVar)}${to}`;
+  lines.splice(last + 1, 0, `${indent}IF ${cond} THEN`, `${indent}\t${stateVar} := ${target};`, `${indent}END_IF`);
   return lines.join(eol);
 }

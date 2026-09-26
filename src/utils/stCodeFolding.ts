@@ -1,3 +1,4 @@
+import { splitStateLabels } from './stateNames.ts';
 /**
  * Structured Text Code Folding Utility
  * Parses IEC 61131-3 / TwinCAT Structured Text into foldable blocks
@@ -59,7 +60,9 @@ function cleanLineForParsing(line: string): string {
 export function detectFoldableBlocks(code: string): FoldableBlock[] {
   if (!code || !code.trim()) return [];
 
-  const lines = code.split('\n');
+  // Lines as the other functions number them (split on \n), without a CRLF file's \r: patterns ending in (.*)$
+  // would not match it
+  const lines = code.split('\n').map((l) => l.replace(/\r$/, ''));
   const blocks: FoldableBlock[] = [];
 
   // Stacks for tracking nested structures
@@ -201,7 +204,8 @@ export function detectFoldableBlocks(code: string): FoldableBlock[] {
 
       // Check for Case Branch Label: e.g. "0:", "10:", "TABLEMANAGER_INIT:", "10, 20:", "ELSE:"
       // Must end with ':' and NOT ':=' assignment (the colon must not be followed by '=')
-      const caseLabelMatch = clean.match(/^\s*([A-Za-z0-9_]+(?:\s*,\s*[A-Za-z0-9_]+)*|\d+\s*\.\.\s*\d+|ELSE)\s*:(?!=)(.*)$/i);
+      // (a label may be qualified: "E_X_States.DISABLED:")
+      const caseLabelMatch = clean.match(/^\s*((?:[A-Za-z0-9_]+\s*\.\s*)?[A-Za-z0-9_]+(?:\s*,\s*(?:[A-Za-z0-9_]+\s*\.\s*)?[A-Za-z0-9_]+)*|\d+\s*\.\.\s*\d+|ELSE)\s*:(?!=)(.*)$/i);
       if (caseLabelMatch) {
         // If previous branch was open, close it at lineNum - 1
         if (currentCase.currentBranch) {
@@ -657,10 +661,10 @@ export function findFoldableBlockForState(
   if (!stateId) return undefined;
   const target = stateId.trim().toUpperCase();
 
-  // Look for case branch matching stateId
-  return blocks.find((b) => {
-    if (b.type !== 'case-branch') return false;
-    const cleanLabel = b.label.toUpperCase();
-    return cleanLabel.includes(target);
-  });
+  // The branch whose labels name the state (E_X.STATE or STATE), else one whose label contains it
+  const branches = blocks.filter((b) => b.type === 'case-branch');
+  return (
+    branches.find((b) => splitStateLabels(b.label.split(/:(?!=)/)[0]).some((l) => l.toUpperCase() === target)) ??
+    branches.find((b) => b.label.toUpperCase().includes(target))
+  );
 }

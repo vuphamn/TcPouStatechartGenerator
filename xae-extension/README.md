@@ -45,6 +45,9 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
   - the context menu of an open document's tab.
 - **Tools > Kval StateScope...** opens the selected or active `.TcPOU`. Without one, it asks for a file.
 - **Command Window:** `Tools.KvalStateScope.Open C:\Path\SM_X.TcPOU`
+- **One tab per POU:** each POU opens in its own **StateScope: <POU>** tab, so several state machines can be watched at once. Opening a POU that already has a tab brings that tab forward, without reloading it. The tabs share one WebView2 browser process.
+- **PLC Symbols:** while live, the Live tab's **Symbols** browses the PLC's symbols from `MAIN.mainStateMachine` with their values; **Watch** opens another state machine of the project in its own tab, live. (Built on the same TcAdsDll calls as the live view; like guard values, not yet run against a real PLC here, because this PC's TwinCAT system is not started.)
+- **One tab per PLC instance:** when the POU is declared more than once, the Live tab's **Open** follows another instance in a new tab, **StateScope: <POU> (<instance>)**, which goes live on it. A tab already following that instance comes forward.
 
 The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcPOU`'s folder and subfolders is ranked by how many `doState()` states its enum declares.
 
@@ -132,6 +135,8 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - opening `SM_KAxis` from a guard's reference, and Back;
     - Document all state machines through the save dialog.
   - **Guard values (0.7.0):** the app side ran in a browser, with a stand-in for the XAE bridge answering `liveWatch`. The same watching code in the desktop app, Link and the gateway ran against a simulated PLC. The extension's own ADS part (`LiveMonitor.SetVars`) compiles but was not run: this PC's TwinCAT system is not started (see Live view above).
+  - **One tab per PLC instance (0.8.0), same copy:** the app's `openInstance` message (sent through WebView2's debugging port, as there is no running TwinCAT system to list instances) opened **StateScope: SM_TableManager (MAIN.fbLine2.smTableManager)**, which asked to go live on that instance. Sending it again, with other letter case, brought that tab forward. Another POU's path or a malformed instance was ignored. The desktop app and the web edition (through Link) were tested against a simulated PLC with three instances.
+  - **One tab per POU (0.8.0), on the same copy in VS 2022:** SM_TableManager then SM_KAxis gave two tabs; opening SM_TableManager again brought its tab forward, with no third tab and no reload.
 - **TcXaeShell 64-bit (TwinCAT 3.1.4026)**, installed with `install-tcxaeshell.ps1`: **Open in Kval StateScope** in the PLC tree's POU context menu (**PlcFile**), opening POUs of a real PLC project and matching their `.TcDUT` in the POU folder.
 - **Two IDEs sharing the browser profile:** when the profile is still held by another IDE, or by one that just closed, the tab retries for about 9 s and then uses a session-only profile. The log records it.
 

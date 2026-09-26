@@ -125,6 +125,13 @@ export class GatewayConnection {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'liveWatch', vars }));
   }
 
+  /** Symbol browser: a symbol's members in the PLC (answered with liveBrowseResult) */
+  browse(req: { requestId: number; path: string; stateVar: string }): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify({ type: 'liveBrowse', ...req }));
+    return true;
+  }
+
   stop(): void {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'liveStop' }));
   }

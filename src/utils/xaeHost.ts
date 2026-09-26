@@ -9,7 +9,8 @@ import { PouSource } from './sourceFileAccess.ts';
 
 /** Messages from the extension */
 export type HostMessage =
-  | { type: 'loadPou'; source: PouSource }
+  /** instance / live: the tab was opened to follow this PLC instance of the POU (openInstance) */
+  | { type: 'loadPou'; source: PouSource; instance?: string; live?: boolean; connection?: Record<string, string> }
   | { type: 'dutCandidates'; candidates: DutCandidate[]; forceFirst: boolean }
   /** files: XAE's version of each saved file (it can differ slightly from what was sent) */
   | { type: 'saveResult'; ok: boolean; message: string; files?: { path: string; content: string }[] }
@@ -41,7 +42,31 @@ export type HostMessage =
   | { type: 'saveDocumentResult'; path?: string; error?: string; canceled?: boolean }
   /** Two-way selection: the caret in TwinCAT's editor of the loaded POU (line of the editor, both parts) */
   | { type: 'editorCaret'; method: string; line: number; lineCount: number }
+  /** Symbol browser: a symbol and its members (one level), or why not */
+  | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   | { type: 'error'; message: string };
+
+/** A member of a browsed PLC symbol. value: a number / boolean / string shown with its value; struct / array: has
+ * members; other: pointers, references, ... stateMachine: holds the state variable (a POU the app can follow) */
+export interface SymbolChild {
+  name: string;
+  path: string;
+  type: string;
+  kind: 'value' | 'struct' | 'array' | 'other';
+  stateMachine?: boolean;
+}
+
+export interface LiveBrowseResult {
+  requestId: number;
+  path: string;
+  /** The symbol's type (not "type": that is the message's) */
+  symbolType?: string;
+  kind?: SymbolChild['kind'];
+  stateMachine?: boolean;
+  truncated?: boolean;
+  children?: SymbolChild[];
+  error?: string | null;
+}
 
 /** Messages to the extension */
 /** A guard variable to follow: its id (the variable as written, lower case) and the symbol paths to try */
@@ -68,6 +93,10 @@ export type AppMessage =
   | { type: 'gitShow'; path: string; requestId: number }
   /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */
   | { type: 'openPou'; typeName?: string; path?: string }
+  /** Another tab on this POU, following another PLC instance of it (a tab already following it comes forward) */
+  | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string> }
+  /** Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult) */
+  | { type: 'liveBrowse'; requestId: number; path: string; stateVar: string }
   /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
   | { type: 'projectPous' }
   /** Save a document (a save dialog; answered with saveDocumentResult) */

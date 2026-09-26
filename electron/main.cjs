@@ -2,7 +2,7 @@ const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { readPouWithDutCandidates } = require('./tcSourceFiles.cjs');
-const live = require('./tcLive.cjs');
+const createLiveSession = require('./tcLive.cjs');
 
 // ---- Opening a .TcPOU from Windows Explorer ("Open in Kval StateScope", or a file dropped on the exe) ----
 
@@ -23,32 +23,95 @@ async function readPouForApp(file) {
   }
 }
 
-// One window: a second start (another file opened from Explorer) hands its file to the running app
+// ---- Windows: one per POU ----
+// One process: a second start (a file opened from Explorer) hands its file over. A POU already open in a window
+// brings that window forward; another one opens in a new window, with its own diagram and live session.
 const isFirstInstance = app.requestSingleInstanceLock();
 if (!isFirstInstance) app.quit();
-let mainWindow = null;
-// Opened when the page asks for it (the app is not loaded yet when the window opens)
-let startupPou = pouFromArgs(process.argv);
+/**
+ * webContents id -> { win, pouPath: the POU the page reported, instance: the PLC instance it follows (a POU can be
+ * declared several times: one window per instance), startupPou / launch: the file it opens first, and the instance
+ * to follow in it }
+ */
+const windows = new Map();
+/** webContents id -> live session */
+const liveSessions = new Map();
 
-app.on('second-instance', async (_event, argv) => {
+const sameFile = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+const sameInstance = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+/** The window showing the file (with an instance: the one following that instance of it) */
+function windowShowing(file, instance) {
+  for (const w of windows.values()) {
+    if (!sameFile(w.pouPath, file) && !sameFile(w.startupPou, file)) continue;
+    if (!instance || sameInstance(w.instance ?? w.launch?.instance, instance)) return w.win;
+  }
+  return null;
+}
+function focusWindow(win) {
+  if (win.isMinimized()) win.restore();
+  win.focus();
+}
+/** Opens the POU (and an instance of it): in the window that shows it, else in a new window */
+function openPouWindow(file, launch = null) {
+  const open = file ? windowShowing(file, launch?.instance) : null;
+  if (open) focusWindow(open);
+  else createWindow(file, launch);
+}
+
+app.on('second-instance', (_event, argv) => {
   const file = pouFromArgs(argv);
-  if (!mainWindow) {
-    startupPou = file ?? startupPou;
+  // Too early (the first window is not open yet): open it once ready
+  if (!app.isReady()) {
+    if (file) app.whenReady().then(() => openPouWindow(file));
     return;
   }
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
-  if (file) mainWindow.webContents.send('tc:open-pou-file', await readPouForApp(file));
+  if (file) return openPouWindow(file);
+  // Started again without a file: bring the app forward (the Window menu opens another window)
+  const last = BrowserWindow.getFocusedWindow() ?? [...windows.values()].pop()?.win;
+  if (last) focusWindow(last);
+  else createWindow(null);
 });
 
-ipcMain.handle('tc:startup-pou', async () => {
-  const file = startupPou;
-  startupPou = null;
-  return file ? readPouForApp(file) : null;
+// The page asks once it is loaded: the file its window was opened for
+ipcMain.handle('tc:startup-pou', async (event) => {
+  const w = windows.get(event.sender.id);
+  const file = w?.startupPou;
+  if (!file) return null;
+  const launch = w.launch;
+  w.startupPou = null;
+  w.launch = null;
+  w.pouPath = file;
+  const source = await readPouForApp(file);
+  return launch && !source.error ? { ...source, launch } : source;
+});
+// The page reports the POU it shows (after Browse, Open referenced POU, ...) and the instance it follows: Explorer
+// and Open instance then find its window
+ipcMain.on('tc:current-pou', (event, filePath, instance) => {
+  const w = windows.get(event.sender.id);
+  if (!w) return;
+  w.pouPath = typeof filePath === 'string' && filePath ? filePath : null;
+  w.instance = typeof instance === 'string' && instance ? instance : null;
+});
+// Window menu: New window (optionally with a .TcPOU). Live's Open instance: the POU following one PLC instance
+// (launch: { instance, live }), or a POU the page hands over itself (launch: { handoff: id }, see instanceLaunch.ts)
+ipcMain.handle('tc:new-window', (_event, filePath, launch) => {
+  const file = typeof filePath === 'string' && /\.tcpou$/i.test(filePath) && fs.existsSync(filePath) ? filePath : null;
+  const handoff = typeof launch?.handoff === 'string' && /^[a-z0-9]{1,40}$/i.test(launch.handoff) ? launch.handoff : null;
+  if (handoff) return void createWindow(null, null, { handoff });
+  const instance = typeof launch?.instance === 'string' && launch.instance.trim() ? launch.instance.trim() : null;
+  // The opener's PLC connection (short strings only; the page keeps the keys it knows)
+  const connection = launch?.connection && typeof launch.connection === 'object'
+    ? Object.fromEntries(Object.entries(launch.connection).filter(([k, v]) => /^[a-zA-Z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 200).slice(0, 16))
+    : undefined;
+  openPouWindow(file, instance ? { instance, live: launch.live === true, connection } : null);
 });
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function createWindow(startupPou = null, launch = null, query = null) {
+  // A new window opens a little below and right of the current one
+  const from = BrowserWindow.getFocusedWindow() ?? [...windows.values()].pop()?.win;
+  const at = from && !from.isMaximized() ? from.getBounds() : null;
+  const mainWindow = new BrowserWindow({
+    ...(at ? { x: at.x + 32, y: at.y + 32 } : {}),
     width: 1280,
     height: 850,
     minWidth: 960,
@@ -73,15 +136,23 @@ function createWindow() {
     }
     return { action: 'allow' };
   });
+  // The window title follows the page's <title> (the app puts the POU's name in it)
+  const id = mainWindow.webContents.id;
+  windows.set(id, { win: mainWindow, pouPath: null, instance: null, startupPou, launch });
   mainWindow.on('closed', () => {
-    mainWindow = null;
+    windows.delete(id);
+    // Its live session ends with it
+    liveSessions.get(id)?.stop(false);
+    liveSessions.delete(id);
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
-    mainWindow.loadURL(devUrl);
+    const url = new URL(devUrl);
+    for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
+    mainWindow.loadURL(url.toString());
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query ? { query } : undefined);
   }
 }
 
@@ -158,24 +229,40 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
   });
 });
 
-// Live view: follow a POU's state variable in a PLC on another computer (messages go back on 'tc:live')
+// Live view: follow a POU's state variable in a PLC on another computer (messages go back on 'tc:live').
+// Each window has its own session.
+function liveFor(contents) {
+  let s = liveSessions.get(contents.id);
+  if (!s) {
+    s = createLiveSession();
+    liveSessions.set(contents.id, s);
+  }
+  return s;
+}
 ipcMain.handle('tc:live-start', (event, options) => {
   const contents = event.sender;
   const send = (m) => {
     if (!contents.isDestroyed()) contents.send('tc:live', m);
   };
-  live.start(send, options || {});
+  liveFor(contents).start(send, options || {});
 });
-// Guard variables to follow in the running session (their values also come back on 'tc:live')
-ipcMain.handle('tc:live-watch', (_event, vars) => live.watch(vars));
+// Guard variables to follow in the window's running session (their values also come back on 'tc:live')
+ipcMain.handle('tc:live-watch', (event, vars) => liveFor(event.sender).watch(vars));
+// Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult on 'tc:live')
+ipcMain.handle('tc:live-browse', (event, req) => {
+  const contents = event.sender;
+  return liveFor(contents).browse((m) => {
+    if (!contents.isDestroyed()) contents.send('tc:live', m);
+  }, req);
+});
 ipcMain.handle('tc:live-stop', (event) => {
   const contents = event.sender;
-  return live.stop(true, (m) => {
+  return liveFor(contents).stop(true, (m) => {
     if (!contents.isDestroyed()) contents.send('tc:live', m);
   });
 });
 app.on('before-quit', () => {
-  live.stop(false);
+  for (const s of liveSessions.values()) s.stop(false);
 });
 
 // Windows groups taskbar buttons and pins by this id; it must match build.appId in package.json
@@ -183,10 +270,10 @@ if (process.platform === 'win32') app.setAppUserModelId('com.kval.statescope');
 
 app.whenReady().then(() => {
   if (!isFirstInstance) return;
-  createWindow();
+  createWindow(pouFromArgs(process.argv));
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(null);
   });
 });
 

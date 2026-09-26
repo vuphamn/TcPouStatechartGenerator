@@ -34,7 +34,11 @@ namespace KvalStateScope.Xae
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         private bool _appReady;
         private string _pendingPou;
+        private string _pendingInstance;
+        private Dictionary<string, string> _pendingConnection;
         private string _pouPath;
+        // The PLC instance this tab follows: the one it was opened for (Open instance), then the one live found
+        private string _instance;
         // Files sent to the app (only these can be saved), with the content key last seen for each (change detection)
         private readonly Dictionary<string, string> _lastSeen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // Folders watched for changes made in XAE or on disk (TwinCAT save, git pull, ...)
@@ -102,9 +106,26 @@ namespace KvalStateScope.Xae
         /// WebView2 that is shutting down (e.g. an IDE that just closed): wait and retry with a fresh control, and in the
         /// end fall back to a profile of this session only.
         /// </summary>
+        // Shared by every StateScope tab of this IDE: one browser process and one profile for all of them
+        private static CoreWebView2Environment _environment;
+
         private async Task StartWebViewAsync(string userData)
         {
             const int ProfileBusy = unchecked((int)0x8007139F);
+            if (_environment != null)
+            {
+                try
+                {
+                    await _web.EnsureCoreWebView2Async(_environment);
+                    return;
+                }
+                catch (System.Runtime.InteropServices.COMException ex)
+                {
+                    Log.Write("shared browser environment not usable, creating another: " + ex.Message);
+                    _environment = null;
+                    NewWebView();
+                }
+            }
             RemoveStaleSessionProfiles(userData);
             for (var attempt = 1; ; attempt++)
             {
@@ -113,6 +134,7 @@ namespace KvalStateScope.Xae
                 {
                     var env = await CoreWebView2Environment.CreateAsync(null, profile);
                     await _web.EnsureCoreWebView2Async(env);
+                    _environment = env;
                     if (profile != userData) Log.Write("using a session-only browser profile: " + profile);
                     return;
                 }
@@ -173,13 +195,32 @@ namespace KvalStateScope.Xae
             }
         }
 
-        /// <summary>Loads a .TcPOU (and the .TcDUT candidates of its folder tree) into the app</summary>
-        public void LoadPou(string pouPath)
+        /// <summary>The .TcPOU this tab shows (or will show once the app is ready); null when none</summary>
+        internal string PouPath => _pouPath ?? _pendingPou;
+
+        /// <summary>The PLC instance of the POU this tab follows (or was opened for); null when none yet</summary>
+        internal string Instance => _pendingPou != null ? _pendingInstance : _instance;
+
+        /// <summary>"StateScope: SM_X", with the followed instance: "StateScope: SM_X (MAIN.fbLine1.smX)"</summary>
+        private void UpdateCaption()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_pouPath == null) return;
+            _pane.Caption = "StateScope: " + Path.GetFileNameWithoutExtension(_pouPath) + (string.IsNullOrEmpty(_instance) ? "" : $" ({_instance})");
+        }
+
+        /// <summary>
+        /// Loads a .TcPOU (and the .TcDUT candidates of its folder tree) into the app. instance: the tab follows that
+        /// PLC instance of it and goes live on it (Live's Open instance)
+        /// </summary>
+        public void LoadPou(string pouPath, string instance = null, Dictionary<string, string> connection = null)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!_appReady)
             {
                 _pendingPou = pouPath;
+                _pendingInstance = instance;
+                _pendingConnection = connection;
                 return;
             }
             try
@@ -190,6 +231,7 @@ namespace KvalStateScope.Xae
                 var content = HostFiles.CurrentContent(_pane, pouPath);
                 if (!string.Equals(_pouPath, pouPath, StringComparison.OrdinalIgnoreCase)) StopLive(true);
                 _pouPath = pouPath;
+                _instance = string.IsNullOrWhiteSpace(instance) ? null : instance.Trim();
                 _lastSeen.Clear();
                 _lastSeen[pouPath] = HostFiles.ContentKey(content);
                 foreach (var d in duts) _lastSeen[d.path] = HostFiles.ContentKey(d.content);
@@ -199,9 +241,13 @@ namespace KvalStateScope.Xae
                 {
                     type = "loadPou",
                     source = new { name = Path.GetFileName(pouPath), path = pouPath, content, dutCandidates = duts },
+                    instance = _instance,
+                    // The opener's PLC connection (Open instance / Watch: the same PLC)
+                    connection,
+                    live = _instance != null,
                 });
-                _pane.Caption = "StateScope: " + Path.GetFileNameWithoutExtension(pouPath);
-                Log.Write($"loaded {pouPath} with {duts.Count} .TcDUT candidate(s)");
+                UpdateCaption();
+                Log.Write($"loaded {pouPath} with {duts.Count} .TcDUT candidate(s){(_instance != null ? ", following " + _instance : "")}");
                 _lastCaret = null;
                 StartCaretWatch();
             }
@@ -240,8 +286,12 @@ namespace KvalStateScope.Xae
                         if (_pendingPou != null)
                         {
                             var p = _pendingPou;
+                            var pi = _pendingInstance;
+                            var pc = _pendingConnection;
+                            _pendingConnection = null;
                             _pendingPou = null;
-                            LoadPou(p);
+                            _pendingInstance = null;
+                            LoadPou(p, pi, pc);
                         }
                         break;
                     case "browsePou":
@@ -271,11 +321,17 @@ namespace KvalStateScope.Xae
                     case "liveWatch":
                         HandleLiveWatch(msg);
                         break;
+                    case "liveBrowse":
+                        HandleLiveBrowse(msg);
+                        break;
                     case "gitShow":
                         HandleGitShow(msg);
                         break;
                     case "openPou":
                         HandleOpenPou(msg);
+                        break;
+                    case "openInstance":
+                        HandleOpenInstance(msg);
                         break;
                     case "projectPous":
                         HandleProjectPous();
@@ -435,6 +491,63 @@ namespace KvalStateScope.Xae
             }
             Log.Write($"open: {Path.GetFileName(target)} ({(typeName != null ? "referenced by " + Path.GetFileName(_pouPath) : "back")})");
             LoadPou(target);
+        }
+
+        /// <summary>The .TcPOU of a POU type in the loaded POU's PLC project, or null</summary>
+        private string FindPouInProject(string typeName)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null || !System.Text.RegularExpressions.Regex.IsMatch(typeName ?? "", @"^[A-Za-z_]\w*$")) return null;
+            try
+            {
+                return Directory.EnumerateFiles(Path.GetDirectoryName(plcproj), typeName + ".TcPOU", SearchOption.AllDirectories).FirstOrDefault();
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
+        }
+
+        /// <summary>
+        /// Live's Open instance: another tab on this tab's POU that follows another PLC instance of it (the tab that
+        /// already follows it comes forward)
+        /// </summary>
+        private void HandleOpenInstance(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            var instance = msg.TryGetValue("instance", out var i) ? (i as string)?.Trim() : null;
+            // The opener's PLC connection: short strings only (the app keeps the keys it knows)
+            var connection = msg.TryGetValue("connection", out var c) && c is Dictionary<string, object> cd
+                ? cd.Where(kv => kv.Key.Length <= 20 && kv.Value is string sv && sv.Length <= 200).Take(16).ToDictionary(kv => kv.Key, kv => (string)kv.Value)
+                : null;
+            if (string.IsNullOrEmpty(instance) || !System.Text.RegularExpressions.Regex.IsMatch(instance, @"^[A-Za-z_][\w.\[\], ]*$")) return;
+            // Symbol browser's Watch: another state machine type, found in this POU's PLC project
+            if (!string.IsNullOrEmpty(typeName))
+            {
+                path = FindPouInProject(typeName);
+                if (path == null)
+                {
+                    Post(new { type = "error", message = $"{typeName}.TcPOU was not found in the PLC project" });
+                    return;
+                }
+            }
+            // Else only this tab's POU, and an instance path (MAIN.fbLine.smX, GVL.aX[2])
+            else if (path == null || !string.Equals(path, _pouPath, StringComparison.OrdinalIgnoreCase)) return;
+            var package = KvalStateScopePackage.Instance;
+            if (package == null) return;
+            Log.Write($"open instance: {instance} of {Path.GetFileName(path)}");
+            _ = package.JoinableTaskFactory.RunAsync(async () =>
+            {
+                try
+                {
+                    await package.ShowStateScopeAsync(path, instance, connection);
+                }
+                catch (Exception ex)
+                {
+                    await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    Post(new { type = "error", message = ex.Message });
+                }
+            });
         }
 
         /// <summary>Project documentation: the state machine POUs (with a doState method) and all enums of the PLC project</summary>
@@ -637,6 +750,43 @@ namespace KvalStateScope.Xae
             ApplyLiveWatch();
         }
 
+        /// <summary>Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult)</summary>
+        private void HandleLiveBrowse(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var path = msg.TryGetValue("path", out var p) ? (p as string)?.Trim() : null;
+            var stateVar = msg.TryGetValue("stateVar", out var v) && v is string sv && System.Text.RegularExpressions.Regex.IsMatch(sv, @"^[A-Za-z_]\w*$") ? sv : "machineState";
+            var monitor = _live;
+            if (string.IsNullOrEmpty(path) || path.Length > 250 || !SymbolPath.IsMatch(path))
+            {
+                Post(new { type = "liveBrowseResult", requestId, path, error = "Not a symbol path" });
+                return;
+            }
+            if (monitor == null)
+            {
+                Post(new { type = "liveBrowseResult", requestId, path, error = "Not connected" });
+                return;
+            }
+            var session = _liveSession;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                LiveMonitor.BrowseResult result;
+                try { result = monitor.Browse(path, stateVar); }
+                catch (Exception ex) when (ex is AdsException || ex is ArgumentException || ex is IndexOutOfRangeException)
+                {
+                    result = new LiveMonitor.BrowseResult { path = path, error = ex.Message };
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                if (session != _liveSession) return;
+                Post(new
+                {
+                    type = "liveBrowseResult", requestId, result.path, result.symbolType, result.kind, result.stateMachine, result.truncated, result.children, result.error,
+                });
+            });
+        }
+
         private void ApplyLiveWatch()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -730,6 +880,9 @@ namespace KvalStateScope.Xae
                 _liveTimer.Tick += OnLiveTick;
                 _liveTimer.Start();
                 Log.Write($"live: following {chosen}.{stateVar} ({type}) on {monitor.TargetText}, PLC {plcState}");
+                // The tab now follows this instance (its caption says which; Open instance finds it by it)
+                _instance = chosen;
+                UpdateCaption();
                 Post(new
                 {
                     type = "liveStatus",

@@ -146,6 +146,10 @@ function parseSymbols(buf) {
 /** One AdsDatatypeEntry (with its sub items) at `at` */
 function parseDataType(buf, at) {
   const len = buf.readUInt32LE(at);
+  // entryLength, version, hashValue, typeHashValue, size, offs, dataType, flags (uint32), then lengths (uint16)
+  const size = buf.readUInt32LE(at + 16);
+  const dataType = buf.readUInt32LE(at + 24);
+  const flags = buf.readUInt32LE(at + 28);
   const nameLength = buf.readUInt16LE(at + 32);
   const typeLength = buf.readUInt16LE(at + 34);
   const commentLength = buf.readUInt16LE(at + 36);
@@ -164,7 +168,7 @@ function parseDataType(buf, at) {
     subItems.push(sub.entry);
     p += sub.length;
   }
-  return { entry: { name, type, bounds, subItems }, length: len };
+  return { entry: { name, type, size, dataType, flags, bounds, subItems }, length: len };
 }
 
 function parseDataTypes(buf) {
@@ -228,6 +232,94 @@ async function discoverInstances(client, typeName, maxPaths = 50) {
   return [...new Map(paths.map((p) => [p.toLowerCase(), p])).values()];
 }
 
+// ---- Symbol browser: a symbol's members, one level at a time (from the PLC's data type information) ----
+
+const SYM_DT_INFO_BY_NAME_EX = 0xf011;
+const ADST_BIGTYPE = 65;
+/** Most members / array elements listed for one symbol */
+const MAX_BROWSE_CHILDREN = 500;
+const MAX_ARRAY_CHILDREN = 100;
+
+/** A data type by name (AdsDatatypeEntry with its sub items), cached per connection; null when the PLC has none */
+async function dataTypeInfo(client, name, cache) {
+  const key = (name || '').toLowerCase();
+  if (!key) return null;
+  if (cache?.has(key)) return cache.get(key);
+  let dt = null;
+  try {
+    const buf = await client.readWriteRaw(SYM_DT_INFO_BY_NAME_EX, 0, 0xffff, Buffer.from(`${name}\0`, 'latin1'));
+    if (buf.length >= 42) dt = parseDataType(buf, 0).entry;
+  } catch (err) {
+    const code = err?.adsError?.errorCode;
+    if (code !== 0x710 && code !== 0x703 && code !== 0x707) throw err;
+  }
+  cache?.set(key, dt);
+  return dt;
+}
+
+/** The type's members, with those of the function block it extends (when the PLC lists them there) */
+async function membersOf(client, dt, cache, depth = 0) {
+  const own = dt?.subItems ?? [];
+  if (!dt || depth > 6 || !dt.type || lastSegment(dt.type) === lastSegment(dt.name) || /^(ARRAY|POINTER|REFERENCE)\b/i.test(dt.type)) return own;
+  const base = await dataTypeInfo(client, dt.type, cache);
+  if (!base || base.subItems.length === 0) return own;
+  const inherited = await membersOf(client, base, cache, depth + 1);
+  const names = new Set(own.map((m) => m.name.toLowerCase()));
+  return [...inherited.filter((m) => !names.has(m.name.toLowerCase())), ...own];
+}
+
+/** value: shown with its value; struct / array: has members; other: pointers, references, interfaces, ... */
+function symbolKind(type, size, dataType, bounds) {
+  if (/^(POINTER|REFERENCE)\s+TO\b/i.test(type || '') || /^(PVOID|ITC\w*|I_\w+)$/i.test(type || '')) return 'other';
+  if (/^ARRAY\b/i.test(type || '') || (bounds && bounds.length)) return arrayType(type) || (bounds && bounds.length === 1) ? 'array' : 'other';
+  if (SIMPLE_TYPES.has(dataType) && size > 0 && size <= MAX_VALUE_SIZE) return 'value';
+  return dataType === ADST_BIGTYPE ? 'struct' : 'other';
+}
+
+/** Does a variable of this type hold the state variable (a state machine the app can follow)? */
+async function holdsStateVar(client, type, stateVar, cache) {
+  const dt = await dataTypeInfo(client, type, cache);
+  if (!dt) return false;
+  const want = stateVar.toLowerCase();
+  return (await membersOf(client, dt, cache)).some((m) => m.name.toLowerCase() === want);
+}
+
+/**
+ * The symbol and its members (or array elements), one level: { path, symbolType, kind, stateMachine, children: [{ name,
+ * path, type, kind, stateMachine }], truncated } or { path, error }. cache: a Map kept for the connection.
+ */
+async function browseSymbol(client, symbolPath, { stateVar = 'machineState', cache } = {}) {
+  const info = await probe(client, symbolPath);
+  if (!info) return { path: symbolPath, error: `${symbolPath} is not in the PLC` };
+  const node = { path: symbolPath, symbolType: info.type, kind: symbolKind(info.type, info.size, info.dataType, null), stateMachine: false, children: [], truncated: false };
+  const describe = async (name, childPath, type, size, dataType, bounds) => {
+    const kind = symbolKind(type, size, dataType, bounds);
+    return { name, path: childPath, type, kind, stateMachine: kind === 'struct' ? await holdsStateVar(client, type, stateVar, cache) : false };
+  };
+  if (node.kind === 'array') {
+    const dt = await dataTypeInfo(client, info.type, cache);
+    const arr = arrayType(info.type) ?? (dt?.bounds?.length === 1 ? { low: dt.bounds[0].low, high: dt.bounds[0].low + dt.bounds[0].count - 1, element: dt.type } : null);
+    if (!arr) return node;
+    const element = await dataTypeInfo(client, arr.element, cache);
+    const last = Math.min(arr.high, arr.low + MAX_ARRAY_CHILDREN - 1);
+    node.truncated = last < arr.high;
+    for (let i = arr.low; i <= last; i++) {
+      node.children.push(await describe(`[${i}]`, `${symbolPath}[${i}]`, arr.element, element?.size ?? 0, element?.dataType ?? ADST_BIGTYPE, element?.bounds));
+    }
+    return node;
+  }
+  if (node.kind !== 'struct') return node;
+  const dt = await dataTypeInfo(client, info.type, cache);
+  const members = await membersOf(client, dt, cache);
+  node.stateMachine = members.some((m) => m.name.toLowerCase() === stateVar.toLowerCase());
+  node.truncated = members.length > MAX_BROWSE_CHILDREN;
+  for (const m of members.slice(0, MAX_BROWSE_CHILDREN)) {
+    if (!/^[A-Za-z_]\w*$/.test(m.name)) continue;
+    node.children.push(await describe(m.name, `${symbolPath}.${m.name}`, m.type, m.size, m.dataType, m.bounds));
+  }
+  return node;
+}
+
 /** Valid IEC symbol path (letters, digits, _, . , [index] and ^ for a pointer): nothing else is ever sent to the PLC */
 const isSymbolPath = (text) => typeof text === 'string' && text.length <= 250 && /^[A-Za-z_][\w]*(\[-?\d+\]|\^)*(\.[A-Za-z_][\w]*(\[-?\d+\]|\^)*)*$/.test(text);
 
@@ -246,4 +338,5 @@ module.exports = {
   subscribeTyped,
   discoverInstances,
   isSymbolPath,
+  browseSymbol,
 };

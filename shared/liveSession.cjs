@@ -87,7 +87,7 @@ function createLiveSession(hooks = {}) {
       hideConsoleWarnings: true,
     });
     // desired: guard variables asked for before the connection was made (liveWatch)
-    const s = { id, client, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null };
+    const s = { id, client, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false };
     session = s;
     const found = [];
     try {
@@ -149,6 +149,7 @@ function createLiveSession(hooks = {}) {
           status('lost', `Connection lost: ${ads.adsErrorText(err)}`);
         }
       }, 2000);
+      s.connected = true;
       status('connected', `${symbol} on ${host} (${netId}:${adsPort}) (PLC ${plcState})`, {
         target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, route,
       });
@@ -191,6 +192,25 @@ function createLiveSession(hooks = {}) {
     return true;
   }
 
+  /**
+   * Symbol browser (liveBrowse): a symbol's members, one level, answered with liveBrowseResult. Only while connected;
+   * req: { requestId, path, stateVar? }
+   */
+  async function browse(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const symbolPath = typeof req?.path === 'string' ? req.path.trim() : '';
+    const stateVar = typeof req?.stateVar === 'string' && /^[A-Za-z_]w*$/.test(req.stateVar) ? req.stateVar : 'machineState';
+    if (!ads.isSymbolPath(symbolPath)) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not a symbol path' });
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not connected' });
+    try {
+      const node = await ads.browseSymbol(s.client, symbolPath, { stateVar, cache: s.dtCache });
+      if (session === s) send({ type: 'liveBrowseResult', requestId, ...node });
+    } catch (err) {
+      if (session === s) send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: ads.adsErrorText(err) });
+    }
+  }
+
   async function stop(notify, send) {
     sessionId++;
     const s = session;
@@ -199,7 +219,7 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
-  return { start, stop, watch };
+  return { start, stop, watch, browse };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId };

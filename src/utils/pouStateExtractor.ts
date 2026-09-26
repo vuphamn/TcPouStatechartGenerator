@@ -4,6 +4,7 @@
  */
 
 import { parseTransitionsFromStateCode } from './pouStateEditor.ts';
+import { caseLabelLinePattern, splitStateLabels } from './stateNames.ts';
 
 export interface IdentifiedPouState {
   id: string; // Machine-readable state identifier (e.g. TABLEMANAGER_IDLE_FEED_OFF)
@@ -111,8 +112,8 @@ export function extractIdentifiedStatesFromPou(
     const caseMatch = doStateSt.match(caseRx);
     if (caseMatch) {
       const body = caseMatch[3];
-      // Matches lines like "  TABLEMANAGER_DISABLED:" or "STATE_A, STATE_B:"
-      const labelPattern = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:(?!\=)(?:\s*(?:\/\/[^\n]*|\(\*[\s\S]*?\*\)))?\s*$/gm;
+      // Matches lines like "  TABLEMANAGER_DISABLED:", "STATE_A, STATE_B:" or "E_X_States.DISABLED:"
+      const labelPattern = caseLabelLinePattern();
       const matches: RegExpExecArray[] = [];
       let m: RegExpExecArray | null;
       while ((m = labelPattern.exec(body)) !== null) {
@@ -121,7 +122,7 @@ export function extractIdentifiedStatesFromPou(
 
       for (let i = 0; i < matches.length; i++) {
         const curMatch = matches[i];
-        const rawLabels = curMatch[1].split(',').map((l) => l.trim()).filter(Boolean);
+        const rawLabels = splitStateLabels(curMatch[1]);
         const startIdx = curMatch.index + curMatch[0].length;
         let endIdx = i + 1 < matches.length ? matches[i + 1].index : body.length;
 

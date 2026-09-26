@@ -13,7 +13,7 @@ The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable 
 | Panel | Contents |
 |---|---|
 | **LeftPanel** | Identified States |
-| **MiddlePanel** | Document tabs: Diagram Canvas, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History, PLC Transition Logger |
+| **MiddlePanel** | Document tabs: Diagram Canvas, POU Editor, Method Editor, Enum Editor, Complexity Report, Transition Frequency, Transition History, PLC Transition Logger |
 | **RightPanel** | One tab group of tool windows: Documentation, Problems, Live, Changes, Paths, Keyword Search & Filter, Real-Time Stats, Complexity Heat-Map, Notes, Mermaid Markdown |
 
 The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas. The **Minimap** and the **Legend** are overlays on the canvas, opened from the diagram toolbar.
@@ -21,6 +21,8 @@ The diagram toolbar (search, view and editing controls) and the diagram **Option
 - **Help:** hover over the `?` icon at the right end of the header for how the app works, the diagram's mouse actions, the tabs and the keyboard shortcuts. Click it to keep it open; `Esc` or a click elsewhere closes it. The book icon beside it opens this README on GitHub (in the desktop app and XAE, in your default browser).
 - **PLC Transition Logger** (MiddlePanel tab, also opened from Transition History): paste, drop or pick a CSV / text log of state changes, or load a sample. **Populate Transition History** sends it to the Transition History tab.
 - **Focus mode:** `Z`, or the focus button in the header, hides the side panels, the header and the status bar, so the diagram fills the window. Press `Z` or `Esc`, or use the exit button, to bring them back.
+- **POU Editor:** the POU's own Structured Text, as TwinCAT XAE shows it when you open the POU. The declaration (`FUNCTION_BLOCK ... EXTENDS ...`, `VAR_INPUT` / `VAR_OUTPUT` / `VAR ... END_VAR`) is on top and the body (the POU's implementation) below; drag the bar between them to resize. Both can be edited: **Save to POU** (Ctrl+S) writes them into the `.TcPOU` and leaves its methods as they are (those are in the Method Editor). Find searches both panels (Enter / F3), the body folds like the Method Editor's, and Reset goes back to the POU's code. Right-click (as in the Method Editor): **Go to Definition** (F12) highlights the variable's line in the declaration, or opens a method of the POU in the Method Editor; **Find References** searches for it in both panels; **Copy Symbol Name**; and in the body, **Toggle Block Fold** folds the block around the cursor. A body that is not Structured Text (SFC, FBD, ...) is left as it is; its declaration can still be edited.
+- **Code views, as in Visual Studio / TwinCAT XAE:** in the Method Editor, the POU Editor, the Enum Editor and Mermaid Markdown, the line with the cursor has a highlight band and a bright line number; it is dimmer when the view is not focused. In Mermaid Markdown, which is read-only, click a line or use the arrow keys, PageUp / PageDown and Ctrl+Home / Ctrl+End to move it. **Ctrl+mouse wheel** changes the text size (50% to 300%), as do Ctrl+Shift+. and Ctrl+Shift+, ; Ctrl+0 or a click on the zoom badge in the bottom-left corner goes back to 100%. The size is the same in all of them and is remembered.
 - **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Selecting a transition opens its Transition Guard window. Turn this off with **Follow selection** in the status bar.
 - **Status bar:** messages appear in the status bar at the bottom rather than as pop-ups. It also shows the Live state, the number of changes and of problems, the state and transition counts, and the file with its unsaved / changed-in-XAE state. After opening a referenced state machine, it has a **Back** button.
 - **A layout per host:** the layout inside XAE is saved separately from the browser / desktop one. It starts compact, with the LeftPanel hidden and a narrower RightPanel, to suit a document tab. Layouts saved by older versions get the new RightPanel once; your other tabs are kept.
@@ -48,6 +50,16 @@ When more than one `.TcDUT` matches, the header shows the count; click the enum 
 - **Close a tab** with its `×` button or a middle-click.
 - **Reopen closed tabs** from the **Window** menu in the header. A reopened tab returns to its original panel and tab group. The Window menu also shows/hides the Left and Right panels and resets the layout.
 - **Resize** panels and tab groups by dragging the splitters; double-click a side-panel splitter to restore its default width.
+
+### Several POUs at once
+Each POU can have its own StateScope, side by side:
+- **XAE:** each POU opens in its own **StateScope: <POU>** tab. Opening a POU that already has a tab brings that tab forward, without reloading it.
+- **Desktop:** each POU opens in its own window, from Explorer, the command line or **Window > New Window**. Opening a POU that is already open brings its window forward. Each window has its own Live session.
+- **Web:** **Window > New Tab** opens another browser tab.
+
+**Several instances of one POU.** A POU can be declared more than once in the PLC program, for example `MAIN.fbLine1.smTable` and `MAIN.fbLine2.smTable`. After you go live, the Live tab lists every instance the PLC has, and marks the one this window follows. **Open** follows another instance in its own tab (XAE, web) or window (desktop), which goes live on it straight away. **Open all** does this for every other instance. An instance that already has its tab or window brings it forward. The title shows the instance, for example **StateScope: SM_TableManager (MAIN.fbLine2.smTable)**. Each window keeps its own instance; the target and the other Live settings are shared by the POU's windows.
+
+Notes are kept per POU, so two instances never overwrite each other's notes. Two tabs on the same POU stay in sync. Notes saved by an earlier version are moved to their POU the first time it is opened.
 
 The layout (panel widths, tab groups, floating windows) is saved in the browser and restored on the next visit. Moving a tab never reloads its content, so the diagram keeps its zoom, pan and selection.
 
@@ -136,12 +148,16 @@ The edits land in the Method Editor and Enum Editor like hand edits, so **Save**
 
 ## Pre-Loaded Production Samples
 
-Test the generator immediately with 5 real-world Beckhoff TwinCAT state machine samples:
+Test the generator immediately with 7 real-world Beckhoff TwinCAT state machine samples:
 1. **Door Dasher (`SM_DoorDasher`)**: Complex multi-level state machine with nested UML composite states (`Disabled`, `Enabling`, `Enabled`, `Stopping`).
 2. **Table Manager (`SM_TableManager`)**: Indexing rotary table sequencer with error handling and interlocks.
 3. **K-Motor VFD (`SM_KMotorVFDEtherCATi550`)**: EtherCAT Lenze i550 variable frequency drive velocity/position controller.
 4. **K-Analog Measure (`SM_KAnalogMeasure`)**: Analog sensor sampling, calibration, and zeroing sequence.
 5. **Feed Manager (`SM_234FeedManager`)**: Material feeder sequencing and fault recovery logic.
+6. **K-Servo Supply Manager (`SM_KServoSupplyManager`)**: Finds the servo power supplies and enables them as child state machines.
+7. **K-Power Supply AX86x0 (`SM_KPowerSupplyAx86x0`)**: Beckhoff AX86x0 servo power supply enable, reset and error handling.
+
+Samples 6 and 7 use a `{attribute 'qualified_only'}` enum, so their code names states with the enum's type: `E_KSupplyManager_States.DISABLED:` and `machineState := E_KPowerSupply_States.ERROR;`. Both forms are read everywhere: in `doState()` and `preProcess()`, the Identified States, the Method Editor and Problems. Code the app writes (a new state's CASE branch, a new transition) follows the style the POU already uses.
 
 ---
 
@@ -204,7 +220,7 @@ After the install folder, the installer offers **Additional components**:
 
 Options for software that is not on the computer are greyed out. Running the installer again shows your earlier choices; an update keeps them.
 
-- **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in that window.
+- **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in a new window, or brings forward the window that already shows it.
 - **Uninstalling** removes the menu entry, the extensions and Link. It removes the gateway's program files but keeps its `config.json`, certificate and key.
 
 ### Live view in the desktop app
@@ -239,6 +255,15 @@ The **Kval StateScope gateway** (`gateway/`) is a small Node.js service on a mac
 - **Setup:** `npm run build:gateway` assembles `release/gateway`. The rest (certificate, PLC list, ADS routes, tokens, running it as a service) is in [gateway/README.md](gateway/README.md).
 
 In the Live tab, enter your access token, choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
+
+## PLC symbols
+
+While live, **Symbols** in the Live tab opens the **PLC Symbols** window. It shows the PLC's variables as a tree, from a root that is `MAIN.mainStateMachine` by default; you can type another root and click **Browse**.
+- **Members, one level at a time:** open a function block, a structure or an array (up to 100 elements) to read its members from the PLC's data types. Members inherited from a base function block are included.
+- **Values:** numbers, booleans, strings and enums show their value live, with the same change notifications as the guard values. The first 60 values on show are followed; close members to see others. Pointers and references are listed without a value.
+- **State machines:** a member that has the state variable (`machineState`) is marked. **Watch** opens its diagram in its own tab (XAE, web) or window (desktop), live on that instance, so its transitions are logged in the Live tab and can go to Transition History. XAE and the desktop app find the POU in the PLC project. Otherwise you are asked to pick its `.TcPOU`. The new window uses the same PLC connection.
+- **Filter** narrows the opened members by name or type. **Refresh** reads them again, for example after a download.
+- Closing the window stops reading its values. The window can be moved and resized, and remembers where it was.
 
 ## Live guard values
 

@@ -16,6 +16,7 @@ export type DockPanelId = 'middle' | 'right';
 
 export type DockTabId =
   | 'diagram'
+  | 'pou'
   | 'method'
   | 'enum'
   | 'complexity'
@@ -36,6 +37,7 @@ export type DockTabId =
 /** Canonical tab order; also used to pick the insert position when a tab is reopened */
 export const DOCK_TAB_ORDER: DockTabId[] = [
   'diagram',
+  'pou',
   'method',
   'enum',
   'complexity',
@@ -57,6 +59,7 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
 export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   diagram: 'middle',
   method: 'middle',
+  pou: 'middle',
   enum: 'middle',
   complexity: 'middle',
   frequency: 'middle',
@@ -113,6 +116,8 @@ export interface DockLayout {
   removedGroups?: Record<string, { index: number; size: number }>;
   /** Tabs this layout was saved with; any other tab is new and gets its default placement on load */
   knownTabs?: DockTabId[];
+  /** The POU Editor tab was moved before the Method Editor (layouts saved with it after it get it moved once) */
+  pouBeforeMethod?: boolean;
 }
 
 /** Tabs that existed before `knownTabs` was recorded */
@@ -152,7 +157,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
       groups: [
         {
           id: 'middle-main',
-          tabs: ['diagram', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger'],
+          tabs: ['diagram', 'pou', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger'],
           active: 'diagram',
           size: 1,
         },
@@ -176,6 +181,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
     rightVisible: true,
     lastGroup: {},
     knownTabs: [...DOCK_TAB_ORDER],
+    pouBeforeMethod: true,
   };
 }
 
@@ -533,7 +539,16 @@ export function loadDockLayout(host: DockHost = currentHost()): DockLayout {
       lastGroup: parsed.lastGroup && typeof parsed.lastGroup === 'object' ? parsed.lastGroup : {},
       removedGroups: parsed.removedGroups && typeof parsed.removedGroups === 'object' ? parsed.removedGroups : {},
       knownTabs: [...DOCK_TAB_ORDER],
+      pouBeforeMethod: true,
     };
+    // Once: the POU Editor before the Method Editor when they share a group
+    if (!parsed.pouBeforeMethod) {
+      for (const g of loaded.middle.groups) {
+        const p = g.tabs.indexOf('pou');
+        const m = g.tabs.indexOf('method');
+        if (p > m && m >= 0) g.tabs = [...g.tabs.slice(0, m), 'pou', ...g.tabs.slice(m).filter((t) => t !== 'pou')];
+      }
+    }
     const known = upgrade ? [...DOCK_TAB_ORDER] : Array.isArray(parsed.knownTabs) ? parsed.knownTabs : LEGACY_KNOWN_TABS;
     return addNewTabs(loaded, fallback, known);
   } catch {

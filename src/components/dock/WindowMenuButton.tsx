@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { AppWindow, ChevronDown, PanelLeft, PanelRight, RotateCcw } from 'lucide-react';
+import { AppWindow, ChevronDown, CopyPlus, PanelLeft, PanelRight, RotateCcw } from 'lucide-react';
 import {
   DOCK_TAB_HOME,
   DOCK_TAB_ORDER,
@@ -17,6 +17,9 @@ interface WindowMenuButtonProps {
   layout: DockLayout;
   onLayoutChange: DockLayoutUpdater;
   tabMeta: Record<DockTabId, DockTabMeta>;
+  /** Another StateScope for another POU (desktop app: a window; web edition: a browser tab) */
+  onNewWindow?: () => void;
+  newWindowLabel?: string;
 }
 
 const PANEL_LABELS: Record<DockPanelId, string> = {
@@ -25,7 +28,7 @@ const PANEL_LABELS: Record<DockPanelId, string> = {
 };
 
 /** "Window" menu: reopen closed tabs in their original panel, toggle side panels, reset layout */
-export const WindowMenuButton: React.FC<WindowMenuButtonProps> = ({ layout, onLayoutChange, tabMeta }) => {
+export const WindowMenuButton: React.FC<WindowMenuButtonProps> = ({ layout, onLayoutChange, tabMeta, onNewWindow, newWindowLabel = 'New Window' }) => {
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const closedAtRef = useRef<number>(0);
 
@@ -45,6 +48,9 @@ export const WindowMenuButton: React.FC<WindowMenuButtonProps> = ({ layout, onLa
   ];
 
   const items: DockMenuItem[] = [
+    ...(onNewWindow
+      ? [{ id: 'new-window', label: newWindowLabel, icon: <CopyPlus className="w-3.5 h-3.5" />, hint: 'another POU', onSelect: onNewWindow }]
+      : []),
     { id: 'heading-panels', heading: true, label: 'Main Panels' },
     {
       id: 'toggle-left',

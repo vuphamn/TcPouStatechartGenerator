@@ -1,3 +1,4 @@
+import { caseLabelLinePattern, splitStateLabels, unqualifyState, STATE_NAME_SRC, stateQualifier } from './stateNames.ts';
 /**
  * Utility for parsing, extracting, and updating Structured Text code
  * for individual state branches inside the doState() method of a Beckhoff TwinCAT .TcPOU file.
@@ -30,10 +31,10 @@ export function parseTransitionsFromStateCode(code: string, stateVarName: string
   const transitions: string[] = [];
   const escapedVar = stateVarName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Match assignment to state variable: <stateVar> := <NEXT_STATE>;
-  const rx = new RegExp(`\\b${escapedVar}\\s*:=\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*;`, 'gi');
+  const rx = new RegExp(`\\b${escapedVar}\\s*:=\\s*(${STATE_NAME_SRC})\\s*;`, 'gi');
   let match: RegExpExecArray | null;
   while ((match = rx.exec(code)) !== null) {
-    const targetState = match[1];
+    const targetState = unqualifyState(match[1]);
     if (!transitions.includes(targetState)) {
       transitions.push(targetState);
     }
@@ -132,7 +133,7 @@ export function getStateCodeFromPou(pouXml: string, targetState: string): Extrac
   // 4. Find all case branch labels
   // Matches lines like "  TABLEMANAGER_DISABLED:" or "STATE_A, STATE_B:"
   // Ignores assignments with :=
-  const labelPattern = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:(?!\=)(?:\s*(?:\/\/[^\n]*|\(\*[\s\S]*?\*\)))?\s*$/gm;
+  const labelPattern = caseLabelLinePattern();
   const matches: RegExpExecArray[] = [];
   let m: RegExpExecArray | null;
   while ((m = labelPattern.exec(body)) !== null) {
@@ -141,7 +142,7 @@ export function getStateCodeFromPou(pouXml: string, targetState: string): Extrac
 
   for (let i = 0; i < matches.length; i++) {
     const curMatch = matches[i];
-    const labels = curMatch[1].split(',').map((l) => l.trim());
+    const labels = splitStateLabels(curMatch[1]);
     if (labels.includes(targetState)) {
       const startIdx = curMatch.index + curMatch[0].length;
       let endIdx = i + 1 < matches.length ? matches[i + 1].index : body.length;
@@ -275,7 +276,7 @@ export function updateStateCodeInPou(
   const caseFooter = caseMatch[4];
 
   // 4. Find all case labels in caseBody
-  const labelPattern = /^[ \t]*([A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*:(?!\=)(?:\s*(?:\/\/[^\n]*|\(\*[\s\S]*?\*\)))?\s*$/gm;
+  const labelPattern = caseLabelLinePattern();
   const matches: RegExpExecArray[] = [];
   let m: RegExpExecArray | null;
   while ((m = labelPattern.exec(caseBody)) !== null) {
@@ -336,7 +337,8 @@ export function updateStateCodeInPou(
     const elseMatch = caseBody.match(/^[ \t]*ELSE\b/im);
     const insertIdx = elseMatch && elseMatch.index !== undefined ? elseMatch.index : caseBody.length;
 
-    const newBranch = `\n\t${targetState}:${formattedCode}`;
+    // In the enum's style: a qualified_only enum needs "E_X.STATE:"
+    const newBranch = `\n\t${stateQualifier(caseBody, stateVarName)}${targetState}:${formattedCode}`;
     newCaseBody = caseBody.slice(0, insertIdx) + newBranch + caseBody.slice(insertIdx);
     action = 'inserted';
   }
