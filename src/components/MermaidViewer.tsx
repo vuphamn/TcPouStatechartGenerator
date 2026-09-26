@@ -1908,6 +1908,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // Label drag: only the label element moves (once per frame); the full re-apply runs on release
   const draggedLabelRef = useRef<{ el: SVGGElement; x: number; y: number } | null>(null);
   const labelDragFrameRef = useRef<number | null>(null);
+  // Line / handle drags: applied once per animation frame with the latest offset, re-routing only that edge
+  const edgeDragFrameRef = useRef<number | null>(null);
+  const applyEdgeDragFrameRef = useRef<(() => void) | null>(null);
   const flushLabelDrag = () => {
     if (labelDragFrameRef.current !== null) {
       cancelAnimationFrame(labelDragFrameRef.current);
@@ -3851,17 +3854,28 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             draggedLabel.el.setAttribute('transform', `translate(${tx}, ${ty})`);
           });
         } else if (containerRef.current) {
-          const svg = getDiagramSvg();
-          if (svg) {
+          // Once per animation frame, with the latest offset, re-routing only the dragged edge (the whole diagram
+          // is updated when the drag ends)
+          const activeEdgeId = selectedEdge?.id || edgeId;
+          applyEdgeDragFrameRef.current = () => {
+            const svg = getDiagramSvg();
+            if (!svg) return;
             applyDiagramOffsetsToSvg(
               svg,
               currentNodeOffsetsRef.current,
               currentEdgeOffsetsRef.current,
               null,
-              selectedEdge?.id || edgeId,
+              activeEdgeId,
               layoutEngine,
-              flowchartCurve
+              flowchartCurve,
+              { onlyEdgeId: edgeId }
             );
+          };
+          if (edgeDragFrameRef.current === null) {
+            edgeDragFrameRef.current = requestAnimationFrame(() => {
+              edgeDragFrameRef.current = null;
+              applyEdgeDragFrameRef.current?.();
+            });
           }
         }
       }
@@ -4086,6 +4100,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       applyNodeDragFrameRef.current?.();
     }
     flushLabelDrag();
+    // The edge drag's last frame, if it has not run yet
+    if (edgeDragFrameRef.current !== null) {
+      cancelAnimationFrame(edgeDragFrameRef.current);
+      edgeDragFrameRef.current = null;
+      applyEdgeDragFrameRef.current?.();
+    }
+    applyEdgeDragFrameRef.current = null;
     // 0. Check pending click on priority badge or edge label
     if (pendingLabelBadgeClickRef.current) {
       const { el, clientX, clientY } = pendingLabelBadgeClickRef.current;

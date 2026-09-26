@@ -770,6 +770,16 @@ export function initializeSvgDragMetadata(
       }
     }
 
+    // 2b. The flowchart's start edge, L_startNode_<target>_<n>: not a transition, so not in availableEdges (the
+    // sequential fallback below would give it another edge's source and target)
+    if (!sourceId || !targetId) {
+      const startMatch = rawPathId.match(/(?:^|[-_])L[_-]startNode[_-](.+?)[_-]\d+$/);
+      if (startMatch) {
+        sourceId = '[*]';
+        targetId = startMatch[1];
+      }
+    }
+
     // 3. Match against availableEdges by link name in id/classes
     if (!sourceId || !targetId) {
       for (let eIdx = 0; eIdx < availableEdges.length; eIdx++) {
@@ -1566,9 +1576,13 @@ export function applyDiagramOffsetsToSvg(
   options: {
     /** Live node drag: only that node and the edges attached to it can change, so skip everything else */
     onlyNodeId?: string | null;
+    /** Live edge drag (line, waypoint or endpoint handle): only that edge changes; its offset key (path or edge id) */
+    onlyEdgeId?: string | null;
   } = {}
 ): void {
   const onlyNodeId = options.onlyNodeId ?? null;
+  const onlyEdgeId = options.onlyEdgeId ?? null;
+  const onlyEdgeBase = onlyEdgeId ? onlyEdgeId.replace(/#\d+$/, '') : null;
   const actualSelectedEdgeId =
     selectedEdgeId !== undefined && selectedEdgeId !== null
       ? selectedEdgeId
@@ -1590,6 +1604,8 @@ export function applyDiagramOffsetsToSvg(
       stateId = '[*]';
     }
     if (!stateId) continue;
+    // An edge drag moves no node
+    if (onlyEdgeId) continue;
     if (onlyNodeId && stateId !== onlyNodeId) continue;
     if (!node.getAttribute('data-state-id')) {
       node.setAttribute('data-state-id', stateId);
@@ -1661,6 +1677,7 @@ export function applyDiagramOffsetsToSvg(
       continue;
     }
     const edgeKey = srcId && tgtId ? `${srcId}->${tgtId}` : edgeId;
+    if (onlyEdgeId && rawPathId !== onlyEdgeId && edgeId !== onlyEdgeId && edgeKey !== onlyEdgeBase) continue;
 
     const { d: newD, midPoint, startPoint, endPoint } = calculateReroutedEdgePath(
       path,
@@ -1903,8 +1920,8 @@ export function applyDiagramOffsetsToSvg(
   }
 
   // Remove handles for edges that are no longer selected
-  // (live node drags only touch attached edges, so leave the handles of other edges alone)
-  if (handlesGroup && !onlyNodeId) {
+  // (live node / edge drags only touch some edges, so leave the handles of other edges alone)
+  if (handlesGroup && !onlyNodeId && !onlyEdgeId) {
     const existingHandles = Array.from(handlesGroup.querySelectorAll('.tc-edge-handle'));
     const normSelected = actualSelectedEdgeId && actualSelectedEdgeId.trim() !== '->' ? actualSelectedEdgeId.trim() : '';
     for (const h of existingHandles) {

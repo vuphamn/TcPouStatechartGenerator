@@ -151,8 +151,5 @@ There is no automated test suite yet. Before opening a PR:
 
 ## Known issues / good first tasks
 
-- In Table Manager, the start transition (start → `TABLEMANAGER_DISABLED`) carries the wrong source/target tags on its SVG path.
-- Edge line drags still re-apply offsets to the whole diagram on every mouse move. Label and node drags are already frame-batched.
 - Not yet tested: Live view and guard values against a real PLC (the XAE extension's ADS part has only run without a started TwinCAT system); git compare for files inside git submodules; the desktop app's save dialog for project documentation.
 - Guard values: array elements with a variable index (`a[i].x`) are unknown. The index could be read first, then the element.
-- The repo root has an empty, accidentally committed file `State2n` that can be deleted.

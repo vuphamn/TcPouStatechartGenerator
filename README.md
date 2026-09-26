@@ -18,7 +18,7 @@ The workspace is organized like TwinCAT XAE / Visual Studio, in three resizable 
 
 The diagram toolbar (search, view and editing controls) and the diagram **Options** toolbar live inside the Diagram Canvas tab, since they only apply to the canvas. The **Minimap** and the **Legend** are overlays on the canvas, opened from the diagram toolbar.
 
-- **Help:** hover over the `?` icon at the right end of the header for how the app works, the diagram's mouse actions, the tabs and the keyboard shortcuts. Click it to keep it open; `Esc` or a click elsewhere closes it.
+- **Help:** hover over the `?` icon at the right end of the header for how the app works, the diagram's mouse actions, the tabs and the keyboard shortcuts. Click it to keep it open; `Esc` or a click elsewhere closes it. The book icon beside it opens this README on GitHub (in the desktop app and XAE, in your default browser).
 - **PLC Transition Logger** (MiddlePanel tab, also opened from Transition History): paste, drop or pick a CSV / text log of state changes, or load a sample. **Populate Transition History** sends it to the Transition History tab.
 - **Focus mode:** `Z`, or the focus button in the header, hides the side panels, the header and the status bar, so the diagram fills the window. Press `Z` or `Esc`, or use the exit button, to bring them back.
 - **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Selecting a transition opens its Transition Guard window. Turn this off with **Follow selection** in the status bar.

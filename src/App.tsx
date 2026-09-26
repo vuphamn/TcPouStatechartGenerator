@@ -30,6 +30,7 @@ import {
   Bookmark,
   Workflow,
   BookOpen,
+  BookMarked,
   FileText,
   Search,
   Map as MapIcon,
@@ -2352,7 +2353,8 @@ export const App: React.FC = () => {
     // First entries stay visible longest
     priority: ['source', 'generate', 'sample', 'export', 'copy', 'download', 'mermaidLive', 'pdf'],
     // Row padding (2 x 16) + gap between title and actions + separator + safety margin
-    available: headerRowWidth - headerLeftWidth - 60 - 40,
+    // ... less the README link and Help at the right end
+    available: headerRowWidth - headerLeftWidth - 60 - 76,
     containerRef: headerActionsRef,
     hiddenButtonSelector: '#header-hidden-controls-container',
     initialHiddenButtonWidth: 100,
@@ -2800,6 +2802,18 @@ export const App: React.FC = () => {
             />
           )}
           <div className="h-4 sm:h-5 w-[1px] bg-slate-800 shrink-0" />
+          {/* The README on GitHub (the desktop app and XAE open it in the default browser) */}
+          <a
+            id="readme-link"
+            href="https://github.com/vuphamn/TcPouStatechartGenerator#readme"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-1 sm:p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors shrink-0"
+            title="README on GitHub: features, setup and editions"
+            aria-label="README on GitHub"
+          >
+            <BookMarked className="w-4 h-4 sm:w-5 sm:h-5" />
+          </a>
           <HelpButton />
         </div>
         </div>
