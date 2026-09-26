@@ -55,6 +55,8 @@ import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
 
 export interface DutEnumEditorProps {
+  /** Live: the PLC's current state (marked in the code, never scrolled to) */
+  liveStateId?: string | null;
   dutContent: string;
   dutFileName?: string;
   pouContent?: string;
@@ -68,6 +70,7 @@ export interface DutEnumEditorProps {
 type EditorViewMode = 'st' | 'grid' | 'xml';
 
 export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
+  liveStateId,
   dutContent,
   dutFileName = 'EnumDeclaration.TcDUT',
   pouContent = '',
@@ -1054,6 +1057,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             value={stCode}
             onChange={(val) => setStCode(val)}
             highlightedLine={flashLine?.view === 'st' ? flashLine.line : null}
+            liveLine={liveStateId ? memberLine(liveStateId, 'st') || null : null}
             enableCodeFolding={true}
             foldedBlockIds={foldedBlockIds}
             onToggleFold={handleToggleFold}
@@ -1125,7 +1129,8 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
                         <tr
                           key={item.id}
                           data-member={item.name}
-                          className={`hover:bg-slate-900/60 transition-colors group ${flashRow === item.name ? 'enum-row-flash' : ''}`}
+                          data-live={liveStateId === item.name ? 'true' : undefined}
+                          className={`hover:bg-slate-900/60 transition-colors group ${flashRow === item.name ? 'enum-row-flash' : ''} ${liveStateId === item.name ? 'bg-emerald-950/60 shadow-[inset_3px_0_0_rgb(52,211,153)]' : ''}`}
                         >
                           {/* Index */}
                           <td className="py-2 px-3 text-slate-500 text-center text-[10px]">
@@ -1215,6 +1220,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             value={rawXmlCode}
             onChange={(val) => setRawXmlCode(val)}
             highlightedLine={flashLine?.view === 'xml' ? flashLine.line : null}
+            liveLine={liveStateId ? memberLine(liveStateId, 'xml') || null : null}
             enableCodeFolding={true}
             findQuery={isFindBarOpen ? findQuery : ''}
             findOptions={findOptions}

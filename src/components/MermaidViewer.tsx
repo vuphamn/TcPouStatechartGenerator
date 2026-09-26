@@ -3500,10 +3500,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setInternalSelectedStateId(stateId);
       if (label) setInternalSelectedStateLabel(label);
     }
-    if (stateId) {
-      if (onOpenInspectorPanel) onOpenInspectorPanel('method', { reveal: false });
-      else setIsInspectorOpen(true);
-    }
+    // Selecting a state leaves the layout as it is (no Method Editor brought forward: the canvas stays where it is);
+    // the Method Editor follows the selection when it is shown. Without the dock (standalone viewer): the inspector.
+    if (stateId && !onOpenInspectorPanel) setIsInspectorOpen(true);
   };
 
   const handleCloseInspector = () => {

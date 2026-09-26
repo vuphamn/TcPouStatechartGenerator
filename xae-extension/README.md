@@ -46,6 +46,7 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
 - **Tools > Kval StateScope...** opens the selected or active `.TcPOU`. Without one, it asks for a file.
 - **Command Window:** `Tools.KvalStateScope.Open C:\Path\SM_X.TcPOU`
 - **One tab per POU:** each POU opens in its own **StateScope: <POU>** tab, so several state machines can be watched at once. Opening a POU that already has a tab brings that tab forward, without reloading it. The tabs share one WebView2 browser process.
+- **Machine Overview:** while live, every state machine under `MAIN.mainStateMachine` with its current state (names from the PLC's enum types), time in state and error states. Watch opens one in its own tab. Like Symbols, it has not yet run against a real PLC here.
 - **PLC Symbols:** while live, the Live tab's **Symbols** browses the PLC's symbols from `MAIN.mainStateMachine` with their values; **Watch** opens another state machine of the project in its own tab, live. (Built on the same TcAdsDll calls as the live view; like guard values, not yet run against a real PLC here, because this PC's TwinCAT system is not started.)
 - **One tab per PLC instance:** when the POU is declared more than once, the Live tab's **Open** follows another instance in a new tab, **StateScope: <POU> (<instance>)**, which goes live on it. A tab already following that instance comes forward.
 

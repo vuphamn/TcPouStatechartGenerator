@@ -44,6 +44,7 @@ import {
   QUICK_TEXT_SWATCHES,
 } from '../utils/nodeStyles.ts';
 import { MethodStructuredTextEditor } from './MethodStructuredTextEditor.tsx';
+import { ZoomableTextArea, ZoomableView } from './ZoomableTextArea.tsx';
 import { DutEnumEditor } from './DutEnumEditor.tsx';
 import {
   exportDocumentation,
@@ -192,6 +193,8 @@ function renderMarkdownBlock(text: string) {
 export interface StateNodeStyleInspectorProps {
   selectedStateId?: string | null;
   selectedStateLabel?: string;
+  /** Live: the PLC's current state (marked in the code, never scrolled to) */
+  liveStateId?: string | null;
   availableStates: StateNodeInfo[];
   customStyles: CustomNodeStylesMap;
   onStyleChange: (stateId: string, style: NodeDisplayProperties) => void;
@@ -226,6 +229,7 @@ export type InspectorPanelMode = 'enum' | 'method' | 'style' | 'docs';
 export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = ({
   selectedStateId,
   selectedStateLabel,
+  liveStateId,
   availableStates,
   customStyles,
   onStyleChange,
@@ -562,6 +566,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
           <div className="flex-1 min-h-0 flex flex-col bg-slate-950 overflow-hidden">
             {tcDutContent && onSaveDutContent ? (
               <DutEnumEditor
+                liveStateId={liveStateId}
                 dutContent={tcDutContent}
                 dutFileName={tcDutFileName || 'EnumDeclaration.TcDUT'}
                 pouContent={tcPouContent || ''}
@@ -583,6 +588,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
         ) : inspectorMode === 'method' ? (
           <div className="flex-1 min-h-0 flex flex-col">
             <MethodStructuredTextEditor
+              liveStateId={liveStateId}
               tcPouContent={tcPouContent}
               tcPouFileName={tcPouFileName}
               initialMethod={initialMethod || 'doState()'}
@@ -846,8 +852,9 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
             {/* Documentation Body */}
             <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-4 overflow-hidden bg-slate-950">
               {docViewMode === 'edit' ? (
-                <textarea
+                <ZoomableTextArea
                   id="state-documentation-textarea"
+                  frameClassName="bg-slate-900 border border-slate-800 rounded-xl focus-within:border-sky-500 focus-within:ring-1 focus-within:ring-sky-500/40"
                   value={docText}
                   onChange={(e) => {
                     setDocText(e.target.value);
@@ -875,12 +882,12 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
                     }
                   }}
                   placeholder={`Describe the purpose of state '${selectedStateLabel || selectedStateId}'...\n\nExample:\n### Purpose & Overview\nControls the idle sequence before feed cycle engages.\n\n### Entry Preconditions\n- Safety circuits closed (bSafetyOk = TRUE)\n- Axis homed\n\n### Actuators & Outputs\n- Clamps energized\n- Feed drive in standstill\n\n### Exit Criteria\n- Start button pressed -> Transition to FEED_ACTIVE`}
-                  className="w-full h-full flex-1 p-3 bg-slate-900 text-slate-100 font-sans text-xs sm:text-sm leading-relaxed border border-slate-800 rounded-xl focus:border-sky-500 focus:ring-1 focus:ring-sky-500/40 outline-none resize-none custom-scrollbar placeholder:text-slate-600"
+                  className="p-3 text-slate-100 font-sans placeholder:text-slate-600"
                 />
               ) : (
-                <div className="w-full h-full flex-1 p-4 bg-slate-900/90 border border-slate-800 rounded-xl overflow-y-auto custom-scrollbar">
+                <ZoomableView id="state-documentation-preview" className="w-full h-full flex-1 p-4 bg-slate-900/90 border border-slate-800 rounded-xl overflow-y-auto custom-scrollbar">
                   {renderMarkdownBlock(docText)}
-                </div>
+                </ZoomableView>
               )}
             </div>
   
@@ -931,41 +938,42 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
             </div>
   
             {/* Documentation Action / Footer Bar */}
-            <div className="flex items-center justify-between px-3.5 py-2 bg-slate-950 border-t border-slate-800 text-xs shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
+            <div id="doc-footer" className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3.5 py-2 bg-slate-950 border-t border-slate-800 text-xs shrink-0">
+              {/* The status: one line beside the buttons, or above them when the panel is narrow (then cut short with "…" if still too long; the full text on hover) */}
+              <div id="doc-footer-status" className="flex items-center gap-2 flex-1 basis-48 min-w-0 overflow-hidden whitespace-nowrap">
                 {exportFeedback ? (
                   <span className="text-emerald-400 flex items-center gap-1.5 font-mono text-[11px] truncate animate-in fade-in duration-150">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span className="truncate">{exportFeedback}</span>
                   </span>
                 ) : docSaveStatus === 'saved' ? (
-                  <span className="text-emerald-400 flex items-center gap-1 font-mono text-[11px]">
+                  <span className="text-emerald-400 flex items-center gap-1 font-mono text-[11px] min-w-0" title="Documentation saved to project metadata">
                     <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                    Documentation saved to project metadata
+                    <span className="truncate">Documentation saved to project metadata</span>
                   </span>
                 ) : docSaveStatus === 'copied' ? (
-                  <span className="text-sky-400 flex items-center gap-1 font-mono text-[11px]">
+                  <span className="text-sky-400 flex items-center gap-1 font-mono text-[11px] min-w-0" title="Copied to clipboard!">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    Copied to clipboard!
+                    <span className="truncate">Copied to clipboard!</span>
                   </span>
                 ) : docIsDirty ? (
-                  <span className="text-amber-400 flex items-center gap-1 font-mono text-[11px]">
+                  <span className="text-amber-400 flex items-center gap-1 font-mono text-[11px] min-w-0" title="Unsaved changes in documentation">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse shrink-0" />
-                    Unsaved changes in documentation
+                    <span className="truncate">Unsaved changes in documentation</span>
                   </span>
                 ) : hasDoc ? (
-                  <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1">
+                  <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1 min-w-0" title="Documentation saved in metadata">
                     <Check className="w-3 h-3 text-emerald-400 shrink-0" />
-                    Documentation saved in metadata
+                    <span className="truncate">Documentation saved in metadata</span>
                   </span>
                 ) : (
-                  <span className="text-slate-400 font-mono text-[11px]">
+                  <span className="text-slate-400 font-mono text-[11px] truncate min-w-0" title={`No documentation saved for ${currentEffectiveStateId || 'selected state'}`}>
                     No documentation saved for {currentEffectiveStateId || 'selected state'}
                   </span>
                 )}
               </div>
   
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 shrink-0 ml-auto">
                 {/* Bottom Quick Export Menu */}
                 <div className="relative" ref={footerExportMenuRef}>
                   <button

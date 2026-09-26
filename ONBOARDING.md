@@ -123,6 +123,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 - **Clicks on nodes** go through the node-drag handler, not only the canvas click handler. A new click mode (such as the add-transition connect mode) has to be handled in both.
 - **Guard labels are not guard conditions.** A diagram label shows `else` where an ELSIF / ELSE sits, and is escaped for Mermaid (`\:`, `#35;`). Evaluate from the model's `GuardFrame`s, never from label text. The model's edges are matched to the diagram's by source, target and label as written.
 - **TwinCAT editor line numbers.** TwinCAT's ST editor numbers a method's declaration lines first, then its implementation. Map editor lines with the declaration's line count (`declarationLineCount`), not with the editor's total line count, which can be one more than the file's.
+- **Machine Overview.** `components/MachineOverview.tsx` walks the symbols from the root with `liveBrowse`. It goes up to 5 levels deep and reads at most 400 symbols; library blocks are skipped. Every member that has the state variable is a machine. `browseSymbol` / `LiveMonitor.Browse` add `stateType` and `stateNames` (the enum's members from the PLC's data type, flag ENUMINFOS) to those members. The machines' state variables ride on `liveWatch` with ids `ov:<path>`: after the guard variables and before the Symbols window, 100 in all.
 - **Symbol browser.** `liveBrowse { requestId, path, stateVar }` is answered with `liveBrowseResult` (one level: `symbolType`, `children` with `kind` and `stateMachine`). The symbol's type is `symbolType`, because `type` is the message's. It is implemented in `shared/tcAds.cjs` (`browseSymbol`, used by the desktop app, Link and the gateway) and in `LiveMonitor.Browse` (XAE). The values ride on `liveWatch` with ids `sym:<path>`, after the guard variables and capped at 100 in all. The window is `components/SymbolBrowserWindow.tsx`.
 - **Several instances of one POU.** A window can be tied to one PLC instance (`windowInstance` in `App.tsx`); it overrides the instance in the POU's saved live settings and is never saved. Live's Open instance goes through the host: XAE `openInstance` (a tab per POU + instance), desktop `tcDesktop.newWindow(path, { instance, live })`, and otherwise a localStorage handoff (`utils/instanceLaunch.ts`, `?handoff=<id>`) for the web edition and for samples or dropped files.
 - **Qualified state names.** A `qualified_only` enum makes the code say `E_X_States.IDLE` where others say `IDLE`. Match state names with the patterns in `utils/stateNames.ts` (`caseLabelLinePattern`, `STATE_NAME_SRC`), strip the type with `unqualifyState`, and write new code with `stateQualifier` so it matches the POU's style.
@@ -133,18 +134,19 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 
 ## Testing
 
-There is no automated test suite yet. Before opening a PR:
+`npm test` runs the automated tests. It covers logic, the app in a headless browser, and the live view against a simulated PLC. GitHub Actions runs the same on every push. [tests/README.md](tests/README.md) explains the suites, the harness and how to write a test. Before opening a PR:
 
-1. Run `npm run lint` and `npm run build`. Both must pass.
-2. Test manually in the browser with the bundled samples. **Table Manager (Line 202)** has parallel transitions and long guard labels, so it's the best stress test. Check that you can:
+1. Run `npm run lint`, `npm run build` and `npm test`. All must pass. For desktop changes, also run `npm run test:desktop` (Windows).
+2. Add or extend a test for what you changed: `tests/web` for the UI, `tests/unit` for parsing and logic, `tests/live` for the live protocol.
+3. Test manually in the browser with the bundled samples. **Table Manager (Line 202)** has parallel transitions and long guard labels, so it's the best stress test. Check that you can:
    - click a state to select it, and click it again for the State Style window;
    - click an edge to select it, and click it again for the Transition Guard window (Style card);
    - drag states, edges, labels and notes;
    - right-click a state for Paths, Add transition and Rename, and check the Problems, Paths and Changes tabs;
    - export.
-3. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval StateScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval StateScope, and its options change Visual Studio, TcXaeShell and Explorer.
-4. For XAE changes: build with `xae-extension\build.ps1` and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
-5. Without a PLC, the Live tab can only be tested up to the connection error, or against a small simulated PLC. An AMS/TCP server answering symbol info, handle, read and notification requests is enough for the desktop app, Link and the gateway (all use ads-client in direct mode). Test against a real PLC before relying on it.
+4. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval StateScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval StateScope, and its options change Visual Studio, TcXaeShell and Explorer.
+5. For XAE changes: build with `xae-extension\build.ps1`, then run `tests/xae` (see its README), and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
+6. Without a PLC, the live view is tested against `tests/fakes/fake-ams2.cjs`, a simulated PLC. It covers symbols, values, notifications, symbol upload and data types, including enums. Test against a real PLC before relying on it.
 
 ## Contributing
 

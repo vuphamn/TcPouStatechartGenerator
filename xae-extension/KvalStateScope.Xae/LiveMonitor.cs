@@ -159,6 +159,9 @@ namespace KvalStateScope.Xae
             public string type { get; set; }
             public string kind { get; set; }
             public bool stateMachine { get; set; }
+            /// <summary>A state machine's state variable type, and its names by value when the PLC describes the enum</summary>
+            public string stateType { get; set; }
+            public Dictionary<string, string> stateNames { get; set; }
         }
 
         public sealed class BrowseResult
@@ -169,6 +172,8 @@ namespace KvalStateScope.Xae
             public string kind { get; set; }
             public bool stateMachine { get; set; }
             public bool truncated { get; set; }
+            public string stateType { get; set; }
+            public Dictionary<string, string> stateNames { get; set; }
             public List<BrowseChild> children { get; set; } = new List<BrowseChild>();
             public string error { get; set; }
         }
@@ -179,6 +184,8 @@ namespace KvalStateScope.Xae
             public int Size, AdsType;
             public List<KeyValuePair<int, int>> Bounds = new List<KeyValuePair<int, int>>(); // (low, count)
             public List<DataType> SubItems = new List<DataType>();
+            /// <summary>An enum's members by value (null: not an enum, or not described)</summary>
+            public Dictionary<string, string> EnumValues;
         }
 
         private const int AdstBigType = 65, MaxBrowseChildren = 500, MaxArrayChildren = 100;
@@ -191,6 +198,7 @@ namespace KvalStateScope.Xae
         {
             length = BitConverter.ToInt32(b, at);
             var dt = new DataType { Size = BitConverter.ToInt32(b, at + 16), AdsType = BitConverter.ToInt32(b, at + 24) };
+            var flags = BitConverter.ToUInt32(b, at + 28);
             int nameLength = BitConverter.ToUInt16(b, at + 32), typeLength = BitConverter.ToUInt16(b, at + 34), commentLength = BitConverter.ToUInt16(b, at + 36);
             int arrayDim = BitConverter.ToUInt16(b, at + 38), subCount = BitConverter.ToUInt16(b, at + 40);
             var p = at + 42;
@@ -205,7 +213,49 @@ namespace KvalStateScope.Xae
                 if (subLength <= 0) break;
                 p += subLength;
             }
+            dt.EnumValues = EnumInfos(b, p, at + length, flags, dt.Size);
             return dt;
+        }
+
+        // AdsDatatypeEntry flags of the optional parts after the sub items (in this order)
+        private const uint DtTypeGuid = 0x80, DtCopyMask = 0x200, DtMethodInfos = 0x800, DtAttributes = 0x1000, DtEnumInfos = 0x2000;
+
+        /// <summary>An enum's members (value -> name) from the entry's optional parts (same as shared/tcAds.cjs)</summary>
+        private static Dictionary<string, string> EnumInfos(byte[] b, int p, int end, uint flags, int size)
+        {
+            if ((flags & DtEnumInfos) == 0 || (size != 1 && size != 2 && size != 4 && size != 8)) return null;
+            try
+            {
+                if ((flags & DtTypeGuid) != 0) p += 16;
+                if ((flags & DtCopyMask) != 0) p += size;
+                if ((flags & DtMethodInfos) != 0)
+                {
+                    int count = BitConverter.ToUInt16(b, p);
+                    p += 2;
+                    for (var i = 0; i < count; i++) p += BitConverter.ToInt32(b, p);
+                }
+                if ((flags & DtAttributes) != 0)
+                {
+                    int count = BitConverter.ToUInt16(b, p);
+                    p += 2;
+                    for (var i = 0; i < count; i++) p += 2 + b[p] + 1 + b[p + 1] + 1;
+                }
+                int members = BitConverter.ToUInt16(b, p);
+                p += 2;
+                var values = new Dictionary<string, string>();
+                for (var i = 0; i < members && p < end; i++)
+                {
+                    int nameLength = b[p];
+                    var name = Encoding.Default.GetString(b, p + 1, nameLength);
+                    p += 1 + nameLength + 1;
+                    long value = size == 1 ? (sbyte)b[p] : size == 2 ? BitConverter.ToInt16(b, p) : size == 4 ? BitConverter.ToInt32(b, p) : BitConverter.ToInt64(b, p);
+                    p += size;
+                    values[value.ToString(System.Globalization.CultureInfo.InvariantCulture)] = name;
+                }
+                return values.Count > 0 ? values : null;
+            }
+            catch (ArgumentException) { return null; }
+            catch (IndexOutOfRangeException) { return null; }
         }
 
         private DataType DataTypeInfo(string name)
@@ -248,8 +298,18 @@ namespace KvalStateScope.Xae
             return adsType == AdstBigType ? "struct" : "other";
         }
 
-        private bool HoldsStateVar(string type, string stateVar) =>
-            MembersOf(DataTypeInfo(type)).Any(m => string.Equals(m.Name, stateVar, StringComparison.OrdinalIgnoreCase));
+        private DataType StateMemberOf(string type, string stateVar) =>
+            MembersOf(DataTypeInfo(type)).FirstOrDefault(m => string.Equals(m.Name, stateVar, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The state variable's type and, for an enum the PLC describes, its names (Machine Overview)</summary>
+        private void AddStateInfo(BrowseChild child, string type, string stateVar)
+        {
+            var m = StateMemberOf(type, stateVar);
+            if (m == null) return;
+            child.stateMachine = true;
+            child.stateType = m.Type;
+            child.stateNames = DataTypeInfo(m.Type)?.EnumValues;
+        }
 
         /// <summary>The symbol and its members (or array elements), one level</summary>
         public BrowseResult Browse(string symbolPath, string stateVar)
@@ -262,7 +322,9 @@ namespace KvalStateScope.Xae
                 BrowseChild Describe(string name, string childPath, string type, int size, int adsType, List<KeyValuePair<int, int>> bounds)
                 {
                     var kind = Kind(type, size, adsType, bounds);
-                    return new BrowseChild { name = name, path = childPath, type = type, kind = kind, stateMachine = kind == "struct" && HoldsStateVar(type, stateVar) };
+                    var child = new BrowseChild { name = name, path = childPath, type = type, kind = kind };
+                    if (kind == "struct") AddStateInfo(child, type, stateVar);
+                    return child;
                 }
                 if (node.kind == "array")
                 {
@@ -283,6 +345,13 @@ namespace KvalStateScope.Xae
                 if (node.kind != "struct") return node;
                 var members = MembersOf(DataTypeInfo(info.Type));
                 node.stateMachine = members.Any(x => string.Equals(x.Name, stateVar, StringComparison.OrdinalIgnoreCase));
+                if (node.stateMachine)
+                {
+                    var own = new BrowseChild();
+                    AddStateInfo(own, info.Type, stateVar);
+                    node.stateType = own.stateType;
+                    node.stateNames = own.stateNames;
+                }
                 node.truncated = members.Count > MaxBrowseChildren;
                 foreach (var x in members.Take(MaxBrowseChildren))
                 {

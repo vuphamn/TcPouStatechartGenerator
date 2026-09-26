@@ -782,7 +782,7 @@ namespace KvalStateScope.Xae
                 if (session != _liveSession) return;
                 Post(new
                 {
-                    type = "liveBrowseResult", requestId, result.path, result.symbolType, result.kind, result.stateMachine, result.truncated, result.children, result.error,
+                    type = "liveBrowseResult", requestId, result.path, result.symbolType, result.kind, result.stateMachine, result.stateType, result.stateNames, result.truncated, result.children, result.error,
                 });
             });
         }

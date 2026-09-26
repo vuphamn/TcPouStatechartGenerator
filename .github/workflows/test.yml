@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # Windows: the tests run the app in Edge (installed on the runner), as users do
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # The desktop suite is not run here: no Electron binary needed
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The gateway's own dependencies (the live suite starts it)
+      - run: npm ci --prefix gateway
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: node tests/run.cjs unit
+      - name: Live view protocol tests (simulated PLC)
+        run: node tests/run.cjs live
+      - name: Web app tests (headless Edge)
+        run: node tests/run.cjs web
+      - name: Test logs and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: tests/.output
+          retention-days: 7

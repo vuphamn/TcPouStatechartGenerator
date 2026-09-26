@@ -9,8 +9,11 @@
 
 !define KSS_EXTRAS "${PROJECT_DIR}\release\installer-extras"
 !define KSS_REG "Software\Kval\StateScope"
-; Under SystemFileAssociations: shown for .TcPOU whatever program the extension is associated with (e.g. TwinCAT)
-!define KSS_MENU_KEY "Software\Classes\SystemFileAssociations\.TcPOU\shell\KvalStateScope.Open"
+; A verb of all files (*), shown only for .TcPOU (AppliesTo): Explorer skips SystemFileAssociations\.TcPOU when the
+; extension itself is not registered (TwinCAT does not register it), whatever program opens it
+!define KSS_MENU_KEY "Software\Classes\*\shell\KvalStateScope"
+; Where earlier versions put it (removed on install and uninstall)
+!define KSS_MENU_KEY_OLD "Software\Classes\SystemFileAssociations\.TcPOU\shell\KvalStateScope.Open"
 !define KSS_PS 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
 
 !macro kssRefreshShell
@@ -196,9 +199,11 @@
     ${EndIf}
 
     ; Explorer's context menu of .TcPOU files (HKCU for this user, HKLM for all users)
+    DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
     ${If} $kssMenu == 1
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "" "Open in Kval StateScope"
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "Icon" '"$appExe",0'
+      WriteRegStr SHCTX "${KSS_MENU_KEY}" "AppliesTo" 'System.FileName:"*.TcPOU"'
       WriteRegStr SHCTX "${KSS_MENU_KEY}\command" "" '"$appExe" "%1"'
     ${Else}
       DeleteRegKey SHCTX "${KSS_MENU_KEY}"
@@ -261,6 +266,7 @@
 
 !macro customUnInstall
   DeleteRegKey SHCTX "${KSS_MENU_KEY}"
+  DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
   !insertmacro kssRefreshShell
   Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
   ; An update runs the old version's uninstaller first: the extensions and the gateway stay

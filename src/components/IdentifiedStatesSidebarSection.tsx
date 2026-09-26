@@ -25,7 +25,14 @@ import { CustomNodeStylesMap } from '../types.ts';
 export interface IdentifiedStatesSidebarSectionProps {
   states: IdentifiedPouState[];
   selectedStateId?: string | null;
+  /** Live: the PLC's current state (marked, never scrolled to: the list stays where it is) */
+  liveStateId?: string | null;
+  /** Live: Follow (the Live tab's setting): on, the list shows each new live state (the canvas pans to it too) */
+  liveFollow?: boolean;
+  onLiveFollowChange?: (follow: boolean) => void;
   onJumpToState: (stateId: string, label?: string) => void;
+  /** An item click with Follow off: select the state without moving the canvas (else onJumpToState) */
+  onSelectState?: (stateId: string, label?: string) => void;
   customStyles?: CustomNodeStylesMap;
   stateVarName?: string;
   onOpenEnumEditor?: () => void;
@@ -40,7 +47,11 @@ type SortMode = 'enum' | 'alpha' | 'complexity';
 export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSectionProps> = ({
   states,
   selectedStateId,
+  liveStateId,
+  liveFollow = false,
+  onLiveFollowChange,
   onJumpToState,
+  onSelectState,
   customStyles,
   stateVarName = 'machineState',
   onOpenEnumEditor,
@@ -60,6 +71,18 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
       if (navigatedTimerRef.current) clearTimeout(navigatedTimerRef.current);
     };
   }, []);
+
+  // An item click: selects the state; with Follow on it also pans the canvas there (as Go to State does)
+  const handleItemClick = (stateId: string, label?: string) => {
+    if (liveFollow || !onSelectState) {
+      handleTriggerGoToState(stateId, label);
+      return;
+    }
+    setRecentlyNavigatedStateId(stateId);
+    if (navigatedTimerRef.current) clearTimeout(navigatedTimerRef.current);
+    navigatedTimerRef.current = setTimeout(() => setRecentlyNavigatedStateId(null), 2600);
+    onSelectState(stateId, label);
+  };
 
   const handleTriggerGoToState = (stateId: string, label?: string) => {
     setRecentlyNavigatedStateId(stateId);
@@ -242,6 +265,16 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     return () => clearTimeout(timer);
   }, [selectedStateId, isExpanded, filteredStates, states]);
 
+
+  // Live, Follow on: the list shows each new live state (the selection stays as it is)
+  useEffect(() => {
+    if (!liveFollow || !liveStateId || !isExpanded) return;
+    const t = window.setTimeout(() => {
+      document.getElementById(`state-list-item-${liveStateId}`)?.scrollIntoView({ block: 'nearest' });
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [liveFollow, liveStateId, isExpanded]);
+
   return (
     <section
       id="identified-states-sidebar-section"
@@ -274,6 +307,17 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {/* Always shown (before going live it sets the preference); brighter while live */}
+          {onLiveFollowChange && (
+            <label
+              className={`flex items-center gap-1 text-[10px] cursor-pointer select-none ${liveStateId ? 'text-emerald-300' : 'text-slate-400'}`}
+              title={`Live: show each new live state here and pan the canvas to it (the same setting as Follow in the Live tab)${liveStateId ? '' : '. Applies once you go live.'}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input id="states-live-follow-toggle" type="checkbox" checked={liveFollow} onChange={(e) => onLiveFollowChange(e.target.checked)} />
+              <Crosshair className="w-3 h-3" /> Follow
+            </label>
+          )}
           {states.length > 0 && (
             <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
               {logicCount} in doState()
@@ -466,6 +510,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
               filteredStates.map((state) => {
                 const isSelected = selectedStateId === state.id;
                 const isJustNavigated = recentlyNavigatedStateId === state.id;
+                const isLive = !!liveStateId && liveStateId === state.id;
                 const customStyle = customStyles ? customStyles[state.id] : undefined;
                 const transStats = stateTransitionsMap.get(state.id) || {
                   incoming: [],
@@ -479,16 +524,22 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                   <div
                     key={state.id}
                     id={`state-list-item-${state.id}`}
-                    onClick={() => handleTriggerGoToState(state.id, state.label)}
-                    className={`group relative flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${
+                    data-live={isLive ? 'true' : undefined}
+                    onClick={() => handleItemClick(state.id, state.label)}
+                    className={`group relative flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                       isJustNavigated
                         ? 'bg-sky-950/80 border-sky-400 shadow-[0_0_18px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/80 text-white'
                         : isSelected
                         ? 'bg-sky-950/60 border-sky-500/60 shadow-[0_0_12px_rgba(56,189,248,0.15)] ring-1 ring-sky-500/30'
                         : 'bg-slate-950/50 hover:bg-slate-800/70 border-slate-800/70 hover:border-slate-700 text-slate-300'
                     }`}
-                    title="Click to center this state in the Diagram Canvas with highlight animation"
+                    title={liveFollow ? 'Click to select this state and center it in the Diagram Canvas (Follow is on)' : 'Click to select this state (Go to State centers it in the Diagram Canvas; with Follow on, a click does too)'}
                   >
+                    {isLive && (
+                      <span className="absolute -top-2 right-2 z-10 flex items-center gap-1 px-1.5 rounded-full bg-emerald-600 text-[9px] font-bold tracking-wide text-white shadow" title="The PLC's current state">
+                        <span className="live-dot" /> LIVE
+                      </span>
+                    )}
                     {/* Left Indicator & Info */}
                     <div className="flex items-start gap-2 min-w-0 pr-2">
                       {/* Status Icon */}

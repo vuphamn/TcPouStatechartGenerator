@@ -16,6 +16,7 @@ import {
   Palette,
   Code2,
   Blocks,
+  LayoutGrid,
   Lock,
   Unlock,
   Printer,
@@ -119,6 +120,7 @@ import { GatewayConnection, GatewayPlc, detectGatewayOrigin } from './utils/live
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
 import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
 import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
+import { MachineOverview, overviewWatchId } from './components/MachineOverview.tsx';
 
 /** Guard variables and Symbols values followed at once (a gateway allows 100 by default) */
 const MAX_WATCHED = 100;
@@ -1911,7 +1913,22 @@ export const App: React.FC = () => {
     },
     [liveSettingsKey, windowInstance, storedLiveSettings.instance]
   );
-  const [liveFollow, setLiveFollow] = useState(true);
+  // Follow: pan the canvas to the live state on each change (off by default: the canvas stays where it is)
+  const [liveFollow, setLiveFollowState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.liveFollow') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setLiveFollow = useCallback((on: boolean) => {
+    setLiveFollowState(on);
+    try {
+      localStorage.setItem('kss.liveFollow', on ? '1' : '0');
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
   // Desktop app: the main process talks ADS to the PLC and sends the same messages as the XAE extension
   useEffect(() => {
     const api = desktopLive();
@@ -2104,6 +2121,9 @@ export const App: React.FC = () => {
   // The value symbols on show in the window (followed with the guard variables)
   const [symbolPaths, setSymbolPaths] = useState<string[]>([]);
   const handleSymbolPaths = useCallback((paths: string[]) => setSymbolPaths((prev) => (prev.join('\n') === paths.join('\n') ? prev : paths)), []);
+  // Machine Overview: the machines it follows (their state variables)
+  const [overviewPaths, setOverviewPaths] = useState<string[]>([]);
+  const handleOverviewPaths = useCallback((paths: string[]) => setOverviewPaths((prev) => (prev.join('\n') === paths.join('\n') ? prev : paths)), []);
   const liveStateVar = identifiedStatesResult.stateVarName || 'machineState';
   const browseSeqRef = useRef(0);
   const browseTargetRef = useRef({ liveMode, stateVar: liveStateVar });
@@ -2271,18 +2291,23 @@ export const App: React.FC = () => {
   // Enum literals in conditions: the state enum, the other .TcDUT files found with the POU, and (desktop, XAE) the
   // PLC project's, loaded once per POU while live
   const [projectDuts, setProjectDuts] = useState<{ path: string; contents: string[] } | null>(null);
+  // The POU they are asked for (a ref: the answer must not be dropped when the effect runs again meanwhile)
+  const projectDutsRequestRef = useRef<string | null>(null);
   useEffect(() => {
     if (!liveActive || liveGuardScope === 'off' || !pouPath || (liveMode !== 'xae' && liveMode !== 'desktop')) return;
-    if (projectDuts?.path === pouPath) return;
-    let cancelled = false;
-    setProjectDuts({ path: pouPath, contents: [] });
-    void loadProjectFiles(pouPath).then((files) => {
-      if (!cancelled && !('error' in files)) setProjectDuts({ path: pouPath, contents: files.duts.map((d) => d.content) });
-    }).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [liveActive, liveGuardScope, pouPath, liveMode, projectDuts?.path]);
+    if (projectDutsRequestRef.current === pouPath) return;
+    projectDutsRequestRef.current = pouPath;
+    const forPou = pouPath;
+    void loadProjectFiles(forPou)
+      .then((files) => {
+        if (projectDutsRequestRef.current !== forPou) return;
+        if ('error' in files) projectDutsRequestRef.current = null; // asked again later
+        else setProjectDuts({ path: forPou, contents: files.duts.map((d) => d.content) });
+      })
+      .catch(() => {
+        if (projectDutsRequestRef.current === forPou) projectDutsRequestRef.current = null;
+      });
+  }, [liveActive, liveGuardScope, pouPath, liveMode]);
   const liveEnums = useMemo(
     () => buildEnumTables([dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])]),
     [dutContent, dutPool, projectDuts, pouPath]
@@ -2337,7 +2362,7 @@ export const App: React.FC = () => {
       return;
     }
     // With the Symbols window's values (full paths, ids "sym:<path>")
-    const key = `${liveWatchKey}\n#symbols\n${symbolPaths.join('\n')}`;
+    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}`;
     if (key === lastWatchRef.current) return;
     const instance = liveStatus.instance;
     const timer = window.setTimeout(() => {
@@ -2345,11 +2370,12 @@ export const App: React.FC = () => {
       const paths = liveWatchKey && instance ? liveWatchKey.split('\n') : [];
       const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
       const symbols = symbolPaths.filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
-      // The guards first; a gateway follows at most 100 by default (a longer request is refused)
-      sendLiveWatch([...guards, ...symbols].slice(0, MAX_WATCHED));
+      const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
+      // The guards first, then the overview's machines; a gateway follows at most 100 by default (more is refused)
+      sendLiveWatch([...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [liveWatchKey, symbolPaths, liveStatus.state, liveStatus.instance, sendLiveWatch]);
+  }, [liveWatchKey, symbolPaths, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -2568,6 +2594,7 @@ export const App: React.FC = () => {
         tooltip: `The declaration and body of ${pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : 'the POU'} (Structured Text)`,
       },
       enum: { title: 'Enum Editor', icon: <Code2 />, tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
+      overview: { title: 'Machine Overview', icon: <LayoutGrid />, tooltip: 'Every state machine of the PLC with its current state (while live)' },
       complexity: {
         title: 'Complexity Report',
         icon: <Activity />,
@@ -3191,7 +3218,14 @@ export const App: React.FC = () => {
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
               selectedStateId={selectedStateId}
+              liveStateId={liveActive ? liveSession.current?.state ?? null : null}
+              liveFollow={liveFollow}
+              onLiveFollowChange={setLiveFollow}
               onJumpToState={handleJumpToState}
+              onSelectState={(id, label) => {
+                setSelectedStateId(id);
+                setSelectedStateLabel(label || id);
+              }}
               customStyles={customNodeStyles}
               stateVarName={identifiedStatesResult.stateVarName}
               onOpenEnumEditor={() => {
@@ -3653,6 +3687,7 @@ export const App: React.FC = () => {
               panelMode={mode}
               selectedStateId={inspectorStateId}
               selectedStateLabel={inspectorStateLabel}
+              liveStateId={liveActive ? liveSession.current?.state ?? null : null}
               availableStates={identifiedStatesResult.states}
               customStyles={customNodeStyles}
               onStyleChange={handleStyleChange}
@@ -3682,6 +3717,25 @@ export const App: React.FC = () => {
             mode
           )
       )}
+
+      {isDockTabMounted('overview') &&
+        createPortal(
+          <MachineOverview
+            connected={liveStatus.state === 'connected'}
+            root={symbolRoot}
+            onRootChange={setSymbolRoot}
+            browse={liveBrowse}
+            values={liveVarValues}
+            onFollow={handleOverviewPaths}
+            stateVar={liveStateVar}
+            currentInstance={liveStatus.instance}
+            pouTypeName={pouTypeName}
+            pouStateNames={liveEnumNames}
+            onWatch={handleWatchMachine}
+            openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+          />,
+          dockRegistry.nodes.overview
+        )}
 
       {isDockTabMounted('pou') &&
         createPortal(
@@ -3724,6 +3778,7 @@ export const App: React.FC = () => {
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode ? () => setSymbolsOpen(true) : undefined}
+            onOpenOverview={liveMode ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
           />,
           dockRegistry.nodes.live
         )}

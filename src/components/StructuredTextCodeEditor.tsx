@@ -14,6 +14,12 @@ import {
   buildSearchRegex,
 } from '../utils/stFindHighlight.ts';
 
+/**
+ * Room below the last line in the line numbers and the highlighting (overflow hidden, scrolled with the textarea):
+ * more than the textarea's horizontal scrollbar, so at the very bottom they can scroll as far as it does
+ */
+const BOTTOM_ROOM = 48;
+
 export interface StructuredTextCodeEditorRef {
   scrollToLine: (lineNumber: number, smooth?: boolean) => void;
   focus: () => void;
@@ -26,6 +32,8 @@ export interface StructuredTextCodeEditorProps {
   onChange: (value: string) => void;
   placeholder?: string;
   highlightedLine?: number | null; // 1-based original line number to highlight
+  /** Live: the line of the PLC's current state (marked, never scrolled to) */
+  liveLine?: number | null;
   scrollToLine?: number | null; // 1-based original line number to scroll into view
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   className?: string;
@@ -57,6 +65,7 @@ export const StructuredTextCodeEditor = forwardRef<
       onChange,
       placeholder,
       highlightedLine,
+      liveLine,
       scrollToLine,
       onKeyDown,
       className = '',
@@ -222,6 +231,19 @@ export const StructuredTextCodeEditor = forwardRef<
       );
       return idx >= 0 ? idx : null;
     }, [highlightedLine, lineEntries]);
+
+    // The live state's line as shown (inside a folded block: the block's line)
+    const liveViewLineIndex = useMemo<number | null>(() => {
+      if (!liveLine) return null;
+      let idx = lineEntries.findIndex((entry) => entry.originalLineNumber === liveLine);
+      if (idx < 0) {
+        for (let i = 0; i < lineEntries.length; i++) {
+          const n = lineEntries[i].originalLineNumber;
+          if (n !== null && n <= liveLine) idx = i;
+        }
+      }
+      return idx >= 0 ? idx : null;
+    }, [liveLine, lineEntries]);
 
     // Expose imperative methods to parent
     useImperativeHandle(ref, () => ({
@@ -389,21 +411,25 @@ export const StructuredTextCodeEditor = forwardRef<
           className={`${
             enableCodeFolding ? 'w-14' : 'w-11'
           } bg-slate-950/95 py-2 select-none border-r border-slate-800/80 overflow-hidden font-mono text-slate-500 shrink-0 select-none z-10`}
-          style={{ fontSize: `${11 * zoom}px`, width: zoom > 1 ? `${(enableCodeFolding ? 56 : 44) * Math.min(zoom, 2)}px` : undefined }}
+          style={{ fontSize: `${11 * zoom}px`, width: zoom > 1 ? `${(enableCodeFolding ? 56 : 44) * Math.min(zoom, 2)}px` : undefined, paddingBottom: `${BOTTOM_ROOM}px` }}
         >
           {lineEntries.map((entry, idx) => {
             const isHighlighted =
               highlightedViewLineIndex !== null && highlightedViewLineIndex === idx;
             const isCaretLine = caretViewLine === idx;
+            const isLiveLine = liveViewLineIndex === idx;
 
             return (
               <div
                 key={`line-row-${idx}`}
                 data-caret-line={isCaretLine ? (focused ? 'focused' : 'blurred') : undefined}
+                data-live-line={isLiveLine ? 'true' : undefined}
                 style={{ height: `${lineH}px`, lineHeight: `${lineH}px` }}
                 className={`st-gutter-row flex items-center justify-between transition-colors px-1 rounded-sm group/gutter-row ${
                   isHighlighted
                     ? 'bg-sky-500/30 text-sky-300 font-bold ring-1 ring-sky-400'
+                    : isLiveLine
+                    ? 'bg-emerald-900/50'
                     : isCaretLine
                     ? focused
                       ? 'bg-slate-700/45'
@@ -470,6 +496,8 @@ export const StructuredTextCodeEditor = forwardRef<
                     className={`${
                       isHighlighted
                         ? 'text-sky-300 font-bold'
+                        : isLiveLine
+                        ? 'text-emerald-300 font-bold'
                         : isCaretLine
                         ? focused
                           ? 'text-slate-100 font-semibold'
@@ -491,6 +519,16 @@ export const StructuredTextCodeEditor = forwardRef<
 
         {/* Code Viewport with Syntax-Highlighted Pre + Transparent Editable Textarea */}
         <div className="relative flex-1 min-h-0 overflow-hidden bg-slate-950">
+          {/* Live: the PLC's current state's line (a green band; the view is not moved to it) */}
+          {liveViewLineIndex !== null && (
+            <div
+              id={id ? `${id}-live-line` : undefined}
+              className="st-live-line absolute left-0 right-0 pointer-events-none z-0 bg-emerald-500/20 border-l-2 border-emerald-400"
+              style={{ top: `${liveViewLineIndex * lineH + 8 - scrollTop}px`, height: `${lineH}px` }}
+              title="The PLC's current state"
+            />
+          )}
+
           {/* The caret's line (as in Visual Studio / TwinCAT XAE): a band with a frame, dimmer when not focused */}
           {caretViewLine !== null && caretViewLine < lineEntries.length && (
             <div
@@ -518,7 +556,9 @@ export const StructuredTextCodeEditor = forwardRef<
             ref={preRef}
             aria-hidden="true"
             tabIndex={-1}
-            style={{ tabSize: 4, MozTabSize: 4, fontSize: `${fontPx}px`, lineHeight: `${lineH}px` }}
+            // (extra room at the bottom: the textarea's horizontal scrollbar lets it scroll further down than this
+            // layer could, which would put its lines out of step at the end of the code)
+            style={{ tabSize: 4, MozTabSize: 4, fontSize: `${fontPx}px`, lineHeight: `${lineH}px`, paddingBottom: `${BOTTOM_ROOM}px` }}
             className="absolute inset-0 m-0 p-2 font-mono whitespace-pre overflow-hidden pointer-events-none select-none text-slate-100 z-0 custom-scrollbar"
             dangerouslySetInnerHTML={{ __html: highlightedHtml + '<br/>' }}
           />

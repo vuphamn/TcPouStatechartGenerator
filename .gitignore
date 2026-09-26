@@ -21,3 +21,6 @@ npm-debug.log*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Test output (browser profiles, logs, screenshots)
+tests/.output/

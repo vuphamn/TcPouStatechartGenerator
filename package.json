@@ -12,7 +12,13 @@
     "electron:dev": "cross-env VITE_DEV_SERVER_URL=http://localhost:3000 electron .",
     "build:exe": "npm run build && node scripts/prepare-installer.cjs && electron-builder --win",
     "build:gateway": "npm run build && node scripts/build-gateway.cjs",
-    "build:link": "node scripts/build-link.cjs"
+    "build:link": "node scripts/build-link.cjs",
+    "test": "node tests/run.cjs unit web live",
+    "test:unit": "node tests/run.cjs unit",
+    "test:web": "node tests/run.cjs web",
+    "test:live": "node tests/run.cjs live",
+    "test:desktop": "node tests/run.cjs desktop",
+    "test:all": "node tests/run.cjs all"
   },
   "build": {
     "appId": "com.kval.statescope",
@@ -70,8 +76,10 @@
     "cross-env": "^10.1.0",
     "electron": "^44.4.1",
     "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
     "jsdom": "^30.0.1",
     "postject": "^1.0.0-alpha.6",
+    "puppeteer-core": "^23.11.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",

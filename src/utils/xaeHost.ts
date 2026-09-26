@@ -54,6 +54,9 @@ export interface SymbolChild {
   type: string;
   kind: 'value' | 'struct' | 'array' | 'other';
   stateMachine?: boolean;
+  /** A state machine's state variable type, and its names by value when the PLC describes the enum */
+  stateType?: string;
+  stateNames?: Record<string, string>;
 }
 
 export interface LiveBrowseResult {
@@ -63,6 +66,8 @@ export interface LiveBrowseResult {
   symbolType?: string;
   kind?: SymbolChild['kind'];
   stateMachine?: boolean;
+  stateType?: string;
+  stateNames?: Record<string, string>;
   truncated?: boolean;
   children?: SymbolChild[];
   error?: string | null;

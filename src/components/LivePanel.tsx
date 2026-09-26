@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid } from 'lucide-react';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
@@ -75,6 +75,8 @@ interface LivePanelProps {
   openTarget?: 'tab' | 'window';
   /** Opens the Symbols window (the PLC's symbols and values) */
   onOpenSymbols?: () => void;
+  /** Opens the Machine Overview tab */
+  onOpenOverview?: () => void;
 }
 
 const GUARD_BADGE = {
@@ -112,6 +114,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onOpenInstance,
   openTarget = 'window',
   onOpenSymbols,
+  onOpenOverview,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   // The instance this window follows (or will), and the others the PLC has
@@ -180,11 +183,21 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {status.state === 'connected' && <span className="live-dot shrink-0" />}
             <span className="truncate">{status.message || 'Not connected'}</span>
           </span>
+          {onOpenOverview && status.state === 'connected' && (
+            <button
+              id="live-overview-btn"
+              onClick={onOpenOverview}
+              className="ml-auto shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+              title="Every state machine of the PLC with its current state (Machine Overview tab)"
+            >
+              <LayoutGrid className="w-3 h-3" /> Overview
+            </button>
+          )}
           {onOpenSymbols && status.state === 'connected' && (
             <button
               id="live-symbols-btn"
               onClick={onOpenSymbols}
-              className="ml-auto shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+              className={`${onOpenOverview ? '' : 'ml-auto '}shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800`}
               title="Browse the PLC's symbols and their values; watch another state machine"
             >
               <ListTree className="w-3 h-3" /> Symbols

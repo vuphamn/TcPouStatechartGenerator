@@ -81,6 +81,8 @@ export interface MethodStructuredTextEditorProps {
   codeJump?: { method: string; line: number; nonce: number } | null;
   selectedStateId?: string | null;
   selectedStateLabel?: string;
+  /** Live: the PLC's current state (marked in the code, never scrolled to) */
+  liveStateId?: string | null;
   onSaveMethodCode?: (methodName: string, newCode: string, newDeclaration?: string) => { success: boolean; error?: string };
   onSavePreProcessCode?: (newCode: string, newDeclaration?: string) => { success: boolean; error?: string };
   onClose?: () => void;
@@ -97,6 +99,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   codeJump,
   selectedStateId,
   selectedStateLabel,
+  liveStateId,
   onSaveMethodCode,
   onSavePreProcessCode,
   onClose,
@@ -523,6 +526,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   const caseBranches = useMemo(() => {
     return foldableBlocks.filter((b) => b.type === 'case-branch');
   }, [foldableBlocks]);
+  // Live: the CASE label of the PLC's current state in this method (0: not in it)
+  const liveCaseLine = useMemo(() => (liveStateId ? findFoldableBlockForState(foldableBlocks, liveStateId)?.startLine ?? null : null), [liveStateId, foldableBlocks]);
 
   const handleJumpToCaseBranch = (block: FoldableBlock) => {
     // If target block is folded, unfold it so the code is visible!
@@ -1631,6 +1636,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             onKeyDown={handleEditorKeyDown}
             onContextMenu={handleImplContextMenu}
             highlightedLine={highlightedCaseLine}
+            liveLine={liveCaseLine}
             scrollToLine={scrollToLine}
             placeholder={`// Structured Text implementation for ${cleanMethodName}()\n`}
             ariaLabel={`${cleanMethodName} Implementation Structured Text`}

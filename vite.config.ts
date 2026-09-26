@@ -12,7 +12,8 @@ export default defineConfig({
     watch: {
       // Build output: watching it locks packaged files (electron-builder rename fails)
       // and crashes the dev server with EBUSY while a built .exe is running
-      ignored: ['**/release/**', '**/dist/**', '**/xae-extension/**'],
+      // (tests/.output: logs and screenshots written while the tests run against this server)
+      ignored: ['**/release/**', '**/dist/**', '**/xae-extension/**', '**/tests/**'],
     },
   },
 });

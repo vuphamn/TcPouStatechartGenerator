@@ -168,7 +168,48 @@ function parseDataType(buf, at) {
     subItems.push(sub.entry);
     p += sub.length;
   }
-  return { entry: { name, type, size, dataType, flags, bounds, subItems }, length: len };
+  return { entry: { name, type, size, dataType, flags, bounds, subItems, enumValues: enumInfos(buf, p, at + len, flags, size) }, length: len };
+}
+
+// AdsDatatypeEntry flags of the optional parts after the sub items (in this order)
+const DT_TYPEGUID = 0x80;
+const DT_COPYMASK = 0x200;
+const DT_METHODINFOS = 0x800;
+const DT_ATTRIBUTES = 0x1000;
+const DT_ENUMINFOS = 0x2000;
+
+/** An enum's members (value -> name) from the entry's optional parts, or null (not an enum / not readable) */
+function enumInfos(buf, p, end, flags, size) {
+  if (!(flags & DT_ENUMINFOS) || ![1, 2, 4, 8].includes(size)) return null;
+  try {
+    if (flags & DT_TYPEGUID) p += 16;
+    if (flags & DT_COPYMASK) p += size;
+    if (flags & DT_METHODINFOS) {
+      const count = buf.readUInt16LE(p);
+      p += 2;
+      // Each method entry starts with its length
+      for (let i = 0; i < count; i++) p += buf.readUInt32LE(p);
+    }
+    if (flags & DT_ATTRIBUTES) {
+      const count = buf.readUInt16LE(p);
+      p += 2;
+      for (let i = 0; i < count; i++) p += 2 + buf.readUInt8(p) + 1 + buf.readUInt8(p + 1) + 1;
+    }
+    const count = buf.readUInt16LE(p);
+    p += 2;
+    const values = {};
+    for (let i = 0; i < count && p < end; i++) {
+      const nameLength = buf.readUInt8(p);
+      const memberName = buf.toString('latin1', p + 1, p + 1 + nameLength);
+      p += 1 + nameLength + 1;
+      const value = size === 1 ? buf.readInt8(p) : size === 2 ? buf.readInt16LE(p) : size === 4 ? buf.readInt32LE(p) : Number(buf.readBigInt64LE(p));
+      p += size;
+      values[value] = memberName;
+    }
+    return Object.keys(values).length ? values : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseDataTypes(buf) {
@@ -278,10 +319,23 @@ function symbolKind(type, size, dataType, bounds) {
 
 /** Does a variable of this type hold the state variable (a state machine the app can follow)? */
 async function holdsStateVar(client, type, stateVar, cache) {
+  return (await stateMemberOf(client, type, stateVar, cache)) !== null;
+}
+
+/** The state variable member of a type (with base types), or null */
+async function stateMemberOf(client, type, stateVar, cache) {
   const dt = await dataTypeInfo(client, type, cache);
-  if (!dt) return false;
+  if (!dt) return null;
   const want = stateVar.toLowerCase();
-  return (await membersOf(client, dt, cache)).some((m) => m.name.toLowerCase() === want);
+  return (await membersOf(client, dt, cache)).find((m) => m.name.toLowerCase() === want) ?? null;
+}
+
+/** A state machine's state variable: its type and, for an enum the PLC describes, its names by value */
+async function stateInfo(client, type, stateVar, cache) {
+  const m = await stateMemberOf(client, type, stateVar, cache);
+  if (!m) return {};
+  const enumDt = m.type ? await dataTypeInfo(client, m.type, cache) : null;
+  return { stateType: m.type, ...(enumDt?.enumValues ? { stateNames: enumDt.enumValues } : {}) };
 }
 
 /**
@@ -294,7 +348,9 @@ async function browseSymbol(client, symbolPath, { stateVar = 'machineState', cac
   const node = { path: symbolPath, symbolType: info.type, kind: symbolKind(info.type, info.size, info.dataType, null), stateMachine: false, children: [], truncated: false };
   const describe = async (name, childPath, type, size, dataType, bounds) => {
     const kind = symbolKind(type, size, dataType, bounds);
-    return { name, path: childPath, type, kind, stateMachine: kind === 'struct' ? await holdsStateVar(client, type, stateVar, cache) : false };
+    const state = kind === 'struct' ? await stateInfo(client, type, stateVar, cache) : {};
+    // stateType / stateNames: for the Machine Overview (state names of any machine the PLC describes)
+    return { name, path: childPath, type, kind, stateMachine: !!state.stateType, ...state };
   };
   if (node.kind === 'array') {
     const dt = await dataTypeInfo(client, info.type, cache);
@@ -312,6 +368,7 @@ async function browseSymbol(client, symbolPath, { stateVar = 'machineState', cac
   const dt = await dataTypeInfo(client, info.type, cache);
   const members = await membersOf(client, dt, cache);
   node.stateMachine = members.some((m) => m.name.toLowerCase() === stateVar.toLowerCase());
+  if (node.stateMachine) Object.assign(node, await stateInfo(client, info.type, stateVar, cache));
   node.truncated = members.length > MAX_BROWSE_CHILDREN;
   for (const m of members.slice(0, MAX_BROWSE_CHILDREN)) {
     if (!/^[A-Za-z_]\w*$/.test(m.name)) continue;

@@ -23,6 +23,7 @@ export type DockTabId =
   | 'frequency'
   | 'history'
   | 'logger'
+  | 'overview'
   | 'docs'
   | 'problems'
   | 'live'
@@ -44,6 +45,7 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'frequency',
   'history',
   'logger',
+  'overview',
   'docs',
   'problems',
   'live',
@@ -65,6 +67,7 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   frequency: 'middle',
   history: 'middle',
   logger: 'middle',
+  overview: 'middle',
   docs: 'right',
   problems: 'right',
   live: 'right',
@@ -157,7 +160,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
       groups: [
         {
           id: 'middle-main',
-          tabs: ['diagram', 'pou', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger'],
+          tabs: ['diagram', 'pou', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger', 'overview'],
           active: 'diagram',
           size: 1,
         },
