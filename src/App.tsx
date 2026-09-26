@@ -1677,6 +1677,8 @@ export const App: React.FC = () => {
     },
     [findPathsFor, pouContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced]
   );
+  // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
+  const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number } | null>(null);
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
       if (!finding.method || !finding.line) return;
@@ -1685,6 +1687,7 @@ export const App: React.FC = () => {
         postToHost({ type: 'navigate', path: pouPath, method: finding.method, line: finding.line, text: finding.text });
       } else {
         handleOpenInspectorPanel('method', { method: finding.method });
+        setCodeJump({ method: finding.method, line: finding.line, nonce: Date.now() });
       }
     },
     [canNavigateInXae, pouPath, handleJumpToState, handleOpenInspectorPanel]
@@ -3298,6 +3301,7 @@ export const App: React.FC = () => {
               onSaveStateCode={handleSaveStateCode}
               onSavePreProcessCode={handleSavePreProcessCode}
               initialMethod={inspectorRequest.method}
+              codeJump={codeJump}
               initialEnumMember={inspectorRequest.enumMember}
               notes={diagramNotes}
               onSaveNote={handleSaveNote}

@@ -151,7 +151,6 @@ There is no automated test suite yet. Before opening a PR:
 
 ## Known issues / good first tasks
 
-- `parseDutContent` in `utils/dutEnumEditor.ts` (used by the Enum Editor) reads only 2 members from enums written with leading commas (`, STATE_X` per line), such as the Door Dasher and 234 Feed Manager samples. The generator's `readEnumOrder` handles them correctly.
 - In Table Manager, the start transition (start → `TABLEMANAGER_DISABLED`) carries the wrong source/target tags on its SVG path.
 - Edge line drags still re-apply offsets to the whole diagram on every mouse move. Label and node drags are already frame-batched.
 - Not yet tested: Live view and guard values against a real PLC (the XAE extension's ADS part has only run without a started TwinCAT system); git compare for files inside git submodules; the desktop app's save dialog for project documentation.

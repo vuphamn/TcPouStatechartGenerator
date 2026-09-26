@@ -50,7 +50,8 @@ import {
 } from '../utils/stCodeFolding.ts';
 import {
   findMatchesInCode,
-  extractVariablesForSuggestions,
+  collectSearchVariables,
+  type SearchVariable,
   FindMatch,
   FindOptions,
 } from '../utils/stFindHighlight.ts';
@@ -65,10 +66,19 @@ import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
 
+const VARIABLE_GROUPS: { source: SearchVariable['source']; label: string }[] = [
+  { source: 'state', label: 'State variable' },
+  { source: 'method', label: 'Method variables' },
+  { source: 'pou', label: 'Function block variables' },
+  { source: 'code', label: 'Used in the code' },
+];
+
 export interface MethodStructuredTextEditorProps {
   tcPouContent?: string;
   tcPouFileName?: string;
   initialMethod?: string;
+  /** Go to this line of the method's implementation (a new nonce each request): scroll, unfold, highlight */
+  codeJump?: { method: string; line: number; nonce: number } | null;
   selectedStateId?: string | null;
   selectedStateLabel?: string;
   onSaveMethodCode?: (methodName: string, newCode: string, newDeclaration?: string) => { success: boolean; error?: string };
@@ -84,6 +94,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   tcPouContent = '',
   tcPouFileName = 'POU.TcPOU',
   initialMethod,
+  codeJump,
   selectedStateId,
   selectedStateLabel,
   onSaveMethodCode,
@@ -365,11 +376,43 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   });
   const [activeGlobalMatchIndex, setActiveGlobalMatchIndex] = useState<number>(0);
   const findInputRef = useRef<HTMLInputElement>(null);
+  // The find box's variable list (a combobox): open, the text it is filtered by, the highlighted option
+  const [varListOpen, setVarListOpen] = useState(false);
+  const [varListFilter, setVarListFilter] = useState('');
+  const [varListActive, setVarListActive] = useState(-1);
+  const findBoxRef = useRef<HTMLDivElement>(null);
+  const varListRef = useRef<HTMLDivElement>(null);
 
-  // Extract variable suggestions from declaration & implementation for 1-click variable finding
-  const variableSuggestions = useMemo(() => {
-    return extractVariablesForSuggestions(declaration, code, extractedInfo.stateVarName);
-  }, [declaration, code, extractedInfo.stateVarName]);
+  // The variables offered in the find box: the method's, the function block's, and names used in the code
+  const searchVariables = useMemo(
+    () => collectSearchVariables(declaration, pouDeclaration, code, extractedInfo.stateVarName),
+    [declaration, pouDeclaration, code, extractedInfo.stateVarName]
+  );
+  const shownVariables = useMemo(() => {
+    const f = varListFilter.trim().toLowerCase();
+    return f ? searchVariables.filter((v) => v.name.toLowerCase().includes(f)) : searchVariables;
+  }, [searchVariables, varListFilter]);
+  const chooseVariable = useCallback((name: string) => {
+    setFindQuery(name);
+    setActiveGlobalMatchIndex(0);
+    setVarListOpen(false);
+    setVarListActive(-1);
+    findInputRef.current?.focus();
+  }, []);
+  // Close the list on a click elsewhere
+  useEffect(() => {
+    if (!varListOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!findBoxRef.current?.contains(e.target as Node)) setVarListOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [varListOpen]);
+  // Keep the highlighted option in view
+  useEffect(() => {
+    if (varListActive < 0) return;
+    varListRef.current?.querySelector(`[data-var-index="${varListActive}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [varListActive]);
 
   // Find matches in implementation code
   const implMatches = useMemo<FindMatch[]>(() => {
@@ -577,6 +620,48 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       return () => clearTimeout(timer);
     }
   }, [selectedStateId, selectedStateLabel, cleanMethodName, code, availableMethods, foldableBlocks, foldedBlockIds]);
+
+  // A jump to a line (Problems tab: Open code). After the state's CASE label scroll above, so the line wins when both
+  // come at once; it waits until the requested method is the one shown.
+  const handledCodeJumpRef = useRef(0);
+  const codeJumpTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!codeJump || codeJump.nonce === handledCodeJumpRef.current) return;
+    if (cleanMethodName.toLowerCase() !== codeJump.method.replace(/\(\)$/, '').toLowerCase()) {
+      // Another method is shown (chosen by hand): switch to the jump's method, the jump follows when it is shown
+      const wanted = codeJump.method.endsWith('()') ? codeJump.method : `${codeJump.method}()`;
+      const match = availableMethods.find((m) => m.toLowerCase() === wanted.toLowerCase());
+      if (match) setSelectedMethod(match);
+      else handledCodeJumpRef.current = codeJump.nonce;
+      return;
+    }
+    handledCodeJumpRef.current = codeJump.nonce;
+    // The selected state's CASE label counts as visited: that scroll must not take the view back later
+    lastScrolledTargetRef.current = selectedStateId || null;
+    const line = codeJump.line;
+    // Unfold the blocks that hide the line
+    const hiding = foldableBlocks.filter((b) => foldedBlockIds.has(b.id) && line > b.startLine && line <= b.endLine);
+    if (hiding.length) {
+      setFoldedBlockIds((prev) => {
+        const next = new Set(prev);
+        for (const b of hiding) next.delete(b.id);
+        return next;
+      });
+    }
+    setHighlightedCaseLine(line);
+    // After the tab is shown and the code unfolded; again while a just-shown editor is still laying out its lines
+    for (const delay of [80, 300, 700]) {
+      window.setTimeout(() => implEditorRef.current?.scrollToLine(line, delay === 80), delay);
+    }
+    if (codeJumpTimerRef.current !== null) window.clearTimeout(codeJumpTimerRef.current);
+    codeJumpTimerRef.current = window.setTimeout(() => {
+      setHighlightedCaseLine((l) => (l === line ? null : l));
+      codeJumpTimerRef.current = null;
+    }, 3000);
+  }, [codeJump, cleanMethodName, availableMethods, foldableBlocks, foldedBlockIds, selectedStateId]);
+  useEffect(() => () => {
+    if (codeJumpTimerRef.current !== null) window.clearTimeout(codeJumpTimerRef.current);
+  }, []);
 
   const isDirty = code !== initialCode || declaration !== initialDeclaration;
 
@@ -907,12 +992,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               </span>
             </div>
 
-            {extractedInfo.methodFound ? (
-              <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-                Found in POU
-              </span>
-            ) : (
+            {/* Only the exception is shown: a method that is not in the POU yet (saving adds it) */}
+            {extractedInfo.methodFound ? null : (
               <span className="text-[10px] text-amber-400 flex items-center gap-1 font-mono shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
                 New Method
@@ -1023,7 +1104,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         {/* Left: Find Input Box with Search Icon, Counter, Prev/Next, Options, and Scope */}
         <div className="flex items-center gap-1.5 flex-1 min-w-[280px]">
           {/* Search Input Box */}
-          <div className="relative flex-1 max-w-sm flex items-center">
+          <div ref={findBoxRef} className="relative flex-1 max-w-sm flex items-center">
             <div className="absolute left-2.5 pointer-events-none flex items-center text-sky-400">
               <Search className="w-3.5 h-3.5" />
             </div>
@@ -1031,30 +1112,61 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               ref={findInputRef}
               id="method-editor-find-input"
               type="text"
+              role="combobox"
+              aria-expanded={varListOpen}
+              aria-controls="method-editor-find-variables"
+              aria-autocomplete="list"
+              aria-activedescendant={varListOpen && varListActive >= 0 ? `find-variable-${varListActive}` : undefined}
+              autoComplete="off"
+              spellCheck={false}
               value={findQuery}
               onChange={(e) => {
                 setFindQuery(e.target.value);
                 setActiveGlobalMatchIndex(0);
+                // Typing filters the variable list
+                setVarListFilter(e.target.value);
+                setVarListActive(-1);
+                setVarListOpen(e.target.value.trim().length > 0);
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                   e.preventDefault();
-                  if (e.shiftKey) {
-                    handlePrevMatch();
+                  if (!varListOpen) {
+                    setVarListFilter('');
+                    setVarListOpen(true);
+                    setVarListActive(e.key === 'ArrowDown' ? 0 : searchVariables.length - 1);
+                    return;
+                  }
+                  const n = shownVariables.length;
+                  if (n === 0) return;
+                  setVarListActive((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i <= 0 ? n - 1 : i - 1)));
+                } else if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (varListOpen && varListActive >= 0 && shownVariables[varListActive]) {
+                    chooseVariable(shownVariables[varListActive].name);
                   } else {
-                    handleNextMatch();
+                    setVarListOpen(false);
+                    if (e.shiftKey) {
+                      handlePrevMatch();
+                    } else {
+                      handleNextMatch();
+                    }
                   }
                 } else if (e.key === 'Escape') {
-                  if (findQuery) {
+                  if (varListOpen) {
+                    setVarListOpen(false);
+                  } else if (findQuery) {
                     setFindQuery('');
                   } else {
                     findInputRef.current?.blur();
                   }
+                } else if (e.key === 'Tab') {
+                  setVarListOpen(false);
                 }
               }}
               placeholder="Find string or variable... (e.g. bBusy, machineState, TON) [Ctrl+F]"
               aria-label="Find string or variable in method code"
-              className="w-full pl-8 pr-7 py-1 text-xs font-mono bg-slate-950 border border-slate-700/80 rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50 transition-colors"
+              className="w-full pl-8 pr-12 py-1 text-xs font-mono bg-slate-950 border border-slate-700/80 rounded-md text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500/50 transition-colors"
             />
             {findQuery && (
               <button
@@ -1063,11 +1175,85 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                   setFindQuery('');
                   findInputRef.current?.focus();
                 }}
-                className="absolute right-2 text-slate-400 hover:text-slate-200 p-0.5 rounded cursor-pointer"
+                className="absolute right-6 text-slate-400 hover:text-slate-200 p-0.5 rounded cursor-pointer"
                 title="Clear search query (Esc)"
               >
                 <X className="w-3 h-3" />
               </button>
+            )}
+            <button
+              type="button"
+              id="method-editor-find-variables-btn"
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                // The whole list, whatever is typed
+                setVarListFilter('');
+                setVarListActive(-1);
+                setVarListOpen((o) => !o);
+                findInputRef.current?.focus();
+              }}
+              disabled={searchVariables.length === 0}
+              className="absolute right-1 p-0.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30 cursor-pointer"
+              title={`Variables (${searchVariables.length}): pick one to find it (Alt+Down)`}
+              aria-label="Show variables"
+            >
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${varListOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {varListOpen && (
+              <div
+                ref={varListRef}
+                id="method-editor-find-variables"
+                role="listbox"
+                aria-label="Variables"
+                className="absolute left-0 top-full mt-1 z-50 w-full min-w-[320px] max-h-72 overflow-y-auto custom-scrollbar bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 text-xs"
+              >
+                {shownVariables.length === 0 ? (
+                  <div className="px-3 py-2 text-slate-500">No variable contains "{varListFilter.trim()}": Enter finds the text</div>
+                ) : (
+                  VARIABLE_GROUPS.map((g) => {
+                    const items = shownVariables.map((v, i) => ({ v, i })).filter((x) => x.v.source === g.source);
+                    if (items.length === 0) return null;
+                    return (
+                      <div key={g.source} role="group" aria-label={g.label}>
+                        <div className="px-3 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wider font-semibold text-slate-500 flex items-center gap-1">
+                          <Tag className="w-2.5 h-2.5" />
+                          {g.label}
+                        </div>
+                        {items.map(({ v, i }) => {
+                          const active = i === varListActive;
+                          const selected = findQuery.trim().toLowerCase() === v.name.toLowerCase();
+                          return (
+                            <div
+                              key={v.name}
+                              id={`find-variable-${i}`}
+                              data-var-index={i}
+                              role="option"
+                              aria-selected={active}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onMouseEnter={() => setVarListActive(i)}
+                              onClick={() => chooseVariable(v.name)}
+                              className={`find-variable-option flex items-center gap-2 px-3 py-1 cursor-pointer font-mono ${
+                                active ? 'bg-sky-700/60 text-white' : 'text-slate-200 hover:bg-slate-800'
+                              }`}
+                              title={`Find ${v.name}${v.type ? ` : ${v.type}` : ''}`}
+                            >
+                              <span className={`truncate ${selected ? 'text-amber-300 font-bold' : ''}`}>{v.name}</span>
+                              {v.type && <span className="truncate text-[10px] text-slate-500">{v.type}</span>}
+                              <span
+                                className={`ml-auto shrink-0 text-[10px] px-1.5 rounded-full ${v.uses ? 'bg-slate-800 text-slate-300' : 'text-slate-600'}`}
+                                title={`${v.uses} use(s) in this method's code`}
+                              >
+                                {v.uses}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             )}
           </div>
 
@@ -1170,38 +1356,6 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           </div>
         </div>
 
-        {/* Right: Quick Variable Filter Chips */}
-        {variableSuggestions.length > 0 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar py-0.5 max-w-full">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold whitespace-nowrap flex items-center gap-1">
-              <Tag className="w-2.5 h-2.5 text-slate-500" />
-              Variables:
-            </span>
-            <div className="flex items-center gap-1 flex-wrap">
-              {variableSuggestions.map((vName) => {
-                const isSelected = findQuery.trim().toLowerCase() === vName.toLowerCase();
-                return (
-                  <button
-                    key={vName}
-                    type="button"
-                    onClick={() => {
-                      setFindQuery(vName);
-                      findInputRef.current?.focus();
-                    }}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-all cursor-pointer whitespace-nowrap ${
-                      isSelected
-                        ? 'bg-amber-400 text-slate-950 font-bold ring-1 ring-amber-300 shadow-xs'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700/60'
-                    }`}
-                    title={`Highlight variable "${vName}" in method`}
-                  >
-                    {vName}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Status banner */}

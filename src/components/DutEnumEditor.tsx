@@ -93,12 +93,46 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Sync initialSelectedMember when prop changes
-  useEffect(() => {
-    if (initialSelectedMember) {
-      setSelectedMemberName(initialSelectedMember);
+  // Jump to an enum member: the editor scrolls to its line and highlights it briefly (the grid: its row), like
+  // the Method Editor does for the state's CASE label. While the tab is hidden it cannot scroll: the jump waits.
+  const [flashLine, setFlashLine] = useState<{ view: 'st' | 'xml'; line: number } | null>(null);
+  const [flashRow, setFlashRow] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pendingJumpRef = useRef<string | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
+  const performJumpRef = useRef<(name: string) => void>(() => {});
+  const isVisible = () => !!rootRef.current && rootRef.current.offsetParent !== null && rootRef.current.clientHeight > 0;
+  const jumpToMember = (name: string) => {
+    setSelectedMemberName(name);
+    if (!isVisible()) {
+      pendingJumpRef.current = name;
+      return;
     }
+    pendingJumpRef.current = null;
+    // After this render: the view shows the current text
+    requestAnimationFrame(() => performJumpRef.current(name));
+  };
+  useEffect(() => {
+    if (initialSelectedMember) jumpToMember(initialSelectedMember);
+    // Only when the selection changes, not on every edit
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSelectedMember]);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const name = pendingJumpRef.current;
+      if (name && isVisible()) {
+        pendingJumpRef.current = null;
+        requestAnimationFrame(() => performJumpRef.current(name));
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+  }, []);
 
   // Dockable, moveable, resizeable popup window hook when opened as modal
   const {
@@ -246,13 +280,63 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     }
   };
 
+  // The member's line in the Structured Text or the raw XML, 1-based (0: not found)
+  const memberLine = (name: string, view: 'st' | 'xml'): number => {
+    if (view === 'st') {
+      const item = activeParsed.enumItems.find((i) => i.name.toLowerCase() === name.toLowerCase());
+      return item && item.line > 0 ? item.line : 0;
+    }
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(`^\\s*,?\\s*${escaped}\\b`, 'i');
+    const lines = rawXmlCode.split(/\r?\n/);
+    const start = Math.max(0, lines.findIndex((l) => /\bTYPE\b/i.test(l)));
+    for (let i = start; i < lines.length; i++) if (rx.test(lines[i])) return i + 1;
+    return 0;
+  };
+  // Highlights for 3 s (a line of the ST / XML editor, or a grid row)
+  const flash = (show: () => void) => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+    show();
+    flashTimerRef.current = window.setTimeout(() => {
+      setFlashLine(null);
+      setFlashRow(null);
+      flashTimerRef.current = null;
+    }, 3000);
+  };
+  const flashEditorLine = (view: 'st' | 'xml', line: number) => {
+    if (line <= 0) return;
+    (view === 'xml' ? xmlEditorRef : stEditorRef).current?.scrollToLine(line);
+    flash(() => {
+      setFlashRow(null);
+      setFlashLine({ view, line });
+    });
+  };
+  // The syntax check numbers the declaration's lines: in the XML view the declaration starts on the CDATA line
+  const declarationLineInView = (line: number) => {
+    if (viewMode !== 'xml') return line;
+    const at = rawXmlCode.split(/\r?\n/).findIndex((l) => /<Declaration>\s*<!\[CDATA\[/i.test(l));
+    return at >= 0 ? at + line : line;
+  };
+  const jumpToDeclarationLine = (line: number) => flashEditorLine(viewMode === 'xml' ? 'xml' : 'st', declarationLineInView(line));
+  performJumpRef.current = (name: string) => {
+    if (viewMode === 'grid') {
+      const row = rootRef.current?.querySelector(`tr[data-member="${CSS.escape(name)}"]`);
+      if (!row) return;
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      flash(() => {
+        setFlashLine(null);
+        setFlashRow(name);
+      });
+      return;
+    }
+    const view = viewMode === 'xml' ? 'xml' : 'st';
+    flashEditorLine(view, memberLine(name, view));
+  };
+
   // Jump to specific enum member in editor
   const handleJumpToMember = (memberName: string) => {
-    setSelectedMemberName(memberName);
-    const item = activeParsed.enumItems.find((i) => i.name === memberName);
-    if (item && item.line > 0) {
-      stEditorRef.current?.scrollToLine(item.line);
-    }
+    if (memberName) jumpToMember(memberName);
+    else setSelectedMemberName('');
   };
 
   // Handle Save
@@ -469,6 +553,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
 
   const editorContent = (
     <div
+      ref={rootRef}
       onKeyDown={handleKeyDown}
       style={isModal && !embedded ? containerStyle : undefined}
       className={`flex flex-col bg-slate-950 text-slate-200 font-sans transition-all duration-150 overflow-hidden ${
@@ -919,15 +1004,15 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span className="font-semibold">TwinCAT DUT Syntax:</span>
             <span className="truncate font-mono text-[11px]">
-              {activeParsed.diagnostics[0].message} (line {activeParsed.diagnostics[0].line})
+              {activeParsed.diagnostics[0].message} (line {declarationLineInView(activeParsed.diagnostics[0].line)})
             </span>
           </div>
           <button
             type="button"
-            onClick={() => stEditorRef.current?.scrollToLine(activeParsed.diagnostics[0].line)}
+            onClick={() => jumpToDeclarationLine(activeParsed.diagnostics[0].line)}
             className="text-[11px] underline text-amber-300 hover:text-amber-100 cursor-pointer font-mono shrink-0 ml-2"
           >
-            Jump to Line {activeParsed.diagnostics[0].line}
+            Jump to Line {declarationLineInView(activeParsed.diagnostics[0].line)}
           </button>
         </div>
       )}
@@ -968,6 +1053,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             id="st-dut-editor"
             value={stCode}
             onChange={(val) => setStCode(val)}
+            highlightedLine={flashLine?.view === 'st' ? flashLine.line : null}
             enableCodeFolding={true}
             foldedBlockIds={foldedBlockIds}
             onToggleFold={handleToggleFold}
@@ -1038,7 +1124,8 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
                       return (
                         <tr
                           key={item.id}
-                          className="hover:bg-slate-900/60 transition-colors group"
+                          data-member={item.name}
+                          className={`hover:bg-slate-900/60 transition-colors group ${flashRow === item.name ? 'enum-row-flash' : ''}`}
                         >
                           {/* Index */}
                           <td className="py-2 px-3 text-slate-500 text-center text-[10px]">
@@ -1127,6 +1214,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             id="raw-tcdut-xml-editor"
             value={rawXmlCode}
             onChange={(val) => setRawXmlCode(val)}
+            highlightedLine={flashLine?.view === 'xml' ? flashLine.line : null}
             enableCodeFolding={true}
             findQuery={isFindBarOpen ? findQuery : ''}
             findOptions={findOptions}

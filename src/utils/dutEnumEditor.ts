@@ -202,9 +202,11 @@ function parseDeclarationItems(declaration: string): {
     const trimmed = line.trim();
 
     if (!trimmed) continue;
+    // The line without its comments: the list's own parentheses, not those of a (* comment *)
+    const codePart = trimmed.replace(/\(\*.*?\*\)/g, '').replace(/\/\/.*$/, '');
 
     // Check opening parenthesis
-    if (trimmed.includes('(') && !inEnumBlock) {
+    if (codePart.includes('(') && !inEnumBlock) {
       inEnumBlock = true;
     }
 
@@ -235,8 +237,11 @@ function parseDeclarationItems(declaration: string): {
       continue;
     }
 
-    // Check commented out enum item e.g. // TABLEMANAGER_FOO, or (* TABLEMANAGER_FOO *)
-    const commentedOutMatch = trimmed.match(/^(?:\/\/|\(\*)\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*:=\s*([0-9A-Fa-fx#]+))?\s*(?:,)?(?:\s*\*\))?/);
+    // A member may be written with its comma first: ", STATE_X" (TwinCAT's style for some enums)
+    const body = trimmed.replace(/^,\s*/, '');
+
+    // Check commented out enum item e.g. // TABLEMANAGER_FOO, or (* TABLEMANAGER_FOO *), or // , TABLEMANAGER_FOO
+    const commentedOutMatch = trimmed.match(/^(?:\/\/|\(\*)\s*,?\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*:=\s*([0-9A-Fa-fx#]+))?\s*(?:,)?(?:\s*\*\))?/);
     if (commentedOutMatch && inEnumBlock) {
       const name = commentedOutMatch[1].trim();
       if (!['TYPE', 'END_TYPE', 'STRUCT', 'END_STRUCT', 'OF'].includes(name.toUpperCase())) {
@@ -254,7 +259,7 @@ function parseDeclarationItems(declaration: string): {
     }
 
     // Standard enum item regex: IDENTIFIER [ := VALUE ] [ , ] [ (* COMMENT *) | // COMMENT ]
-    const itemMatch = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:=\s*([0-9A-Fa-fx#\-_]+))?(?:\s*,|\s*;|\s*$)?(?:\s*(?:\(\*([^*]+)\*\)|\/\/(.*)))?/);
+    const itemMatch = body.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:=\s*([0-9A-Fa-fx#\-_]+))?(?:\s*,|\s*;|\s*$)?(?:\s*(?:\(\*([^*]+)\*\)|\/\/(.*)))?/);
     if (itemMatch) {
       const name = itemMatch[1].trim();
       const val = itemMatch[2] ? itemMatch[2].trim() : undefined;
@@ -296,7 +301,7 @@ function parseDeclarationItems(declaration: string): {
       }
     }
 
-    if (trimmed.includes(')')) {
+    if (codePart.includes(')')) {
       inEnumBlock = false;
     }
   }

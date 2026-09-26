@@ -209,6 +209,8 @@ export interface StateNodeStyleInspectorProps {
   onSavePreProcessCode?: (newCode: string, newDeclaration?: string) => { success: boolean; error?: string };
   initialMode?: 'enum' | 'method' | 'style' | 'code' | 'preprocess' | 'docs';
   initialMethod?: string;
+  /** Open the method at this line (Problems tab: Open code) */
+  codeJump?: { method: string; line: number; nonce: number } | null;
   initialEnumMember?: string;
   // Documentation / Notes persistence
   notes?: DiagramNotes;
@@ -241,6 +243,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
   onSavePreProcessCode,
   initialMode = 'method',
   initialMethod = 'doState()',
+  codeJump,
   initialEnumMember,
   notes,
   onSaveNote,
@@ -583,6 +586,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
               tcPouContent={tcPouContent}
               tcPouFileName={tcPouFileName}
               initialMethod={initialMethod || 'doState()'}
+              codeJump={codeJump}
               selectedStateId={currentEffectiveStateId}
               selectedStateLabel={currentEffectiveStateLabel}
               onSaveMethodCode={onSaveMethodCode}

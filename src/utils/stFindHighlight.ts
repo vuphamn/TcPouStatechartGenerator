@@ -151,90 +151,80 @@ export function highlightHtmlWithFindMatches(
   return { html: highlightedHtml, matchCount: matchCounter };
 }
 
-/**
- * Extracts variable names from Structured Text declaration and code
- * to provide quick search suggestions for variables (e.g. machineState, bBusy, etc.)
- */
-export function extractVariablesForSuggestions(
-  declaration: string,
-  implementation: string,
-  knownStateVar?: string
-): string[] {
-  const vars = new Set<string>();
 
-  if (knownStateVar && knownStateVar.trim()) {
-    vars.add(knownStateVar.trim());
-  }
+export interface SearchVariable {
+  name: string;
+  /** Where it is declared: the state variable, the method's VAR blocks, the POU's, or only used in the code */
+  source: 'state' | 'method' | 'pou' | 'code';
+  /** The declared type, e.g. BOOL, TON, E_FeedMode */
+  type?: string;
+  /** Whole-word uses in the implementation (any case, as ST is) */
+  uses: number;
+}
 
-  // Parse variable declarations in declaration text:
-  // VAR / VAR_INPUT / VAR_OUTPUT ... <varName> : <type> ... END_VAR
-  const declLines = declaration.split('\n');
+const ST_KEYWORDS = new Set([
+  'CASE', 'OF', 'END_CASE', 'IF', 'THEN', 'ELSE', 'ELSIF', 'END_IF', 'FOR', 'TO', 'BY', 'DO', 'END_FOR', 'WHILE',
+  'END_WHILE', 'REPEAT', 'UNTIL', 'RETURN', 'TRUE', 'FALSE', 'AND', 'OR', 'XOR', 'NOT', 'MOD', 'EXIT', 'CONTINUE',
+]);
+
+/** Name -> type of the variables in a declaration's VAR blocks (comments and attributes skipped) */
+function declaredVariables(declaration: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const text = declaration.replace(/\(\*[\s\S]*?\*\)/g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/\{[^}]*\}/g, ' ');
   let inVarBlock = false;
-
-  for (const rawLine of declLines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('//') || line.startsWith('(*')) continue;
-
-    if (/\b(VAR|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_STAT|VAR_TEMP)\b/i.test(line)) {
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^VAR(_INPUT|_OUTPUT|_IN_OUT|_STAT|_TEMP|_INST)?\b/i.test(line)) {
       inVarBlock = true;
       continue;
     }
-    if (/\bEND_VAR\b/i.test(line)) {
+    if (/^END_VAR\b/i.test(line)) {
       inVarBlock = false;
       continue;
     }
-
-    if (inVarBlock) {
-      // Match "bBusy : BOOL;" or "stateVar, nextState : INT;"
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0) {
-        const leftPart = line.substring(0, colonIdx).trim();
-        const names = leftPart.split(',');
-        for (const name of names) {
-          const cleanName = name.trim().replace(/^\[.*?\]/, '');
-          if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(cleanName)) {
-            vars.add(cleanName);
-          }
-        }
-      }
+    if (!inVarBlock) continue;
+    // "bBusy : BOOL;", "a, b : INT := 5;", "fbTimer : TON;", "aX : ARRAY [1..5] OF INT;"
+    const m = line.match(/^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?:AT\s+%\S+\s*)?:\s*([^;:=]+)/i);
+    if (!m) continue;
+    const type = m[2].trim().replace(/\s+/g, ' ');
+    for (const name of m[1].split(',')) {
+      const n = name.trim();
+      if (n && !ST_KEYWORDS.has(n.toUpperCase()) && !out.has(n)) out.set(n, type);
     }
   }
+  return out;
+}
 
-  // Also check common PLC prefixes and patterns in implementation
-  const implMatches = implementation.match(/\b([bnsudre][A-Z][a-zA-Z0-9_]*)\b/g);
-  if (implMatches) {
-    for (const m of implMatches) {
-      if (m.length >= 3 && m.length <= 32) {
-        vars.add(m);
-      }
-    }
+/**
+ * Every variable worth searching for in a method: the state variable, the method's own variables, the POU's
+ * (function block members), and prefixed names used in the code but declared elsewhere (bX, nX, sX, ...).
+ */
+export function collectSearchVariables(
+  methodDeclaration: string,
+  pouDeclaration: string,
+  implementation: string,
+  stateVar?: string
+): SearchVariable[] {
+  const code = implementation.replace(/\(\*[\s\S]*?\*\)/g, ' ').replace(/\/\/[^\n]*/g, ' ');
+  const counts = new Map<string, number>();
+  for (const w of code.match(/\b[A-Za-z_]\w*\b/g) ?? []) counts.set(w.toLowerCase(), (counts.get(w.toLowerCase()) ?? 0) + 1);
+  const uses = (n: string) => counts.get(n.toLowerCase()) ?? 0;
+
+  const byName = new Map<string, SearchVariable>();
+  const add = (name: string, source: SearchVariable['source'], type?: string) => {
+    const key = name.toLowerCase();
+    if (!byName.has(key)) byName.set(key, { name, source, type, uses: uses(name) });
+  };
+  const method = declaredVariables(methodDeclaration);
+  const pou = declaredVariables(pouDeclaration);
+  const state = stateVar?.trim();
+  if (state) add(state, 'state', pou.get(state) ?? method.get(state));
+  for (const [n, t] of method) add(n, 'method', t);
+  for (const [n, t] of pou) add(n, 'pou', t);
+  for (const m of code.match(/\b[bnsudrefi][A-Z][A-Za-z0-9_]*\b/g) ?? []) {
+    if (m.length >= 3 && m.length <= 40 && !ST_KEYWORDS.has(m.toUpperCase())) add(m, 'code');
   }
-
-  // Standard IEC ST keywords to exclude from variable suggestions
-  const keywords = new Set([
-    'CASE',
-    'OF',
-    'END_CASE',
-    'IF',
-    'THEN',
-    'ELSE',
-    'ELSIF',
-    'END_IF',
-    'FOR',
-    'TO',
-    'BY',
-    'DO',
-    'END_FOR',
-    'WHILE',
-    'END_WHILE',
-    'REPEAT',
-    'UNTIL',
-    'RETURN',
-    'TRUE',
-    'FALSE',
-  ]);
-
-  return Array.from(vars)
-    .filter((v) => !keywords.has(v.toUpperCase()))
-    .slice(0, 15);
+  const order = { state: 0, method: 1, pou: 2, code: 3 };
+  return [...byName.values()].sort((a, b) => order[a.source] - order[b.source] || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
