@@ -138,15 +138,27 @@ jobs:
             @{ id = 'desktop'; on = $env:DESKTOP; v = $env:DESKTOP_VERSION; title = 'Desktop edition'; files = 'out/KvalStateScope-Setup-*.exe', 'out/KvalStateScope-Portable-*.exe' },
             @{ id = 'web'; on = $env:WEB; v = $env:WEB_VERSION; title = 'Web edition'; files = 'out/KvalStateScope-WebApp-*.zip', 'out/KvalStateScope-Gateway-*.zip', 'out/KvalStateScope-Link-*.exe' }
           )
+          # Every edition is tried (one failing does not stop the others); a release that exists already (a rerun)
+          # gets its files uploaded again
+          $failed = @()
           foreach ($e in $editions) {
             if ($e.on -ne 'true') { continue }
             $tag = "$($e.id)-v$($e.v)"
             node scripts/release-plan.cjs --notes $e.id | Out-File -Encoding utf8 "out/$($e.id)-notes.md"
-            $assets = $e.files | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { $_.FullName }
-            if (-not $assets) { throw "No files for $($e.title)" }
-            gh release create $tag @assets --target $sha --title "$($e.title) $($e.v)" --notes-file "out/$($e.id)-notes.md"
-            if ($LASTEXITCODE -ne 0) { throw "Could not create the release $tag" }
+            # Paths relative to the workspace: gh reads "D:\..." as the file "D" (a colon starts an asset's label)
+            $assets = $e.files | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { "out/$($_.Name)" }
+            if (-not $assets) { Write-Host "::error::No files for $($e.title)"; $failed += $tag; continue }
+            gh release view $tag *> $null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "$tag exists: uploading its files again"
+              gh release upload $tag @assets --clobber
+            } else {
+              gh release create $tag @assets --target $sha --title "$($e.title) $($e.v)" --notes-file "out/$($e.id)-notes.md"
+            }
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::Could not create the release $tag"; $failed += $tag }
+            else { Write-Host "Released $tag" }
           }
+          if ($failed.Count) { throw "Not released: $($failed -join ', ')" }
 
       - name: Build output (on failure)
         if: failure()
