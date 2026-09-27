@@ -213,3 +213,63 @@ export function findSymbolDeclarationLine(
 
   return null;
 }
+
+/** Types that are no POU of the project: IEC elementary types and the standard library's function blocks */
+const NOT_A_POU = new Set(
+  (
+    'BOOL BIT BYTE WORD DWORD LWORD SINT USINT INT UINT DINT UDINT LINT ULINT REAL LREAL TIME LTIME DATE LDATE TOD LTOD ' +
+    'TIME_OF_DAY LTIME_OF_DAY DT LDT DATE_AND_TIME LDATE_AND_TIME STRING WSTRING CHAR WCHAR XWORD UXINT XINT PVOID ANY ' +
+    'ANY_NUM ANY_INT ANY_REAL HRESULT TON TOF TP LTON LTOF LTP R_TRIG F_TRIG CTU CTD CTUD RS SR'
+  ).split(' ')
+);
+
+/** One declaration line's names and type ("a, b AT %I* : ARRAY[1..3] OF FB_X := ...;" -> [a, b], FB_X) */
+function parseDeclarationLine(line: string): { names: string[]; type: string } | null {
+  const stripped = line.replace(/\/\/.*/, '').replace(/\(\*.*?\*\)/g, '');
+  const m = stripped.match(/^\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?:AT\s+%[\w*.]+\s*)?:(?!=)\s*([^;]*)/i);
+  if (!m) return null;
+  let type = m[2].split(':=')[0].trim();
+  // ARRAY [..] OF T, POINTER TO T, REFERENCE TO T, Namespace.T
+  for (let i = 0; i < 4; i++) type = type.replace(/^ARRAY\s*\[[^\]]*\]\s*OF\s+/i, '').replace(/^(?:POINTER|REFERENCE)\s+TO\s+/i, '');
+  const name = type.match(/^([A-Za-z_][\w.]*)/)?.[1];
+  if (!name) return null;
+  return { names: m[1].split(',').map((n) => n.trim()), type: name.split('.').pop()! };
+}
+
+const isPouType = (type: string) => /^[A-Za-z_]\w*$/.test(type) && !NOT_A_POU.has(type.toUpperCase());
+
+/**
+ * The POU type Go to Definition can open for a symbol: the symbol itself when it is used as a type in the
+ * declarations (a variable's type, EXTENDS / IMPLEMENTS), else the type of the variable it is (or is a member of).
+ * Elementary types and the standard function blocks (TON, R_TRIG, ...) are none.
+ */
+export function findTypeTarget(
+  declarations: string[],
+  symbol: string,
+  memberOf?: string
+): { type: string; isTypeItself: boolean } | null {
+  const sym = symbol?.trim().toLowerCase();
+  if (!sym) return null;
+  const decls: { names: string[]; type: string }[] = [];
+  for (const d of declarations) {
+    for (const line of (d || '').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('//')) continue;
+      const header = trimmed.match(/^(?:FUNCTION_BLOCK|PROGRAM|INTERFACE|METHOD|PROPERTY)\b(.*)$/i);
+      if (header) {
+        const bases = header[1].match(/\b(?:EXTENDS|IMPLEMENTS)\s+([\w.,\s]+)/gi) ?? [];
+        for (const b of bases)
+          for (const t of b.replace(/^(?:EXTENDS|IMPLEMENTS)\s+/i, '').split(/[\s,]+/).filter(Boolean))
+            if (t.split('.').pop()!.toLowerCase() === sym && isPouType(t.split('.').pop()!)) return { type: t.split('.').pop()!, isTypeItself: true };
+        continue;
+      }
+      const parsed = parseDeclarationLine(line);
+      if (parsed) decls.push(parsed);
+    }
+  }
+  const asType = decls.find((d) => d.type.toLowerCase() === sym);
+  if (asType) return isPouType(asType.type) ? { type: asType.type, isTypeItself: true } : null;
+  const of = (name: string) => decls.find((d) => d.names.some((n) => n.toLowerCase() === name.toLowerCase()));
+  const variable = of(sym) ?? (memberOf ? of(memberOf) : undefined);
+  return variable && isPouType(variable.type) ? { type: variable.type, isTypeItself: false } : null;
+}

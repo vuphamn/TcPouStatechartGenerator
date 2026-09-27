@@ -98,6 +98,8 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 
 **Open a referenced state machine.** When a state or guard uses another state machine's instance (e.g. `smOutfeedStopAxis : SM_KAxis`), the context menu offers *Open SM_KAxis (smOutfeedStopAxis)*. The extension looks for `SM_KAxis.TcPOU` under the POU's PLC project folder and opens it in the tab. **Back** in the status bar returns to the previous POU.
 
+**Go to Definition on a type.** In the POU Editor and the Method Editor, right-click a variable of another POU's type (`smAxis : SM_KAxis`) or the type itself. **Open SM_KAxis in StateScope** opens `SM_KAxis.TcPOU` of the PLC project in the tab (with Back); **Open SM_KAxis in the TwinCAT editor** opens it in TwinCAT's editor, as a double-click in the PLC tree would (a DUT or an interface of that name too). Go to Definition (F12) on the type itself opens it in StateScope. A type that is not in the project (a library's) is reported.
+
 **Compare with git.** The **Changes** tab compares the loaded POU with the version XAE has saved, or with the committed one. For *committed (git)*, the extension runs `git show HEAD:<file>` in the file's folder; git must be on the `PATH`. It only reads files StateScope has loaded.
 
 **Document all state machines** (Export menu). The extension collects every POU with a `doState()` method, and every `.TcDUT`, under the PLC project folder. The app draws and documents each state machine, and a save dialog asks where to write the HTML file, which then opens.
@@ -170,6 +172,6 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 | `LiveMonitor.cs` | Live view: ADS through `TcAdsDll.dll` (P/Invoke), symbol lookup, change notification |
 | `LiveTargets.cs` | Live view: instance paths of a function block from the project's declarations; the PLC's ADS port |
 | `PlcSearch.cs` | The Live tab's Browse: the router's routes (`StaticRoutes.xml`) and the TwinCAT devices on the network (UDP 48899) |
-| `CodeNavigation.cs` | Show in TwinCAT editor: opens a method's editor from the PLC tree and places the caret |
+| `CodeNavigation.cs` | Show in TwinCAT editor: opens a method's editor from the PLC tree and places the caret; also a POU's (Go to Definition on a type) |
 | `PriorityCommandTarget.cs` | Answers for the context-menu command in menus owned by other windows (TwinCAT's PLC tree) |
 | `VSPackage.resx` | Carries the compiled command table (IDE loads menus from `VSPackage.resources`) |

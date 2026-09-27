@@ -345,6 +345,9 @@ namespace KvalStateScope.Xae
                     case "openPou":
                         HandleOpenPou(msg);
                         break;
+                    case "openInXae":
+                        HandleOpenInXae(msg);
+                        break;
                     case "openInstance":
                         HandleOpenInstance(msg);
                         break;
@@ -501,7 +504,10 @@ namespace KvalStateScope.Xae
             }
             if (target == null)
             {
-                Post(new { type = "error", message = $"{(typeName ?? Path.GetFileName(path ?? ""))}.TcPOU was not found in {Path.GetFileName(plcproj)}" });
+                var other = typeName != null ? FindInProject(typeName, ".TcDUT", ".TcIO") : null;
+                Post(new { type = "error", message = other != null
+                    ? $"{typeName} is a {(other.EndsWith(".TcDUT", StringComparison.OrdinalIgnoreCase) ? "DUT" : "interface")}, not a POU: open it in the TwinCAT editor"
+                    : $"{(typeName ?? Path.GetFileName(path ?? ""))}.TcPOU was not found in {Path.GetFileName(plcproj)}" });
                 return;
             }
             Log.Write($"open: {Path.GetFileName(target)} ({(typeName != null ? "referenced by " + Path.GetFileName(_pouPath) : "back")})");
@@ -509,16 +515,57 @@ namespace KvalStateScope.Xae
         }
 
         /// <summary>The .TcPOU of a POU type in the loaded POU's PLC project, or null</summary>
-        private string FindPouInProject(string typeName)
+        private string FindPouInProject(string typeName) => FindInProject(typeName, ".TcPOU");
+
+        /// <summary>The file of a type in the loaded POU's PLC project (the first extension found first), or null</summary>
+        private string FindInProject(string typeName, params string[] extensions)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
             if (plcproj == null || !System.Text.RegularExpressions.Regex.IsMatch(typeName ?? "", @"^[A-Za-z_]\w*$")) return null;
             try
             {
-                return Directory.EnumerateFiles(Path.GetDirectoryName(plcproj), typeName + ".TcPOU", SearchOption.AllDirectories).FirstOrDefault();
+                foreach (var extension in extensions)
+                {
+                    var hit = Directory.EnumerateFiles(Path.GetDirectoryName(plcproj), typeName + extension, SearchOption.AllDirectories).FirstOrDefault();
+                    if (hit != null) return hit;
+                }
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+            return null;
+        }
+
+        /// <summary>
+        /// The code editors' Go to Definition on a type: that POU (or DUT, interface) of the loaded POU's PLC project
+        /// opened in TwinCAT's editor, as a double-click in the project tree would
+        /// </summary>
+        private void HandleOpenInXae(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            var path = FindInProject(typeName, ".TcPOU", ".TcDUT", ".TcIO");
+            if (path == null)
+            {
+                Post(new { type = "error", message = $"{typeName} was not found in the PLC project (a library type?)" });
+                return;
+            }
+            Log.Write($"open in XAE: {Path.GetFileName(path)}");
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                string error;
+                try
+                {
+                    error = await CodeNavigation.GoToAsync(_pane, path, null, 1, null);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    error = ex.Message;
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                // (GoToAsync's "Opened X; go to line 1": the editor opened, the caret was not placed)
+                if (error != null && !error.StartsWith("Opened ", StringComparison.Ordinal)) Post(new { type = "error", message = error });
+                Log.Write(error == null ? "open in XAE: done" : "open in XAE: " + error);
+            });
         }
 
         /// <summary>

@@ -101,6 +101,7 @@ import {
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
+import { setOpenTypeHandler, type OpenTypeWhere } from './utils/openType.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
@@ -2770,6 +2771,26 @@ export const App: React.FC = () => {
     },
     [pouPath, pouFileName, openPouInProject]
   );
+  // The code editors' Go to Definition on a type (another POU): here in StateScope (with Back), or in TwinCAT's editor
+  const handleOpenType = useCallback(
+    async (type: string, where: OpenTypeWhere) => {
+      if (where === 'xae') {
+        postToHost({ type: 'openInXae', typeName: type });
+        return;
+      }
+      const from = pouPath ? { path: pouPath, name: pouFileName } : null;
+      if (await openPouInProject(type)) {
+        if (from) setPouHistory((h) => [...h, from].slice(-20));
+      }
+    },
+    [pouPath, pouFileName, openPouInProject]
+  );
+  useEffect(() => {
+    const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
+    const canOpen = isXaeHost() || Boolean(desktop?.openPouInProject && pouPath);
+    setOpenTypeHandler(canOpen ? { open: (t, w) => void handleOpenType(t, w), xae: isXaeHost(), current: pouFileName.replace(/\.TcPOU$/i, '') } : null);
+    return () => setOpenTypeHandler(null);
+  }, [handleOpenType, pouPath, pouFileName]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;

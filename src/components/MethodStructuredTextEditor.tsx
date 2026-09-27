@@ -61,8 +61,10 @@ import {
   extractPouDeclaration,
   resolveSymbolFromText,
   findSymbolDeclarationLine,
+  findTypeTarget,
 } from '../utils/stSymbolDefinition.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
+import { openTypeHandlerFor } from '../utils/openType.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
 
@@ -729,6 +731,14 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         setTimeout(() => {
           setDefinitionNotification(null);
         }, 4500);
+        return;
+      }
+
+      // A type (another POU of the project): opened in StateScope
+      const typeTarget = findTypeTarget([declaration, pouDeclaration], sym, memberOf);
+      const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
+      if (typeTarget && opener) {
+        opener.open(typeTarget.type, 'statescope');
         return;
       }
 
@@ -1743,6 +1753,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           y={contextMenu.y}
           targetSymbol={contextMenu.symbol}
           targetMemberOf={contextMenu.memberOf}
+          typeTarget={contextMenu.symbol ? findTypeTarget([declaration, pouDeclaration], contextMenu.symbol, contextMenu.memberOf) : null}
           onGoToDefinition={handleGoToDefinition}
           onFindReferences={(sym) => {
             setFindQuery(sym);

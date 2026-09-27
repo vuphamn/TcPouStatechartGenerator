@@ -4,9 +4,10 @@ import { StructuredTextCodeEditor, StructuredTextCodeEditorRef } from './Structu
 import { getPouBody } from '../utils/pouBody.ts';
 import { detectFoldableBlocks, getAllFoldableBlockIds } from '../utils/stCodeFolding.ts';
 import { findMatchesInCode, FindMatch } from '../utils/stFindHighlight.ts';
-import { findSymbolDeclarationLine, resolveSymbolFromText } from '../utils/stSymbolDefinition.ts';
+import { findSymbolDeclarationLine, findTypeTarget, resolveSymbolFromText } from '../utils/stSymbolDefinition.ts';
 import { getAllMethodsFromPou } from '../utils/pouStateEditor.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
+import { openTypeHandlerFor } from '../utils/openType.ts';
 
 /**
  * POU Editor (MiddlePanel tab): the POU's own Structured Text, as TwinCAT XAE shows it when the POU is opened: the
@@ -199,6 +200,13 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       const method = methods.find((m) => m.toLowerCase() === sym.toLowerCase());
       if (method && onOpenMethod) {
         onOpenMethod(`${method}()`);
+        return;
+      }
+      // A type (another POU of the project): opened in StateScope
+      const typeTarget = findTypeTarget([decl], sym, memberOf);
+      const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
+      if (typeTarget && opener) {
+        opener.open(typeTarget.type, 'statescope');
         return;
       }
       showNotice('warning', `'${sym}' is not declared in ${body.name || 'the POU'} (a base class, a GVL or a library?)`);
@@ -448,6 +456,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           y={menu.y}
           targetSymbol={menu.symbol}
           targetMemberOf={menu.memberOf}
+          typeTarget={menu.symbol ? findTypeTarget([decl], menu.symbol, menu.memberOf) : null}
           onGoToDefinition={goToDefinition}
           onFindReferences={(sym) => {
             setQuery(sym);

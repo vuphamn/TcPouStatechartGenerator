@@ -7,7 +7,9 @@ import {
   FoldVertical,
   Code2,
   FileCode2,
+  ExternalLink,
 } from 'lucide-react';
+import { openTypeHandlerFor } from '../utils/openType.ts';
 
 export interface MethodEditorContextMenuProps {
   x: number;
@@ -18,6 +20,8 @@ export interface MethodEditorContextMenuProps {
   onFindReferences?: (symbol: string) => void;
   onCopySymbol?: (symbol: string) => void;
   onToggleFoldCurrent?: () => void;
+  /** The POU type of the symbol (see findTypeTarget): it can be opened in StateScope / TwinCAT's editor */
+  typeTarget?: { type: string; isTypeItself: boolean } | null;
   onClose: () => void;
 }
 
@@ -30,6 +34,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
   onFindReferences,
   onCopySymbol,
   onToggleFoldCurrent,
+  typeTarget,
   onClose,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -63,7 +68,9 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
 
   // Adjust coordinates to ensure menu stays fully within viewport
   const menuWidth = 260;
-  const menuHeight = 220;
+  const opener = openTypeHandlerFor(typeTarget?.type);
+  const openType = opener && typeTarget ? typeTarget.type : null;
+  const menuHeight = openType ? 320 : 220;
   const clampedX = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, x));
   const clampedY = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, y));
 
@@ -142,7 +149,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               <span className="font-medium text-[11px] leading-tight">Go to Definition</span>
               {hasSymbol && (
                 <span className="text-[10px] text-sky-400/80 truncate font-mono">
-                  Highlight in Top Panel
+                  {openType && typeTarget?.isTypeItself ? `Open ${openType} in StateScope` : 'Highlight in Top Panel'}
                 </span>
               )}
             </div>
@@ -151,6 +158,48 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
             F12
           </span>
         </button>
+
+        {/* The symbol's POU type: open it in StateScope, or in TwinCAT's editor */}
+        {openType && opener && (
+          <>
+            <div className="my-1 border-t border-slate-800" />
+            <button
+              id="editor-menu-open-type-statescope"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                opener.open(openType, 'statescope');
+                onClose();
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              title={`Open ${openType}.TcPOU of the PLC project here (Back returns)`}
+            >
+              <FileCode2 className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+              <span className="font-medium text-[11px] leading-tight truncate">
+                Open <span className="font-mono">{openType}</span> in StateScope
+              </span>
+            </button>
+            {opener.xae && (
+              <button
+                id="editor-menu-open-type-xae"
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  opener.open(openType, 'xae');
+                  onClose();
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer mt-0.5"
+                title={`Open ${openType} in TwinCAT's editor`}
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span className="font-medium text-[11px] leading-tight truncate">
+                  Open <span className="font-mono">{openType}</span> in the TwinCAT editor
+                </span>
+              </button>
+            )}
+            <div className="my-1 border-t border-slate-800" />
+          </>
+        )}
 
         {/* Find References / Search */}
         {hasSymbol && onFindReferences && (

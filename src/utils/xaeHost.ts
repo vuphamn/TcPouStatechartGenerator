@@ -108,6 +108,8 @@ export type AppMessage =
   | { type: 'gitShow'; path: string; requestId: number }
   /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */
   | { type: 'openPou'; typeName?: string; path?: string }
+  /** Open a POU (or DUT, interface) of the loaded POU's PLC project in TwinCAT's editor */
+  | { type: 'openInXae'; typeName: string }
   /** Another tab on this POU, following another PLC instance of it (a tab already following it comes forward) */
   | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string> }
   /** Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult) */
