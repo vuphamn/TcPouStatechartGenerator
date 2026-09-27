@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   openPouInProject: (fromPath, typeName, filePath) => ipcRenderer.invoke('tc:open-pou-in-project', fromPath, typeName, filePath),
   /** Project documentation: the state machine POUs and enums of the PLC project that contains the file */
   projectPous: (fromPath) => ipcRenderer.invoke('tc:project-pous', fromPath),
+  projectSymbols: (fromPath) => ipcRenderer.invoke('tc:project-symbols', fromPath),
+  projectUses: (fromPath, name) => ipcRenderer.invoke('tc:project-uses', fromPath, name),
   /** A save dialog for a document: { path } | { canceled } | { error } */
   saveFile: (name, content) => ipcRenderer.invoke('tc:save-file', name, content),
   // The edited sources back to their files; Save As a new file

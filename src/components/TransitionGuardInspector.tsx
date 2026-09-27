@@ -44,6 +44,8 @@ export interface TransitionGuardInspectorProps {
   onEdgeStyleChange?: (style: EdgeDisplayProperties | null) => void;
   /** TwinCAT XAE: open this transition's code in TwinCAT's editor */
   onShowInXae?: () => void;
+  /** Change the transition's condition */
+  onEditCondition?: () => void;
 }
 
 export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> = ({
@@ -57,6 +59,7 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
   edgeStyle,
   onEdgeStyleChange,
   onShowInXae,
+  onEditCondition,
 }) => {
   const [copied, setCopied] = useState(false);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number } | null>(null);
@@ -434,7 +437,19 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
       </div>
 
       {/* Footer bar */}
-      <div className="px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400 shrink-0">
+      <div className="px-3.5 py-2 bg-slate-950/90 border-t border-slate-800/80 flex items-center justify-between gap-1.5 text-[10px] text-slate-400 shrink-0">
+        {onEditCondition && (
+          <button
+            id="guard-inspector-edit-condition-btn"
+            type="button"
+            onClick={onEditCondition}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-sky-700/80 hover:bg-sky-600 text-white font-medium transition-colors shrink-0"
+            title="Change this transition's condition (F2), with the variables of the POU"
+          >
+            <Edit3 className="w-3 h-3" />
+            Edit condition
+          </button>
+        )}
         {onShowInXae ? (
           <button
             id="guard-inspector-show-in-xae-btn"

@@ -184,10 +184,113 @@ export function computeBoxBoundaryIntersection(
   }
 }
 
+/** A state's box: center and half sizes (in the path's coordinates) */
+export interface NodeBox {
+  cx: number;
+  cy: number;
+  hw: number;
+  hh: number;
+}
+
+/**
+ * Where a dragged endpoint attaches to a state: on the side it was dropped by (the one it is furthest out of,
+ * relative to the box's size), `gap` outside it and away from the corners, with that side's normal, so the
+ * edge comes in square to the border and its arrow head touches it
+ */
+export function attachToBoxSide(box: NodeBox, p: Point, gap = 0): BoundaryIntersection {
+  const dx = p.x - box.cx;
+  const dy = p.y - box.cy;
+  const ux = box.hw > 0 ? dx / box.hw : 0;
+  const uy = box.hh > 0 ? dy / box.hh : 0;
+  const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+  const mx = Math.min(10, box.hw / 2);
+  const my = Math.min(8, box.hh / 2);
+  if (Math.abs(ux) >= Math.abs(uy)) {
+    const nx = ux >= 0 ? 1 : -1;
+    return { x: box.cx + nx * (box.hw + gap), y: clamp(p.y, box.cy - box.hh + my, box.cy + box.hh - my), normalX: nx, normalY: 0 };
+  }
+  const ny = uy >= 0 ? 1 : -1;
+  return { x: clamp(p.x, box.cx - box.hw + mx, box.cx + box.hw - mx), y: box.cy + ny * (box.hh + gap), normalX: 0, normalY: ny };
+}
+
+/** A point at its state: inside its box or at most `reach` outside it (a dragged end elsewhere floats) */
+export function isAtBox(box: NodeBox, p: Point, reach = 24): boolean {
+  const ox = Math.max(0, Math.abs(p.x - box.cx) - box.hw);
+  const oy = Math.max(0, Math.abs(p.y - box.cy) - box.hh);
+  return Math.hypot(ox, oy) <= reach;
+}
+
+/** How far outside its box's side a path end is (the room Mermaid leaves for the arrow head) */
+function gapOutside(box: NodeBox, p: Point): number {
+  const a = attachToBoxSide(box, p, 0);
+  return Math.max(0, Math.min(8, (p.x - a.x) * a.normalX + (p.y - a.y) * a.normalY));
+}
+
+/** Consecutive duplicates and points in the middle of a straight run dropped */
+function simplifyOrthogonal(pts: Point[]): Point[] {
+  const out: Point[] = [];
+  for (const p of pts) {
+    const last = out[out.length - 1];
+    if (last && Math.hypot(p.x - last.x, p.y - last.y) < 0.5) continue;
+    if (out.length >= 2) {
+      const prev = out[out.length - 2];
+      if ((Math.abs(prev.x - last.x) < 0.5 && Math.abs(last.x - p.x) < 0.5) || (Math.abs(prev.y - last.y) < 0.5 && Math.abs(last.y - p.y) < 0.5)) {
+        out[out.length - 1] = p;
+        continue;
+      }
+    }
+    out.push(p);
+  }
+  return out;
+}
+
+/**
+ * A dragged end re-attached to its state: the route's last point (first, for the start) replaced by the point on
+ * the side it was dropped by, reached square to that side through a short stub and a right-angle corner
+ */
+function reattachEnd(route: Point[], box: NodeBox, gap: number, atStart: boolean): Point[] {
+  if (route.length < 2) return route;
+  const pts = atStart ? [...route].reverse() : [...route];
+  const dropped = pts[pts.length - 1];
+  if (!isAtBox(box, dropped)) return route;
+  const a = attachToBoxSide(box, dropped, gap);
+  const stub = { x: a.x + a.normalX * 16, y: a.y + a.normalY * 16 };
+  const before = pts[pts.length - 2];
+  const corner = a.normalY === 0 ? { x: stub.x, y: before.y } : { x: before.x, y: stub.y };
+  const tail = [...pts.slice(0, -1), corner, stub, { x: a.x, y: a.y }];
+  const out = simplifyOrthogonal(tail);
+  return atStart ? out.reverse() : out;
+}
+
+/** A state's box from its element (as the reroutes measure it), moved by its offset */
+function nodeBoxOf(el: Element | null, svg: SVGSVGElement, offset: Point): NodeBox | null {
+  if (!el) return null;
+  let cx = parseFloat(el.getAttribute('data-orig-cx') || 'NaN');
+  let cy = parseFloat(el.getAttribute('data-orig-cy') || 'NaN');
+  if (isNaN(cx) || isNaN(cy)) {
+    const geom = getNodeGeometry(el as SVGGElement, svg);
+    cx = geom.origCenterX;
+    cy = geom.origCenterY;
+    el.setAttribute('data-orig-cx', cx.toFixed(1));
+    el.setAttribute('data-orig-cy', cy.toFixed(1));
+    el.setAttribute('data-hw', geom.halfWidth.toFixed(1));
+    el.setAttribute('data-hh', geom.halfHeight.toFixed(1));
+  }
+  const hw = parseFloat(el.getAttribute('data-hw') || 'NaN');
+  const hh = parseFloat(el.getAttribute('data-hh') || 'NaN');
+  if (isNaN(hw) || isNaN(hh)) return null;
+  return { cx: cx + offset.x, cy: cy + offset.y, hw, hh };
+}
+
 /**
  * Extract node bounding geometry (center and half-dimensions in diagram coordinate space).
  * Accumulates parent group transforms to match edgePaths coordinate space.
  */
+/** A state's own shape (its box), not the badges and marks added to its group */
+export function nodeShapeOf(node: Element): SVGGraphicsElement {
+  return (node.querySelector(':scope > .label-container, :scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, :scope > path') as SVGGraphicsElement | null) ?? (node as SVGGraphicsElement);
+}
+
 export function getNodeGeometry(node: SVGGElement, svgRoot?: SVGSVGElement | null): NodeGeometry {
   const stateId = node.getAttribute('data-state-id') || '';
 
@@ -195,7 +298,8 @@ export function getNodeGeometry(node: SVGGElement, svgRoot?: SVGSVGElement | nul
   const edgePaths = svgRoot?.querySelector('g.edgePaths');
   if (svgRoot && edgePaths) {
     try {
-      const nodeEl = node as SVGGraphicsElement;
+      // (the shape: a problem badge or a note mark on the group would make the box too big)
+      const nodeEl = nodeShapeOf(node);
       const edgeEl = edgePaths as SVGGraphicsElement;
       if (typeof nodeEl.getScreenCTM === 'function' && typeof edgeEl.getScreenCTM === 'function') {
         const nodeCTM = nodeEl.getScreenCTM();
@@ -1207,7 +1311,9 @@ function rerouteElkOrthogonal(
   origD: string,
   srcOffset: Point,
   tgtOffset: Point,
-  edgeOffset: EdgeOffset = { x: 0, y: 0 }
+  edgeOffset: EdgeOffset = { x: 0, y: 0 },
+  /** The states' boxes (moved, and where they were): a dragged end re-attaches to the side it is dropped by */
+  boxes: { src?: NodeBox | null; tgt?: NodeBox | null; origSrc?: NodeBox | null; origTgt?: NodeBox | null } = {}
 ): { d: string; midPoint: Point; startPoint: Point; endPoint: Point } | null {
   // Start / end handle drags move that endpoint on top of any node movement
   srcOffset = { x: srcOffset.x + (edgeOffset.startDx || 0), y: srcOffset.y + (edgeOffset.startDy || 0) };
@@ -1272,6 +1378,11 @@ function rerouteElkOrthogonal(
     }
     routed.push(b);
   }
+  // A dragged end: onto the side of its state it was dropped by, square to it (the arrow head touches the border)
+  let attached = routed;
+  if (boxes.tgt && (edgeOffset.endDx || edgeOffset.endDy)) attached = reattachEnd(attached, boxes.tgt, boxes.origTgt ? gapOutside(boxes.origTgt, drawn[drawn.length - 1]) : 3, false);
+  if (boxes.src && (edgeOffset.startDx || edgeOffset.startDy)) attached = reattachEnd(attached, boxes.src, boxes.origSrc ? gapOutside(boxes.origSrc, drawn[0]) : 0, true);
+  routed.splice(0, routed.length, ...attached);
 
   // Middle handle drag: move the segment at the middle of the route perpendicular to its direction.
   // A middle segment touching a node is split so that only its middle part moves (ends stay attached).
@@ -1407,7 +1518,12 @@ export function calculateReroutedEdgePath(
   // ELK draws orthogonal routes regardless of the curve setting: keep them orthogonal when nodes move
   // and when the edge's own handles are dragged (start / end endpoints, middle segment)
   if (normEngine === 'elk') {
-    const orthogonal = rerouteElkOrthogonal(path, origD, srcOffset, tgtOffset, edgeOffset);
+    const orthogonal = rerouteElkOrthogonal(path, origD, srcOffset, tgtOffset, edgeOffset, {
+      src: nodeBoxOf(srcNodeEl, svg, srcOffset),
+      tgt: nodeBoxOf(tgtNodeEl, svg, tgtOffset),
+      origSrc: nodeBoxOf(srcNodeEl, svg, { x: 0, y: 0 }),
+      origTgt: nodeBoxOf(tgtNodeEl, svg, { x: 0, y: 0 }),
+    });
     if (orthogonal) return orthogonal;
   }
 
@@ -1467,17 +1583,24 @@ export function calculateReroutedEdgePath(
   const actualMidY = baseMidY + (edgeOffset.y || 0);
 
   // Compute boundary intersections with source and target boxes
-  const startBound = srcNodeEl
+  let startBound = srcNodeEl
     ? computeBoxBoundaryIntersection(sCx, sCy, sHw, sHh, actualMidX, actualMidY, 0)
     : { x: sCx, y: sCy, normalX: 0, normalY: 1 };
-  const endBound = tgtNodeEl
+  let endBound = tgtNodeEl
     ? computeBoxBoundaryIntersection(tCx, tCy, tHw, tHh, actualMidX, actualMidY, 3)
     : { x: tCx, y: tCy, normalX: 0, normalY: -1 };
+  // A dragged end: onto the side of its state it was dropped by, with that side's normal (square to the border)
+  const sBox = { cx: sCx, cy: sCy, hw: sHw, hh: sHh };
+  const tBox = { cx: tCx, cy: tCy, hw: tHw, hh: tHh };
+  const startAt = { x: startBound.x + (edgeOffset.startDx || 0), y: startBound.y + (edgeOffset.startDy || 0) };
+  const endAt = { x: endBound.x + (edgeOffset.endDx || 0), y: endBound.y + (edgeOffset.endDy || 0) };
+  startBound = srcNodeEl && (edgeOffset.startDx || edgeOffset.startDy) && isAtBox(sBox, startAt) ? attachToBoxSide(sBox, startAt, 0) : { ...startBound, ...startAt };
+  endBound = tgtNodeEl && (edgeOffset.endDx || edgeOffset.endDy) && isAtBox(tBox, endAt) ? attachToBoxSide(tBox, endAt, 3) : { ...endBound, ...endAt };
 
-  const startX = startBound.x + (edgeOffset.startDx || 0);
-  const startY = startBound.y + (edgeOffset.startDy || 0);
-  const endX = endBound.x + (edgeOffset.endDx || 0);
-  const endY = endBound.y + (edgeOffset.endDy || 0);
+  const startX = startBound.x;
+  const startY = startBound.y;
+  const endX = endBound.x;
+  const endY = endBound.y;
 
   const startPoint = { x: startX, y: startY };
   const endPoint = { x: endX, y: endY };

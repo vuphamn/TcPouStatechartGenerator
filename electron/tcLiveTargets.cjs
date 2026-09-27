@@ -239,4 +239,49 @@ function projectPous(fromPath) {
   return { project: path.basename(plcproj, path.extname(plcproj)), pous, duts };
 }
 
-module.exports = { plcPort, instancePaths, findPouInProject, isInSameProject, projectPous, DEFAULT_PLC_PORT };
+/**
+ * The PLC project's types for completion and the checks: its .TcPOU / .TcGVL / .TcDUT / .TcIO files, without their
+ * implementations (the declarations are what is read)
+ */
+function projectSymbols(fromPath) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj) return { error: 'The POU is not in a PLC project folder' };
+  const root = path.dirname(plcproj);
+  const files = [];
+  let total = 0;
+  for (const file of listFiles(root, (n) => /\.tc(pou|gvl|dut|io)$/i.test(n))) {
+    try {
+      let text = fs.readFileSync(file, 'utf8');
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+      text = text.replace(/<Implementation>[\s\S]*?<\/Implementation>/gi, '').replace(/<LineIds\b[\s\S]*?<\/LineIds>/gi, '');
+      total += text.length;
+      if (total > 30e6) break;
+      files.push({ name: path.basename(file), path: file, content: text });
+    } catch {
+      // unreadable file
+    }
+  }
+  return { project: path.basename(plcproj, path.extname(plcproj)), files };
+}
+
+/** A rename's other files: the PLC project's .TcPOU files (not `fromPath`) whose code has the name, in full */
+function projectUses(fromPath, name) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj || !/^[A-Za-z_]\w*$/.test(String(name))) return { error: 'The POU is not in a PLC project folder' };
+  const word = new RegExp(`\\b${name}\\b`, 'i');
+  const files = [];
+  for (const file of listFiles(path.dirname(plcproj), (n) => /\.tcpou$/i.test(n))) {
+    if (path.resolve(file).toLowerCase() === path.resolve(fromPath).toLowerCase()) continue;
+    try {
+      let text = fs.readFileSync(file, 'utf8');
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+      if (word.test(text)) files.push({ name: path.basename(file), path: file, content: text });
+    } catch {
+      // unreadable file
+    }
+    if (files.length >= 200) break;
+  }
+  return { files };
+}
+
+module.exports = { plcPort, instancePaths, findPouInProject, isInSameProject, projectPous, projectSymbols, projectUses, DEFAULT_PLC_PORT };

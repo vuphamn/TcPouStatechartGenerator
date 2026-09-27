@@ -18,6 +18,7 @@ import {
   Code2,
   AlertCircle,
   Play,
+  Bookmark,
 } from 'lucide-react';
 import { IdentifiedPouState } from '../utils/pouStateExtractor.ts';
 import { CustomNodeStylesMap } from '../types.ts';
@@ -39,6 +40,10 @@ export interface IdentifiedStatesSidebarSectionProps {
   onOpenComplexityReport?: () => void;
   /** Grow into the free height of the parent column; the state list scrolls instead of stopping at a fixed height */
   fill?: boolean;
+  /** Bookmarked states: a badge on their card; right-click a card to add / remove one */
+  bookmarkedStates?: string[];
+  onToggleBookmark?: (stateId: string) => void;
+  onShowBookmarks?: () => void;
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
@@ -57,7 +62,29 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   onOpenEnumEditor,
   onOpenComplexityReport,
   fill = false,
+  bookmarkedStates,
+  onToggleBookmark,
+  onShowBookmarks,
 }) => {
+  const bookmarkSet = useMemo(() => new Set(bookmarkedStates ?? []), [bookmarkedStates]);
+  // A card's right-click menu (Add / Remove bookmark)
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  useEffect(() => {
+    if (!cardMenu) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent && e.key !== 'Escape') return;
+      if (e instanceof MouseEvent && (e.target as Element | null)?.closest?.('#state-list-menu')) return;
+      setCardMenu(null);
+    };
+    window.addEventListener('mousedown', close, true);
+    window.addEventListener('keydown', close, true);
+    window.addEventListener('scroll', close, true);
+    return () => {
+      window.removeEventListener('mousedown', close, true);
+      window.removeEventListener('keydown', close, true);
+      window.removeEventListener('scroll', close, true);
+    };
+  }, [cardMenu]);
   const [isExpanded, setIsExpanded] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
@@ -526,6 +553,14 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                     id={`state-list-item-${state.id}`}
                     data-live={isLive ? 'true' : undefined}
                     onClick={() => handleItemClick(state.id, state.label)}
+                    onContextMenu={
+                      onToggleBookmark
+                        ? (e) => {
+                            e.preventDefault();
+                            setCardMenu({ x: e.clientX, y: e.clientY, id: state.id });
+                          }
+                        : undefined
+                    }
                     className={`group relative flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                       isJustNavigated
                         ? 'bg-sky-950/80 border-sky-400 shadow-[0_0_18px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/80 text-white'
@@ -573,6 +608,11 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                       {/* State Details */}
                       <div className="flex flex-col min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
+                          {bookmarkSet.has(state.id) && (
+                            <span id={`state-bookmark-${state.id}`} className="shrink-0" title="Bookmark (right-click to remove it)">
+                              <Bookmark className="w-3 h-3 text-sky-300 fill-sky-400" />
+                            </span>
+                          )}
                           <span
                             className={`font-mono text-xs font-semibold leading-tight break-all ${
                               isJustNavigated
@@ -731,6 +771,59 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                 <span className="font-mono text-slate-400">{stateVarName}</span>
               </div>
             </div>
+          )}
+        </div>
+      )}
+      {cardMenu && onToggleBookmark && (
+        <div
+          id="state-list-menu"
+          role="menu"
+          style={{ left: Math.min(cardMenu.x, window.innerWidth - 230), top: Math.min(cardMenu.y, window.innerHeight - 90) }}
+          className="fixed z-50 w-56 bg-slate-900/95 border border-slate-700/80 rounded-lg shadow-2xl p-1 text-xs"
+        >
+          <div className="px-2.5 py-1 text-[10px] font-mono text-slate-400 truncate border-b border-slate-800 mb-1">{cardMenu.id}</div>
+          <button
+            id="state-list-bookmark-btn"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onToggleBookmark(cardMenu.id);
+              setCardMenu(null);
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
+            title="Shown on the state, here, and at its CASE label in the Method Editor"
+          >
+            <Bookmark className={`w-3.5 h-3.5 ${bookmarkSet.has(cardMenu.id) ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
+            {bookmarkSet.has(cardMenu.id) ? 'Remove bookmark' : 'Add bookmark'}
+          </button>
+          {onShowBookmarks && (
+            <button
+              id="state-list-bookmarks-btn"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onShowBookmarks();
+                setCardMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
+            >
+              <Bookmark className="w-3.5 h-3.5 text-slate-400" />
+              All bookmarks…
+            </button>
+          )}
+          {onJumpToState && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onJumpToState(cardMenu.id);
+                setCardMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
+            >
+              <Crosshair className="w-3.5 h-3.5 text-slate-400" />
+              Go to State
+            </button>
           )}
         </div>
       )}

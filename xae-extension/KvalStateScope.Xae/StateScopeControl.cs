@@ -354,6 +354,15 @@ namespace KvalStateScope.Xae
                     case "projectPous":
                         HandleProjectPous();
                         break;
+                    case "projectSymbols":
+                        HandleProjectSymbols();
+                        break;
+                    case "projectUses":
+                        HandleProjectUses(msg);
+                        break;
+                    case "saveOther":
+                        HandleSaveOther(msg);
+                        break;
                     case "saveDocument":
                         HandleSaveDocument(msg);
                         break;
@@ -522,17 +531,7 @@ namespace KvalStateScope.Xae
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
-            if (plcproj == null || !System.Text.RegularExpressions.Regex.IsMatch(typeName ?? "", @"^[A-Za-z_]\w*$")) return null;
-            try
-            {
-                foreach (var extension in extensions)
-                {
-                    var hit = Directory.EnumerateFiles(Path.GetDirectoryName(plcproj), typeName + extension, SearchOption.AllDirectories).FirstOrDefault();
-                    if (hit != null) return hit;
-                }
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
-            return null;
+            return plcproj == null ? null : ProjectScan.FindType(Path.GetDirectoryName(plcproj), typeName, extensions);
         }
 
         /// <summary>
@@ -543,19 +542,24 @@ namespace KvalStateScope.Xae
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            // Go to Definition on a member: a method's editor, or the declaration's line (with its text)
+            var method = msg.TryGetValue("method", out var mt) ? mt as string : null;
+            var line = msg.TryGetValue("line", out var ln) && ln is int li ? li : 1;
+            var text = msg.TryGetValue("text", out var tx) ? tx as string : null;
+            if (method != null && !System.Text.RegularExpressions.Regex.IsMatch(method, @"^[A-Za-z_]\w*$")) method = null;
             var path = FindInProject(typeName, ".TcPOU", ".TcDUT", ".TcIO");
             if (path == null)
             {
                 Post(new { type = "error", message = $"{typeName} was not found in the PLC project (a library type?)" });
                 return;
             }
-            Log.Write($"open in XAE: {Path.GetFileName(path)}");
+            Log.Write($"open in XAE: {Path.GetFileName(path)}{(method != null ? " " + method : line > 1 ? " line " + line : "")}");
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 string error;
                 try
                 {
-                    error = await CodeNavigation.GoToAsync(_pane, path, null, 1, null);
+                    error = await CodeNavigation.GoToAsync(_pane, path, method, method != null ? 1 : line, method != null ? null : text);
                 }
                 catch (Exception ex) when (!(ex is OutOfMemoryException))
                 {
@@ -648,6 +652,89 @@ namespace KvalStateScope.Xae
                 Log.Write($"docs: {pous.Count} state machine POU(s), {duts.Count} enum file(s) in {Path.GetFileName(plcproj)}");
                 Post(new { type = "projectPous", project = Path.GetFileNameWithoutExtension(plcproj), pous, duts });
             });
+        }
+
+        /// <summary>
+        /// Completion and the checks: the PLC project's .TcPOU / .TcGVL / .TcDUT / .TcIO files without their
+        /// implementations (the declarations are what the app reads)
+        /// </summary>
+        private void HandleProjectSymbols()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null)
+            {
+                Post(new { type = "projectSymbols", error = "The POU is not in a PLC project folder" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var files = ProjectScan.SymbolFiles(Path.GetDirectoryName(plcproj));
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"symbols: {files.Count} file(s) of {Path.GetFileName(plcproj)}");
+                Post(new { type = "projectSymbols", project = Path.GetFileNameWithoutExtension(plcproj), files });
+            });
+        }
+
+        /// <summary>
+        /// A rename's other files: the PLC project's .TcPOU files (not this tab's) whose code has the name, in full
+        /// </summary>
+        private void HandleProjectUses(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var needle = msg.TryGetValue("name", out var n) ? n as string : null;
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null || needle == null || !System.Text.RegularExpressions.Regex.IsMatch(needle, @"^[A-Za-z_]\w*$"))
+            {
+                Post(new { type = "projectUses", requestId, error = "The POU is not in a PLC project folder" });
+                return;
+            }
+            var self = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var files = ProjectScan.UsesOf(Path.GetDirectoryName(plcproj), needle, self);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"uses of {needle}: {files.Count} other POU file(s)");
+                Post(new { type = "projectUses", requestId, files });
+            });
+        }
+
+        /// <summary>
+        /// A rename's other files written (the PLC project's .TcPOU files, as a Save writes them: into XAE, with a
+        /// backup; refused when a file changed since it was read)
+        /// </summary>
+        private void HandleSaveOther(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            var root = plcproj != null ? Path.GetDirectoryName(plcproj) + Path.DirectorySeparatorChar : null;
+            var files = new List<HostFiles.SaveRequest>();
+            if (root != null && msg.TryGetValue("files", out var raw) && raw is System.Collections.IEnumerable list && !(raw is string))
+            {
+                foreach (var item in list.OfType<Dictionary<string, object>>())
+                {
+                    var path = item.TryGetValue("path", out var p) ? p as string : null;
+                    var content = item.TryGetValue("content", out var c) ? c as string : null;
+                    var baseline = item.TryGetValue("baseline", out var b) ? b as string : null;
+                    if (path == null || content == null || baseline == null) continue;
+                    var full = ProjectScan.ProjectPou(root, path);
+                    if (full == null) continue;
+                    files.Add(new HostFiles.SaveRequest { Path = full, Content = content, LoadedKey = HostFiles.ContentKey(baseline), Force = false });
+                }
+            }
+            if (files.Count == 0)
+            {
+                Post(new { type = "saveOtherResult", requestId, ok = false, message = "No file of the PLC project to write" });
+                return;
+            }
+            Log.Write($"save (rename): {string.Join(", ", files.Select(f => Path.GetFileName(f.Path)))}");
+            var error = HostFiles.Save(_pane, files, out _);
+            Log.Write(error == null ? "saved" : "save refused: " + error);
+            Post(new { type = "saveOtherResult", requestId, ok = error == null, message = error ?? $"Wrote {files.Count} other POU(s): {string.Join(", ", files.Select(f => Path.GetFileName(f.Path)))}" });
         }
 
         /// <summary>Saves a document (the project documentation) where the user chooses, then opens it</summary>

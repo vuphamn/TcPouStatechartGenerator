@@ -25,6 +25,9 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit tests
         run: node tests/run.cjs unit
+      # The XAE extension's code that needs no Visual Studio (the PLC project files it sends the app)
+      - name: XAE extension tests (C#)
+        run: dotnet test xae-extension/KvalStateScope.Xae.Tests
       - name: Live view protocol tests (simulated PLC)
         run: node tests/run.cjs live
       - name: Web app tests (headless Edge)

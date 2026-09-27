@@ -735,6 +735,25 @@ path.diagram-loop-edge {
   border-radius: 4px;
 }
 
+/* A highlighted label is one box: the frame on the visible box (.labelBkg) only. Not on the label's group (drawn
+   around its whole foreignObject, which can be larger than the box: a second frame with a gap), nor on a rect
+   behind it, nor on the text inside it (a smaller box within the box) */
+g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diagram-loop-edge-label, .diagram-selected-edge-label, .tc-interactive-edge-label-active, .diagram-match-edge, .clickable-edge-label:hover, .tc-interactive-edge-label:hover):has(.labelBkg),
+g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diagram-loop-edge-label, .diagram-selected-edge-label, .tc-interactive-edge-label-active, .diagram-match-edge, .clickable-edge-label:hover, .tc-interactive-edge-label:hover):has(.labelBkg) rect {
+  outline: none !important;
+  box-shadow: none !important;
+}
+/* (inside its edge: the foreignObject clips what is drawn outside it) */
+g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diagram-loop-edge-label, .diagram-selected-edge-label, .tc-interactive-edge-label-active, .diagram-match-edge, .clickable-edge-label:hover, .tc-interactive-edge-label:hover) .labelBkg {
+  outline-offset: -2px !important;
+}
+g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diagram-loop-edge-label, .diagram-selected-edge-label, .tc-interactive-edge-label-active, .diagram-match-edge, .clickable-edge-label:hover, .tc-interactive-edge-label:hover) .labelBkg :is(span, p, .edgeLabel) {
+  display: block;
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
 /* Interactive Edge Labels & Transition Guard Details */
 .tc-interactive-edge-label {
   cursor: pointer !important;
@@ -1139,3 +1158,12 @@ path.state-jump-border-pulse {
 }
 
 
+
+/* States selected together (Ctrl+click, Shift+drag): a dashed frame */
+g.node.multi-selected > rect,
+g.node.multi-selected > polygon,
+g.node.multi-selected > .label-container {
+  stroke: #38bdf8 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 6 3 !important;
+}

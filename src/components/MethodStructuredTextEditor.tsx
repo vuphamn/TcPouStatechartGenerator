@@ -64,7 +64,11 @@ import {
   findTypeTarget,
 } from '../utils/stSymbolDefinition.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
-import { openTypeHandlerFor } from '../utils/openType.ts';
+import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
+import { NewVariable, declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
+import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
+import { bookmarkedLines, clearBookmarks, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { markersFor } from '../utils/variableLint.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
 
@@ -688,6 +692,16 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       // Clear previous declaration highlight
       setDeclHighlightedLine(null);
 
+      // A member of another POU's instance (smAxis.bDone): that POU, at the member
+      if (memberOf) {
+        const tt = findTypeTarget([declaration, pouDeclaration], sym, memberOf);
+        const opener = tt?.member ? openTypeHandlerFor(tt.type) : null;
+        if (tt?.member && opener) {
+          opener.open(tt.type, 'statescope', tt.member);
+          return;
+        }
+      }
+
       // 1. Check Method Declaration first
       let methodMatch = findSymbolDeclarationLine(declaration, sym);
       if (!methodMatch && memberOf) {
@@ -835,11 +849,118 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     });
   };
 
+  // Declare (a name the code uses but nobody declares: in the method, or in the POU) and Rename
+  const [declaring, setDeclaring] = useState<{ name: string; where: 'method' | 'pou' } | null>(null);
+  const methodVars = useMemo(() => declarationVariables(declaration), [declaration]);
+  const pouVars = useMemo(() => declarationVariables(pouDeclaration), [pouDeclaration]);
+  const isUndeclared = (sym: string, memberOf?: string) => {
+    if (memberOf || !/^[A-Za-z_]\w*$/.test(sym)) return false;
+    const k = sym.toLowerCase();
+    if ([...methodVars, ...pouVars].some((v) => v.name.toLowerCase() === k)) return false;
+    if (availableMethods.some((m) => m.replace(/\(\)$/, '').toLowerCase() === k)) return false;
+    const scope = editorServices()?.scope?.(cleanMethodName);
+    return undeclaredNames(sym, scope?.top ?? [], scope?.knownNames ?? []).length > 0;
+  };
+  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration') => {
+    const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declEditorRef : implEditorRef).current?.formatDocument()) };
+    if (!sym) return [format];
+    const services = editorServices();
+    const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
+    if (isUndeclared(sym, memberOf)) {
+      items.push({ id: 'editor-menu-declare', label: `Declare ${sym} in ${cleanMethodName}()…`, title: 'In the method\'s declaration (Shift+F2)', onSelect: () => setDeclaring({ name: sym, where: 'method' }) });
+      if (services?.declare) items.push({ id: 'editor-menu-declare-pou', label: `Declare ${sym} in the POU…`, title: 'A member of the POU (written into its declaration at once)', onSelect: () => setDeclaring({ name: sym, where: 'pou' }) });
+    }
+    const own = methodVars.find((v) => v.name.toLowerCase() === sym.toLowerCase());
+    const member = pouVars.find((v) => v.name.toLowerCase() === sym.toLowerCase());
+    const target = own ?? member;
+    if (target && services?.rename && !memberOf) {
+      items.push({
+        id: 'editor-menu-rename',
+        label: own ? `Rename ${own.name} (in ${cleanMethodName}())…` : `Rename ${target.name}…`,
+        title: own ? 'The method\'s own variable, in this method' : 'In the whole POU: its declaration, body, methods and the guards (a preview first)',
+        onSelect: () => {
+          if (isDirty) {
+            setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): the rename works on the saved POU' });
+            setTimeout(() => setDefinitionNotification(null), 3500);
+            return;
+          }
+          services.rename!(target.name, own ? cleanMethodName : undefined);
+        },
+      });
+    }
+    if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
+    items.push(format);
+    return items;
+  };
+  const finishDeclare = (v: NewVariable) => {
+    if (!declaring) return;
+    if (declaring.where === 'method') {
+      setDeclaration((d) => declareInDeclaration(d, [v]));
+      setDefinitionNotification({ type: 'success', message: `Declared ${v.name} : ${v.type} in ${cleanMethodName}() (${v.scope}; not saved yet: Ctrl+S)` });
+    } else if (editorServices()?.declare?.([v])) {
+      setDefinitionNotification({ type: 'success', message: `Declared ${v.name} : ${v.type} in the POU (${v.scope})` });
+    }
+    setTimeout(() => setDefinitionNotification(null), 4000);
+    setDeclaring(null);
+  };
+
+  // PLC Bookmarks: the method's bookmarked lines (its own, and the label lines of bookmarked states)
+  const bookmarkStore = useBookmarks(tcPouFileName);
+  const bookmarkLines = useMemo(() => bookmarkedLines(tcPouFileName, cleanMethodName, code), [bookmarkStore, tcPouFileName, cleanMethodName, code]); // eslint-disable-line react-hooks/exhaustive-deps
+  const flashBookmark = (message: string) => {
+    setScrollNotification(message);
+    setTimeout(() => setScrollNotification(null), 2500);
+  };
+  const toggleBookmarkAt = (line: number) => {
+    const r = toggleLineBookmark(tcPouFileName, cleanMethodName, code, line);
+    flashBookmark(r.state ? `${r.on ? 'Bookmarked' : 'Bookmark removed:'} ${r.state} (the state's bookmark)` : `${r.on ? 'Bookmark set' : 'Bookmark removed'} at line ${line}`);
+  };
+  const goToBookmark = (dir: 1 | -1, from: number) => {
+    if (!bookmarkLines.length) return;
+    const target = dir > 0 ? bookmarkLines.find((l) => l > from) ?? bookmarkLines[0] : [...bookmarkLines].reverse().find((l) => l < from) ?? bookmarkLines[bookmarkLines.length - 1];
+    // (inside a folded block: unfolded)
+    const around = foldableBlocks.filter((b) => b.startLine < target && target <= b.endLine && foldedBlockIds.has(b.id));
+    if (around.length) {
+      setFoldedBlockIds((prev) => {
+        const next = new Set(prev);
+        around.forEach((b) => next.delete(b.id));
+        return next;
+      });
+    }
+    setScrollToLine(null);
+    requestAnimationFrame(() => {
+      setScrollToLine(target);
+      setHighlightedCaseLine(target);
+    });
+    setTimeout(() => setHighlightedCaseLine(null), 2500);
+    flashBookmark(`Bookmark ${bookmarkLines.indexOf(target) + 1} of ${bookmarkLines.length} (line ${target})`);
+  };
+
   // Handle Ctrl+S / Cmd+S save shortcuts, and F12 Go to Definition in code editors
   const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
       handleSave();
+    } else if (e.key === 'F12' && e.shiftKey) {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'method-implementation-editor') {
+      // Toggle a bookmark on the caret's line (as TwinCAT's PLC Bookmarks)
+      e.preventDefault();
+      const ta = e.currentTarget;
+      toggleBookmarkAt(toCodeLine(ta.value.slice(0, ta.selectionStart).split('\n').length));
+    } else if (e.key === 'F2' && e.shiftKey) {
+      // Declare the name at the caret (as TwinCAT's Auto Declare)
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol && isUndeclared(resolved.symbol, resolved.memberOf)) setDeclaring({ name: resolved.symbol, where: 'method' });
+      else if (resolved?.symbol) {
+        setDefinitionNotification({ type: 'warning', message: `'${resolved.symbol}' is declared already (or is no variable)` });
+        setTimeout(() => setDefinitionNotification(null), 3500);
+      }
     } else if (e.key === 'F12') {
       e.preventDefault();
       const textarea = e.currentTarget;
@@ -1499,6 +1620,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               id="method-declaration-editor"
               value={declTab === 'pou' ? pouDeclaration : declaration}
               onChange={declTab === 'pou' ? setPouDeclaration : setDeclaration}
+              completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}
+              markers={markersFor(editorServices()?.problems?.() ?? [], declTab === 'pou' ? pouDeclaration : declaration, { method: declTab === 'pou' ? undefined : cleanMethodName, declaration: true })}
               onKeyDown={handleEditorKeyDown}
               onContextMenu={handleDeclContextMenu}
               highlightedLine={declHighlightedLine}
@@ -1666,6 +1789,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             onChange={setCode}
             onKeyDown={handleEditorKeyDown}
             onContextMenu={handleImplContextMenu}
+            bookmarkLines={bookmarkLines}
+            completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}
+            markers={markersFor(editorServices()?.problems?.() ?? [], code, { method: cleanMethodName, declaration: false })}
             highlightedLine={highlightedCaseLine}
             liveLine={liveCaseLine}
             scrollToLine={scrollToLine}
@@ -1746,6 +1872,18 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         </div>
       </div>
 
+      {declaring && (
+        <DeclareVariableDialog
+          initial={{ name: declaring.name, type: guessType(declaring.name), scope: declaring.where === 'method' ? 'VAR' : 'VAR_INPUT' }}
+          known={declaring.where === 'method' ? methodVars : pouVars}
+          types={editorServices()?.scope?.(cleanMethodName).types ?? []}
+          scopes={declaring.where === 'method' ? ['VAR', 'VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR_INST', 'VAR_TEMP'] : ['VAR_INPUT', 'VAR_OUTPUT', 'VAR']}
+          title={declaring.where === 'method' ? `Declare a variable in ${cleanMethodName}()` : 'Declare a variable in the POU'}
+          onCancel={() => setDeclaring(null)}
+          onDone={finishDeclare}
+        />
+      )}
+
       {/* Right-Click Context Menu for Go to Definition, Find References, Copy */}
       {contextMenu && (
         <MethodEditorContextMenu
@@ -1754,6 +1892,27 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           targetSymbol={contextMenu.symbol}
           targetMemberOf={contextMenu.memberOf}
           typeTarget={contextMenu.symbol ? findTypeTarget([declaration, pouDeclaration], contextMenu.symbol, contextMenu.memberOf) : null}
+          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope)}
+          bookmarks={
+            contextMenu.sourceScope === 'implementation' && contextMenu.line
+              ? {
+                  on: bookmarkLines.includes(contextMenu.line),
+                  count: bookmarkLines.length,
+                  onToggle: () => toggleBookmarkAt(contextMenu.line!),
+                  onNext: () => goToBookmark(1, contextMenu.line!),
+                  onPrev: () => goToBookmark(-1, contextMenu.line!),
+                  onClearMethod: () => {
+                    clearBookmarks(tcPouFileName, cleanMethodName, code);
+                    flashBookmark(`Bookmarks of ${cleanMethodName}() cleared`);
+                  },
+                  onClearAll: () => {
+                    clearBookmarks(tcPouFileName);
+                    flashBookmark('All bookmarks of the POU cleared');
+                  },
+                  onShowAll: editorServices()?.showBookmarks,
+                }
+              : undefined
+          }
           onGoToDefinition={handleGoToDefinition}
           onFindReferences={(sym) => {
             setFindQuery(sym);

@@ -34,6 +34,8 @@ const SEVERITY: Record<LintSeverity, { icon: React.ReactNode; label: string; chi
 const FIX_LABEL: Record<NonNullable<LintFinding['fix']>['kind'], string> = {
   'add-enum-member': 'Add to enum',
   'add-case-branch': 'Add CASE branch',
+  'declare-variable': 'Declare…',
+  'remove-variable': 'Remove',
 };
 
 export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({

@@ -722,7 +722,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setZoom((z) => Math.min(5, z * 1.15))}
+                    onClick={() => setZoom((z) => Math.min(10, z * 1.15))}
                     className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
                     title="Zoom In"
                   >

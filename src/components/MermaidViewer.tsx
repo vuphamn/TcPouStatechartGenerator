@@ -118,6 +118,7 @@ import {
   getEdgeAnchorPoint,
   parseTranslation,
   getNodeGeometry,
+  nodeShapeOf,
 } from '../utils/nodeDragger.ts';
 import {
   CanvasNodePositionsMap,
@@ -178,8 +179,17 @@ export interface MermaidViewerProps {
   onEdgeStyleChange?: (edgeId: string, style: EdgeDisplayProperties | null) => void;
   /** TwinCAT XAE: open a state's CASE branch / a transition in TwinCAT's editor */
   onShowInXae?: (target: { kind: 'state'; id: string } | { kind: 'edge'; edge: EdgeInfo }) => void;
+  /** The Transition Guard window's Edit: the transition's condition (the app asks for it, by the label) */
+  onEditTransitionCondition?: (edge: EdgeInfo) => void;
   /** States with lint problems (Problems tab): a badge on their node */
   problemMarkers?: Record<string, 'error' | 'warning'>;
+  /** Bookmarked states: a badge at their top-left corner */
+  bookmarkedStates?: string[];
+  /** A state's tooltip (its entry / do / exit actions), by state */
+  stateTooltips?: Record<string, string>;
+  /** Several states selected (Ctrl+click, Shift+drag a box): marked; the app's menu acts on all of them */
+  multiSelection?: string[];
+  onMultiSelectionChange?: (ids: string[]) => void;
   /** Live view: the PLC's current state (and the one it came from) are highlighted */
   /** stuck: longer in the state than its time limit (red) */
   liveHighlight?: { stateId: string; previousStateId?: string; stuck?: boolean; regionStates?: string[] } | null;
@@ -1529,7 +1539,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     customEdgeStyles,
     onEdgeStyleChange,
     onShowInXae,
+    onEditTransitionCondition,
     problemMarkers,
+    bookmarkedStates,
+    stateTooltips,
+    multiSelection,
+    onMultiSelectionChange,
     liveHighlight,
     stateTimes,
     pathHighlight,
@@ -3501,6 +3516,56 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     });
   }, [renderedSvg, problemMarkers]);
 
+  // A state's entry / do / exit actions on hover: at once, in the app's own box (in the heat-map's, when that
+  // one shows); no browser tooltip, which came late and covered it
+  const [hoveredActions, setHoveredActions] = useState<{ id: string; text: string; x: number; y: number } | null>(null);
+
+  // Bookmarks: a ribbon at the top-left corner of each bookmarked state
+  const bookmarkKey = (bookmarkedStates ?? []).join('|');
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('g.state-bookmark-marker').forEach((el) => el.remove());
+    const marked = new Set(bookmarkKey ? bookmarkKey.split('|') : []);
+    if (!marked.size) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    const num = (el: Element, name: string) => parseFloat(el.getAttribute(name) || '0') || 0;
+    svg.querySelectorAll('g.node[data-state-id]').forEach((node) => {
+      const id = node.getAttribute('data-state-id') || '';
+      if (!marked.has(id)) return;
+      // The node's shape in its own coordinates (as the problem badges do)
+      let box = { x: 0, y: 0, width: 0 };
+      const shape = node.querySelector(':scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, rect, polygon');
+      if (shape?.tagName === 'rect') box = { x: num(shape, 'x'), y: num(shape, 'y'), width: num(shape, 'width') };
+      else if (shape?.tagName === 'polygon') {
+        const pts = (shape.getAttribute('points') || '').trim().split(/[\s,]+/).map(Number);
+        const xs = pts.filter((_, i) => i % 2 === 0);
+        const ys = pts.filter((_, i) => i % 2 === 1);
+        if (xs.length) box = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs) };
+      }
+      if (!box.width) {
+        try {
+          const b = (node as SVGGElement).getBBox();
+          box = { x: b.x, y: b.y, width: b.width };
+        } catch {
+          return;
+        }
+      }
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', 'state-bookmark-marker');
+      g.setAttribute('data-state-id', id);
+      g.setAttribute('transform', `translate(${box.x + 6}, ${box.y - 3})`);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = 'Bookmark (right-click the state to remove it)';
+      const ribbon = document.createElementNS(ns, 'path');
+      ribbon.setAttribute('d', 'M0,0 H12 V16 L6,11.5 L0,16 Z');
+      // (inline and important: the theme's ".node path" fill would paint it dark; the colours of Identified States' icon)
+      ribbon.setAttribute('style', 'fill:#38bdf8 !important;stroke:#7dd3fc !important;stroke-width:1.2px !important;stroke-linejoin:round;filter:drop-shadow(0 0 3px rgba(56,189,248,0.7));');
+      g.append(title, ribbon);
+      node.appendChild(g);
+    });
+  }, [renderedSvg, bookmarkKey]);
+
   // Custom transition line styles, applied to the rendered paths (resolved like a click on the path)
   useEffect(() => {
     const svg = renderedSvg;
@@ -3713,7 +3778,71 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     (s) => s.fill || s.color || s.stroke || s.strokeWidth
   ).length;
 
+  // Several states: Ctrl+click adds / removes one, Shift+drag on the canvas selects the ones in the box
+  const multiGestureRef = useRef(false);
+  const [selectBand, setSelectBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const handleMultiSelectDown = (e: React.MouseEvent): boolean => {
+    if (e.button !== 0 || !onMultiSelectionChange) return false;
+    const t = e.target as Element;
+    // (a press in a menu, a dialog or a control over the canvas is theirs: React passes it on to here)
+    if (t.closest?.('#diagram-context-menu, [role="menu"], [role="dialog"], [role="listbox"], button, input, textarea, select')) return false;
+    const nodeEl = t.closest?.('g.node[data-state-id]');
+    const id = nodeEl?.getAttribute('data-state-id') ?? null;
+    if ((e.ctrlKey || e.metaKey) && id && id !== '[*]' && !t.closest('.tc-edge-handle')) {
+      e.preventDefault();
+      e.stopPropagation();
+      const cur = multiSelection ?? [];
+      const base = cur.length ? cur : effectiveSelectedStateId && effectiveSelectedStateId !== id && effectiveSelectedStateId !== '[*]' ? [effectiveSelectedStateId] : [];
+      onMultiSelectionChange(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
+      multiGestureRef.current = true;
+      return true;
+    }
+    if (e.shiftKey && !id && !t.closest('[data-edge-key], .tc-edge-handle, g.edgeLabel, button, input')) {
+      e.preventDefault();
+      e.stopPropagation();
+      multiGestureRef.current = true;
+      const x0 = e.clientX;
+      const y0 = e.clientY;
+      setSelectBand({ x0, y0, x1: x0, y1: y0 });
+      const move = (ev: MouseEvent) => setSelectBand({ x0, y0, x1: ev.clientX, y1: ev.clientY });
+      const up = (ev: MouseEvent) => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up, true);
+        setSelectBand(null);
+        const l = Math.min(x0, ev.clientX);
+        const r = Math.max(x0, ev.clientX);
+        const tp = Math.min(y0, ev.clientY);
+        const b = Math.max(y0, ev.clientY);
+        if (r - l < 4 && b - tp < 4) return;
+        const svg = getDiagramSvg();
+        const ids = [...(svg?.querySelectorAll('g.node[data-state-id]') ?? [])]
+          .filter((n) => {
+            const q = n.getBoundingClientRect();
+            return q.width > 0 && q.right > l && q.left < r && q.bottom > tp && q.top < b;
+          })
+          .map((n) => n.getAttribute('data-state-id') || '')
+          .filter((x) => x && x !== '[*]');
+        onMultiSelectionChange([...new Set(ids)]);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up, true);
+      return true;
+    }
+    // A plain click elsewhere ends the selection
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey && (multiSelection?.length ?? 0) > 0 && !id) onMultiSelectionChange([]);
+    return false;
+  };
+  // The selected states marked
+  const multiKey = (multiSelection ?? []).join('|');
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    const set = new Set(multiKey ? multiKey.split('|') : []);
+    svg.querySelectorAll('g.node[data-state-id]').forEach((n) => n.classList.toggle('multi-selected', set.has(n.getAttribute('data-state-id') || '')));
+  }, [renderedSvg, multiKey]);
+
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (handleMultiSelectDown(e)) return;
     if (e.button === 2) {
       // A right-click: its menu is for the transition pressed (the release may re-draw it away from the pointer)
       const t = e.target as Element;
@@ -3956,7 +4085,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const node = endpointNodeAt(x, y);
     const current = currentEdgeOffsetsRef.current[eId];
     if (!node || !current) return;
-    const r = node.getBoundingClientRect();
+    // (the state's own box, not its badges)
+    const r = nodeShapeOf(node).getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
     let dx = x - cx;
@@ -4416,9 +4546,21 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     } else if (hoveredComplexityMetric) {
       setHoveredComplexityMetric(null);
     }
+
+    // 5. A state's actions (entry / do / exit), as soon as the pointer is on it
+    if (stateTooltips && !isDraggingNodeRef.current && !isDraggingEdgeHandleRef.current) {
+      const nodeEl = target?.closest('g.node[data-state-id]');
+      const sId = nodeEl?.getAttribute('data-state-id') || '';
+      const tip = sId ? stateTooltips[sId] : undefined;
+      if (tip) {
+        if (hoveredActions?.id !== sId) setHoveredActions({ id: sId, text: tip.split('\n').slice(1).join('\n'), x: e.clientX, y: e.clientY });
+      } else if (hoveredActions) setHoveredActions(null);
+    }
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    // (a Ctrl+click / Shift+drag selection: nothing else)
+    if (multiGestureRef.current) return;
     // Apply the latest pending node-drag position before finishing the drag
     if (nodeDragFrameRef.current !== null) {
       cancelAnimationFrame(nodeDragFrameRef.current);
@@ -4976,7 +5118,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         target.closest('#state-machine-stats-panel') ||
         target.closest('#diagram-search-panel') ||
         target.closest('#transition-guard-inspector') ||
-        target.closest('#edge-condition-detail-overlay, #transition-guard-inspector'))
+        target.closest('#edge-condition-detail-overlay, #transition-guard-inspector') ||
+        // (the right-click menu of a state / a transition, and any menu or dialog over the canvas: they scroll themselves)
+        target.closest('#diagram-context-menu, [role="menu"], [role="dialog"], [role="listbox"]'))
     ) {
       // Allow normal scrolling inside editors and UI overlays; do NOT zoom canvas
       return;
@@ -4984,7 +5128,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
     const oldZoom = wheelZoomRef.current;
-    const newZoom = Math.min(Math.max(0.2, oldZoom * factor), 5);
+    const newZoom = Math.min(Math.max(0.2, oldZoom * factor), 10);
     if (newZoom === oldZoom) return;
 
     // Zoom around the cursor: the wrapper is drawn as translate(pan) scale(zoom) with its origin at the
@@ -5198,7 +5342,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     () => ({
       panToState,
       resetView: handleResetZoom,
-      zoomIn: () => setZoom((prev) => Math.min(5, prev * 1.2)),
+      zoomIn: () => setZoom((prev) => Math.min(10, prev * 1.2)),
       zoomOut: () => setZoom((prev) => Math.max(0.2, prev / 1.2)),
       fitToScreen: handleResetZoom,
       autoAlign: handleAutoAlign,
@@ -5508,6 +5652,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   }, [isFullscreen, isInspectorOpen, effectiveSelectedStateId, effectiveNodeOffsets, selectedEdge]);
 
   const handleClick = (e: React.MouseEvent) => {
+    if (multiGestureRef.current) {
+      multiGestureRef.current = false;
+      return;
+    }
     // Mouse-up already handled this gesture's edge click
     if (edgeClickHandledRef.current) {
       edgeClickHandledRef.current = false;
@@ -6165,7 +6313,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               type="button"
               onClick={() => {
                 onSwitchToDiagramTab?.();
-                setZoom((z) => Math.min(5, z * 1.15));
+                setZoom((z) => Math.min(10, z * 1.15));
               }}
               className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
               title="Zoom In"
@@ -6227,6 +6375,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         ? createPortal(toolbarContent, effectivePortalTarget)
         : toolbarContent}
 
+      {/* The box of a Shift+drag selection, and how many states are selected */}
+      {selectBand && (
+        <div
+          id="canvas-select-band"
+          className="fixed z-40 pointer-events-none border border-sky-400 bg-sky-400/10 rounded-sm"
+          style={{ left: Math.min(selectBand.x0, selectBand.x1), top: Math.min(selectBand.y0, selectBand.y1), width: Math.abs(selectBand.x1 - selectBand.x0), height: Math.abs(selectBand.y1 - selectBand.y0) }}
+        />
+      )}
+      {(multiSelection?.length ?? 0) > 1 && (
+        <div id="canvas-multi-selection" className="absolute left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-full bg-sky-900/90 border border-sky-600 text-[11px] text-sky-100 shadow-lg" style={{ top: canvasTop + 8 }}>
+          {multiSelection!.length} states selected · right-click one of them for their actions · Esc clears
+        </div>
+      )}
       {/* The statechart palette: over the canvas, not in it (the canvas' first <svg> is the diagram) */}
       {onPaletteElement && !error && svgContent && <StatechartPalette onClick={handlePaletteClick} history={history} top={canvasTop + 8} />}
       {/* Main Diagram Canvas */}
@@ -6239,6 +6400,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         onMouseLeave={(e) => {
           handleMouseUp(e);
           setHoveredComplexityMetric(null);
+          setHoveredActions(null);
           setHoveredEdgeCondition(null);
         }}
         onClick={handleClick}
@@ -6504,6 +6666,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Complexity Heat-map / Refactor Badge Hover Tooltip */}
+        {hoveredActions && !((isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric) && (
+          <div
+            id="state-actions-hover"
+            className="fixed z-50 pointer-events-none max-w-[420px] rounded-lg bg-slate-950/95 border border-slate-700 shadow-2xl px-2.5 py-1.5"
+            style={{ left: Math.min(hoveredActions.x + 16, window.innerWidth - 440), top: Math.min(hoveredActions.y + 16, window.innerHeight - 220) }}
+          >
+            <div className="text-[10px] font-semibold text-slate-400 mb-0.5">{hoveredActions.id}</div>
+            <pre className="font-mono text-[10px] text-slate-300 whitespace-pre-wrap max-h-48 overflow-hidden">{hoveredActions.text}</pre>
+          </div>
+        )}
         {(isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric && (
           <div
             id="heatmap-state-hover-tooltip"
@@ -6567,6 +6739,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                   <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
                   <span>Exceeds refactor threshold (M={hoveredComplexityMetric.metric.score} ≥ {complexityThreshold})</span>
                 </div>
+              )}
+              {hoveredActions && hoveredActions.id.toLowerCase() === hoveredComplexityMetric.metric.stateId.toLowerCase() && (
+                <pre id="state-actions-in-heatmap" className="mt-1 pt-1 border-t border-slate-700/70 font-mono text-[10px] text-slate-300 whitespace-pre-wrap max-h-48 overflow-hidden">{hoveredActions.text}</pre>
               )}
             </div>
           </div>
@@ -6850,6 +7025,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             onClose={() => setActiveConditionOverlay(null)}
             edgeStyle={customEdgeStyles?.[activeConditionOverlay.edge.id]}
             onShowInXae={onShowInXae ? () => onShowInXae({ kind: 'edge', edge: activeConditionOverlay.edge }) : undefined}
+            onEditCondition={
+              onEditTransitionCondition
+                ? () => {
+                    const edge = activeConditionOverlay.edge;
+                    setActiveConditionOverlay(null);
+                    onEditTransitionCondition(edge);
+                  }
+                : undefined
+            }
             onEdgeStyleChange={
               onEdgeStyleChange ? (style) => onEdgeStyleChange(activeConditionOverlay.edge.id, style) : undefined
             }

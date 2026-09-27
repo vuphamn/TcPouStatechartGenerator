@@ -7,7 +7,11 @@ import { findMatchesInCode, FindMatch } from '../utils/stFindHighlight.ts';
 import { findSymbolDeclarationLine, findTypeTarget, resolveSymbolFromText } from '../utils/stSymbolDefinition.ts';
 import { getAllMethodsFromPou } from '../utils/pouStateEditor.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
-import { openTypeHandlerFor } from '../utils/openType.ts';
+import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
+import { declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
+import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
+import { markersFor } from '../utils/variableLint.ts';
+import { BODY, bookmarkedLines, clearBookmarks, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 
 /**
  * POU Editor (MiddlePanel tab): the POU's own Structured Text, as TwinCAT XAE shows it when the POU is opened: the
@@ -24,11 +28,13 @@ interface PouCodeEditorProps {
   onToast?: (message: string, type: 'success' | 'error') => void;
   /** Go to Definition on one of the POU's methods: open it in the Method Editor */
   onOpenMethod?: (methodName: string) => void;
+  /** Go to a symbol's declaration (a new nonce each request: Go to Definition from another POU) */
+  reveal?: { symbol: string; nonce: number; line?: number; part?: 'declaration' | 'implementation' } | null;
 }
 
 const SPLIT_KEY = 'kss.pouEditor.split';
 
-export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFileName, onSave, onToast, onOpenMethod }) => {
+export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFileName, onSave, onToast, onOpenMethod, reveal }) => {
   // Edited with LF (a textarea has no CRLF); saved with the line ends the POU has
   const raw = useMemo(() => getPouBody(pouContent), [pouContent]);
   const crlf = /\r\n/.test(raw.declaration + raw.implementation);
@@ -186,6 +192,15 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     (symbol: string, memberOf?: string) => {
       const sym = symbol.trim();
       if (!sym) return;
+      // A member of another POU's instance (smAxis.bDone): that POU, at the member
+      if (memberOf) {
+        const tt = findTypeTarget([decl], sym, memberOf);
+        const opener = tt?.member ? openTypeHandlerFor(tt.type) : null;
+        if (tt?.member && opener) {
+          opener.open(tt.type, 'statescope', tt.member);
+          return;
+        }
+      }
       const hit = findSymbolDeclarationLine(decl, sym) ?? (memberOf ? findSymbolDeclarationLine(decl, memberOf) : null);
       if (hit) {
         setDeclHighlight(hit.lineNumber);
@@ -213,6 +228,69 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     },
     [decl, methods, onOpenMethod, showNotice, body.name]
   );
+
+  // Go to Definition from another POU: to the member's declaration once this POU is shown
+  const goToRef = useRef(goToDefinition);
+  goToRef.current = goToDefinition;
+  useEffect(() => {
+    if (!reveal) return;
+    const t = window.setTimeout(() => {
+      // A line (Find All References): that line of the declaration / body
+      if (reveal.line && reveal.part === 'implementation') implRef.current?.scrollToLine(reveal.line);
+      else if (reveal.line) {
+        setDeclHighlight(reveal.line);
+        declRef.current?.scrollToLine(reveal.line);
+      } else goToRef.current(reveal.symbol);
+    }, 120);
+    return () => window.clearTimeout(t);
+  }, [reveal?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // PLC Bookmarks in the body
+  const bookmarkStore = useBookmarks(pouFileName);
+  const bodyBookmarks = useMemo(() => bookmarkedLines(pouFileName, BODY, impl), [bookmarkStore, pouFileName, impl]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleBodyBookmark = (line: number) => {
+    const r = toggleLineBookmark(pouFileName, BODY, impl, line);
+    showNotice('success', r.on ? `Bookmark set at line ${line}` : `Bookmark removed at line ${line}`);
+  };
+  const goToBodyBookmark = (dir: 1 | -1, from: number) => {
+    if (!bodyBookmarks.length) return;
+    const target = dir > 0 ? bodyBookmarks.find((l) => l > from) ?? bodyBookmarks[0] : [...bodyBookmarks].reverse().find((l) => l < from) ?? bodyBookmarks[bodyBookmarks.length - 1];
+    implRef.current?.scrollToLine(target);
+    showNotice('success', `Bookmark ${bodyBookmarks.indexOf(target) + 1} of ${bodyBookmarks.length} (line ${target})`);
+  };
+
+  // Declare (a name the code uses but nobody declares) and Rename (a member of the POU)
+  const [declaring, setDeclaring] = useState<string | null>(null);
+  const declared = useMemo(() => declarationVariables(decl), [decl]);
+  const isUndeclared = (sym: string, memberOf?: string) => {
+    if (memberOf || !/^[A-Za-z_]\w*$/.test(sym)) return false;
+    if (declared.some((v) => v.name.toLowerCase() === sym.toLowerCase()) || methods.some((m) => m.toLowerCase() === sym.toLowerCase())) return false;
+    const scope = editorServices()?.scope?.();
+    return undeclaredNames(sym, scope?.top ?? [], scope?.knownNames ?? []).length > 0;
+  };
+  const renameItem = (sym: string) => {
+    const services = editorServices();
+    if (!services?.rename || !declared.some((v) => v.name.toLowerCase() === sym.toLowerCase())) return null;
+    const name = declared.find((v) => v.name.toLowerCase() === sym.toLowerCase())!.name;
+    return {
+      id: 'editor-menu-rename',
+      label: `Rename ${name}…`,
+      title: 'In the whole POU: its declaration, body, methods and the guards (a preview first)',
+      onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.rename!(name)),
+    };
+  };
+  const menuExtras = (sym: string | null, memberOf?: string, scope?: 'declaration' | 'implementation') => {
+    const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declRef : implRef).current?.formatDocument()) };
+    if (!sym) return [format];
+    const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
+    if (isUndeclared(sym, memberOf)) items.push({ id: 'editor-menu-declare', label: `Declare ${sym}…`, title: 'In the declaration (Shift+F2)', onSelect: () => setDeclaring(sym) });
+    const r = renameItem(sym);
+    if (r) items.push(r);
+    const services = editorServices();
+    if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
+    items.push(format);
+    return items;
+  };
 
   const lineAt = (text: string, pos: number) => text.slice(0, pos).split('\n').length;
   // A line of the body as shown (folded blocks are one line) to its line in the code
@@ -246,6 +324,22 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     } else if (e.key === 'F3') {
       e.preventDefault();
       goTo(active + (e.shiftKey ? -1 : 1));
+    } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'pou-implementation-editor') {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      toggleBodyBookmark(toCodeLine(lineAt(ta.value, ta.selectionStart)));
+    } else if (e.key === 'F12' && e.shiftKey) {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F2' && e.shiftKey) {
+      // Declare the name at the caret (as TwinCAT's Auto Declare)
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol && isUndeclared(resolved.symbol, resolved.memberOf)) setDeclaring(resolved.symbol);
+      else if (resolved?.symbol) showNotice('warning', `'${resolved.symbol}' is declared already (or is no variable)`);
     } else if (e.key === 'F12') {
       e.preventDefault();
       const ta = e.currentTarget;
@@ -376,6 +470,8 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
               id="pou-declaration-editor"
               value={decl}
               onChange={setDecl}
+              completionScope={() => editorServices()?.scope?.() ?? null}
+              markers={markersFor(editorServices()?.problems?.() ?? [], decl, { declaration: true })}
               onKeyDown={onEditorKeyDown}
               onContextMenu={openMenu('declaration')}
               highlightedLine={declHighlight}
@@ -416,6 +512,9 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
                 id="pou-implementation-editor"
                 value={impl}
                 onChange={setImpl}
+                completionScope={() => editorServices()?.scope?.() ?? null}
+                markers={markersFor(editorServices()?.problems?.() ?? [], impl, { declaration: false })}
+                bookmarkLines={bodyBookmarks}
                 onKeyDown={onEditorKeyDown}
                 onContextMenu={openMenu('implementation')}
                 ariaLabel="POU implementation"
@@ -450,6 +549,22 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
         <span className="ml-auto text-slate-600">Right-click: Go to Definition (F12) · Ctrl+mouse wheel: text size</span>
       </div>
 
+      {declaring && (
+        <DeclareVariableDialog
+          initial={{ name: declaring, type: guessType(declaring), scope: 'VAR' }}
+          known={declared}
+          types={editorServices()?.scope?.().types ?? []}
+          scopes={['VAR', 'VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT']}
+          title={`Declare a variable in ${body.name || 'the POU'}`}
+          onCancel={() => setDeclaring(null)}
+          onDone={(v) => {
+            setDecl((d) => declareInDeclaration(d, [v]));
+            setDeclaring(null);
+            showNotice('success', `Declared ${v.name} : ${v.type} in ${v.scope} (not saved yet: Ctrl+S)`);
+          }}
+        />
+      )}
+
       {menu && (
         <MethodEditorContextMenu
           x={menu.x}
@@ -457,6 +572,21 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           targetSymbol={menu.symbol}
           targetMemberOf={menu.memberOf}
           typeTarget={menu.symbol ? findTypeTarget([decl], menu.symbol, menu.memberOf) : null}
+          extraItems={menuExtras(menu.symbol, menu.memberOf, menu.scope)}
+          bookmarks={
+            menu.scope === 'implementation'
+              ? {
+                  on: bodyBookmarks.includes(menu.line),
+                  count: bodyBookmarks.length,
+                  onToggle: () => toggleBodyBookmark(menu.line),
+                  onNext: () => goToBodyBookmark(1, menu.line),
+                  onPrev: () => goToBodyBookmark(-1, menu.line),
+                  onClearMethod: () => clearBookmarks(pouFileName, BODY, impl),
+                  onClearAll: () => clearBookmarks(pouFileName),
+                  onShowAll: editorServices()?.showBookmarks,
+                }
+              : undefined
+          }
           onGoToDefinition={goToDefinition}
           onFindReferences={(sym) => {
             setQuery(sym);

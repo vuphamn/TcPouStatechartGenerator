@@ -208,6 +208,20 @@ ipcMain.handle('tc:project-pous', async (_event, fromPath) => {
   return projectPous(fromPath);
 });
 
+// A rename's other files: the project's POUs whose code has the name (written back with tc:save-sources)
+ipcMain.handle('tc:project-uses', async (_event, fromPath, name) => {
+  const { projectUses } = require('./tcLiveTargets.cjs');
+  if (typeof fromPath !== 'string') return { error: 'The POU was not opened from its folder' };
+  return projectUses(fromPath, name);
+});
+
+// Completion and the checks: the PLC project's types (declarations only)
+ipcMain.handle('tc:project-symbols', async (_event, fromPath) => {
+  const { projectSymbols } = require('./tcLiveTargets.cjs');
+  if (typeof fromPath !== 'string') return { error: 'The POU was not opened from its folder' };
+  return projectSymbols(fromPath);
+});
+
 // A save dialog for a document (the project documentation); opens it afterwards
 // Save: the edited .TcPOU / .TcDUT back to their files (conflicts when changed on disk since they were read)
 ipcMain.handle('tc:save-sources', (_event, files) => saveSources(files));

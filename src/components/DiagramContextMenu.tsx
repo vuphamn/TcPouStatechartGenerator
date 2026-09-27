@@ -81,7 +81,40 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
   isLayoutLocked,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const [copySuccess, setCopySuccess] = React.useState(false);
+  // A filter for the commands: typing hides the ones that do not match; arrows and Enter pick one
+  const [filter, setFilter] = useState('');
+  const [active, setActive] = useState(0);
+  const [matches, setMatches] = useState<number | null>(null);
+  const visibleButtons = () => (actionsRef.current ? Array.from(actionsRef.current.querySelectorAll<HTMLButtonElement>('button')).filter((b) => b.style.display !== 'none') : []);
+  useLayoutEffect(() => {
+    const root = actionsRef.current;
+    if (!root) return;
+    const q = filter.trim().toLowerCase();
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('button'));
+    let shown = 0;
+    for (const b of buttons) {
+      const hit = !q || `${b.textContent ?? ''} ${b.title ?? ''}`.toLowerCase().includes(q);
+      b.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    }
+    // (a section with nothing left in it goes too)
+    root.querySelectorAll<HTMLElement>(':scope > div').forEach((sec) => {
+      const any = Array.from(sec.querySelectorAll('button')).some((b) => (b as HTMLElement).style.display !== 'none');
+      sec.style.display = any ? '' : 'none';
+    });
+    setMatches(q ? shown : null);
+    setActive(0);
+  }, [filter, extraItems]);
+  useLayoutEffect(() => {
+    const vis = visibleButtons();
+    actionsRef.current?.querySelectorAll('button[data-active]').forEach((b) => b.removeAttribute('data-active'));
+    if (filter.trim() && vis[active]) {
+      vis[active].setAttribute('data-active', 'true');
+      vis[active].scrollIntoView({ block: 'nearest' });
+    }
+  });
 
   // Close when clicking outside or pressing Escape
   useEffect(() => {
@@ -91,7 +124,8 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
       }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      // (Escape in the filter: it clears it first)
+      if (e.key === 'Escape' && !(e.target as HTMLElement | null)?.closest?.('#diagram-context-menu-filter')) {
         onClose();
       }
     };
@@ -188,6 +222,37 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
         </button>
       </div>
 
+      {/* Filter the commands */}
+      <div className="relative mb-1">
+        <Search className="w-3 h-3 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          id="diagram-context-menu-filter"
+          autoFocus
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            const vis = visibleButtons();
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              if (vis.length) setActive((a) => (a + (e.key === 'ArrowDown' ? 1 : vis.length - 1)) % vis.length);
+            } else if (e.key === 'Enter') {
+              e.preventDefault();
+              (vis[filter.trim() ? active : 0] ?? vis[0])?.click();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              if (filter) setFilter('');
+              else onClose();
+            }
+          }}
+          placeholder="Filter commands…"
+          autoComplete="off"
+          spellCheck={false}
+          className="w-full pl-6 pr-2 py-1 rounded-md bg-slate-950/80 border border-slate-700/80 text-[11px] text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-600 select-text"
+        />
+      </div>
+      {matches === 0 && <div id="diagram-context-menu-none" className="px-2.5 py-1.5 text-slate-500">No command matches “{filter.trim()}”</div>}
+
       {/* Existing Note Preview if present */}
       {hasNote && (
         <div className="px-2.5 py-1.5 mb-1.5 bg-amber-500/10 border border-amber-500/25 rounded-lg text-amber-200/90 text-[11px] flex items-start gap-1.5">
@@ -199,7 +264,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
       )}
 
       {/* Menu Actions */}
-      <div className="space-y-0.5">
+      <div ref={actionsRef} className="space-y-0.5 [&_button[data-active]]:bg-sky-700/40 [&_button[data-active]]:text-white">
         {extraItems && extraItems.length > 0 && (
           <div className="pb-1 mb-1 border-b border-slate-800 space-y-0.5">
             {extraItems.map((item) => (

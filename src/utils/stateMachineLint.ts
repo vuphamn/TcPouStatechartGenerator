@@ -27,9 +27,22 @@ export type LintRuleId =
   | 'multiple-initial'
   | 'region-no-final'
   | 'region-unreachable'
-  | 'recorded-path';
+  | 'recorded-path'
+  | 'undeclared-variable'
+  | 'unused-variable'
+  | 'duplicate-variable'
+  | 'input-written'
+  | 'unused-method'
+  | 'unreachable-code'
+  | 'fb-not-called';
 
-export type LintFix = { kind: 'add-enum-member'; name: string } | { kind: 'add-case-branch'; name: string };
+export type LintFix =
+  | { kind: 'add-enum-member'; name: string }
+  | { kind: 'add-case-branch'; name: string }
+  /** Declare a name the code uses (in its method, or the POU) */
+  | { kind: 'declare-variable'; name: string; method?: string }
+  /** Delete an unused variable's declaration */
+  | { kind: 'remove-variable'; name: string; method?: string };
 
 export interface LintFinding {
   /** Stable across edits (no line numbers): used to ignore a finding */
@@ -45,6 +58,8 @@ export interface LintFinding {
   /** The source line, to find it again in TwinCAT's editor */
   text?: string;
   fix?: LintFix;
+  /** Where the code editors underline it: a line of the method's (or the POU's) declaration / implementation, the name */
+  mark?: { line: number; declaration: boolean; name: string };
 }
 
 export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: string; description: string }> = {
@@ -120,6 +135,41 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     title: 'Recorded path broken',
     description: 'A path check (kept from a live session or a recording) has a transition the diagram no longer has: the machine did it, the edited code would not.',
   },
+  'undeclared-variable': {
+    severity: 'warning',
+    title: 'Not declared',
+    description: 'The code uses a name that is declared nowhere: not in the method, the POU, its base class, a GVL or a type of the PLC project (checked when the project is known: XAE, desktop).',
+  },
+  'unused-variable': {
+    severity: 'info',
+    title: 'Not used',
+    description: "A variable (VAR) of the POU or of a method is not used in its code. Inputs and outputs are the POU's interface and not checked; a derived FB may still use it.",
+  },
+  'input-written': {
+    severity: 'warning',
+    title: 'Input written',
+    description: 'The POU assigns one of its own inputs (VAR_INPUT): its caller sets it every call, so the value written here is overwritten, and the caller does not see it.',
+  },
+  'unused-method': {
+    severity: 'info',
+    title: 'Method not called',
+    description: 'A PRIVATE method that no code of the POU calls. (Public and protected methods may be called from elsewhere: not checked.)',
+  },
+  'unreachable-code': {
+    severity: 'warning',
+    title: 'Never runs',
+    description: 'Code right after a RETURN in the same block: it is never reached.',
+  },
+  'fb-not-called': {
+    severity: 'warning',
+    title: 'FB never called',
+    description: 'A timer, trigger or counter whose outputs the code reads, but that is never called (fbTimer(IN := ..., PT := ...)): its outputs never change.',
+  },
+  'duplicate-variable': {
+    severity: 'error',
+    title: 'Declared twice',
+    description: "A name is declared twice in one declaration (error), or a method's own variable hides a member of the POU of that name (warning).",
+  },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -171,7 +221,7 @@ export function blankComments(text: string): string {
   return out.join('');
 }
 
-interface CodeUnit {
+export interface CodeUnit {
   /** Method / action name; null for the POU's own body */
   method: string | null;
   lines: string[];
@@ -184,7 +234,7 @@ const cdata = (s: string) => {
 };
 
 /** ST implementations of the POU body, its methods and actions */
-function codeUnits(pouXml: string): CodeUnit[] {
+export function codeUnits(pouXml: string): CodeUnit[] {
   const units: CodeUnit[] = [];
   const make = (method: string | null, st: string) => {
     const text = cdata(st);

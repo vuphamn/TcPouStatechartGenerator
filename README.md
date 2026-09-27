@@ -69,7 +69,7 @@ The layout (panel widths, tab groups, floating windows) is saved in the browser 
 ## Key Features
 
 ### 1. Interactive Diagram Canvas
-- **Fluid Pan & Zoom**: Smooth gliding canvas navigation with mouse wheel zoom, fit-to-screen, 1:1 reset, and full-screen presentation mode.
+- **Fluid Pan & Zoom**: Smooth gliding canvas navigation with mouse wheel zoom (20% to 1000%), fit-to-screen, 1:1 reset, and full-screen presentation mode. The wheel over a right-click menu (a state's, a transition's) or a dialog on the canvas does not zoom.
 - **Node Dragging & Custom Layouts**: Drag individual state nodes directly on the canvas to customize diagram positioning.
 - **Auto-Align Diagram Engine**: Dedicated toolbar button and shortcut (`A`) to re-run the layout engine (ELK or Dagre) to cleanly organize all nodes according to current flowchart or stateDiagram-v2 logic while respecting the locked layout state.
 - **Magnetic Snap to Grid**: Toggleable snap grid (10px, 20px, 40px) with real-time horizontal and vertical smart alignment crosshair guides.
@@ -112,6 +112,13 @@ The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the res
 | Several initial states: more than one `// @initial` in one composite (or outside the composites) | Warning | |
 | Parallel region without a final state: its join never fires | Warning | |
 | Region state never entered: neither where its region starts nor a target in it | Warning | |
+| Not declared: the code uses a name declared nowhere (the method, the POU, its base class, a GVL, a type of the project). Checked when the PLC project is known (XAE, desktop) and so is the POU's base class | Warning | |
+| Not used: a `VAR` of the POU, or of a method, that its code never uses (inputs and outputs are the interface: not checked) | Info | |
+| Declared twice in one declaration (Error), or a method's own variable that hides a member of the POU (Warning) | Error / Warning | |
+| Input written: the POU assigns one of its own inputs (VAR_INPUT), which its caller overwrites every call. A command input (`cmd_...`) reset by the POU, and any input reset to FALSE, is the usual handshake and not reported | Warning | |
+| Method not called: a PRIVATE method that no code of the POU calls | Info | |
+| Never runs: code right after a RETURN in the same block | Warning | |
+| FB never called: a timer, trigger or counter whose outputs are read but which is never called, so they never change | Warning | |
 
 - **Scanning:** comments, strings and nested `CASE` / `IF` blocks are skipped over, so only the state `CASE`'s own labels and `ELSE` count.
 - **Lifecycle states:** the enum members up to `…_ENABLING` are driven by the base class (enable / disable), so the unreachable and dead-end rules skip them. The diagram groups states the same way.
@@ -119,10 +126,17 @@ The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the res
 
 ### 5. Editing from the diagram
 Right-click a state or the canvas:
+- **Filter the menu:** the menu of a state, a transition or the canvas opens with a filter box. Type part of a command ("bookm", "refer", "entry") to keep only the matching ones; the arrow keys and Enter run one, Esc clears the filter, then closes the menu.
 - **Add state...** adds a member to the `.TcDUT` enum and an empty `CASE` branch to `doState()`.
 - **Add new state from here…** asks for the new state's name, then the condition. It adds the state (an enum member at the end of the list, or last in the state's `{region}` composite, a `CASE` branch and a `getStateDescription()` line) and the transition to it at the end of the state's branch. The canvas then scrolls to it.
 - **Add transition from here** starts a line from the state. Click the target state, then enter the condition. The transition is written at the end of the source state's branch, as `IF <condition> THEN machineState := <target>; END_IF`. `Esc` or a click on empty canvas cancels.
-- **Rename state...** renames it everywhere, as a whole word: in the enum, in every method of the POU, and in its notes, styles and positions on the canvas. The name is checked against the enum and ST identifiers first.
+- **The condition field lists the POU's variables**, as TwinCAT's UML editor does: typing a name shows the variables that match it (doState()'s own and the POU's, with type and VAR block, the typed part marked). Arrow keys and Enter or Tab insert one; **Variables** or Ctrl+Space opens the list. A name that is not declared can be declared there: **Declare new variable…** asks for the scope (VAR_INPUT, VAR_OUTPUT, VAR), the type (guessed from the prefix: `bX` BOOL, `nX` INT, `tX` TIME, ...), an initial value and a comment. It is added to the end of that VAR block with the transition. A name used but not declared is pointed out (click it to declare it; a GVL's or a library's needs none). The same goes for exception transitions and Add new state from here.
+- **Members after a dot:** `smAxis.` lists what the instance offers (an FB's inputs, outputs, public methods and properties, inherited ones too), `smAxis.stData.` a struct's members, `GVL_IO.` a GVL's variables, `E_Mode.` an enum's values. The names also include the project's GVL variables (not those of a `qualified_only` GVL, which are used as `GVL.x`), and the base class's members. In XAE and the desktop app the app reads the PLC project's types for this (their declarations); the web edition knows the loaded POU and enum.
+- **The syntax is checked while typing:** brackets, a missing operand or operator, and the usual slips (`:=`, `==`, `!=`, `&&`, `||`, `!`, a `;`) are pointed out and the dialog waits until the condition is valid ST.
+- **Edit condition…** in a transition's menu, `F2` on a selected transition, or **Edit condition** in the Transition Guard window changes its condition, right on its label: a field over the label, with the same help (Enter changes it, Esc cancels). A transition without a condition gets a dialog by it, which says an IF is added. Its IF / ELSIF head is rewritten on one line; a composite's exception transition keeps its state range; a transition without a condition gets an IF. A transition in an ELSE is changed in the Method Editor. (Double-click still opens the Transition Guard window.)
+- **Entry, do and exit actions:** a state's menu shows **Entry action**, **Do action** and **Exit action**, each with its first line, as TwinCAT's UML editor shows them. Entry is the `IF bFirstPass THEN ... END_IF` block at the start of its branch (the first cycle in the state), exit an `IF machineState <> STATE THEN ... END_IF` block at its end (the cycle the state is left), do the rest of its code that is no transition. Each opens a code dialog (several lines, `Ctrl+Enter` sets it, empty removes it) with the same names and members. A do action between the state's transitions is changed in the Method Editor. **Actions** in the Options shows them under the states' names.
+- **Rename state...** renames it everywhere, as a whole word: in the enum, in every method of the POU, and in its notes, styles and positions on the canvas. The name is checked against the enum and ST identifiers first. In XAE and the desktop app, when other POUs of the project use the state (`E_States.STATE`, `STATE`), you are then asked whether to rename it there too; the dialog lists their lines, and those POUs are written at once.
+- **Several states:** Ctrl+click a state to add it to a selection (or take it out), or Shift+drag a box on the canvas around them. The selected states get a dashed frame. Right-click one of them for their actions: bookmark (or remove the bookmarks of) all of them, delete all of them (one confirmation lists what goes), clear the selection. Esc or a click elsewhere clears it.
 - **Copy state** (`Ctrl+C` with the state selected), then `Ctrl+V` or **Paste a copy of …**, adds a new state named `<STATE>_COPY`. It gets a copy of the state's code: the branch in `doState()`, its actions and transitions out, placed right after the original. A `machineState := <STATE>` inside the copy goes to the copy. Its line in `getStateDescription()` is copied with " (copy)", and it becomes a new enum member at the end of the list, so no other state changes value. The name is asked for straight away.
 - **Delete state…** (`Delete`) shows what goes and asks first: the transitions into it (in `doState()` and `preProcess()`), its branches, and its enum member. It also lists what still refers to it, such as a range bound in `preProcess()`, for you to change. Members after it in the enum get new values when they have none of their own, and the dialog says so.
 - **Setting a state's role:** **Set as initial state** (the machine's) and **Mark as final state** do the same as the palette's Initial and Final. **Initial state of <composite>** makes it its composite's initial state. **Move to composite…** moves its enum member into another composite.
@@ -140,7 +154,7 @@ TABLEMANAGER_ERROR              (* @final  the machine stops here *)
 
 Transitions:
 - **Priority:** right-click a transition for **Raise priority** / **Lower priority** / **Priority n of m…**, or press `Alt+↑` / `Alt+↓` with it selected. The priority is the order of a state's transitions in its `doState()` branch. The IF / ELSIF arms of one IF swap (the first keeps `IF`), and so do separate statements. A comment right above an arm moves with it. An `ELSE` stays last, and transitions that share a block with others are left for the Method Editor. The message says which. For `preProcess()` transitions, the same items change their order there.
-- **Moving an end:** drag a selected transition's end handle onto another state (the state is marked while you drag) to change its target (`machineState := NEW`). Drag its start handle onto another state to move its code (its IF, or its IF / ELSIF arm as an IF of its own) to the end of that state's branch. Released over its own state, the end snaps onto the state's border, and the state flashes to confirm the connection. Dropped on empty canvas, the handles only reshape the line, as before.
+- **Moving an end:** drag a selected transition's end handle onto another state (the state is marked while you drag) to change its target (`machineState := NEW`). Drag its start handle onto another state to move its code (its IF, or its IF / ELSIF arm as an IF of its own) to the end of that state's branch. Released over or next to its own state, the end attaches to the side of the state it is by (also near a corner), and the line comes in square to that side, so the arrow head touches the border; the state flashes to confirm the connection. Dropped on empty canvas, the handles only reshape the line, as before.
 - **Delete transition…** (`Delete` with it selected) removes its code block after showing it.
 - A click selects a transition. A **double-click** opens its Transition Guard window.
 
@@ -183,6 +197,20 @@ The toolbar on the left of the canvas holds the elements of TwinCAT's UML statec
 - **Identified States Sidebar**: Filter states by name, logic presence in `doState()`, error sinks, or composite groups; sort alphabetically or by enum index; jump to any state with 1 click.
 - **Integrated Enum Editor (`.TcDUT`)**: In-app editor for TwinCAT enum definitions with syntax checking and member management.
 - **Integrated Method Editor (`.TcPOU`)**: Embedded editor for `doState()` and `preProcess()` Structured Text blocks.
+- **Bookmarks**, as TwinCAT's PLC Bookmarks: right-click a state on the canvas or in Identified States for **Add bookmark** / **Remove bookmark**. A bookmarked state has a ribbon on the canvas and a bookmark on its card, and the Method Editor marks its `CASE` label line in the gutter. In the Method Editor's implementation, right-click a line for **PLC Bookmarks**: *Toggle Bookmark* (`Ctrl+F2`), *Next Bookmark*, *Previous Bookmark*, *Clear All Bookmarks* (this method, or the whole POU). Toggling a state's label line toggles the state's bookmark, so the canvas shows it too; other lines keep their text, so a bookmark stays on its line when lines above it change. The POU Editor's body has PLC Bookmarks too. **Show All Bookmarks…** (in the submenu, a state's or the canvas's menu, or Identified States) lists every bookmark of the POU; a click goes there. Hovering a state on the canvas shows its entry, do and exit actions in full, at once (in the heat-map's box when that one shows). On the canvas, **F2** / **Shift+F2** (no transition selected) go to the next / previous bookmarked state. Bookmarks are kept per POU in this browser / app.
+- **Code help in the editors** (POU Editor, Method Editor), as in TwinCAT:
+  - **Completion:** Ctrl+Space lists the names the code can use (the method's, the POU's and its base class's, the project's GVLs), and a dot lists the members of what is before it (an FB instance's inputs, outputs, methods and properties, a struct's members, a GVL's variables, an enum's values). Arrows move, Enter or Tab inserts, Esc closes; Ctrl+Z undoes the insert.
+  - **Input Assistant** (F2): every name by category (variables, inherited, global variables, states, enum values, types, the standard ones), with a search; Enter or a double-click inserts it.
+  - **Hover** a name for its type, VAR block and comment.
+  - **Parameter hints:** in a call (`fbTimer(`, `smAxis.home(`, a function), a box above the line lists what it takes: its inputs, in-outs and outputs (`=> Q`) with their types, the one being typed marked (by position, or by name after `IN :=`). The standard function blocks (TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD, RS, SR) are known too, and complete after a dot (`fbTimer.` → Q, ET, …).
+  - **Snippets:** a key and Tab puts in a piece of code, indented like its line, the caret where you type next: `if`, `ife`, `elsif`, `case`, `for`, `while`, `repeat`, `ton`, `rtrig`, `trans` (a transition), `entry`, `exit`. Your own: the command palette's **Edit snippets…** (kept in this browser; yours come first).
+  - **Format Document** (Shift+Alt+F, or the menu): every line re-indented with tabs by its blocks (IF / ELSIF / ELSE, CASE labels and their code, FOR, WHILE, REPEAT, VAR blocks), a condition going on over several lines one level further. Only the indentation changes; Ctrl+Z undoes it.
+  - **Problems in the code:** a name that is not declared, a variable declared twice or not used is underlined (red, amber, blue), its message on hover. The Problems tab has **Declare…** for a name that is not declared (in its method, or the POU) and **Remove** for an unused variable (after showing its line).
+  - **Find All References** (Shift+F12, or the menu; a state's menu on the canvas too): every use in the POU's declaration, body, methods and guards, marked as declaration, write or read. A state's uses as `E_States.STATE` count. A click opens it at the line.
+- **Refactoring in the code editors** (POU Editor, Method Editor), from the right-click menu:
+  - **Go to Definition** (F12) on a member of another POU's instance (`smAxis.bDone`) opens that POU at the member: its declaration line in the POU Editor, or its method in the Method Editor (XAE, desktop). In XAE, **Open SM_KAxis.bDone in the TwinCAT editor** opens TwinCAT's editor there.
+  - **Declare x…** (Shift+F2, as TwinCAT's Auto Declare) on a name the code uses but nobody declares: scope, type (guessed from its prefix), initial value and comment. In the Method Editor it goes into the method's declaration, or with **Declare x in the POU…** into the POU's (written at once).
+  - **Rename x…** on a variable of the POU renames it in its declaration, body, methods, properties and the guards, as a whole word. A member of something else (`other.x`) and a call's named parameter (`fb(x := 1)`) stay; a method with its own `x` keeps it. The dialog previews every changed line. For an input or output, XAE and the desktop app also look in the other POUs of the PLC project: its uses there (`instance.x`, `inst[i].x`, `pInst^.x`, a named parameter `instance(x := …)`) are renamed too, listed in the preview, and those POUs are written at once when you confirm (each only if it did not change since it was read). In the web edition the other POUs keep the old name, and the dialog says so. Live watches are not changed. In the Method Editor, a method's own variable is renamed in that method. Save first: it works on the saved POU.
 - **Custom State Styling Inspector**: Customize fill colors, stroke colors, and borders for individual states with instant live preview.
 
 ### 9. Export & Tooling
@@ -229,6 +257,10 @@ Edits (the canvas', and an editor's **Save** / `Ctrl+S`, which puts its code int
 - **A file changed on disk since it was opened** (saved in TwinCAT or another editor): Save asks before overwriting it. Files that did not change are saved.
 - **Unsaved edits are not lost silently:** opening another POU (Browse, a drop, a sample) asks first, and closing or reloading does too (the desktop app asks in a dialog). What is kept per viewer (layout, notes, styles, positions, options) is never the code.
 
+### Command palette and shortcuts
+- **Ctrl+Shift+P** opens the command palette: every command of the app in one list with a filter (all the words typed, in any order): the selected state's and the canvas's menu commands, "Go to" every state, "Open" every method, "Show" every tab, the view options (actions on the states, descriptions, priorities, the layout engine), Save, Undo / Redo, the bookmarks, the shortcuts, Edit snippets. Arrows and Enter run one.
+- **?** (not while typing) lists every keyboard shortcut, by where it works, with a filter.
+
 ### Development
 ```bash
 # Clone the repository
@@ -240,6 +272,9 @@ npm install
 
 # Start local development server (runs on port 3000)
 npm run dev
+
+# The tests: node tests/run.cjs [unit|web|live|desktop|all]; the XAE extension's own (C#, no Visual Studio needed):
+dotnet test xae-extension/KvalStateScope.Xae.Tests
 ```
 
 ### Production Build

@@ -65,6 +65,8 @@ import {
   SquareStack,
   ListTree,
   FlaskConical,
+  Zap,
+  Pencil,
 } from 'lucide-react';
 import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
 import {
@@ -102,6 +104,22 @@ import {
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
 import { setOpenTypeHandler, type OpenTypeWhere } from './utils/openType.ts';
+import { declareInDeclaration, declareVariables, declarationVariables, guessType, removeFromDeclaration, type NewVariable } from './utils/pouVariables.ts';
+import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
+import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols, onProjectSymbols, setProjectSymbols, symbolScope, type ProjectFile } from './utils/projectSymbols.ts';
+import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
+import { allStateActions, readStateActions, writeStateAction, type ActionKind } from './utils/stateActions.ts';
+import { checkRename, findReferences, renameMemberInFile, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
+import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
+import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS } from './utils/stSnippets.ts';
+import { ReferencesDialog } from './components/ReferencesDialog.tsx';
+import { lintVariables } from './utils/variableLint.ts';
+import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
+import { stateQualifier } from './utils/stateNames.ts';
+import { BODY, clearBookmarks, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BookmarksDialog } from './components/BookmarksDialog.tsx';
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
+import { getPouBody } from './utils/pouBody.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
@@ -111,7 +129,7 @@ import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
 import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
-import { getStateCodeFromPou } from './utils/pouStateEditor.ts';
+import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -338,6 +356,22 @@ export const App: React.FC = () => {
   const [includeStateDescriptions, setIncludeStateDescriptions] = useState<boolean>(
     SAMPLES[0].defaultIncludeDescriptions
   );
+  // States' entry / do / exit actions shown on them (as TwinCAT's UML editor does)
+  const [showStateActions, setShowStateActions] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.stateActions') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('kss.stateActions', showStateActions ? '1' : '0');
+    } catch {
+      // (not remembered)
+    }
+  }, [showStateActions]);
+  const stateActions = useMemo(() => (showStateActions && pouContent ? allStateActions(pouContent) : undefined), [showStateActions, pouContent]);
   const [showTransitionPriorities, setShowTransitionPriorities] = useState<boolean>(true);
   const [priorityFormat, setPriorityFormat] = useState<PriorityFormat>(initialPreset.priorityFormat);
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
@@ -647,7 +681,7 @@ export const App: React.FC = () => {
       const result = generateStatechart(dutContent, pouContent, {
         flowchartOutput,
         collapseErrorSinkEdges, choiceNodes,
-        includeStateDescriptions,
+        includeStateDescriptions, stateActions,
         showTransitionPriorities,
         priorityFormat,
       });
@@ -674,7 +708,7 @@ export const App: React.FC = () => {
     pouContent,
     flowchartOutput,
     collapseErrorSinkEdges, choiceNodes,
-    includeStateDescriptions,
+    includeStateDescriptions, stateActions,
     showTransitionPriorities,
     priorityFormat,
   ]);
@@ -859,7 +893,7 @@ export const App: React.FC = () => {
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
             collapseErrorSinkEdges, choiceNodes,
-            includeStateDescriptions,
+            includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat,
           });
@@ -892,7 +926,7 @@ export const App: React.FC = () => {
       dutContent,
       flowchartOutput,
       collapseErrorSinkEdges, choiceNodes,
-      includeStateDescriptions,
+      includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat,
     ]
@@ -927,7 +961,7 @@ export const App: React.FC = () => {
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
             collapseErrorSinkEdges, choiceNodes,
-            includeStateDescriptions,
+            includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat,
           });
@@ -960,7 +994,7 @@ export const App: React.FC = () => {
       dutContent,
       flowchartOutput,
       collapseErrorSinkEdges, choiceNodes,
-      includeStateDescriptions,
+      includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat,
     ]
@@ -976,14 +1010,14 @@ export const App: React.FC = () => {
       try {
         const startTime = performance.now();
         setGenerationError(null);
-        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat });
+        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat });
         setRawMarkdown(result);
         setGenerationStats({ statesCount: (result.match(/-->/g) || []).length, linesCount: result.split('\n').length, timeMs: Math.round(performance.now() - startTime) });
       } catch (genErr: unknown) {
         setGenerationError(genErr instanceof Error ? genErr.message : String(genErr));
       }
     },
-    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat]
+    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat]
   );
 
   const handleSavePreProcessCode = useCallback(
@@ -1004,7 +1038,7 @@ export const App: React.FC = () => {
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
             collapseErrorSinkEdges, choiceNodes,
-            includeStateDescriptions,
+            includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat,
           });
@@ -1037,7 +1071,7 @@ export const App: React.FC = () => {
       dutContent,
       flowchartOutput,
       collapseErrorSinkEdges, choiceNodes,
-      includeStateDescriptions,
+      includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat,
     ]
@@ -1055,7 +1089,7 @@ export const App: React.FC = () => {
           const result = generateStatechart(newDutContent, pouContent, {
             flowchartOutput,
             collapseErrorSinkEdges, choiceNodes,
-            includeStateDescriptions,
+            includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat,
           });
@@ -1087,7 +1121,7 @@ export const App: React.FC = () => {
       pouContent,
       flowchartOutput,
       collapseErrorSinkEdges, choiceNodes,
-      includeStateDescriptions,
+      includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat,
     ]
@@ -1822,10 +1856,124 @@ export const App: React.FC = () => {
     [seenPouType]
   );
   const pathCheckResults = useMemo(() => runPathChecks(pathChecks, availableEdges), [pathChecks, availableEdges]);
-  const lintFindings = useMemo(
-    () => [...lintStateMachine(pouContent, dutContent, availableEdges), ...pathCheckFindings(pathCheckResults)],
-    [pouContent, dutContent, availableEdges, pathCheckResults]
+  // Bookmarks (the canvas, Identified States, the Method Editor share them)
+  const bookmarks = useBookmarks(pouFileName);
+  const handleToggleBookmark = useCallback(
+    (state: string) => {
+      const on = toggleStateBookmark(pouFileName, state);
+      showCopyToast(on ? `Bookmarked ${state}` : `Bookmark removed: ${state}`, 'success');
+    },
+    [pouFileName, showCopyToast]
   );
+  // A state's tooltip on the canvas: its entry / do / exit actions in full (a few lines each)
+  const stateTooltips = useMemo(() => {
+    const out: Record<string, string> = {};
+    if (!pouContent) return out;
+    // (the parallel regions' own state variables; regionOf is computed further down)
+    const regions = regionVariables(pouContent, dutContent, identifiedStatesResult.stateVarName || 'machineState');
+    for (const st of identifiedStatesResult.states) {
+      const a = readStateActions(pouContent, st.id, regions.get(st.id)?.variable ?? identifiedStatesResult.stateVarName ?? 'machineState');
+      if ('error' in a) continue;
+      const part = (kind: 'entry' | 'do' | 'exit') => {
+        const lines = a[kind].filter((l) => l.trim());
+        if (!lines.length) return '';
+        return `${kind} /\n${lines.slice(0, 12).map((l) => `  ${l.replace(/\t/g, '  ')}`).join('\n')}${lines.length > 12 ? `\n  … ${lines.length - 12} more lines` : ''}`;
+      };
+      const text = [part('entry'), part('do'), part('exit')].filter(Boolean).join('\n');
+      if (text) out[st.id] = `${st.id}\n${text}`;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pouContent, dutContent, identifiedStatesResult]);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // (read by the canvas's keys, set up further down)
+  const bookmarksRef = useRef<string[]>([]);
+  const identifiedStatesRef = useRef<string[]>([]);
+  bookmarksRef.current = bookmarks.states;
+  identifiedStatesRef.current = identifiedStatesResult.states.map((s) => s.id);
+  // Keyboard shortcuts (?): every shortcut in one list
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '?' || e.ctrlKey || e.altKey || e.metaKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      setShortcutsOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  // Several states selected on the canvas (Ctrl+click, Shift+drag)
+  const [multiSelected, setMultiSelected] = useState<string[]>([]);
+  useEffect(() => setMultiSelected([]), [pouFileName]);
+  useEffect(() => {
+    if (!multiSelected.length) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !(e.target as HTMLElement | null)?.closest?.('input, textarea, [role="dialog"], #diagram-context-menu')) setMultiSelected([]);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [multiSelected.length]);
+  // The command palette (Ctrl+Shift+P)
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const bookmarkEntries = useMemo(
+    () => (bookmarksOpen ? listBookmarks(pouFileName, (m) => (m === BODY ? getPouBody(pouContent).implementation : getMethodCodeFromPou(pouContent, m).methodFound ? getMethodCodeFromPou(pouContent, m).code : null)) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bookmarksOpen, bookmarks, pouContent, pouFileName]
+  );
+  const [projectFiles, setProjectFiles] = useState<{ project?: string; files: ProjectFile[] } | null>(null);
+  useEffect(() => {
+    setProjectFiles(null);
+    if (isXaeHost()) {
+      const off = onHostMessage((m) => {
+        if (m.type === 'projectSymbols' && m.files) setProjectFiles({ project: m.project, files: m.files });
+      });
+      postToHost({ type: 'projectSymbols' });
+      return off;
+    }
+    const desktop = (window as unknown as { tcDesktop?: { projectSymbols?: (from: string) => Promise<{ project?: string; files?: ProjectFile[]; error?: string }> } }).tcDesktop;
+    if (desktop?.projectSymbols && pouPath) {
+      let alive = true;
+      void desktop.projectSymbols(pouPath).then((r) => {
+        if (alive && r?.files) setProjectFiles({ project: r.project, files: r.files });
+      });
+      return () => {
+        alive = false;
+      };
+    }
+    return undefined;
+  }, [pouPath]);
+  const [symbolsVersion, setSymbolsVersion] = useState(0);
+  useEffect(() => onProjectSymbols(() => setSymbolsVersion((v) => v + 1)), []);
+  useEffect(() => {
+    const loaded: ProjectFile[] = [
+      ...(pouContent ? [{ name: pouFileName || 'POU.TcPOU', content: pouContent }] : []),
+      ...(dutContent ? [{ name: dutFileName || 'E_States.TcDUT', content: dutContent }] : []),
+    ];
+    setProjectSymbols(buildProjectSymbols(projectFiles?.files ?? [], loaded, projectFiles?.project), !!projectFiles);
+  }, [projectFiles, pouContent, dutContent, pouFileName, dutFileName]);
+  const lintFindings = useMemo(
+    () => [
+      ...lintStateMachine(pouContent, dutContent, availableEdges),
+      ...lintVariables(pouContent, getProjectSymbols(), hasProjectSymbols(), identifiedStatesResult.states.map((s) => s.id)),
+      ...pathCheckFindings(pathCheckResults),
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, dutContent, availableEdges, pathCheckResults, symbolsVersion, identifiedStatesResult]
+  );
+  const lintFindingsRef = useRef<LintFinding[]>([]);
+  lintFindingsRef.current = lintFindings;
   const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;
   const [lintIgnored, setLintIgnored] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -2013,6 +2161,32 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [connectFrom]);
   const stateVarName = identifiedStatesResult.stateVarName || 'machineState';
+  const projectIoRef = useRef<{
+    fetch: (name: string) => Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }>;
+    write: (files: { path: string; content: string; baseline: string }[]) => Promise<string | null>;
+    can: () => boolean;
+  } | null>(null);
+  // After a state is renamed here: its uses in the project's other POUs (E_States.OLD, OLD), renamed too if you agree
+  const renameStateElsewhere = async (oldName: string, newName: string) => {
+    const io = projectIoRef.current;
+    if (!io?.can()) return;
+    const res = await io.fetch(oldName);
+    if (res.error || !res.files?.length) return;
+    const enumNames = (dutContent.match(/\bTYPE\s+(\w+)/gi) ?? []).map((m) => m.split(/\s+/)[1]);
+    const others = res.files.map((f) => ({ ...f, ...renameWordInFile(f.content, oldName, newName, enumNames) })).filter((f) => f.changes.length);
+    if (!others.length) return;
+    setPromptRequest({
+      title: `Rename ${oldName} in ${others.length} other POU${others.length === 1 ? '' : 's'} too?`,
+      label: `These POUs of the project use ${oldName}. Written at once (each only if it did not change since it was read):`,
+      details: others.flatMap((o) => [`${o.name}:`, ...o.changes.slice(0, 10).map((c) => `  ${c.where} ${c.line}: ${c.before} → ${c.after}`), ...(o.changes.length > 10 ? [`  … ${o.changes.length - 10} more`] : [])]),
+      confirmOnly: true,
+      submitLabel: 'Rename there too',
+      onSubmit: async () => {
+        const err = await io.write(others.map((o) => ({ path: o.path, content: o.xml, baseline: o.content })));
+        showCopyToast(err ? `Not written: ${err}` : `Renamed ${oldName} → ${newName} in ${others.map((o) => o.name).join(', ')}`, err ? 'error' : 'success', 7000);
+      },
+    });
+  };
   const handleRenameState = useCallback(
     (oldName: string) =>
       setPromptRequest({
@@ -2042,8 +2216,11 @@ export const App: React.FC = () => {
           }
           const where = `${r.pouCount} place${r.pouCount === 1 ? '' : 's'} in the POU${dutContent ? `, ${r.dutCount} in the enum` : ''}`;
           showCopyToast(`Renamed ${oldName} to ${newName}: ${where}`, 'success');
+          // (the other POUs: asked after this dialog closed)
+          setTimeout(() => void renameStateElsewhere(oldName, newName), 0);
         },
       }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, dutContent, handleReplaceSources, selectedStateId, showCopyToast]
   );
   const handleAddState = useCallback(
@@ -2080,6 +2257,19 @@ export const App: React.FC = () => {
 
   // What a connect-mode click makes: a transition (with a condition), a completion transition (none), an exception
   // transition (checked first; from a composite: in preProcess())
+  const codeScope = (method?: string) => symbolScope(pouContent, getProjectSymbols(), { method, states: identifiedStatesResult.states.map((st) => st.id) });
+  const conditionHelp = (method = 'doState') => ({ scope: codeScope(method), condition: true });
+  /** The POU with the variables declared in a condition dialog (null: the error was shown) */
+  const withDeclarations = (pou: string, declarations?: NewVariable[]) => {
+    if (!declarations?.length) return pou;
+    const r = declareVariables(pou, declarations);
+    if ('error' in r) {
+      showCopyToast(r.error, 'error');
+      return null;
+    }
+    return r.pou;
+  };
+  const declaredText = (declarations?: NewVariable[]) => (declarations?.length ? `; declared ${declarations.map((d) => `${d.name} : ${d.type}`).join(', ')}` : '');
   const connectKindRef = useRef<{ kind: 'transition' | 'completion' | 'exception'; composite?: string }>({ kind: 'transition' });
   const handleConnectTo = useCallback(
     (to: string) => {
@@ -2111,12 +2301,15 @@ export const App: React.FC = () => {
           initial: 'bError',
           monospace: true,
           submitLabel: 'Add exception transition',
+          ...conditionHelp(composite ? 'preProcess' : 'doState'),
           validate: (v) => (v ? null : 'Enter a condition'),
-          onSubmit: (condition) => {
+          onSubmit: (condition, declarations) => {
             const r = addExceptionTransition(pouContent, dutContent, composite ? { composite } : { state: from }, to, condition, v);
             if ('error' in r) return showCopyToast(r.error, 'error');
-            handleReplaceSources(r.pou, null);
-            showCopyToast(`Added the exception transition ${from} → ${to} in ${r.where}`, 'success');
+            const pou = withDeclarations(r.pou, declarations);
+            if (!pou) return;
+            handleReplaceSources(pou, null);
+            showCopyToast(`Added the exception transition ${from} → ${to} in ${r.where}${declaredText(declarations)}`, 'success');
           },
         });
         return;
@@ -2128,11 +2321,21 @@ export const App: React.FC = () => {
         monospace: true,
         hint: `IF <condition> THEN ${stateVarName} := ${to}; END_IF`,
         submitLabel: 'Add transition',
+        ...conditionHelp(),
         validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
-        onSubmit: (condition) => {
+        onSubmit: (condition, declarations) => {
           const code = addTransition(pouContent, from, to, condition, v);
           if (!code) {
             showCopyToast(`${from} has no CASE branch in doState()`, 'error');
+            return;
+          }
+          if (declarations?.length) {
+            const u = updateMethodCodeInPou(pouContent, 'doState', code);
+            const pou = u.success ? withDeclarations(u.updatedPou, declarations) : null;
+            if (!u.success) showCopyToast(u.error || 'Could not add the transition', 'error');
+            if (!pou) return;
+            handleReplaceSources(pou, null);
+            showCopyToast(`Added the transition ${from} → ${to}${declaredText(declarations)}`, 'success');
             return;
           }
           const result = handleSaveMethodCode('doState', code);
@@ -2141,7 +2344,7 @@ export const App: React.FC = () => {
         },
       });
     },
-    [connectFrom, pouContent, dutContent, stateVarName, regionOf, handleSaveMethodCode, handleReplaceSources, showCopyToast]
+    [connectFrom, pouContent, dutContent, stateVarName, regionOf, handleSaveMethodCode, handleReplaceSources, showCopyToast, identifiedStatesResult]
   );
 
   // Transitions edited on the canvas (priority, start / end moved): doState() / preProcess() rewritten, the chart
@@ -2307,6 +2510,100 @@ export const App: React.FC = () => {
     [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast, seen]
   );
 
+  // A transition's condition changed: from its menu, F2, or the Transition Guard window; the dialog by its label
+  const edgeAnchor = (edge: EdgeInfo) => {
+    // Its label (the diagram's, not the minimap's), else the middle of its line
+    const key = `${edge.from}->${edge.to}`;
+    const label = [...document.querySelectorAll<SVGGElement>('#mermaid-diagram-svg-container g.edgeLabel')].find((l) => l.getAttribute('data-linked-path-id') === key || l.getAttribute('data-edge-id') === key);
+    const lr = label?.getBoundingClientRect();
+    if (lr && lr.width > 4 && lr.height > 4) return { x: lr.x + lr.width / 2, y: lr.y + lr.height / 2, width: lr.width, height: lr.height, onLabel: true };
+    const path = [...document.querySelectorAll<SVGPathElement>('#mermaid-canvas-area path.tc-edge-path')].find((p) => p.getAttribute('data-edge-key') === `${edge.from}->${edge.to}`);
+    if (!path) return undefined;
+    try {
+      const q = path.getPointAtLength(path.getTotalLength() / 2);
+      const m = path.getScreenCTM();
+      if (!m) return undefined;
+      return { x: q.x * m.a + q.y * m.c + m.e, y: q.x * m.b + q.y * m.d + m.f };
+    } catch {
+      return undefined;
+    }
+  };
+  const handleEditCondition = useCallback(
+    (edge: EdgeInfo) => {
+      if (!pouContent) return;
+      const e = currentEdge(edge);
+      const sv = varFor(e.from);
+      const c = transitionCondition(pouContent, e, sv);
+      if ('error' in c) {
+        showCopyToast(c.error, 'error', 6000);
+        return;
+      }
+      const anchor = edgeAnchor(e);
+      setPromptRequest({
+        title: `Condition of ${e.from} → ${e.to}`,
+        label: c.condition
+          ? `Condition (Structured Text), in ${c.method}() line ${c.line}:`
+          : `${e.from} → ${e.to} has no condition (it is taken whenever the code gets there). A condition puts it in an IF:`,
+        initial: c.condition || 'TRUE',
+        monospace: true,
+        anchor,
+        // (on its label: edited in place; without a condition, the dialog says what happens)
+        inline: !!c.condition && !!anchor && 'onLabel' in anchor,
+        submitLabel: 'Change condition',
+        ...conditionHelp(c.method),
+        validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
+        onSubmit: (condition, declarations) => {
+          if (condition === c.condition && !declarations?.length) return;
+          const r = setTransitionCondition(pouContent, e, condition, sv);
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          const u = updateMethodCodeInPou(pouContent, r.method, r.code);
+          if (!u.success) return showCopyToast(u.error || 'Could not change the condition', 'error');
+          const pou = withDeclarations(u.updatedPou, declarations);
+          if (!pou) return;
+          handleReplaceSources(pou, null);
+          showCopyToast(`${r.message}${declaredText(declarations)}`, 'success');
+        },
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, currentEdge, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult]
+  );
+  const ACTION_TEXT: Record<ActionKind, string> = {
+    entry: 'runs once, the first cycle in the state: IF bFirstPass THEN … END_IF at the start of its branch',
+    do: "runs every cycle in the state: its branch's code that is no transition",
+    exit: 'runs once, the cycle the state is left: IF <state> <> STATE THEN … END_IF at the end of its branch',
+  };
+  const handleEditAction = useCallback(
+    (state: string, kind: ActionKind) => {
+      if (!pouContent) return;
+      const sv = varFor(state);
+      const a = readStateActions(pouContent, state, sv);
+      if ('error' in a) return showCopyToast(a.error, 'error', 6000);
+      if (kind === 'do' && !a.doEditable) return showCopyToast(`${state}'s do code is between its transitions: change it in the Method Editor`, 'error', 6000);
+      const doCode = getMethodCodeFromPou(pouContent, 'doState').code ?? '';
+      setPromptRequest({
+        title: `${kind[0].toUpperCase()}${kind.slice(1)} action of ${state}`,
+        label: `The ${kind} action ${ACTION_TEXT[kind].replace('<state>', sv)}. Empty: none.`,
+        initial: a[kind].join('\n'),
+        monospace: true,
+        multiline: true,
+        submitLabel: 'Set action',
+        scope: codeScope('doState'),
+        hint: 'Structured Text statements',
+        onSubmit: (code, declarations) => {
+          const r = writeStateAction(pouContent, state, sv, kind, code, stateQualifier(doCode, sv));
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          const pou = withDeclarations(r.pou, declarations);
+          if (!pou) return;
+          handleReplaceSources(pou, null);
+          showCopyToast(`${r.message}${declaredText(declarations)}`, 'success');
+        },
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult]
+  );
+
   // The statechart palette: elements dropped on the canvas become ST (Save writes the files)
   const [choiceRequest, setChoiceRequest] = useState<ChoiceRequest | null>(null);
   const [forkJoinRequest, setForkJoinRequest] = useState<ForkJoinRequest | null>(null);
@@ -2338,7 +2635,7 @@ export const App: React.FC = () => {
   );
   /** A new state (optionally final, in a composite), its description, placed where it was dropped */
   const createState = useCallback(
-    (name: string, opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string; from?: { state: string; condition: string } }) => {
+    (name: string, opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string; from?: { state: string; condition: string; declarations?: NewVariable[] } }) => {
       let pou = addCaseBranch(pouContent, name);
       if (!pou) return showCopyToast('doState() has no CASE to add the state to', 'error');
       const u = updateMethodCodeInPou(pouContent, 'doState', pou);
@@ -2350,6 +2647,9 @@ export const App: React.FC = () => {
         const t = code ? updateMethodCodeInPou(pou, 'doState', code) : null;
         if (!t?.success) return showCopyToast(`${opts.from.state} has no CASE branch in doState()`, 'error');
         pou = t.updatedPou;
+        const declared = withDeclarations(pou, opts.from.declarations);
+        if (!declared) return;
+        pou = declared;
       }
       pou = addStateDescription(pou, name, describeName(name, stateNames));
       if (opts.final && !dutContent.trim()) {
@@ -2412,8 +2712,9 @@ export const App: React.FC = () => {
                 monospace: true,
                 hint: `IF <condition> THEN ${stateVarName} := ${name}; END_IF`,
                 submitLabel: 'Add state and transition',
+                ...conditionHelp(),
                 validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
-                onSubmit: (condition) => createState(name, { composite, from: { state: from, condition } }),
+                onSubmit: (condition, declarations) => createState(name, { composite, from: { state: from, condition, declarations } }),
               }),
             0
           ),
@@ -2727,6 +3028,23 @@ export const App: React.FC = () => {
         handlePasteState();
         return true;
       }
+      // F2: the selected transition's condition
+      if (e.key === 'F2' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && sel.edge && pouContent) {
+        handleEditCondition(sel.edge);
+        return true;
+      }
+      // F2 / Shift+F2 otherwise: the next / previous bookmarked state (in the states' order)
+      if (e.key === 'F2' && !e.ctrlKey && !e.altKey && !e.metaKey && !sel.edge && bookmarksRef.current.length) {
+        const order = identifiedStatesRef.current.filter((s) => bookmarksRef.current.includes(s));
+        if (!order.length) return false;
+        const at = sel.stateId ? order.indexOf(sel.stateId) : -1;
+        const next = e.shiftKey ? order[(at <= 0 ? order.length : at) - 1] : order[(at + 1) % order.length];
+        handleJumpToState(next);
+        setSelectedStateId(next);
+        setSelectedStateLabel(next);
+        showCopyToast(`Bookmark ${order.indexOf(next) + 1} of ${order.length}: ${next}`, 'success', 1800);
+        return true;
+      }
       // Delete: the selected transition, else the selected state (after a confirmation)
       if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.metaKey && pouContent) {
         if (sel.edge) handleDeleteTransition(sel.edge);
@@ -2736,7 +3054,7 @@ export const App: React.FC = () => {
       }
       return false;
     },
-    [handleTransitionPriorityStep, pouContent, handleCopyState, handlePasteState, handleDeleteTransition, handleDeleteState, stepHistory]
+    [handleTransitionPriorityStep, pouContent, handleCopyState, handlePasteState, handleDeleteTransition, handleDeleteState, stepHistory, handleEditCondition]
   );
 
   // Open a state machine the diagram references (its POU in the same PLC project), with Back
@@ -2771,26 +3089,223 @@ export const App: React.FC = () => {
     },
     [pouPath, pouFileName, openPouInProject]
   );
-  // The code editors' Go to Definition on a type (another POU): here in StateScope (with Back), or in TwinCAT's editor
+  // The code editors' Go to Definition on a type (another POU): here in StateScope (with Back), or in TwinCAT's
+  // editor; a member: that POU at the member (its declaration line, or its method)
+  const [pendingReveal, setPendingReveal] = useState<{ type: string; member: string } | null>(null);
+  const [pouReveal, setPouReveal] = useState<{ symbol: string; nonce: number; line?: number; part?: 'declaration' | 'implementation' } | null>(null);
+  // Find All References: the uses of a name in the POU, listed; a click opens the method / the POU Editor at the line
+  const [refsView, setRefsView] = useState<{ name: string; refs: Reference[] } | null>(null);
+  const handleFindReferences = useCallback((name: string) => {
+    // (a state is also used as E_States.STATE)
+    if (pouContent) setRefsView({ name, refs: findReferences(pouContent, name, (dutContent.match(/\bTYPE\s+(\w+)/gi) ?? []).map((m) => m.split(/\s+/)[1])) });
+  }, [pouContent, dutContent]);
+  const handleOpenReference = useCallback(
+    (r: Reference) => {
+      const method = r.unit && getAllMethodsFromPou(pouContent).find((m) => m.toLowerCase() === r.unit!.toLowerCase());
+      if (method) {
+        handleOpenInspectorPanel('method', { method: `${method}()` });
+        if (r.part === 'implementation') setCodeJump({ method, line: r.line, nonce: Date.now() });
+      } else if (!r.unit) {
+        setDockLayout((l) => activateDockTab(l, 'pou'));
+        setPouReveal({ symbol: refsView?.name ?? '', nonce: Date.now(), line: r.line, part: r.part });
+      } else showCopyToast(`${r.where} line ${r.line}: open it in the TwinCAT editor`, 'error');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, handleOpenInspectorPanel, refsView, showCopyToast]
+  );
   const handleOpenType = useCallback(
-    async (type: string, where: OpenTypeWhere) => {
+    async (type: string, where: OpenTypeWhere, member?: string) => {
+      const info = getProjectSymbols()?.types.get(type.toLowerCase());
+      const found = member ? info?.members.find((m) => m.name.toLowerCase() === member.toLowerCase()) : undefined;
       if (where === 'xae') {
-        postToHost({ type: 'openInXae', typeName: type });
+        const method = found && (found.scope === 'METHOD' || found.scope === 'PROPERTY') ? found.name : undefined;
+        postToHost({ type: 'openInXae', typeName: type, ...(method ? { method } : found?.line ? { line: found.line, text: found.text } : {}) });
+        return;
+      }
+      if (info && !['FUNCTION_BLOCK', 'PROGRAM', 'FUNCTION'].includes(info.kind)) {
+        showCopyToast(`${type} is ${info.kind === 'GVL' ? 'a GVL' : info.kind === 'INTERFACE' ? 'an interface' : 'a DUT'}: StateScope opens POUs${isXaeHost() ? ' (Open in the TwinCAT editor)' : ''}`, 'error');
         return;
       }
       const from = pouPath ? { path: pouPath, name: pouFileName } : null;
       if (await openPouInProject(type)) {
         if (from) setPouHistory((h) => [...h, from].slice(-20));
+        if (member) setPendingReveal({ type, member });
       }
     },
-    [pouPath, pouFileName, openPouInProject]
+    [pouPath, pouFileName, openPouInProject, showCopyToast]
+  );
+  // Once that POU is here: its method in the Method Editor, else the member's line in the POU Editor
+  useEffect(() => {
+    if (!pendingReveal) return;
+    if (pouFileName.replace(/\.TcPOU$/i, '').toLowerCase() !== pendingReveal.type.toLowerCase()) return;
+    const method = getAllMethodsFromPou(pouContent).find((m) => m.toLowerCase() === pendingReveal.member.toLowerCase());
+    if (method && /<Method\b/i.test(pouContent)) handleOpenMethodEditorModal(`${method}()`);
+    else {
+      setDockLayout((l) => activateDockTab(l, 'pou'));
+      setPouReveal({ symbol: pendingReveal.member, nonce: Date.now() });
+    }
+    setPendingReveal(null);
+  }, [pendingReveal, pouFileName, pouContent, handleOpenMethodEditorModal]);
+  // Rename a variable of the POU (a method's own: in it), with the changes previewed. An input / output is also
+  // renamed where other POUs of the project use it (instance.x, instance(x := ...)): XAE and the desktop app find
+  // them, the preview lists them, and they are written at once (this POU with Save, as usual)
+  const renameUsesRef = useRef<{ key: string; files: { name: string; path: string; baseline: string; content: string; changes: { where: string; line: number; before: string; after: string }[] }[] | null; error?: string } | null>(null);
+  const fetchProjectUses = useCallback(async (name: string): Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }> => {
+    if (isXaeHost()) {
+      const requestId = Date.now() % 1e9;
+      return new Promise((resolve) => {
+        const off = onHostMessage((m) => {
+          if (m.type === 'projectUses' && m.requestId === requestId) {
+            off();
+            resolve({ files: m.files, error: m.error });
+          }
+        });
+        postToHost({ type: 'projectUses', requestId, name });
+        setTimeout(() => {
+          off();
+          resolve({ error: 'XAE did not answer' });
+        }, 20000);
+      });
+    }
+    const desktop = (window as unknown as { tcDesktop?: { projectUses?: (from: string, n: string) => Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }> } }).tcDesktop;
+    if (desktop?.projectUses && pouPath) return desktop.projectUses(pouPath, name);
+    return { error: 'none' };
+  }, [pouPath]);
+  const writeOtherPous = useCallback(
+    async (files: { path: string; content: string; baseline: string }[]): Promise<string | null> => {
+      if (isXaeHost()) {
+        const requestId = Date.now() % 1e9;
+        return new Promise((resolve) => {
+          const off = onHostMessage((m) => {
+            if (m.type === 'saveOtherResult' && m.requestId === requestId) {
+              off();
+              resolve(m.ok ? null : m.message || 'XAE did not write them');
+            }
+          });
+          postToHost({ type: 'saveOther', requestId, files });
+        });
+      }
+      const desktop = (window as unknown as { tcDesktop?: { saveSources?: (f: unknown) => Promise<{ saved: string[]; conflicts: { path: string }[]; errors: { path: string; error: string }[] }> } }).tcDesktop;
+      if (!desktop?.saveSources) return 'The other POUs cannot be written here';
+      const r = await desktop.saveSources(files);
+      if (r.conflicts.length) return `Changed since they were read: ${r.conflicts.map((c) => c.path.split(/[\\/]/).pop()).join(', ')}`;
+      if (r.errors.length) return r.errors.map((e) => e.error).join('; ');
+      return null;
+    },
+    []
+  );
+  projectIoRef.current = {
+    fetch: fetchProjectUses,
+    write: writeOtherPous,
+    can: () => isXaeHost() || Boolean((window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop?.projectUses && pouPath),
+  };
+  const handleRenameVariable = useCallback(
+    (name: string, method?: string) => {
+      if (!pouContent) return;
+      const v = (method ? declarationVariables(getMethodCodeFromPou(pouContent, method).declaration || '') : declarationVariables(extractPouDeclaration(pouContent))).find((x) => x.name.toLowerCase() === name.toLowerCase());
+      const outside = !method && v && ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT'].includes(v.scope);
+      const desktop = (window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop;
+      const canProject = !!outside && (isXaeHost() || Boolean(desktop?.projectUses && pouPath));
+      const pouName = pouFileName.replace(/\.TcPOU$/i, '');
+      // The other POUs' changes for a new name (the files are read once)
+      renameUsesRef.current = null;
+      let files: { name: string; path: string; content: string }[] | null = null;
+      let lookupError: string | undefined;
+      const otherChanges = (n: string) => {
+        if (!files) return null;
+        const instances = new Set<string>();
+        for (const tp of getProjectSymbols()?.types.values() ?? []) for (const m of tp.members) if (baseTypeName(m.type).toLowerCase() === pouName.toLowerCase()) instances.add(m.name.toLowerCase());
+        return files
+          .map((file) => {
+            const local = new Set(instances);
+            for (const d of file.content.matchAll(/<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>/gi)) for (const x of declarationVariables(d[1])) if (baseTypeName(x.type).toLowerCase() === pouName.toLowerCase()) local.add(x.name.toLowerCase());
+            if (!local.size) return null;
+            const r = renameMemberInFile(file.content, local, name, n);
+            return r.changes.length ? { name: file.name, path: file.path, baseline: file.content, content: r.xml, changes: r.changes } : null;
+          })
+          .filter((x): x is NonNullable<typeof x> => !!x);
+      };
+      const ask = () =>
+        setPromptRequest({
+          title: `Rename ${name}${method ? ` (in ${method}())` : ''}`,
+          label: method ? `The new name of ${method}()'s ${name}, in that method:` : `The new name of ${name}${v ? ` (${v.scope} : ${v.type})` : ''}, everywhere in the POU: its declaration, body, methods and the guards${canProject ? ', and where other POUs of the project use it' : ''}:`,
+          initial: name,
+          monospace: true,
+          submitLabel: 'Rename',
+          validate: (n) => (n === name ? 'Enter a new name' : checkRename(pouContent, name, n, method)),
+          preview: (n) => {
+            const r = renameVariable(pouContent, name, n, method);
+            if ('error' in r) return [];
+            const rows = r.changes.slice(0, 40).map((c) => `${c.where} ${c.line}:  ${c.before}\n    →  ${c.after}`);
+            if (r.changes.length > 40) rows.push(`… ${r.changes.length - 40} more`);
+            if (r.skipped.length) rows.push(`Left as they are (their own ${name}): ${r.skipped.join(', ')}`);
+            if (canProject) {
+              const others = otherChanges(n);
+              if (others === null) rows.push(lookupError ? `⚠ Uses in other POUs not found (${lookupError}): they keep the old name` : 'Looking for uses in the other POUs of the project…');
+              else if (!others.length) rows.push('No other POU of the project uses it.');
+              else
+                for (const o of others) {
+                  rows.push(`${o.name} (written at once):`);
+                  o.changes.slice(0, 12).forEach((c) => rows.push(`  ${c.where} ${c.line}:  ${c.before}\n      →  ${c.after}`));
+                  if (o.changes.length > 12) rows.push(`  … ${o.changes.length - 12} more`);
+                }
+              rows.push('Live watches of the old name are not changed.');
+            } else if (outside) rows.push(`⚠ ${name} is part of the POU's interface: other POUs that use it (instance.${name}), and Live watches, keep the old name`);
+            return [`${r.changes.length} line${r.changes.length === 1 ? '' : 's'} change:`, ...rows];
+          },
+          onSubmit: async (n) => {
+            const r = renameVariable(pouContent, name, n, method);
+            if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+            const others = canProject ? otherChanges(n) ?? [] : [];
+            if (others.length) {
+              const err = await writeOtherPous(others.map((o) => ({ path: o.path, content: o.content, baseline: o.baseline })));
+              if (err) return showCopyToast(`Not renamed: ${err}`, 'error', 8000);
+            }
+            handleReplaceSources(r.pou, null);
+            showCopyToast(`Renamed ${name} → ${n}: ${r.changes.length} line${r.changes.length === 1 ? '' : 's'}${others.length ? `, and in ${others.map((o) => o.name).join(', ')} (written)` : ''}${r.skipped.length ? ` (not in ${r.skipped.join(', ')}: their own ${name})` : ''}`, 'success', 7000);
+          },
+        });
+      ask();
+      if (canProject) {
+        void fetchProjectUses(name).then((res) => {
+          files = res.files ?? [];
+          lookupError = res.error;
+          if (res.error) files = null;
+          // (the dialog shows them: asked again, what is typed is kept)
+          setPromptRequest((cur) => (cur && cur.title.startsWith(`Rename ${name}`) ? { ...cur } : cur));
+        });
+      }
+    },
+    [pouContent, pouFileName, pouPath, handleReplaceSources, showCopyToast, fetchProjectUses, writeOtherPous]
+  );
+  const handleDeclareInPou = useCallback(
+    (vars: NewVariable[]) => {
+      const r = declareVariables(pouContent, vars);
+      if ('error' in r) {
+        showCopyToast(r.error, 'error');
+        return false;
+      }
+      handleReplaceSources(r.pou, null);
+      return true;
+    },
+    [pouContent, handleReplaceSources, showCopyToast]
   );
   useEffect(() => {
     const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
     const canOpen = isXaeHost() || Boolean(desktop?.openPouInProject && pouPath);
-    setOpenTypeHandler(canOpen ? { open: (t, w) => void handleOpenType(t, w), xae: isXaeHost(), current: pouFileName.replace(/\.TcPOU$/i, '') } : null);
+    setOpenTypeHandler({
+      open: canOpen ? (t, w, m) => void handleOpenType(t, w, m) : undefined,
+      xae: isXaeHost(),
+      current: pouFileName.replace(/\.TcPOU$/i, ''),
+      scope: (method) => symbolScope(pouContent, getProjectSymbols(), { method: method ?? '__body__', states: identifiedStatesResult.states.map((s) => s.id) }),
+      rename: handleRenameVariable,
+      declare: handleDeclareInPou,
+      findReferences: handleFindReferences,
+      problems: () => lintFindingsRef.current,
+      showBookmarks: () => setBookmarksOpen(true),
+    });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -2804,6 +3319,58 @@ export const App: React.FC = () => {
   const diagramContextMenuItems = useCallback(
     (target: ContextMenuTarget): ContextMenuExtraItem[] => {
       const items: ContextMenuExtraItem[] = [];
+      // Several states selected, and this one among them: actions on all of them first
+      if (target.type === 'node' && multiSelected.length > 1 && multiSelected.includes(target.id)) {
+        const many = multiSelected;
+        const n = many.length;
+        const allMarked = many.every((s) => bookmarks.states.includes(s));
+        items.push({
+          id: 'multi-bookmark-btn',
+          label: allMarked ? `Remove the bookmarks of the ${n} states` : `Bookmark the ${n} states`,
+          icon: <Bookmark className="w-3.5 h-3.5" />,
+          onSelect: () => {
+            for (const s of many) if (bookmarks.states.includes(s) === allMarked) toggleStateBookmark(pouFileName, s);
+            showCopyToast(allMarked ? `Removed ${n} bookmarks` : `Bookmarked ${n} states`, 'success');
+          },
+        });
+        items.push({
+          id: 'multi-delete-btn',
+          label: `Delete the ${n} states…`,
+          icon: <Trash2 className="w-3.5 h-3.5" />,
+          onSelect: () => {
+            let pou = pouContent;
+            let dut: string | null = dutContent;
+            const details: string[] = [];
+            for (const s of many) {
+              const r = deleteState(pou, dut ?? '', s, stateVarName);
+              if ('error' in r) return showCopyToast(`${s}: ${r.error}`, 'error', 6000);
+              pou = r.pou;
+              if (r.dut) dut = r.dut;
+              details.push(`${s}: ${[...(r.dut ? ['its enum member'] : []), ...r.methods.map((m) => `its branch in ${m}()`), ...(r.transitions.length ? [`${r.transitions.length} transition${r.transitions.length === 1 ? '' : 's'} into it`] : [])].join(', ')}`);
+              for (const k of [...r.kept, ...r.remaining]) details.push(`  still refers to it: ${k}`);
+            }
+            setPromptRequest({
+              title: `Delete ${n} states?`,
+              label: 'Deleted from the POU and the enum (Save writes them to the project):',
+              details,
+              confirmOnly: true,
+              danger: true,
+              submitLabel: `Delete ${n} states`,
+              onSubmit: () => {
+                handleReplaceSources(pou, dut !== dutContent ? dut : null);
+                many.forEach((s) => dropStateKeys(s));
+                setMultiSelected([]);
+                if (selectedStateId && many.includes(selectedStateId)) {
+                  setSelectedStateId(null);
+                  setSelectedStateLabel('');
+                }
+                showCopyToast(`Deleted ${n} states`, 'success');
+              },
+            });
+          },
+        });
+        items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
+      }
       // A free note (from the palette): only the viewer's note items
       if (target.type === 'node' && (target.id.startsWith('note_') || target.id.startsWith('choice_'))) return items;
       if (target.type === 'node') {
@@ -2858,6 +3425,35 @@ export const App: React.FC = () => {
           });
         }
       }
+      // Where the state is used (its CASE label, the transitions to it, ...)
+      if (target.type === 'node' && target.id !== '[*]' && knownStates.has(target.id) && pouContent) {
+        items.push({ id: 'find-refs-btn', label: 'Find all references', icon: <Search className="w-3.5 h-3.5" />, title: 'Every use of the state in the POU: its CASE label, the transitions to it, …', onSelect: () => handleFindReferences(target.id) });
+      }
+      // A bookmark on the state
+      if (target.type === 'node' && target.id !== '[*]' && knownStates.has(target.id)) {
+        const on = bookmarks.states.includes(target.id);
+        items.push({ id: 'bookmark-state-btn', label: on ? 'Remove bookmark' : 'Add bookmark', icon: <Bookmark className="w-3.5 h-3.5" />, title: 'Shown on the state, in Identified States and at its CASE label in the Method Editor', onSelect: () => handleToggleBookmark(target.id) });
+      }
+      if ((target.type === 'node' || target.type === 'canvas') && bookmarks.states.length + bookmarks.lines.length > 0)
+        items.push({ id: 'bookmarks-list-btn', label: `All bookmarks (${bookmarks.states.length + bookmarks.lines.length})…`, icon: <Bookmark className="w-3.5 h-3.5" />, onSelect: () => setBookmarksOpen(true) });
+      // A state's entry / do / exit actions
+      if (target.type === 'node' && pouContent && target.id !== '[*]' && knownStates.has(target.id)) {
+        const a = readStateActions(pouContent, target.id, varFor(target.id));
+        if (!('error' in a)) {
+          for (const kind of ['entry', 'do', 'exit'] as ActionKind[]) {
+            // (its first line of code: comments left out)
+            const first = a[kind].map((l) => l.replace(/\/\/.*$/, '').replace(/\(\*.*?\*\)/g, '').trim()).find((l) => l && !l.startsWith('(*'));
+            const n = a[kind].filter((l) => l.trim()).length;
+            items.push({
+              id: `action-${kind}-btn`,
+              label: `${kind[0].toUpperCase()}${kind.slice(1)} action${first ? `: ${first.length > 28 ? `${first.slice(0, 27)}…` : first}${n > 1 ? ` (+${n - 1})` : ''}` : '…'}`,
+              icon: <Zap className="w-3.5 h-3.5" />,
+              title: kind === 'do' && !a.doEditable ? 'Its do code is between its transitions: change it in the Method Editor' : `The ${kind} action ${ACTION_TEXT[kind].replace('<state>', varFor(target.id))}`,
+              onSelect: () => handleEditAction(target.id, kind),
+            });
+          }
+        }
+      }
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
       if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
         items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
@@ -2905,6 +3501,8 @@ export const App: React.FC = () => {
           });
         }
         if (edge.from !== '[*]')
+          items.push({ id: 'edit-condition-btn', label: 'Edit condition…', icon: <Pencil className="w-3.5 h-3.5" />, title: 'F2: its condition, with the variables of the POU', onSelect: () => handleEditCondition(edge) });
+        if (edge.from !== '[*]')
           items.push({ id: 'delete-transition-btn', label: 'Delete transition…', icon: <Trash2 className="w-3.5 h-3.5" />, title: 'Delete: its code in doState() / preProcess()', onSelect: () => handleDeleteTransition(edge) });
       }
       // State machines this state's code / this transition's guard uses: open their charts
@@ -2934,8 +3532,57 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom]
+    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, handleEditAction, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
   );
+  // The command palette's commands: tabs, states, methods, the selected state's and the canvas's menus, options
+  const paletteCommands = (): PaletteCommand[] => {
+    const cmds: PaletteCommand[] = [];
+    const menu = (target: ContextMenuTarget, group: string) =>
+      diagramContextMenuItems(target).forEach((it) => cmds.push({ id: `${group}:${it.id}`, group, label: it.label, run: it.onSelect }));
+    if (selectedStateId && selectedStateId !== '[*]') menu({ type: 'node', id: selectedStateId, label: selectedStateLabel || selectedStateId } as ContextMenuTarget, 'Selected');
+    document.querySelectorAll<HTMLElement>('button[id^="dock-tab-"]').forEach((el) => {
+      const label = el.textContent?.replace(/\s+/g, ' ').trim();
+      if (label && label.length < 40) cmds.push({ id: `tab:${el.id}`, group: 'Tab', label: `Show ${label}`, run: () => el.click() });
+    });
+    for (const st of identifiedStatesResult.states) cmds.push({ id: `state:${st.id}`, group: 'State', label: `Go to ${st.id}`, hint: st.label && st.label !== st.id ? st.label : undefined, run: () => handleJumpToState(st.id) });
+    for (const m of pouContent ? getAllMethodsFromPou(pouContent) : []) cmds.push({ id: `method:${m}`, group: 'Method', label: `Open ${m}()`, run: () => handleOpenInspectorPanel('method', { method: `${m}()` }) });
+    menu({ type: 'canvas' } as ContextMenuTarget, 'Canvas');
+    const toggle = (id: string, label: string, on: boolean, set: (v: boolean) => void) => cmds.push({ id: `view:${id}`, group: 'View', label: `${on ? 'Hide' : 'Show'} ${label}`, run: () => set(!on) });
+    toggle('actions', 'entry / do / exit actions on the states', showStateActions, setShowStateActions);
+    toggle('descriptions', 'state descriptions', includeStateDescriptions, setIncludeStateDescriptions);
+    toggle('priorities', 'transition priorities', showTransitionPriorities, setShowTransitionPriorities);
+    cmds.push({ id: 'view:engine', group: 'View', label: `Layout engine: ${layoutEngine === 'elk' ? 'Dagre' : 'ELK'}`, run: () => setLayoutEngine(layoutEngine === 'elk' ? 'dagre' : 'elk') });
+    cmds.push({ id: 'app:save', group: 'File', label: 'Save to project', hint: 'Ctrl+S', run: () => handleSaveToProjectRef.current() });
+    cmds.push({ id: 'app:undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => stepHistory(true) });
+    cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
+    cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
+    cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    cmds.push({
+      id: 'app:snippets',
+      group: 'Edit',
+      label: 'Edit snippets…',
+      run: () =>
+        setPromptRequest({
+          title: 'Your snippets',
+          label: `A snippet: its key on a line of its own ("key // what it is"), its code below it indented by 4 spaces; $1 is where the caret goes. In a code editor, the key and Tab put it in. Yours come before the built-in ones (${BUILTIN_SNIPPETS.map((s) => s.key).join(', ')}).`,
+          initial: userSnippets().length ? snippetsToText(userSnippets()) : 'fbCall // an example\n    fbX(bExecute := $1);\n    IF fbX.bDone THEN\n    \t\n    END_IF',
+          monospace: true,
+          multiline: true,
+          submitLabel: 'Keep',
+          validate: (v) => {
+            const r = snippetsFromText(v);
+            return typeof r === 'string' ? r : null;
+          },
+          onSubmit: (v) => {
+            const r = snippetsFromText(v);
+            if (typeof r === 'string') return;
+            setUserSnippets(r);
+            showCopyToast(`${r.length} snippet${r.length === 1 ? '' : 's'} kept`, 'success');
+          },
+        }),
+    });
+    return cmds;
+  };
   // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
   const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number } | null>(null);
   const handleLintGoToCode = useCallback(
@@ -2951,10 +3598,42 @@ export const App: React.FC = () => {
     },
     [canNavigateInXae, pouPath, handleJumpToState, handleOpenInspectorPanel]
   );
+  // The Problems tab's quick fixes for variables: Declare… (its method, or the POU), Remove (after a look)
+  const [declareFix, setDeclareFix] = useState<{ name: string; method?: string } | null>(null);
   const handleLintFix = useCallback(
     (finding: LintFinding) => {
       const fix = finding.fix;
       if (!fix) return;
+      if (fix.kind === 'declare-variable') {
+        setDeclareFix({ name: fix.name, method: fix.method });
+        return;
+      }
+      if (fix.kind === 'remove-variable') {
+        const m = fix.method ? getMethodCodeFromPou(pouContent, fix.method) : null;
+        const decl = m ? m.declaration || '' : extractPouDeclaration(pouContent);
+        const r = removeFromDeclaration(decl, fix.name);
+        if (!r) return showCopyToast(`${fix.name} was not found in the declaration`, 'error');
+        setPromptRequest({
+          title: `Remove ${fix.name}?`,
+          label: `Its declaration in ${fix.method ? `${fix.method}()` : 'the POU'} is removed (Save writes it to the project):`,
+          details: [r.removed],
+          confirmOnly: true,
+          danger: true,
+          submitLabel: 'Remove',
+          onSubmit: () => {
+            if (fix.method && m) {
+              const res = handleSaveMethodCode(fix.method, m.code, r.declaration);
+              if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            } else {
+              const u = updatePouBody(pouContent, r.declaration, null);
+              if (!u.success) return showCopyToast(u.error || 'Could not change the declaration', 'error');
+              handleReplaceSources(u.updatedPou, null);
+            }
+            showCopyToast(`Removed ${fix.name}`, 'success');
+          },
+        });
+        return;
+      }
       if (fix.kind === 'add-enum-member') {
         if (!dutContent.trim()) {
           showCopyToast('Load the .TcDUT enum first', 'error');
@@ -2977,7 +3656,7 @@ export const App: React.FC = () => {
         showCopyToast(`Added a CASE branch for ${fix.name} to doState()`, 'success');
       }
     },
-    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast]
+    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast, handleReplaceSources]
   );
 
   // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
@@ -3825,7 +4504,7 @@ export const App: React.FC = () => {
       const model = generateStatechartModel(dutContent, pouContent, {
         flowchartOutput,
         collapseErrorSinkEdges, choiceNodes,
-        includeStateDescriptions,
+        includeStateDescriptions, stateActions,
         showTransitionPriorities,
         priorityFormat,
       });
@@ -3834,7 +4513,7 @@ export const App: React.FC = () => {
     } catch {
       return null;
     }
-  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
+  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, liveEnums]);
   const liveGuardInputs = useMemo<GuardInputs | null>(
     () =>
       liveGuardEdges
@@ -3902,12 +4581,12 @@ export const App: React.FC = () => {
   const simGuardEdges = useMemo(() => {
     if (!simOn) return null;
     try {
-      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat });
+      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat });
       return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
     } catch {
       return null;
     }
-  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
+  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, liveEnums]);
   const simInputs = useMemo<GuardInputs | null>(
     () =>
       simGuardEdges && sim.current
@@ -4847,6 +5526,9 @@ export const App: React.FC = () => {
                 setSelectedStateLabel(label || id);
               }}
               customStyles={customNodeStyles}
+              bookmarkedStates={bookmarks.states}
+              onToggleBookmark={handleToggleBookmark}
+              onShowBookmarks={() => setBookmarksOpen(true)}
               stateVarName={identifiedStatesResult.stateVarName}
               onOpenEnumEditor={() => {
                 handleOpenEnumEditorModal(selectedStateId || undefined);
@@ -5022,6 +5704,18 @@ export const App: React.FC = () => {
                   className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
                 />
                 <span className="text-slate-300">Include state descriptions</span>
+              </label>
+
+              {/* Entry / do / exit on the states */}
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="Each state's entry / do / exit action (its first line) under its name, as TwinCAT's UML editor shows them. Right-click a state to edit them.">
+                <input
+                  id="state-actions-checkbox"
+                  type="checkbox"
+                  checked={showStateActions}
+                  onChange={(e) => setShowStateActions(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                />
+                <span className="text-slate-300">Actions</span>
               </label>
 
               {/* Show transition priorities & format */}
@@ -5260,8 +5954,13 @@ export const App: React.FC = () => {
                   onClearAllCustomStyles={handleClearAllCustomStyles}
                   customEdgeStyles={customEdgeStyles}
                   onEdgeStyleChange={handleEdgeStyleChange}
+                  onEditTransitionCondition={pouContent ? handleEditCondition : undefined}
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
+                  bookmarkedStates={bookmarks.states}
+                  stateTooltips={stateTooltips}
+                  multiSelection={multiSelected}
+                  onMultiSelectionChange={setMultiSelected}
                   liveHighlight={liveHighlight ?? simHighlight}
                   stateTimes={showStateTimes && measuredStateTimes.length ? stateTimeBadges : null}
                   pathHighlight={pathHighlight}
@@ -5434,6 +6133,7 @@ export const App: React.FC = () => {
             onSave={handleSavePouBody}
             onToast={showCopyToast}
             onOpenMethod={handleOpenMethodEditorModal}
+            reveal={pouReveal}
           />,
           dockRegistry.nodes.pou
         )}
@@ -5672,6 +6372,46 @@ export const App: React.FC = () => {
         )}
 
       {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
+      {declareFix && (
+        <DeclareVariableDialog
+          initial={{ name: declareFix.name, type: guessType(declareFix.name), scope: declareFix.method ? 'VAR' : 'VAR_INPUT' }}
+          known={declareFix.method ? declarationVariables(getMethodCodeFromPou(pouContent, declareFix.method).declaration || '') : declarationVariables(extractPouDeclaration(pouContent))}
+          types={symbolScope(pouContent, getProjectSymbols(), { method: declareFix.method }).types}
+          scopes={declareFix.method ? ['VAR', 'VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR_INST', 'VAR_TEMP'] : ['VAR_INPUT', 'VAR_OUTPUT', 'VAR']}
+          title={`Declare ${declareFix.name} in ${declareFix.method ? `${declareFix.method}()` : 'the POU'}`}
+          onCancel={() => setDeclareFix(null)}
+          onDone={(v) => {
+            const method = declareFix.method;
+            setDeclareFix(null);
+            if (method) {
+              const m = getMethodCodeFromPou(pouContent, method);
+              const res = handleSaveMethodCode(method, m.code, declareInDeclaration(m.declaration || '', [v]));
+              if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            } else if (!handleDeclareInPou([v])) return;
+            showCopyToast(`Declared ${v.name} : ${v.type} in ${method ? `${method}()` : 'the POU'} (${v.scope})`, 'success');
+          }}
+        />
+      )}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}
+      {bookmarksOpen && (
+        <BookmarksDialog
+          entries={bookmarkEntries}
+          onClose={() => setBookmarksOpen(false)}
+          onClear={() => clearBookmarks(pouFileName)}
+          onOpen={(e: BookmarkEntry) => {
+            if (e.kind === 'state' && e.state) handleJumpToState(e.state);
+            if (e.method === BODY) {
+              setDockLayout((l) => activateDockTab(l, 'pou'));
+              setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'implementation' });
+            } else if (e.line > 0) {
+              handleOpenInspectorPanel('method', { method: `${e.method}()` });
+              setCodeJump({ method: e.method, line: e.line, nonce: Date.now() });
+            }
+          }}
+        />
+      )}
+      {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>

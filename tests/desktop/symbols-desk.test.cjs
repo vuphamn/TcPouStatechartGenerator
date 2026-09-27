@@ -42,6 +42,13 @@ const cfg = writeSymbolsPlc();
   let pages = await waitPages(1);
   const w1 = pages[0];
   for (let i = 0; i < 60 && !/SM_TableManager/.test(await w1.title()); i++) await sleep(250);
+  // The project's types for completion and the checks (declarations only)
+  const types = await w1.evaluate((file) => window.tcDesktop.projectSymbols(file), table);
+  const names = (types.files || []).map((f) => f.name).sort().join(',');
+  expect(types.project === 'Mini' && names === 'E_DoorDasher_States.TcDUT,E_TableManager_States.TcDUT,SM_DoorDasher.TcPOU,SM_TableManager.TcPOU' && types.files.every((f) => !/<Implementation>/.test(f.content)) && types.files.some((f) => /<Declaration>/.test(f.content)), `the project's types: ${names} (implementations left out)`);
+  // A rename's other files: the project's other POUs whose code has the name
+  const uses = await w1.evaluate((file) => window.tcDesktop.projectUses(file, 'machineState'), table);
+  expect(Array.isArray(uses.files) && uses.files.map((f) => f.name).join() === 'SM_DoorDasher.TcPOU' && /<Implementation>/.test(uses.files[0].content), `uses of machineState elsewhere: ${(uses.files || []).map((f) => f.name).join(', ')} (in full, the POU itself left out)`);
   await w1.click('#dock-tab-live');
   await sleep(400);
   expect(!(await w1.$('#live-symbols-btn')), 'no Symbols button before going live');

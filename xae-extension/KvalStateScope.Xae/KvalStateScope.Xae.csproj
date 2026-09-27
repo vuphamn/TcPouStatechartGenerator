@@ -55,6 +55,7 @@
     <Compile Include="StateScopeToolWindow.cs" />
     <Compile Include="StateScopeControl.cs" />
     <Compile Include="HostFiles.cs" />
+    <Compile Include="ProjectScan.cs" />
     <Compile Include="TwinCATProject.cs" />
     <Compile Include="CodeNavigation.cs" />
     <Compile Include="LiveMonitor.cs" />

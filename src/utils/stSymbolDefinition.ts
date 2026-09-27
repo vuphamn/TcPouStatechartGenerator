@@ -247,7 +247,7 @@ export function findTypeTarget(
   declarations: string[],
   symbol: string,
   memberOf?: string
-): { type: string; isTypeItself: boolean } | null {
+): { type: string; isTypeItself: boolean; member?: string } | null {
   const sym = symbol?.trim().toLowerCase();
   if (!sym) return null;
   const decls: { names: string[]; type: string }[] = [];
@@ -267,9 +267,12 @@ export function findTypeTarget(
       if (parsed) decls.push(parsed);
     }
   }
+  const of = (name: string) => decls.find((d) => d.names.some((n) => n.toLowerCase() === name.toLowerCase()));
+  // A member (fbX.bDone): the type of what it is a member of, and the member
+  const holder = memberOf ? of(memberOf) : undefined;
+  if (holder) return isPouType(holder.type) ? { type: holder.type, isTypeItself: false, member: symbol.trim() } : null;
   const asType = decls.find((d) => d.type.toLowerCase() === sym);
   if (asType) return isPouType(asType.type) ? { type: asType.type, isTypeItself: true } : null;
-  const of = (name: string) => decls.find((d) => d.names.some((n) => n.toLowerCase() === name.toLowerCase()));
-  const variable = of(sym) ?? (memberOf ? of(memberOf) : undefined);
+  const variable = of(sym);
   return variable && isPouType(variable.type) ? { type: variable.type, isTypeItself: false } : null;
 }

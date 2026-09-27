@@ -13,6 +13,14 @@ export interface GeneratorOptions {
   includeStateDescriptions?: boolean;
   showTransitionPriorities?: boolean;
   priorityFormat?: PriorityFormat;
+  /** States' entry / do / exit actions (their first line) shown under their names, as TwinCAT's UML editor does */
+  stateActions?: Map<string, { entry?: string; do?: string; exit?: string }>;
+}
+
+/** A line of code in a node label: # < > as Mermaid entities, short */
+function actionText(code: string): string {
+  const s = code.length > 34 ? `${code.slice(0, 33)}…` : code;
+  return s.replace(/"/g, "'").replace(/#/g, '#35;').replace(/</g, '#lt;').replace(/>/g, '#gt;');
 }
 
 /** One enclosing IF level of an assignment: its condition (null: ELSE) and the earlier branches' conditions */
@@ -1803,6 +1811,16 @@ export function generateStatechartModel(
   if (includeStateDescriptions) {
     const descSt = getMethodSt(doc, tcPouContent, 'getStateDescription');
     stateDescriptions = parseStateDescriptions(descSt);
+  }
+  // Entry / do / exit: lines under the name (after the description)
+  if (options.stateActions && options.stateActions.size > 0) {
+    stateDescriptions = new Map(stateDescriptions ?? []);
+    for (const [state, a] of options.stateActions) {
+      const lines = (['entry', 'do', 'exit'] as const).filter((k) => a[k]).map((k) => `${k} / ${actionText(a[k]!)}`);
+      if (!lines.length) continue;
+      const desc = stateDescriptions.get(state);
+      stateDescriptions.set(state, [...(desc ? [desc] : []), ...lines].join('<br/>'));
+    }
   }
 
   if (doStateSt === null && preProcessSt === null) {

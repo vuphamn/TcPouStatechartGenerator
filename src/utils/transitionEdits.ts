@@ -397,3 +397,124 @@ export function deleteTransition(pouXml: string, edge: EdgeRef, stateVar: string
     removed: took.removed,
   };
 }
+
+/** Where a transition's own condition is: the IF / ELSIF head right around its assignment */
+interface ConditionHead {
+  /** Lines of the head: from the keyword's line to the THEN's (inclusive) */
+  first: number;
+  last: number;
+  keyword: 'IF' | 'ELSIF';
+  /** The condition as written (lines joined) */
+  condition: string;
+  /** A composite's exception transition in preProcess(): the state range kept, only the part in ( ) edited */
+  range?: { prefix: string };
+}
+
+/** The IF / ELSIF around a line of the scope (null: none, the assignment is unconditional; an error: in an ELSE) */
+function conditionHead(s: Scope, line: number, col: number): ConditionHead | null | { error: string } {
+  const head = (i: number): ConditionHead | { error: string } => {
+    const kw = s.code[i].match(/^(\s*)(IF|ELSIF)\b/i)!;
+    const startCol = kw[0].length;
+    // From the keyword to THEN (a condition may take several lines)
+    let j = i;
+    let thenCol = -1;
+    for (; j <= line; j++) {
+      const from = j === i ? startCol : 0;
+      const k = s.code[j].slice(from).search(/\bTHEN\b/i);
+      if (k >= 0) {
+        thenCol = from + k;
+        break;
+      }
+    }
+    if (thenCol < 0) return { error: 'Its IF has no THEN before it' };
+    const parts: string[] = [];
+    for (let k = i; k <= j; k++) {
+      const text = s.lines[k].slice(k === i ? startCol : 0, k === j ? thenCol : undefined);
+      parts.push(text.replace(/\/\/.*$/, '').replace(/\(\*[\s\S]*?\*\)/g, ' ').trim());
+    }
+    return { first: i, last: j, keyword: kw[2].toUpperCase() as 'IF' | 'ELSIF', condition: parts.filter(Boolean).join(' ') };
+  };
+  // On the assignment's line: "IF x THEN machineState := A;"
+  if (/^\s*(IF|ELSIF)\b/i.test(s.code[line]) && s.code[line].slice(0, col).search(/\bTHEN\b/i) >= 0) return head(line);
+  let depth = 0;
+  const top = s.method === 'doState' ? s.start : 0;
+  for (let i = line - 1; i >= top; i--) {
+    const c = s.code[i];
+    const opens = count(c, /\b(IF|CASE|FOR|WHILE|REPEAT)\b/gi);
+    const closes = count(c, /\bEND_(IF|CASE|FOR|WHILE|REPEAT)\b/gi);
+    // (a whole IF ... END_IF on one line is no enclosing block)
+    if (closes > 0 && opens >= closes) continue;
+    if (closes > opens) {
+      depth += closes - opens;
+      continue;
+    }
+    if (depth === 0 && /^\s*ELSE\b/i.test(c) && !/^\s*ELSE\s*IF\b/i.test(c)) return { error: 'It is in an ELSE: its condition is that the ones above are FALSE. Change it in the Method Editor' };
+    if (depth === 0 && /^\s*ELSIF\b/i.test(c)) return head(i);
+    if (opens > closes) {
+      if (depth > 0) {
+        depth -= opens - closes;
+        continue;
+      }
+      if (/^\s*IF\b/i.test(c)) return head(i);
+      // In a CASE / FOR / WHILE / REPEAT: no IF of its own
+      return null;
+    }
+  }
+  return null;
+}
+
+/** A transition's own condition as written (its IF / ELSIF), for editing; '' when it has none */
+export function transitionCondition(pouXml: string, edge: EdgeRef, stateVar: string): { method: TransitionMethod; condition: string; line: number } | { error: string } {
+  const s = edgeScope(pouXml, edge, stateVar);
+  if ('error' in s) return s;
+  const index = pick(pouXml, s, edge);
+  if (index < 0) return notFound(s.method, edge, stateVar);
+  const t = s.items[index];
+  const h = conditionHead(s, t.line, t.col);
+  if (h && 'error' in h) return h;
+  if (!h) return { method: s.method, condition: '', line: t.line + 1 };
+  const inner = compositeCondition(h.condition, stateVar);
+  return { method: s.method, condition: inner ? inner.condition : h.condition, line: h.first + 1 };
+}
+
+/** "machineState >= A AND machineState <= B AND (x)": a composite's exception transition */
+function compositeCondition(cond: string, stateVar: string): { prefix: string; condition: string } | null {
+  const m = cond.match(new RegExp(`^(${escapeRx(stateVar)}\\s*>=\\s*[\\w.]+\\s+AND\\s+${escapeRx(stateVar)}\\s*<=\\s*[\\w.]+\\s+AND\\s+)\\(([\\s\\S]*)\\)$`, 'i'));
+  return m ? { prefix: m[1], condition: m[2].trim() } : null;
+}
+
+/**
+ * The edge's transition gets another condition: its IF / ELSIF head is rewritten on one line (a composite's
+ * exception keeps its state range). Without an IF of its own, the assignment is put in one.
+ */
+export function setTransitionCondition(pouXml: string, edge: EdgeRef, condition: string, stateVar: string): TransitionEditResult {
+  const cond = condition.trim();
+  if (!cond) return { error: 'Enter a condition (TRUE for always)' };
+  const s = edgeScope(pouXml, edge, stateVar);
+  if ('error' in s) return s;
+  const index = pick(pouXml, s, edge);
+  if (index < 0) return notFound(s.method, edge, stateVar);
+  const t = s.items[index];
+  const h = conditionHead(s, t.line, t.col);
+  if (h && 'error' in h) return h;
+  const lines = [...s.lines];
+  if (!h) {
+    // An assignment of its own: into an IF, indented like it
+    const l = lines[t.line];
+    const indent = leading(l);
+    if (!/^\s*[A-Za-z_][\w.]*\s*:=/.test(s.code[t.line]) || s.code[t.line].replace(/^\s*[^;]*;\s*/, '').trim()) return { error: 'The assignment shares its line with other code: change it in the Method Editor' };
+    lines.splice(t.line, 1, `${indent}IF ${cond} THEN`, `${indent}\t${l.trim()}`, `${indent}END_IF`);
+    return { method: s.method, code: lines.join(s.eol), message: `${edge.from} → ${edge.to} now has the condition ${cond}`, line: t.line + 1 };
+  }
+  const composite = compositeCondition(h.condition, stateVar);
+  const written = composite ? `${composite.prefix}(${cond})` : cond;
+  const firstLine = lines[h.first];
+  const kwAt = firstLine.search(/\b(IF|ELSIF)\b/i);
+  const lastCode = s.code[h.last];
+  const thenAt = lastCode.search(/\bTHEN\b/i);
+  const after = lines[h.last].slice(thenAt + 4);
+  const head = `${firstLine.slice(0, kwAt)}${h.keyword} ${written} THEN${after}`;
+  lines.splice(h.first, h.last - h.first + 1, head);
+  const was = composite ? composite.condition : h.condition;
+  return { method: s.method, code: lines.join(s.eol), message: `${edge.from} → ${edge.to}: condition ${was} → ${cond}`, line: h.first + 1 };
+}

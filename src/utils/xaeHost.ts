@@ -39,6 +39,12 @@ export type HostMessage =
   | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
   | { type: 'projectPous'; project?: string; pous?: { name: string; path?: string; content: string }[]; duts?: DutCandidate[]; error?: string }
+  /** A rename's other files: the project's POUs whose code has the name */
+  | { type: 'projectUses'; requestId?: number; files?: { name: string; path: string; content: string }[]; error?: string }
+  /** The other files written (saveOther) */
+  | { type: 'saveOtherResult'; requestId?: number; ok: boolean; message?: string }
+  /** The PLC project's type files (declarations only), for completion and the checks */
+  | { type: 'projectSymbols'; project?: string; files?: { name: string; path?: string; content: string }[]; error?: string }
   | { type: 'saveDocumentResult'; path?: string; error?: string; canceled?: boolean }
   /** Two-way selection: the caret in TwinCAT's editor of the loaded POU (line of the editor, both parts) */
   | { type: 'editorCaret'; method: string; line: number; lineCount: number }
@@ -109,7 +115,7 @@ export type AppMessage =
   /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */
   | { type: 'openPou'; typeName?: string; path?: string }
   /** Open a POU (or DUT, interface) of the loaded POU's PLC project in TwinCAT's editor */
-  | { type: 'openInXae'; typeName: string }
+  | { type: 'openInXae'; typeName: string; method?: string; line?: number; text?: string }
   /** Another tab on this POU, following another PLC instance of it (a tab already following it comes forward) */
   | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string> }
   /** Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult) */
@@ -120,6 +126,12 @@ export type AppMessage =
   | { type: 'addRoute'; requestId: number; netId: string; ip: string; name: string; user: string; password: string }
   /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
   | { type: 'projectPous' }
+  /** The PLC project's types (answered with projectSymbols) */
+  | { type: 'projectSymbols' }
+  /** The project's POUs whose code has a name (answered with projectUses) */
+  | { type: 'projectUses'; requestId: number; name: string }
+  /** Other POUs of the project written (a rename; answered with saveOtherResult) */
+  | { type: 'saveOther'; requestId: number; files: { path: string; content: string; baseline: string }[] }
   /** Save a document (a save dialog; answered with saveDocumentResult) */
   | { type: 'saveDocument'; name: string; content: string };
 

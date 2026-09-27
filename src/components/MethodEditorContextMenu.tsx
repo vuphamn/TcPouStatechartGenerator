@@ -8,6 +8,8 @@ import {
   Code2,
   FileCode2,
   ExternalLink,
+  Bookmark,
+  ChevronRight,
 } from 'lucide-react';
 import { openTypeHandlerFor } from '../utils/openType.ts';
 
@@ -21,7 +23,20 @@ export interface MethodEditorContextMenuProps {
   onCopySymbol?: (symbol: string) => void;
   onToggleFoldCurrent?: () => void;
   /** The POU type of the symbol (see findTypeTarget): it can be opened in StateScope / TwinCAT's editor */
-  typeTarget?: { type: string; isTypeItself: boolean } | null;
+  typeTarget?: { type: string; isTypeItself: boolean; member?: string } | null;
+  /** PLC Bookmarks for the line right-clicked (the implementation) */
+  bookmarks?: {
+    on: boolean;
+    count: number;
+    onToggle: () => void;
+    onNext: () => void;
+    onPrev: () => void;
+    onClearMethod: () => void;
+    onClearAll: () => void;
+    onShowAll?: () => void;
+  };
+  /** More actions on the symbol (Declare…, Rename…) */
+  extraItems?: { id: string; label: React.ReactNode; title?: string; onSelect: () => void }[];
   onClose: () => void;
 }
 
@@ -35,8 +50,11 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
   onCopySymbol,
   onToggleFoldCurrent,
   typeTarget,
+  extraItems,
+  bookmarks,
   onClose,
 }) => {
+  const [bookmarksOpen, setBookmarksOpen] = React.useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = React.useState(false);
 
@@ -70,7 +88,8 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
   const menuWidth = 260;
   const opener = openTypeHandlerFor(typeTarget?.type);
   const openType = opener && typeTarget ? typeTarget.type : null;
-  const menuHeight = openType ? 320 : 220;
+  const member = typeTarget?.member;
+  const menuHeight = (openType ? 320 : 220) + (extraItems?.length ?? 0) * 28 + (bookmarks ? 30 : 0);
   const clampedX = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, x));
   const clampedY = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, y));
 
@@ -149,7 +168,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               <span className="font-medium text-[11px] leading-tight">Go to Definition</span>
               {hasSymbol && (
                 <span className="text-[10px] text-sky-400/80 truncate font-mono">
-                  {openType && typeTarget?.isTypeItself ? `Open ${openType} in StateScope` : 'Highlight in Top Panel'}
+                  {openType && member ? `Open ${openType}.${member} in StateScope` : openType && typeTarget?.isTypeItself ? `Open ${openType} in StateScope` : 'Highlight in Top Panel'}
                 </span>
               )}
             </div>
@@ -168,7 +187,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               type="button"
               role="menuitem"
               onClick={() => {
-                opener.open(openType, 'statescope');
+                opener.open(openType, 'statescope', member);
                 onClose();
               }}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
@@ -176,7 +195,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
             >
               <FileCode2 className="w-3.5 h-3.5 text-violet-400 shrink-0" />
               <span className="font-medium text-[11px] leading-tight truncate">
-                Open <span className="font-mono">{openType}</span> in StateScope
+                Open <span className="font-mono">{member ? `${openType}.${member}` : openType}</span> in StateScope
               </span>
             </button>
             {opener.xae && (
@@ -185,7 +204,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
                 type="button"
                 role="menuitem"
                 onClick={() => {
-                  opener.open(openType, 'xae');
+                  opener.open(openType, 'xae', member);
                   onClose();
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer mt-0.5"
@@ -193,13 +212,31 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               >
                 <ExternalLink className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span className="font-medium text-[11px] leading-tight truncate">
-                  Open <span className="font-mono">{openType}</span> in the TwinCAT editor
+                  Open <span className="font-mono">{member ? `${openType}.${member}` : openType}</span> in the TwinCAT editor
                 </span>
               </button>
             )}
             <div className="my-1 border-t border-slate-800" />
           </>
         )}
+
+        {/* Declare…, Rename… */}
+        {extraItems?.map((item) => (
+          <button
+            key={item.id}
+            id={item.id}
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              item.onSelect();
+              onClose();
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            title={item.title}
+          >
+            <span className="font-medium text-[11px] leading-tight truncate">{item.label}</span>
+          </button>
+        ))}
 
         {/* Find References / Search */}
         {hasSymbol && onFindReferences && (
@@ -240,6 +277,64 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               </span>
             </div>
           </button>
+        )}
+
+        {/* PLC Bookmarks: a submenu */}
+        {bookmarks && (
+          <>
+            <div className="my-1 border-t border-slate-800" />
+            <div className="relative" onMouseEnter={() => setBookmarksOpen(true)} onMouseLeave={() => setBookmarksOpen(false)}>
+              <button
+                id="editor-menu-bookmarks"
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={bookmarksOpen}
+                onClick={() => setBookmarksOpen(true)}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <Bookmark className={`w-3.5 h-3.5 shrink-0 ${bookmarks.on ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
+                  <span className="font-medium text-[11px] leading-tight">PLC Bookmarks</span>
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+              </button>
+              {bookmarksOpen && (
+                <div
+                  id="editor-menu-bookmarks-sub"
+                  role="menu"
+                  className={`absolute top-0 ${clampedX + menuWidth + 250 > window.innerWidth ? 'right-full mr-1' : 'left-full ml-1'} w-60 bg-slate-900/95 border border-slate-700/80 rounded-lg shadow-2xl p-1`}
+                >
+                  {(
+                    [
+                      ['editor-menu-bookmark-toggle', bookmarks.on ? 'Remove Bookmark' : 'Toggle Bookmark', 'Ctrl+F2', bookmarks.onToggle, false],
+                      ['editor-menu-bookmark-next', 'Next Bookmark', '', bookmarks.onNext, bookmarks.count === 0],
+                      ['editor-menu-bookmark-prev', 'Previous Bookmark', '', bookmarks.onPrev, bookmarks.count === 0],
+                      ['editor-menu-bookmark-clear', 'Clear All Bookmarks (this method)', '', bookmarks.onClearMethod, bookmarks.count === 0],
+                      ['editor-menu-bookmark-clear-all', 'Clear All Bookmarks (the POU)', '', bookmarks.onClearAll, false],
+                      ...(bookmarks.onShowAll ? [['editor-menu-bookmark-list', 'Show All Bookmarks…', '', bookmarks.onShowAll, false]] : []),
+                    ] as [string, string, string, () => void, boolean][]
+                  ).map(([id, label, keys, run, disabled]) => (
+                    <button
+                      key={id}
+                      id={id}
+                      type="button"
+                      role="menuitem"
+                      disabled={disabled}
+                      onClick={() => {
+                        run();
+                        onClose();
+                      }}
+                      className="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 disabled:text-slate-600 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                    >
+                      <span className="font-medium text-[11px] leading-tight">{label}</span>
+                      {keys && <span className="text-[10px] font-mono text-slate-400 px-1 py-0.5 rounded bg-slate-800/80 shrink-0">{keys}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         )}
 
         {/* Optional Fold / Unfold Block */}

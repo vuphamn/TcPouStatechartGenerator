@@ -1,6 +1,57 @@
 import React, { useRef, useMemo, useEffect, useLayoutEffect, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { useEditorZoom } from '../hooks/useEditorZoom.ts';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Bookmark as BookmarkIcon } from 'lucide-react';
+import { completionAt, type SymbolScope } from '../utils/projectSymbols.ts';
+import type { PouVariable } from '../utils/pouVariables.ts';
+import { InputAssistantDialog } from './InputAssistantDialog.tsx';
+import { createPortal } from 'react-dom';
+import { expandSnippet, snippetFor } from '../utils/stSnippets.ts';
+import { formatST } from '../utils/stFormat.ts';
+
+/** A problem in the code: a wavy underline under [start, end) of a line (0-based columns), the message on hover */
+export interface CodeMarker {
+  line: number;
+  start: number;
+  end: number;
+  message: string;
+  severity: 'error' | 'warning' | 'info';
+}
+
+const MARKER_COLOR = { error: '%23f43f5e', warning: '%23f59e0b', info: '%2338bdf8' };
+const wave = (sev: CodeMarker['severity']) =>
+  `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='4'%3E%3Cpath d='M0 3 Q1.5 0 3 3 T6 3' fill='none' stroke='${MARKER_COLOR[sev]}' stroke-width='1.2'/%3E%3C/svg%3E")`;
+
+/** The character index of a line at a column as shown (tabs of 4) */
+const indexAtVisual = (text: string, vcol: number) => {
+  let v = 0;
+  for (let i = 0; i < text.length; i++) {
+    const w = text[i] === '\t' ? 4 - (v % 4) : 1;
+    if (vcol < v + w) return i;
+    v += w;
+  }
+  return -1;
+};
+
+/** What a name is, for the hover: "nCycles : INT (VAR) — comment" */
+export function describeName(scope: SymbolScope | null, text: string, index: number): string | null {
+  if (!scope || index < 0 || !/\w/.test(text[index] ?? '')) return null;
+  let end = index;
+  while (end < text.length && /\w/.test(text[end])) end++;
+  const at = completionAt(text, end);
+  if (!at.word || /^\d/.test(at.word)) return null;
+  const pool = at.chain && at.chain.length ? scope.members(at.chain) ?? [] : scope.top;
+  const v = pool.find((x) => x.name.toLowerCase() === at.word.toLowerCase());
+  if (!v) return null;
+  const owner = at.chain && at.chain.length ? `${at.chain.join('.')}.` : '';
+  return `${owner}${v.name}${v.type ? ` : ${v.type}` : ''}  (${v.scope})${v.comment ? `\n${v.comment}` : ''}`;
+}
+
+/** A column of a line as shown (tabs of 4) */
+const visualColumn = (text: string, col: number) => {
+  let v = 0;
+  for (let i = 0; i < col && i < text.length; i++) v = text[i] === '\t' ? v + 4 - (v % 4) : v + 1;
+  return v + Math.max(0, col - text.length);
+};
 import { highlightStructuredText } from '../utils/stSyntaxHighlighter.ts';
 import {
   FoldableBlock,
@@ -24,6 +75,8 @@ export interface StructuredTextCodeEditorRef {
   scrollToLine: (lineNumber: number, smooth?: boolean) => void;
   focus: () => void;
   getTextarea: () => HTMLTextAreaElement | null;
+  /** Re-indent the code (Format Document); false: nothing changed */
+  formatDocument: () => boolean;
 }
 
 export interface StructuredTextCodeEditorProps {
@@ -52,6 +105,12 @@ export interface StructuredTextCodeEditorProps {
 
   // Context Menu
   onContextMenu?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
+  /** Bookmarked lines (1-based original line numbers): a mark in the gutter */
+  bookmarkLines?: number[];
+  /** Completion (Ctrl+Space, and after a dot): the names the code sees */
+  completionScope?: () => SymbolScope | null;
+  /** Problems in the code: wavy underlines, the message on hover */
+  markers?: CodeMarker[];
 }
 
 export const StructuredTextCodeEditor = forwardRef<
@@ -78,9 +137,13 @@ export const StructuredTextCodeEditor = forwardRef<
       findOptions = { matchCase: false, wholeWord: false },
       activeFindMatchIndex,
       onContextMenu,
+      bookmarkLines,
+      completionScope,
+      markers,
     },
     ref
   ) => {
+    const bookmarkSet = useMemo(() => new Set(bookmarkLines ?? []), [bookmarkLines]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const preRef = useRef<HTMLPreElement>(null);
     const gutterRef = useRef<HTMLDivElement>(null);
@@ -149,6 +212,83 @@ export const StructuredTextCodeEditor = forwardRef<
     const showZoom = zoom !== 1 || Date.now() - zoomShownAt < 1200;
     // The caret's line (view line index), highlighted like Visual Studio's / TwinCAT XAE's current line
     const [caretViewLine, setCaretViewLine] = useState<number | null>(null);
+    const [scrollLeft, setScrollLeft] = useState(0);
+    // The width of a character (monospace), to place underlines and the completion list on a line
+    const [charW, setCharW] = useState(7.2);
+    type Completion = { start: number; end: number; word: string; chain: string[] | null; items: PouVariable[]; active: number; forced: boolean };
+    const [completion, setCompletion] = useState<Completion | null>(null);
+    const completionRef = useRef<Completion | null>(null);
+    completionRef.current = completion;
+    const completionListRef = useRef<HTMLDivElement>(null);
+    // Format Document: every line re-indented (as typing: undo works) when nothing is folded, else set directly
+    const formatNow = (): boolean => {
+      const formatted = formatST(value);
+      if (formatted === value) return false;
+      const ta = textareaRef.current;
+      if (ta && !(viewModel && viewModel.activeFoldedBlocks.length > 0)) {
+        ta.focus();
+        const caretLine = ta.value.slice(0, ta.selectionStart).split('\n').length;
+        ta.setSelectionRange(0, ta.value.length);
+        if (!ta.ownerDocument.execCommand('insertText', false, formatted)) onChange(formatted);
+        // (the caret back on its line, at its start)
+        const at = formatted.split('\n').slice(0, caretLine - 1).join('\n').length + (caretLine > 1 ? 1 : 0);
+        ta.setSelectionRange(at, at);
+      } else onChange(formatted);
+      return true;
+    };
+
+    // Parameter hints: the call around the caret and what it takes
+    type Signature = { start: number; label: string; returns?: string; params: PouVariable[]; active: number };
+    const [signature, setSignature] = useState<Signature | null>(null);
+    const refreshSignature = () => {
+      const ta = textareaRef.current;
+      const scope = completionScope?.();
+      if (!ta || !scope) return setSignature(null);
+      const text = ta.value;
+      const caret = ta.selectionStart;
+      // Back to the unclosed "(" of the statement
+      let depth = 0;
+      let open = -1;
+      for (let i = caret - 1; i >= 0 && caret - i < 2000; i--) {
+        const ch = text[i];
+        if (ch === ')') depth++;
+        else if (ch === '(') {
+          if (depth === 0) {
+            open = i;
+            break;
+          }
+          depth--;
+        } else if (ch === ';' && depth === 0) break;
+      }
+      if (open < 0) return setSignature(null);
+      const at = completionAt(text, open);
+      if (!at.word || at.end !== open) return setSignature(null);
+      const sig = scope.signature([...(at.chain ?? []), at.word]);
+      if (!sig || !sig.params.length) return setSignature(null);
+      // Which parameter: by name (IN := ...) or by position
+      const inner = text.slice(open + 1, caret);
+      let d = 0;
+      let commas = 0;
+      let segStart = 0;
+      for (let i = 0; i < inner.length; i++) {
+        if (inner[i] === '(') d++;
+        else if (inner[i] === ')') d--;
+        else if (inner[i] === ',' && d === 0) {
+          commas++;
+          segStart = i + 1;
+        }
+      }
+      const named = inner.slice(segStart).match(/^\s*([A-Za-z_]\w*)\s*(:=|=>)/);
+      const byName = named ? sig.params.findIndex((p) => p.name.toLowerCase() === named[1].toLowerCase()) : -1;
+      const inputs = sig.params.filter((p) => p.scope !== 'VAR_OUTPUT');
+      const active = byName >= 0 ? byName : sig.params.indexOf(inputs[Math.min(commas, inputs.length - 1)]);
+      setSignature({ start: at.start - (at.chain?.length ? at.chain.join('.').length + 1 : 0), label: sig.label, returns: sig.returns, params: sig.params, active });
+    };
+    const signatureRef = useRef<Signature | null>(null);
+    signatureRef.current = signature;
+
+    // The Input Assistant (F2): the selection it inserts at
+    const [assistant, setAssistant] = useState<{ start: number; end: number; catalog: ReturnType<SymbolScope['catalog']> } | null>(null);
     const [focused, setFocused] = useState(false);
     const updateCaretLine = useCallback(() => {
       const ta = textareaRef.current;
@@ -266,6 +406,7 @@ export const StructuredTextCodeEditor = forwardRef<
         textareaRef.current?.focus();
       },
       getTextarea: () => textareaRef.current,
+      formatDocument: () => formatNow(),
     }));
 
     // Auto-scroll when scrollToLine prop changes
@@ -292,6 +433,7 @@ export const StructuredTextCodeEditor = forwardRef<
       const top = e.currentTarget.scrollTop;
       const left = e.currentTarget.scrollLeft;
       setScrollTop(top);
+      setScrollLeft(left);
 
       if (preRef.current) {
         preRef.current.scrollTop = top;
@@ -304,6 +446,9 @@ export const StructuredTextCodeEditor = forwardRef<
 
     // Handle code edits from textarea
     const handleTextareaChange = (newViewCode: string) => {
+      // (the list follows what is typed; so does the parameter hint)
+      if (completionRef.current) requestAnimationFrame(() => refreshCompletion(completionRef.current?.forced ?? false));
+      if (completionScope) requestAnimationFrame(refreshSignature);
       if (viewModel && viewModel.activeFoldedBlocks.length > 0) {
         const fullCode = restoreFullCodeFromViewCode(
           newViewCode,
@@ -329,7 +474,90 @@ export const StructuredTextCodeEditor = forwardRef<
     };
 
     // Tab key indentation support & custom keybindings
+    // Completion: the names at the caret's word (after "a.b.": the members of what it is)
+    const refreshCompletion = (forced: boolean) => {
+      const ta = textareaRef.current;
+      const scope = completionScope?.();
+      if (!ta || !scope) return setCompletion(null);
+      const at = completionAt(ta.value, ta.selectionStart);
+      const inChain = !!at.chain && at.chain.length > 0;
+      if (!inChain && !at.word && !forced) return setCompletion(null);
+      const pool = inChain ? scope.members(at.chain!) ?? [] : scope.top;
+      const w = at.word.toLowerCase();
+      const starts = w ? pool.filter((v) => v.name.toLowerCase().startsWith(w)) : pool;
+      const items = w ? [...starts, ...pool.filter((v) => !starts.includes(v) && v.name.toLowerCase().includes(w))] : pool;
+      if (!items.length || (!forced && items.length === 1 && items[0].name === at.word)) return setCompletion(null);
+      setCompletion({ start: at.start, end: at.end, word: at.word, chain: at.chain, items: items.slice(0, 300), active: 0, forced });
+    };
+    const acceptCompletion = (name: string) => {
+      const ta = textareaRef.current;
+      const c = completionRef.current;
+      if (!ta || !c) return;
+      ta.focus();
+      ta.setSelectionRange(c.start, c.end);
+      // (as typing: the editor's own change handling and undo)
+      if (!ta.ownerDocument.execCommand('insertText', false, name)) {
+        const v = ta.value;
+        handleTextareaChange(v.slice(0, c.start) + name + v.slice(c.end));
+      }
+      setCompletion(null);
+    };
+    useEffect(() => {
+      completionListRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: 'nearest' });
+    }, [completion?.active]);
+    useLayoutEffect(() => {
+      const ta = textareaRef.current;
+      const ctx = document.createElement('canvas').getContext('2d');
+      if (!ta || !ctx) return;
+      ctx.font = `${fontPx}px ${getComputedStyle(ta).fontFamily}`;
+      const w = ctx.measureText('MMMMMMMMMM').width / 10;
+      if (w > 0) setCharW(w);
+    }, [fontPx]);
+
     const handleKeyDownInternal = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      const c = completionRef.current;
+      if (c) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const n = c.items.length;
+          setCompletion({ ...c, active: (c.active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n });
+          return;
+        }
+        if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.shiftKey) {
+          e.preventDefault();
+          acceptCompletion(c.items[c.active].name);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setCompletion(null);
+          return;
+        }
+      }
+      if (completionScope && e.key === 'F2' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+        const scope = completionScope();
+        const ta = textareaRef.current;
+        if (scope && ta) {
+          e.preventDefault();
+          setCompletion(null);
+          setAssistant({ start: ta.selectionStart, end: ta.selectionEnd, catalog: scope.catalog() });
+          return;
+        }
+      }
+      if (completionScope && e.ctrlKey && (e.key === ' ' || e.code === 'Space')) {
+        e.preventDefault();
+        refreshCompletion(true);
+        return;
+      }
+      // After a dot: the members
+      if (completionScope && e.key === '.' && !e.ctrlKey && !e.altKey) setTimeout(() => refreshCompletion(false), 0);
+      if (signatureRef.current && e.key === 'Escape' && !completionRef.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSignature(null);
+        return;
+      }
       if (onKeyDown) {
         onKeyDown(e);
         if (e.defaultPrevented) return;
@@ -359,6 +587,32 @@ export const StructuredTextCodeEditor = forwardRef<
         return;
       }
 
+      // Format Document (Shift+Alt+F)
+      if (e.shiftKey && e.altKey && !e.ctrlKey && (e.key === 'F' || e.key === 'f' || e.code === 'KeyF')) {
+        e.preventDefault();
+        formatNow();
+        return;
+      }
+      // A snippet: its key and Tab (not in the declaration's VAR lines: those are code editors' too, so any line)
+      if (e.key === 'Tab' && !e.shiftKey && completionScope && textareaRef.current) {
+        const ta = textareaRef.current;
+        if (ta.selectionStart === ta.selectionEnd) {
+          const before = ta.value.slice(0, ta.selectionStart);
+          const lineStart = before.lastIndexOf('\n') + 1;
+          const m = before.slice(lineStart).match(/(^|[\s(;])([A-Za-z_]\w*)$/);
+          const snip = m ? snippetFor(m[2]) : undefined;
+          if (m && snip) {
+            e.preventDefault();
+            const wordStart = ta.selectionStart - m[2].length;
+            const indent = ta.value.slice(lineStart).match(/^[ \t]*/)![0];
+            const { text, caret } = expandSnippet(snip, indent);
+            ta.setSelectionRange(wordStart, ta.selectionStart);
+            if (!ta.ownerDocument.execCommand('insertText', false, text)) handleTextareaChange(ta.value.slice(0, wordStart) + text + ta.value.slice(ta.selectionEnd));
+            ta.setSelectionRange(wordStart + caret, wordStart + caret);
+            return;
+          }
+        }
+      }
       if (e.key === 'Tab') {
         e.preventDefault();
         const textarea = textareaRef.current;
@@ -407,6 +661,7 @@ export const StructuredTextCodeEditor = forwardRef<
         {/* Line Numbers Gutter with Code Folding Toggles */}
         <div
           ref={gutterRef}
+          id={id ? `${id}-gutter` : undefined}
           aria-hidden="true"
           className={`${
             enableCodeFolding ? 'w-14' : 'w-11'
@@ -486,6 +741,11 @@ export const StructuredTextCodeEditor = forwardRef<
 
                 {/* Right: Line Number and Find Match Indicator */}
                 <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
+                  {entry.originalLineNumber !== null && bookmarkSet.has(entry.originalLineNumber) && (
+                    <span className="st-bookmark shrink-0 text-sky-300" data-bookmark-line={entry.originalLineNumber} title="Bookmark (right-click: PLC Bookmarks)">
+                      <BookmarkIcon className="w-2.5 h-2.5 fill-sky-400" />
+                    </span>
+                  )}
                   {matchingViewLines.has(idx) && (
                     <span
                       className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 shadow-[0_0_6px_rgba(251,191,36,0.8)]"
@@ -551,6 +811,125 @@ export const StructuredTextCodeEditor = forwardRef<
             />
           )}
 
+          {/* Problems: wavy underlines */}
+          {markers && markers.length > 0 && (
+            <div id={id ? `${id}-markers` : undefined} className="absolute inset-0 pointer-events-none overflow-hidden z-[5]">
+              {markers.map((m, i) => {
+                const viewIdx = lineEntries.findIndex((en) => en.originalLineNumber === m.line);
+                if (viewIdx < 0) return null;
+                const text = value.split('\n')[m.line - 1] ?? '';
+                const a = visualColumn(text, m.start);
+                const b = visualColumn(text, m.end);
+                return (
+                  <div
+                    key={`${m.line}-${m.start}-${i}`}
+                    className={`st-marker st-marker-${m.severity} absolute`}
+                    data-line={m.line}
+                    data-message={m.message}
+                    style={{ left: `${8 + a * charW - scrollLeft}px`, width: `${Math.max(charW, (b - a) * charW)}px`, top: `${viewIdx * lineH + 8 - scrollTop + lineH - 5}px`, height: '5px', backgroundImage: wave(m.severity), backgroundRepeat: 'repeat-x' }}
+                  />
+                );
+              })}
+            </div>
+          )}
+          {/* Parameter hint: what the call takes, the parameter at the caret marked */}
+          {signature &&
+            (() => {
+              const v = textareaRef.current?.value ?? '';
+              const lineStart = v.lastIndexOf('\n', signature.start - 1) + 1;
+              const viewIdx = (v.slice(0, signature.start).match(/\n/g) || []).length;
+              const lineText = v.slice(lineStart, v.indexOf('\n', lineStart) < 0 ? undefined : v.indexOf('\n', lineStart));
+              const x = 8 + visualColumn(lineText, signature.start - lineStart) * charW - scrollLeft;
+              const above = viewIdx * lineH + 8 - scrollTop - 26;
+              const y = above >= 0 ? above : (viewIdx + 1) * lineH + 8 - scrollTop + (completion ? 230 : 2);
+              return (
+                <div
+                  id={id ? `${id}-signature` : undefined}
+                  className="code-signature absolute z-30 max-w-[90%] truncate rounded-md bg-slate-950 border border-sky-800/80 shadow-xl px-2 py-0.5 font-mono text-[11px] text-slate-300 pointer-events-none"
+                  style={{ left: `${Math.max(4, x)}px`, top: `${y}px` }}
+                >
+                  <span className="text-slate-100">{signature.label}</span>(
+                  {signature.params.map((p, i) => (
+                    <React.Fragment key={p.name}>
+                      {i > 0 && ', '}
+                      <span className={i === signature.active ? 'code-signature-active text-sky-300 font-bold underline' : ''} data-param={p.name}>
+                        {p.scope === 'VAR_OUTPUT' ? `=> ${p.name}` : p.name}: {p.type}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                  ){signature.returns ? `: ${signature.returns}` : ''}
+                  {signature.params[signature.active]?.comment && <span className="text-slate-500"> — {signature.params[signature.active].comment}</span>}
+                </div>
+              );
+            })()}
+
+          {/* Completion (Ctrl+Space, after a dot) */}
+          {completion &&
+            (() => {
+              const ta = textareaRef.current;
+              const v = ta?.value ?? '';
+              const lineStart = v.lastIndexOf('\n', completion.start - 1) + 1;
+              const viewIdx = (v.slice(0, completion.start).match(/\n/g) || []).length;
+              const lineText = v.slice(lineStart, v.indexOf('\n', lineStart) < 0 ? undefined : v.indexOf('\n', lineStart));
+              const x = 8 + visualColumn(lineText, completion.start - lineStart) * charW - scrollLeft;
+              const y = (viewIdx + 1) * lineH + 8 - scrollTop;
+              const width = containerRef.current?.clientWidth ?? 600;
+              return (
+                <div
+                  id={id ? `${id}-completion` : undefined}
+                  ref={completionListRef}
+                  role="listbox"
+                  className="code-completion absolute z-30 w-80 max-h-56 overflow-y-auto rounded-md bg-slate-950 border border-slate-700 shadow-2xl py-1 font-sans text-xs"
+                  style={{ left: `${Math.max(4, Math.min(x, width - 330))}px`, top: `${y}px` }}
+                >
+                  {completion.chain && completion.chain.length > 0 && (
+                    <div className="px-2.5 pb-1 text-[10px] text-slate-500 border-b border-slate-800">
+                      Members of <span className="font-mono">{completion.chain.join('.')}</span>
+                    </div>
+                  )}
+                  {completion.items.map((it, i) => (
+                    <div
+                      key={it.name + it.scope}
+                      role="option"
+                      aria-selected={i === completion.active}
+                      data-active={i === completion.active ? 'true' : undefined}
+                      data-name={it.name}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseMove={() => i !== completion.active && setCompletion({ ...completion, active: i })}
+                      onClick={() => acceptCompletion(it.name)}
+                      className={`code-completion-item flex items-center gap-2 px-2.5 py-0.5 cursor-pointer font-mono ${i === completion.active ? 'bg-sky-700/40 text-white' : 'text-slate-200'}`}
+                      title={it.comment}
+                    >
+                      <span className="truncate">{it.name}</span>
+                      {it.type && <span className="text-slate-400 truncate">: {it.type}</span>}
+                      <span className="ml-auto text-[10px] text-slate-500 shrink-0">{it.scope}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+          {assistant && createPortal(
+            <InputAssistantDialog
+              catalog={assistant.catalog}
+              onClose={() => {
+                setAssistant(null);
+                requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+              onInsert={(name) => {
+                const ta = textareaRef.current;
+                if (!ta) return;
+                ta.focus();
+                ta.setSelectionRange(assistant.start, assistant.end);
+                if (!ta.ownerDocument.execCommand('insertText', false, name)) {
+                  const v = ta.value;
+                  handleTextareaChange(v.slice(0, assistant.start) + name + v.slice(assistant.end));
+                }
+              }}
+            />,
+            textareaRef.current?.ownerDocument.body ?? document.body
+          )}
+
           {/* Syntax-Highlighted HTML (Underneath) */}
           <pre
             ref={preRef}
@@ -578,7 +957,31 @@ export const StructuredTextCodeEditor = forwardRef<
               setFocused(true);
               updateCaretLine();
             }}
-            onBlur={() => setFocused(false)}
+            onBlur={() => {
+              setFocused(false);
+              setSignature(null);
+              setTimeout(() => {
+                if (!completionListRef.current?.contains(document.activeElement)) setCompletion(null);
+              }, 150);
+            }}
+            onMouseDown={() => setCompletion(null)}
+            onKeyUp={(e) => {
+              if (completionScope && /^(Arrow|Home|End|PageUp|PageDown)/.test(e.key)) refreshSignature();
+            }}
+            onMouseUp={() => completionScope && requestAnimationFrame(refreshSignature)}
+            onMouseMove={(e) => {
+              if (!markers?.length && !completionScope) return;
+              const ta = e.currentTarget;
+              const r = ta.getBoundingClientRect();
+              const viewIdx = Math.floor((e.clientY - r.top - 8 + ta.scrollTop) / lineH);
+              const line = lineEntries[viewIdx]?.originalLineNumber;
+              const col = (e.clientX - r.left - 8 + ta.scrollLeft) / charW;
+              const text = line ? value.split('\n')[line - 1] ?? '' : '';
+              // A problem's message, else what the name under the pointer is (its type, block and comment)
+              const hit = line && markers ? markers.find((m) => m.line === line && visualColumn(text, m.start) <= col && col <= visualColumn(text, m.end)) : undefined;
+              const title = hit ? hit.message : line && completionScope ? describeName(completionScope(), text, indexAtVisual(text, Math.floor(col))) ?? '' : '';
+              if (ta.title !== title) ta.title = title;
+            }}
             onScroll={handleScroll}
             onWheel={(e) => e.stopPropagation()}
             onKeyDown={handleKeyDownInternal}
