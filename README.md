@@ -346,7 +346,8 @@ The **Kval StateScope gateway** (`gateway/`) is a small Node.js service on a mac
 In the Live tab, enter your access token (or **Sign in** with your company account, when the gateway has it set up), choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
 
 - **Sign-in with company accounts:** OpenID Connect (Microsoft Entra ID / Microsoft 365, ADFS, Okta, Google). The gateway checks who may use it (users, e-mail domains, groups) and logs the user's name. Tokens can stay or be turned off.
-- **Alerts:** the gateway follows the machines under a root by itself, with no browser open, and posts to a Teams, Slack or JSON webhook when one is stuck or in an error state, and when it recovers. Set them up on the setup page.
+- **Alerts:** the gateway follows the machines under a root by itself, with no browser open, and posts to a Teams, Slack or JSON webhook when one is stuck or in an error state, and when it recovers. Set them up on the setup page. The gateway keeps the alert history. **Acknowledge** (with a note) shows everyone who is on it and posts that to the webhook too.
+- **Operator board:** `https://<gateway>:8443/?board` (or **Operator board** in the Live tab) is a full-screen view for a screen by the line. It has a tile per machine, green, amber (stuck) or red (error) with problems first, and the alerts with Acknowledge. See [gateway/README.md](gateway/README.md#operator-board).
 
 Through Link, the Live tab's **Browse** also searches the network (Link runs the search on this computer) and offers **Add route**, as in the desktop app.
 

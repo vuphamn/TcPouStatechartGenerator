@@ -45,8 +45,9 @@ function checkRule(r, i, plcIds) {
   } catch {
     throw new Error(`${where}: the error pattern is not a valid regular expression`);
   }
-  const webhook = String(r?.webhook ?? '').trim();
-  if (!/^https?:\/\/[^\s]+$/i.test(webhook)) throw new Error(`${where}: the webhook is an http(s) URL`);
+  // (no webhook: the alerts go to the history and the operator board only)
+  const webhook = String(r?.webhook ?? '').trim() || null;
+  if (webhook && !/^https?:\/\/[^\s]+$/i.test(webhook)) throw new Error(`${where}: the webhook is an http(s) URL (or empty)`);
   const format = ['teams', 'slack', 'json'].includes(r?.format) ? r.format : 'json';
   return {
     id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, stuckAfterMs, stateLimits,
@@ -166,7 +167,7 @@ class AlertMonitor {
       if (!m) continue;
       const was = t ? { stuck: t.stuck, error: t.error, name: this.name(m, t.value) } : null;
       // (the gateway's clock: the first value's time is when it was first seen)
-      const next = { value: s.v, since: now, stuck: false, error: false, sent: t?.sent ?? {} };
+      const next = { value: s.v, since: now, first: !t, stuck: false, error: false, sent: t?.sent ?? {} };
       this.tracks.set(s.id, next);
       const name = this.name(m, s.v);
       if (was && (was.stuck || was.error) && this.rule.notifyRecovery) this.alert('recovered', m, next, `✅ ${m.path} left ${was.name}: now ${name}`);
@@ -196,13 +197,28 @@ class AlertMonitor {
     t.sent[kind] = now;
     const plc = this.env.plcOf(this.rule.plc);
     const event = {
-      event: kind, rule: this.rule.name, plc: this.rule.plc, plcName: plc?.name ?? this.rule.plc, machine: m.path, type: m.type,
+      event: kind, rule: this.rule.name, ruleId: this.rule.id, plc: this.rule.plc, plcName: plc?.name ?? this.rule.plc, machine: m.path, type: m.type,
       state: this.name(m, t.value), value: t.value, since: new Date(t.since).toISOString(), durationMs: now - t.since,
       text: `${plc?.name ?? this.rule.plc}: ${text}`, at: new Date(now).toISOString(),
     };
     this.lastAlert = { kind, machine: m.path, state: event.state, at: event.at };
     this.env.log(`alerts: ${kind} ${m.path} (${event.state}) on ${this.rule.plc}`);
-    void postWebhook(this.rule.webhook, this.rule.format, event, this.env.log);
+    // The alert history (the web app lists and acknowledges it), then the webhook
+    this.env.onEvent?.(event, this.rule);
+    if (this.rule.webhook) void postWebhook(this.rule.webhook, this.rule.format, event, this.env.log);
+  }
+
+  /** The machines now (the operator board): state, since when (gateway time), in error, the limit that applies */
+  snapshot() {
+    const error = new RegExp(this.rule.errorPattern || DEFAULT_ERROR, 'i');
+    return this.machines.map((m) => {
+      const t = this.tracks.get(m.path.toLowerCase());
+      const state = t ? this.name(m, t.value) : null;
+      return {
+        path: m.path, type: m.type, value: t?.value ?? null, state, since: t?.since ?? null, atLeast: !!t?.first,
+        error: !!state && error.test(state), limitMs: state ? this.rule.stateLimits?.[state] ?? this.rule.stuckAfterMs ?? null : null,
+      };
+    });
   }
 
   lost(message) {
@@ -273,4 +289,4 @@ function createAlerts(env) {
   };
 }
 
-module.exports = { createAlerts, checkRule, postWebhook, DEFAULT_ERROR };
+module.exports = { createAlerts, checkRule, postWebhook, AlertMonitor, DEFAULT_ERROR };

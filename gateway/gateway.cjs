@@ -23,6 +23,7 @@ const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
 const { createAlerts, checkRule, postWebhook } = require('./alerts.cjs');
 const { createAuth } = require('./auth.cjs');
+const { createAlertLog, createBoards } = require('./board.cjs');
 
 const VERSION = '1.0.0';
 const args = process.argv.slice(2);
@@ -414,7 +415,10 @@ function start() {
       if (own) await own.disconnect(true).catch(() => {});
     }
   };
-  alerts = createAlerts({ connectionFor, plcOf: (id) => plcs.get(id), log, retryMs: config.alertRetryMs ?? 30000 });
+  // The alert history (listed and acknowledged in the web app) and the operator boards' monitors
+  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: () => config.alerts ?? [] });
+  const boards = createBoards({ connectionFor, plcOf: (id) => plcs.get(id), rules: () => config.alerts ?? [], log, retryMs: config.alertRetryMs ?? 30000 });
+  alerts = createAlerts({ connectionFor, plcOf: (id) => plcs.get(id), log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e) });
   alerts.apply(config.alerts ?? []);
   const admin = createAdmin({
     configPath,
@@ -471,6 +475,10 @@ function start() {
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     const ssoUser = auth.userOf(req);
+    // Operator board and alert history of this connection
+    let boardStop = null;
+    let alertsOff = null;
+    const boardViewer = {};
     let user = null;
     let session = null; // { conn, entry, vars }
     // Guard variables asked for before the session was connected
@@ -556,6 +564,26 @@ function start() {
         return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
       }
 
+      // Operator board: the machines of these PLCs (default: all), once a second
+      if (m.type === 'boardWatch') {
+        const ids = Array.isArray(m.plcs) && m.plcs.length ? m.plcs.filter((id) => plcs.has(id)).slice(0, 20) : [...plcs.keys()].slice(0, 20);
+        const root = typeof m.root === 'string' && ads.isSymbolPath(m.root) ? m.root : 'MAIN.mainStateMachine';
+        boardStop?.();
+        boardStop = boards.watch(ids, root, boardViewer, send);
+        log(`board: ${user} watches ${ids.join(', ') || '(no PLCs)'}`);
+        return;
+      }
+      // Alert history: the latest alerts, then each new or changed one (alertEvent)
+      if (m.type === 'alertsList') {
+        send({ type: 'alertsList', events: alertLog.list() });
+        alertsOff ??= alertLog.subscribe((event) => send({ type: 'alertEvent', event }));
+        return;
+      }
+      if (m.type === 'alertAck') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const e = typeof m.id === 'string' ? alertLog.ack(m.id, user, typeof m.note === 'string' ? m.note : '') : null;
+        return send({ type: 'alertAckResult', requestId, ok: !!e, event: e, message: e ? 'Acknowledged' : 'No such alert' });
+      }
       // Guard variables of the running session: read like the state variable (a malformed request is ignored)
       if (m.type === 'liveWatch') {
         const vars = parseWatchRequest(m.vars, config.maxWatchedVariables ?? 100);
@@ -671,6 +699,8 @@ function start() {
 
     ws.on('close', async () => {
       clearTimeout(helloTimer);
+      boardStop?.();
+      alertsOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -694,6 +724,7 @@ function start() {
   const shutdown = async () => {
     log('stopping');
     alerts.stop();
+    boards.stop();
     for (const c of connections.values()) await c.close();
     process.exit(0);
   };

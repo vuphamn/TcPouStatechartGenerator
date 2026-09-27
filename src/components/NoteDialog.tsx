@@ -23,13 +23,20 @@ export const NoteDialog: React.FC<NoteDialogProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setNoteText(currentNote || '');
-      setTimeout(() => {
-        textareaRef.current?.focus();
-        textareaRef.current?.select();
-      }, 50);
-    }
+    if (!isOpen) return;
+    setNoteText(currentNote || '');
+    // Focused (and the old text selected) at once: a select later would take in what was already typed, and the
+    // next key would replace it (seen on slow machines)
+    const focus = () => {
+      const ta = textareaRef.current;
+      if (!ta || document.activeElement === ta) return !!ta;
+      ta.focus();
+      ta.select();
+      return true;
+    };
+    if (focus()) return;
+    const t = window.setTimeout(focus, 50);
+    return () => window.clearTimeout(t);
   }, [isOpen, currentNote]);
 
   // Handle keyboard shortcuts (Ctrl+Enter to save, Escape to cancel)

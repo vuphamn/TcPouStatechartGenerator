@@ -112,6 +112,8 @@ interface LivePanelProps {
   sso?: { provider: string; user: string | null; name: string | null; tokens: boolean };
   onSignIn?: () => void;
   onSignOut?: () => void;
+  /** Web edition through a gateway: the operator board's address */
+  boardUrl?: string;
 }
 
 const REPLAY_SPEEDS = [1, 2, 5, 10, 60, 600];
@@ -208,6 +210,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   sso,
   onSignIn,
   onSignOut,
+  boardUrl,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   // The instance this window follows (or will), and the others the PLC has
@@ -581,6 +584,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   </option>
                 ))}
               </select>
+              {boardUrl && (
+                <>
+                  <span />
+                  <a id="live-board-link" href={boardUrl} target="_blank" rel="noreferrer" className="text-[11px] text-sky-400 hover:text-sky-300 underline" title="A full-screen view of the gateway's machines and alerts, for a screen by the line">
+                    Operator board
+                  </a>
+                </>
+              )}
             </>
           )}
           {!viaGateway && (

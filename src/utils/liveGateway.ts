@@ -174,6 +174,13 @@ export class GatewayConnection {
     return true;
   }
 
+  /** Sends a message as is (the operator board: boardWatch, alertsList); false when not connected */
+  send(message: Record<string, unknown>): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify(message));
+    return true;
+  }
+
   /** A request answered with replyType (same requestId); rejects when not connected or after timeoutMs */
   request<T>(message: Record<string, unknown>, replyType: string, timeoutMs = 15000): Promise<T> {
     const ws = this.ws;

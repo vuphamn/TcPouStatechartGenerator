@@ -482,7 +482,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         el('tr', {}, el('th', {}, 'Root'), el('td', {}, input('root', { class: 'mono', placeholder: 'MAIN.mainStateMachine' })), el('th', {}, 'State variable'), el('td', {}, input('stateVar', { class: 'mono', placeholder: 'machineState' }))),
         el('tr', {}, el('th', {}, 'Stuck after (s)'), el('td', {}, stuck), el('th', {}, 'Per state (s)'), el('td', {}, limits)),
         el('tr', {}, el('th', {}, 'Error states'), el('td', {}, el('div', { class: 'row nowrap' }, check('onError', 'alert'), input('errorPattern', { class: 'mono', placeholder: 'ERROR|FAULT|ALARM|E_?STOP|ABORT' }))), el('th', {}, 'Recovery'), el('td', {}, check('notifyRecovery', 'also when it recovers'))),
-        el('tr', {}, el('th', {}, 'Webhook'), el('td', {}, input('webhook', { class: 'mono', placeholder: 'https://...' })), el('th', {}, 'Format'), el('td', {}, format)),
+        el('tr', {}, el('th', {}, 'Webhook'), el('td', {}, input('webhook', { class: 'mono', placeholder: 'https://... (empty: the operator board and the history only)' })), el('th', {}, 'Format'), el('td', {}, format)),
       ));
       const test = el('button', { class: 'admin-alert-test', on: { click: async () => {
         test.disabled = true;

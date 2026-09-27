@@ -5248,6 +5248,11 @@ export const App: React.FC = () => {
             onSignIn={() => {
               window.location.href = `/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
             }}
+            boardUrl={
+              liveMode === 'web' && liveVia === 'gateway' && (gatewayOrigin || liveSettings.gateway)
+                ? `${window.location.pathname}?board${liveSettings.gateway && !ssoHere ? `&gateway=${encodeURIComponent(liveSettings.gateway)}` : ''}`
+                : undefined
+            }
             onSignOut={() => {
               if (!gatewayOrigin) return;
               handleLiveStop();

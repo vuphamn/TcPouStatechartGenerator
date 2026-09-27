@@ -108,6 +108,30 @@ Set the rules up on the setup page (**Alerts**), or in `config.json`:
 
 The time in state counts from when the gateway first saw the machine in it (after a restart, from then).
 
+A rule without a webhook still records its alerts: they go to the alert history and the operator board only.
+
+### Alert history and acknowledging
+
+Every alert is kept in `alerts-history.json` next to `config.json` (the latest 1000). People signed in to the gateway (token or company account) see the list on the [operator board](#operator-board).
+- **Acknowledge**, with an optional note such as "on my way", marks an alert as seen. Every open board shows who acknowledged it and when. The rule's webhook gets a message: *"👤 alice@example.com acknowledged: Line 202: MAIN.mainStateMachine.aDoors[2] is in DOOR_DASHER_ERROR · on my way"*. In the JSON format, `event` is `acknowledged`, with `by` and `note`.
+- **Resolved:** a recovery marks that machine's open alerts as resolved.
+- **Logged:** each acknowledgement goes into the gateway's log.
+
+## Operator board
+
+A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/?board`. The Live tab links to it (**Operator board**) when it goes through a gateway.
+- **One tile per state machine** of the gateway's PLCs. Green is normal, amber is stuck (longer in a state than its limit), red is an error state; problems come first. Each tile shows the machine, its state and its time in state ("≥" when it was already in that state when the gateway began watching). The header counts the machines, the errors and the stuck ones, and has a clock.
+- **The alerts panel** lists the alert history, newest first, with **Acknowledge** on the open ones. The bell hides it and counts the open ones.
+- **Watching:** the gateway follows the machines itself: one monitor per PLC, shared by every board, stopped a minute after the last board closes. The limits and error names come from an alert rule for that PLC and root when there is one.
+- **Signing in:** the board asks for a token (kept in that browser, for a wall screen), or offers **Sign in** when company sign-in is set up. After a lost connection it connects again by itself.
+- **Address options:**
+  - `&plcs=line202,line237`: only these PLCs (default: all);
+  - `&root=MAIN.mainStateMachine`: where the machines are looked for;
+  - `&title=Line%20202`: the board's title;
+  - `&stuck=300`: a default limit in seconds, for PLCs without an alert rule;
+  - `&alerts=0`: start with the alerts panel hidden;
+  - `&gateway=host:8443`: a board served from somewhere else (with a token).
+
 ## Sign-in with company accounts
 
 Instead of access tokens (or next to them), people can sign in with their company account through OpenID Connect: Microsoft Entra ID (Microsoft 365 accounts), ADFS, Okta, Google and others. The web app served by the gateway then shows **Sign in with ...** in the Live tab.
@@ -157,7 +181,8 @@ With `"insecure": true` and no `tls` entry, the gateway serves plain HTTP / WS a
 
 The log goes to the console, one line per event with a time stamp:
 - sign-ins (tokens and company accounts), rejected tokens and users, sign-outs, and IP addresses blocked after 10 failures a minute;
-- alerts: the rules' machines followed, and each message sent (or a webhook that failed);
+- alerts: the rules' machines followed, each message sent (or a webhook that failed), and acknowledgements;
+- operator boards: who watches which PLCs;
 - the setup page's actions (searches, PLC lists saved, tokens created or revoked) and refused requests to it;
 - "go live" requests, with user, PLC and variable;
 - ADS connections to the PLCs, and handles released.
