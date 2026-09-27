@@ -18,10 +18,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   // The Door Dasher sample: an enum written with leading commas
   await page.select('#sample-selector', 'door-dasher-237');
-  await page.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id^="DOOR_DASHER"]'), { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id^="DOOR_DASHER"]'), { timeout: 60000 });
   await sleep(600);
   await page.click('#dock-tab-enum');
   await sleep(800);

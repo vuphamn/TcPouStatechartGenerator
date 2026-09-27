@@ -10,7 +10,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const errors = []; p.on('pageerror', (e) => errors.push(e.message));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.click('#dock-tab-method'); await sleep(800);
   const text = await p.evaluate(() => document.body.innerText);
   console.log(/Found in POU/.test(text) ? 'FAIL label still shown' : 'ok   "Found in POU" is gone');

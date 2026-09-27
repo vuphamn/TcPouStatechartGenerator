@@ -33,7 +33,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
   await a.goto(h.APP_URL, { waitUntil: 'load' });
   await a.evaluate(() => localStorage.clear());
   await a.reload({ waitUntil: 'load' });
-  await a.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  await a.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   await a.click('#dock-tab-live');
   await sleep(400);
   await set(a, 'live-token-input', code);
@@ -60,7 +60,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
   if (b) {
     b.on('pageerror', (e) => errors.push(e.message));
     await b.bringToFront();
-    await b.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 }).catch(() => {});
+    await b.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
     await b.click('#dock-tab-live').catch(() => {});
     for (let i = 0; i < 60 && !s2; i++) { await sleep(300); s2 = await b.$eval('#live-current-state', (e) => e.textContent).catch(() => ''); }
   }

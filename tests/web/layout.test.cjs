@@ -16,7 +16,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  const ready = () => page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  const ready = () => page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   const rightTabs = () => page.$$eval('#right-dock-panel [id^="dock-tab-"]', (t) => t.map((x) => x.id.replace('dock-tab-', '')));
 
   // 1. Old (revision 1) layout with the three RightPanel groups: upgraded once

@@ -29,7 +29,7 @@ const launch = (file, port) => exe
   let f = '';
   for (let i = 0; i < 60 && !/SM_DoorDasher/.test(f); i++) { await sleep(500); f = await file(); }
   expect(/SM_DoorDasher/.test(f), `opened at start-up: ${f.trim()}`);
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 }).catch(() => {});
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
   const dut = await page.evaluate(() => document.body.innerText.match(/E_DoorDasher\w*/)?.[0]);
   expect(!!dut, `its .TcDUT found next to it: ${dut}`);
 

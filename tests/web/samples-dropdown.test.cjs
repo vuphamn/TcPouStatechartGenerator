@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   const options = await page.$$eval('#sample-selector option', (o) => o.map((x) => `${x.value}|${x.textContent.trim()}`));
   const cases = [
     { id: 'k-servo-supply-manager', states: ['DISABLED', 'ADD_CHILDREN', 'NO_CHILDREN', 'ENABLE_CHILDREN', 'ENABLED', 'ERROR'], minEdges: 4 },
@@ -29,7 +29,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     expect(!!opt, `dropdown lists ${opt || c.id}`);
     if (!opt) continue;
     await page.select('#sample-selector', c.id);
-    await page.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${c.states[1]}"]`, { timeout: 30000 }).catch(() => null);
+    await page.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${c.states[1]}"]`, { timeout: 60000 }).catch(() => null);
     await sleep(1200);
     const drawn = await page.evaluate(() => ({
       nodes: [...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id]')].map((n) => n.getAttribute('data-state-id')),

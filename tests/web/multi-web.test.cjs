@@ -18,7 +18,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
     const p = await b.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     await p.goto(URL_, { waitUntil: 'load' });
-    await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+    await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
     await sleep(600);
     return p;
   };
@@ -56,7 +56,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
     localStorage.setItem('tc_statechart_diagram_notes_metadata', JSON.stringify({ nodes: { TABLEMANAGER_CLAMPED: 'legacy clamp note' }, edges: {} }));
   });
   await a.reload({ waitUntil: 'load' });
-  await a.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await a.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await sleep(800);
   expect(/legacy clamp note/.test(await stored(a, TM)) && !(await a.evaluate(() => localStorage.getItem('tc_statechart_diagram_notes_metadata'))), 'old notes moved to the Table Manager POU that they fit');
   expect(await shows(a, 'legacy clamp note'), 'and shown on its diagram');
@@ -69,7 +69,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
   // Tab B: Door Dasher (it starts on Table Manager, the default sample)
   const bTab = await open();
   await bTab.select('#sample-selector', 'door-dasher-237');
-  await bTab.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id^="DOOR_DASHER"]'), { timeout: 30000 });
+  await bTab.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id^="DOOR_DASHER"]'), { timeout: 60000 });
   await sleep(800);
   expect(!(await shows(bTab, 'homing note A')), 'tab B (Door Dasher): no Table Manager note');
   await addNote(bTab, 'DOOR_DASHER_DISABLED', 'dasher note B');
@@ -89,7 +89,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
   // Tab B back to Table Manager: its notes come back
   await bTab.bringToFront();
   await bTab.select('#sample-selector', 'table-manager-202');
-  await bTab.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]'), { timeout: 30000 });
+  await bTab.waitForFunction(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]'), { timeout: 60000 });
   await sleep(800);
   expect(await shows(bTab, 'homing note A') && /dasher note B/.test(await stored(bTab, DD)), 'switching back restores the POU\'s notes; Door Dasher\'s are kept');
 

@@ -22,7 +22,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     localStorage.setItem('tc_statechart_dock_layout_v1', JSON.stringify({ version: 1, revision: 2, middle: { groups: [{ id: 'middle-main', tabs: ['diagram', 'method', 'enum'], active: 'diagram', size: 1 }], floating: [] }, right: { groups: [{ id: 'right-main', tabs: ['docs'], active: 'docs', size: 1 }], floating: [] }, leftWidth: 400, rightWidth: 400, leftVisible: true, rightVisible: true, lastGroup: {}, knownTabs: ['diagram', 'method', 'enum', 'docs'] }));
   });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   const tabs = await page.$$eval('[id^="dock-tab-"]', (t) => t.map((x) => x.id.replace('dock-tab-', '')));
   expect(tabs.indexOf('pou') === tabs.indexOf('method') - 1, `a saved layout gets the tab before the Method Editor: ${tabs.slice(0, 5).join(', ')}`);
   // A layout saved with the POU Editor after the Method Editor: moved before it once
@@ -30,7 +30,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     localStorage.setItem('tc_statechart_dock_layout_v1', JSON.stringify({ version: 1, revision: 2, middle: { groups: [{ id: 'middle-main', tabs: ['diagram', 'method', 'pou', 'enum'], active: 'diagram', size: 1 }], floating: [] }, right: { groups: [{ id: 'right-main', tabs: ['docs'], active: 'docs', size: 1 }], floating: [] }, leftWidth: 400, rightWidth: 400, leftVisible: true, rightVisible: true, lastGroup: {}, knownTabs: ['diagram', 'method', 'pou', 'enum', 'docs'] }));
   });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   let order = await page.$$eval('[id^="dock-tab-"]', (x) => x.map((e) => e.id.replace('dock-tab-', '')));
   expect(order.slice(0, 4).join() === 'diagram,pou,method,enum', `saved with it after the Method Editor: moved before (${order.slice(0, 4).join(', ')})`);
   // ...once: moved back by the user, it stays there
@@ -40,7 +40,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     localStorage.setItem('tc_statechart_dock_layout_v1', JSON.stringify(l));
   });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   order = await page.$$eval('[id^="dock-tab-"]', (x) => x.map((e) => e.id.replace('dock-tab-', '')));
   expect(order.slice(0, 4).join() === 'diagram,method,pou,enum', `a place the user chose afterwards is kept (${order.slice(0, 4).join(', ')})`);
   await page.click('#dock-tab-pou');

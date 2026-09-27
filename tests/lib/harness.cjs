@@ -75,6 +75,18 @@ async function launchBrowser(options = {}) {
     child.kill();
     throw new Error(`The browser did not start (${browserPath()})`);
   }
+  // Page loads may take longer than puppeteer's 30 s on a slow machine (the GitHub runner: the app's first load there
+  // takes 20 s and more): every page gets 1 minute, 2 on CI
+  const navTimeout = process.env.CI ? 120000 : 60000;
+  const newPage = browser.newPage.bind(browser);
+  browser.newPage = async (...a) => {
+    const page = await newPage(...a);
+    page.setDefaultNavigationTimeout(navTimeout);
+    return page;
+  };
+  browser.on('targetcreated', (t) => {
+    if (t.type() === 'page') void t.page().then((page) => page?.setDefaultNavigationTimeout(navTimeout)).catch(() => {});
+  });
   // Closing the browser ends its process; so does the end of the test
   const removeProfile = () => {
     try {

@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let i = 0; i < 60 && !p; i++) { p = (await browser.pages()).find((x) => x.url().startsWith(h.APP_ORIGIN) && !/window\.html/.test(x.url())); if (!p) await sleep(250); }
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.setViewport({ width: 1600, height: 1000 });
   await sleep(800);
   await p.click('#dock-tab-method');

@@ -32,7 +32,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   p.on('pageerror', (e) => errors.push(e.message));
   let f = '';
   for (let i = 0; i < 60 && !/SM_TableManager/.test(f); i++) { await sleep(500); f = await p.$eval('#status-file', (e) => e.textContent).catch(() => ''); }
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.setViewport({ width: 1600, height: 1000 });
   await sleep(1200);
   const saveBtn = () => p.$eval('#save-sources-btn', (e) => ({ text: e.textContent.trim(), disabled: e.disabled })).catch(() => null);

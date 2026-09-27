@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let i = 0; i < 60; i++) { try { await page.goto(h.APP_URL, { waitUntil: 'load' }); break; } catch { await sleep(500); } }
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await sleep(800);
 
   // --- Left panel: only Identified States
@@ -98,7 +98,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     localStorage.setItem('tc_statechart_dock_layout_v1', JSON.stringify(l));
   });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   expect(!!(await page.$('#dock-tab-logger')), 'an older saved layout gets the logger tab');
 
   console.log('page errors:', errors.slice(0, 5));

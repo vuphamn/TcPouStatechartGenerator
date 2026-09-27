@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await page.click('#dock-tab-method');
   await page.waitForSelector('#method-editor-find-input', { timeout: 10000 });
   await sleep(600);

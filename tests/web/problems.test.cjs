@@ -19,7 +19,7 @@ const expect = (cond, what) => { console.log(`${cond ? 'ok  ' : 'FAIL'} ${what}`
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id]', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id]', { timeout: 60000 });
 
   const keys = () => page.$$eval('[data-problem-key]', (els) => els.map((e) => e.getAttribute('data-problem-key')));
   const badge = () => page.$eval('#problems-tab-badge', (e) => e.textContent).catch(() => null);

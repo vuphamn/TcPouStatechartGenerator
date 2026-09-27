@@ -44,7 +44,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   });
   await p.evaluate(() => localStorage.clear());
   await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${S('HOMMING')}"]`, { timeout: 30000 });
+  await p.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${S('HOMMING')}"]`, { timeout: 60000 });
   await h.sleep(800);
   await p.evaluate(() => document.getElementById('dock-tab-live')?.click());
   await h.sleep(400);

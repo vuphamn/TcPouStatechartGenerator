@@ -12,7 +12,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const p = await b.newPage();
   await p.goto(h.APP_URL, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await sleep(1000);
   const check = () => p.evaluate(() => {
     const svg = document.querySelector('#mermaid-canvas-area svg');

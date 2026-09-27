@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  const ready = (id = 'TABLEMANAGER_HOMMING') => page.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`, { timeout: 30000 });
+  const ready = (id = 'TABLEMANAGER_HOMMING') => page.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`, { timeout: 60000 });
   await ready();
   await sleep(800);
   const nodePoint = (id) => page.evaluate((id) => {

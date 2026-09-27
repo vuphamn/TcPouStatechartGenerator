@@ -39,7 +39,7 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-guards.json'), JSON.stringify(confi
   for (let i = 0; i < 40 && !page; i++) { page = (await browser.pages()).find((p) => p.url().startsWith(h.APP_ORIGIN)); if (!page) await sleep(250); }
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   await page.setViewport({ width: 1600, height: 1000 });
   await sleep(500);
   await page.click('#dock-tab-live');

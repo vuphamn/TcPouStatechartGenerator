@@ -18,7 +18,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.goto(h.APP_URL, { waitUntil: 'load' });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await sleep(500);
 
   const clickCard = (name) => page.evaluate((name) => {
@@ -63,7 +63,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     localStorage.setItem(key, JSON.stringify(l));
   });
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await page.waitForSelector('#st-dut-editor', { timeout: 10000 });
   await sleep(800);
   expect(await clickCard('TABLEMANAGER_AUTOFEED_OUTSTOP_SLOW'), 'clicked a state near the end of the enum');
@@ -107,7 +107,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   //    Editor, still shown (no tab is switched), goes to its member
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
-  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await page.click('#dock-tab-enum');
   await sleep(600);
   await clickCard('TABLEMANAGER_AUTOFEED_INSTOP_BACK_TO_STOP');

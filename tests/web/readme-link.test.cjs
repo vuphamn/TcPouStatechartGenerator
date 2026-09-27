@@ -12,7 +12,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const errors = []; p.on('pageerror', (e) => errors.push(e.message));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   const a = await p.$eval('#readme-link', (e) => ({ href: e.href, target: e.target, rel: e.rel, title: e.title }));
   expect(a.href === 'https://github.com/vuphamn/TcPouStatechartGenerator#readme' && a.target === '_blank' && /noopener/.test(a.rel), `link: ${a.href} (${a.target}, ${a.rel})`);
   const opened = new Promise((r) => b.once('targetcreated', (t) => r(t.url())));

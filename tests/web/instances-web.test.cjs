@@ -40,7 +40,7 @@ fs.writeFileSync(cfg, JSON.stringify({
   await a.goto(h.APP_URL, { waitUntil: 'load' });
   await a.evaluate(() => localStorage.clear());
   await a.reload({ waitUntil: 'load' });
-  await a.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 30000 });
+  await a.waitForSelector('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_HOMMING"]', { timeout: 60000 });
   // A dropped POU (no .TcDUT: states show as numbers, #2 = smTable1, #3 = smTable2), not a sample, edited so the handed-over tab can be checked for the same POU
   const table = fs.readFileSync(path.join(h.FIXTURES, 'sample0', 'SM_TableManager.TcPOU'), 'utf8').replace('Homing', 'Homing (edited here)');
   await a.evaluate((text) => {
@@ -71,7 +71,7 @@ fs.writeFileSync(cfg, JSON.stringify({
   if (b) {
     b.on('pageerror', (e) => errors.push(e.message));
     await b.bringToFront();
-    await b.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 }).catch(() => {});
+    await b.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
     await b.click('#dock-tab-live').catch(() => {});
   }
   const s2 = b ? await waitCurrent(b, /TABLEMANAGER_|#d/) : '';

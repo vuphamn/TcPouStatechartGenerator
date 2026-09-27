@@ -13,7 +13,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const errors = []; p.on('pageerror', (e) => errors.push(e.message));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
   await p.evaluate(() => localStorage.clear()); await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
+  await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await sleep(1000);
   for (let i = 0; i < 4; i++) { await p.click('#zoom-in-button'); await sleep(120); }
   // Go to State centers it (a plain click on the item only selects it, unless Follow is on)

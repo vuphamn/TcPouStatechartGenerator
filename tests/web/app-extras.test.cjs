@@ -61,7 +61,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
     ]));
   });
   await p.reload({ waitUntil: 'load' });
-  await p.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${S('HOMMING')}"]`, { timeout: 30000 });
+  await p.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${S('HOMMING')}"]`, { timeout: 60000 });
   await h.sleep(800);
 
   // The update banner (a quiet check a few seconds after start): 0.9.10 is newer than 0.9.2 (and than 0.9.4)
