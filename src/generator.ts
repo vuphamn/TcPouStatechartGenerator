@@ -7,6 +7,8 @@ export type PriorityFormat = 'paren' | 'bracket' | 'circled';
 
 export interface GeneratorOptions {
   collapseErrorSinkEdges?: boolean;
+  /** A state's IF / ELSIF / ELSE of transitions drawn as a choice (a diamond) */
+  choiceNodes?: boolean;
   flowchartOutput?: boolean;
   includeStateDescriptions?: boolean;
   showTransitionPriorities?: boolean;
@@ -28,13 +30,15 @@ export interface ModelEdge {
   label: string;
   source: string;
   /** The transitions in the code this edge stands for (several when edges were merged into a composite's) */
-  members: { from: string; frames: GuardFrame[] }[];
+  members: { from: string; to: string; frames: GuardFrame[] }[];
 }
 
 export interface StatechartModel {
   markdown: string;
   stateVar: string;
   edges: ModelEdge[];
+  /** The composites (as drawn) and their own states */
+  composites: Record<string, string[]>;
 }
 
 export interface Transition {
@@ -46,6 +50,8 @@ export interface Transition {
   priority?: number | null;
   source: string;
   redirectedFrom?: string | null;
+  /** In a state's top-level IF: which one and which arm (IF 0, ELSIF 1, …) */
+  choice?: { id: number; arm: number };
   redirectedTo?: string | null;
   scopeLower?: string | null;
   scopeUpper?: string | null;
@@ -56,7 +62,10 @@ export interface Transition {
 interface IfFrame {
   currentCond: string | null;
   negatedPriorConds: (string | null)[];
+  /** Which IF statement (for choice nodes) */
+  id?: number;
 }
+let ifSeq = 0;
 
 interface UmlComposite {
   displayName: string;
@@ -75,6 +84,10 @@ interface GroupingResult {
   machineStartState?: string;
   enabledCompositeName?: string;
   enumOrder: string[];
+  /** Composites whose initial state is marked (@initial): drawn with a start node */
+  markedInitial?: Set<string>;
+  /** A composite's final states (marked): its exits, each drawn to an end node in it */
+  groupFinals?: Map<string, string[]>;
 }
 
 const DefaultCollapseErrorSinkEdges = true;
@@ -168,7 +181,15 @@ function toLogicalLines(code: string): string[] {
   flat = flat.replace(/\bELSIF\b/gi, '\nELSIF');
   flat = flat.replace(/\bELSE\b/gi, '\nELSE');
   flat = flat.replace(/\bEND_IF\b/gi, '\nEND_IF\n');
-  return flat.split('\n');
+  // A CASE / loop ends a statement too (it has no ";"), and its labels start one: the IF after them is on its own line
+  flat = flat.replace(/\bOF\b/gi, 'OF\n');
+  flat = flat.replace(/\bEND_(CASE|FOR|WHILE|REPEAT)\b\s*;?/gi, (m) => `\n${m}\n`);
+  flat = flat.replace(/\b(DO)\b/gi, 'DO\n');
+  const label = /^\s*((?:[A-Za-z_][\w.]*|\d+)(?:\s*(?:,|\.\.)\s*(?:[A-Za-z_][\w.]*|\d+))*)\s*:(?!=)\s*(\S.*)$/;
+  return flat.split('\n').flatMap((l) => {
+    const m = l.match(label);
+    return m && !/^(IF|ELSIF|ELSE|CASE|FOR|WHILE|REPEAT|RETURN)$/i.test(m[1]) ? [`${m[1]}:`, m[2]] : [l];
+  });
 }
 
 // A CASE label: MEMBER or E_Type.MEMBER (an enum with {attribute 'qualified_only'}), several separated by commas
@@ -375,6 +396,7 @@ function parseDoState(
       ifStack.push({
         currentCond: cleanCondition(mIf[1]),
         negatedPriorConds: [],
+        id: ++ifSeq,
       });
     } else {
       const mEl = line.match(elsifRx);
@@ -410,6 +432,8 @@ function parseDoState(
           guard,
           frames: snapshotFrames(ifStack),
           priority: currentPrio,
+          // (its top-level IF and arm: a choice)
+          choice: ifStack.length && ifStack[0].id ? { id: ifStack[0].id, arm: ifStack[0].negatedPriorConds.length } : undefined,
           source: 'doState',
           effectiveFrom: currentState,
           effectiveTo: target,
@@ -449,6 +473,7 @@ function parsePreProcess(
       ifStack.push({
         currentCond: cleanCondition(mIf[1]),
         negatedPriorConds: [],
+        id: ++ifSeq,
       });
     } else {
       const mEl = line.match(elsifRx);
@@ -693,6 +718,224 @@ function deriveEnabledCompositeName(decl: string, typeIdx: number, order: string
   }
   const derived = deriveGroupName(order);
   return (derived ?? 'Machine') + 'Enabled';
+}
+
+/**
+ * The enum's regions put in the grouping: each a composite holding its members, inside the composite its first
+ * member was in (or its enclosing region)
+ */
+function applyEnumRegions(groups: GroupingResult, regions: GroupingResult | null) {
+  if (!regions) return;
+  for (const [name, members] of regions.groups) {
+    let id = name;
+    while (groups.groups.has(id) && !regions.groups.has(id)) id = `${id}_`;
+    const enclosing = regions.groupParent.get(name) ?? (members[0] ? groups.stateToGroup.get(members[0]) : undefined);
+    for (const m of members) {
+      const old = groups.stateToGroup.get(m);
+      if (old && old !== id) {
+        const list = groups.groups.get(old);
+        if (list) groups.groups.set(old, list.filter((x) => x !== m));
+      }
+      groups.stateToGroup.set(m, id);
+    }
+    groups.groups.set(id, [...members]);
+    if (members[0]) groups.groupFirstState.set(id, members[0]);
+    if (enclosing && enclosing !== id) groups.groupParent.set(id, enclosing);
+  }
+  // A composite left without members keeps its first state only when it still holds it
+  for (const [g, list] of groups.groups) {
+    const first = groups.groupFirstState.get(g);
+    if (first && !list.includes(first)) {
+      if (list[0]) groups.groupFirstState.set(g, list[0]);
+      else groups.groupFirstState.delete(g);
+    }
+  }
+}
+
+/**
+ * Composites from {region "Name"} … {endregion} pragmas around the enum's members (the canvas editor writes them);
+ * a region inside a region is a composite inside a composite. null: the enum has none.
+ */
+function loadEnumRegions(decl: string | null): GroupingResult | null {
+  if (!decl || !/\{\s*region\b/i.test(decl)) return null;
+  const typeIdx = decl.search(/\bTYPE\b/i);
+  const openParen = decl.indexOf('(', Math.max(0, typeIdx));
+  const closeParen = decl.lastIndexOf(')');
+  if (openParen < 0 || closeParen <= openParen) return null;
+  const result: GroupingResult = {
+    groups: new Map(),
+    stateToGroup: new Map(),
+    groupFirstState: new Map(),
+    groupLastState: new Map(),
+    compositeToId: new Map(),
+    groupParent: new Map(),
+    enumOrder: [],
+  };
+  const stack: string[] = [];
+  const body = decl.substring(openParen + 1, closeParen).replace(/\(\*[\s\S]*?\*\)/g, '').replace(/\r/g, '');
+  for (const raw of body.split('\n')) {
+    const line = raw.replace(/\/\/.*$/, '').trim();
+    const region = line.match(/^\{\s*region\b\s*(?:"([^"]*)"|'([^']*)'|([^}]*?))\s*\}/i);
+    if (region) {
+      let name = (region[1] ?? region[2] ?? region[3] ?? '').trim() || `Composite${result.groups.size + 1}`;
+      while (result.groups.has(name)) name = `${name}_`;
+      result.groups.set(name, []);
+      if (stack.length) result.groupParent.set(name, stack[stack.length - 1]);
+      stack.push(name);
+      continue;
+    }
+    if (/^\{\s*endregion\b/i.test(line)) {
+      stack.pop();
+      continue;
+    }
+    const m = line.replace(/^,/, '').trim().match(/^([A-Za-z_][A-Za-z0-9_]*)/);
+    if (!m || !stack.length) continue;
+    const g = stack[stack.length - 1];
+    result.groups.get(g)!.push(m[1]);
+    result.stateToGroup.set(m[1], g);
+    if (!result.groupFirstState.has(g)) result.groupFirstState.set(g, m[1]);
+  }
+  return result.groups.size ? result : null;
+}
+
+/** The state variable's initial value in the POU's own declaration ("machineState : E_X := E_X.IDLE;") */
+function declaredInitialState(pouXml: string, stateVarName: string): string | null {
+  const own = pouXml.match(/<POU\b[^>]*>\s*<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>/i);
+  if (!own) return null;
+  const code = own[1].replace(/\(\*[\s\S]*?\*\)/g, '').replace(/\/\/.*$/gm, '');
+  const m = code.match(new RegExp(`^\\s*${stateVarName}\\s*:\\s*[A-Za-z_][\\w.]*\\s*:=\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)?([A-Za-z_]\\w*)\\s*;`, 'im'));
+  return m ? m[1] : null;
+}
+
+/** The state variable set in initialize() (a variable inherited from the base FB): "machineState := IDLE;" */
+function initializedState(st: string | null, stateVarName: string): string | null {
+  if (!st) return null;
+  const code = stripComments(st);
+  const m = code.match(new RegExp(`^\\s*${stateVarName}\\s*:=\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)?([A-Za-z_]\\w*)\\s*;`, 'im'));
+  return m ? m[1] : null;
+}
+
+export interface ParallelRegion {
+  /** The state whose branch holds the region */
+  parent: string;
+  /** The region's state variable (of the enum's type) */
+  variable: string;
+  states: string[];
+  /** Set in the parent's branch before the region's CASE (on entry) */
+  start: string | null;
+  finals: string[];
+  transitions: { from: string; to: string; guard: string | null }[];
+}
+
+/**
+ * Parallel regions (the canvas' Fork / Join writes them): in a state's branch of doState(), a CASE on another
+ * variable whose labels are members of the enum. Its states, its transitions ("<variable> := X" under a label),
+ * where it starts (the variable set before its CASE) and its final states ("(* final *)" on a label).
+ */
+export function parseParallelRegions(st: string | null, stateVarName: string, members: Set<string>): Map<string, ParallelRegion[]> {
+  const out = new Map<string, ParallelRegion[]>();
+  if (!st || members.size === 0) return out;
+  const own = (v: string) => v.split('.').pop()!.replace(/^THIS\^$/i, '');
+  const labelRx = /^((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)/;
+  let depth = 0;
+  let parent: string | null = null;
+  let region: ParallelRegion | null = null;
+  let regionDepth = 0;
+  let current: string | null = null;
+  const ifs: string[] = [];
+  const starts = new Map<string, string>();
+  for (const raw of stripComments(st).split(/\r?\n/).map((l, i) => ({ code: l, raw: st.split(/\r?\n/)[i] ?? '' }))) {
+    const line = raw.code.trim();
+    if (!line) continue;
+    const caseM = line.match(/^CASE\s*\(?\s*([A-Za-z_][\w.]*)\s*\)?\s*OF\b/i);
+    if (caseM) {
+      depth++;
+      if (depth === 2 && parent && own(caseM[1]) !== own(stateVarName)) {
+        region = { parent, variable: caseM[1], states: [], start: starts.get(caseM[1]) ?? null, finals: [], transitions: [] };
+        regionDepth = depth;
+        current = null;
+        ifs.length = 0;
+      }
+      continue;
+    }
+    if (/^END_CASE\b/i.test(line)) {
+      if (region && depth === regionDepth) {
+        if (region.states.length) out.set(region.parent, [...(out.get(region.parent) ?? []), region]);
+        region = null;
+        current = null;
+      }
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    const lab = line.match(labelRx);
+    if (lab && !/^(ELSE|ELSIF|IF|END_\w+|THEN)\b/i.test(line)) {
+      const names = lab[1].split(',').map((n) => unqualifyState(n.trim()));
+      if (depth === 1) {
+        parent = names[0];
+        starts.clear();
+        continue;
+      }
+      if (region && depth === regionDepth && names.every((n) => members.has(n))) {
+        current = names[0];
+        region.states.push(...names);
+        ifs.length = 0;
+        if (/\(\*\s*final\s*\*\)/i.test(raw.raw)) region.finals.push(...names);
+        continue;
+      }
+    }
+    // The conditions around an assignment in a region's state
+    let closes = 0;
+    if (region && current) {
+      const mIf = line.match(/^IF\b(.*?)\bTHEN\b/i);
+      const mEl = line.match(/^ELSIF\b(.*?)\bTHEN\b/i);
+      if (mIf) ifs.push(cleanCondition(mIf[1]) ?? mIf[1].trim());
+      else if (mEl && ifs.length) ifs[ifs.length - 1] = cleanCondition(mEl[1]) ?? mEl[1].trim();
+      else if (/^ELSE\b/i.test(line) && ifs.length) ifs[ifs.length - 1] = `NOT (${ifs[ifs.length - 1]})`;
+      closes = (line.match(/\bEND_IF\b/gi) ?? []).length;
+      if (/^END_IF\b/i.test(line)) {
+        ifs.pop();
+        closes--;
+      }
+    }
+    for (const a of line.matchAll(/\b([A-Za-z_][\w.]*)\s*:=\s*([A-Za-z_][\w.]*)/g)) {
+      const target = unqualifyState(a[2]);
+      if (!members.has(target) || own(a[1]) === own(stateVarName)) continue;
+      if (region && current && a[1] === region.variable) {
+        if (target !== current) region.transitions.push({ from: current, to: target, guard: ifs.length ? ifs.join(' AND ') : null });
+      } else if (!region && parent && depth === 1 && !starts.has(a[1])) starts.set(a[1], target);
+    }
+    // (IF … END_IF on one line)
+    for (; closes > 0 && ifs.length; closes--) ifs.pop();
+  }
+  return out;
+}
+
+/** Members marked in the enum: "// @initial" / "// @final" (or in (* … *)) on their line */
+export function enumStateMarks(decl: string | null): { initial: string[]; final: string[] } {
+  const marks = { initial: [] as string[], final: [] as string[] };
+  if (!decl) return marks;
+  const typeIdx = decl.search(/\bTYPE\b/i);
+  const open = decl.indexOf('(', Math.max(0, typeIdx));
+  const close = decl.lastIndexOf(')');
+  if (open < 0 || close <= open) return marks;
+  for (const line of decl.substring(open + 1, close).split(/\r?\n/)) {
+    const comment = [...line.matchAll(/\/\/(.*)$|\(\*([\s\S]*?)\*\)/g)].map((m) => m[1] ?? m[2] ?? '').join(' ');
+    const member = line.replace(/\(\*[\s\S]*?\*\)/g, '').replace(/\/\/.*$/, '').replace(/\{[^}]*\}/g, '').replace(/^\s*,/, '').match(/^\s*([A-Za-z_]\w*)/)?.[1];
+    if (!member) continue;
+    if (/@initial\b/i.test(comment)) marks.initial.push(member);
+    if (/@final\b/i.test(comment)) marks.final.push(member);
+  }
+  return marks;
+}
+
+/** Final states: "(* final *)" on their CASE label in doState() */
+function finalStatesOf(doStateSt: string | null): Set<string> {
+  const finals = new Set<string>();
+  for (const line of (doStateSt ?? '').split(/\r?\n/)) {
+    const m = line.match(/^\s*((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)\s*\(\*\s*final\s*\*\)/i);
+    if (m) for (const n of m[1].split(',')) finals.add(unqualifyState(n.trim()));
+  }
+  return finals;
 }
 
 function loadEnumGrouping(decl: string | null): GroupingResult | null {
@@ -1066,6 +1309,42 @@ function flowNodeLabel(state: string, stateDescriptions?: Map<string, string>): 
   return state;
 }
 
+/** A state with parallel regions, as a flowchart subgraph holding one subgraph per region */
+function emitFlowchartRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], declared: Set<string>, stateDescriptions?: Map<string, string>) {
+  lines.push(`${indent}subgraph ${san(state)}["${flowNodeLabel(state, stateDescriptions)}"]`);
+  for (const r of regions) {
+    const rid = `${san(state)}__${san(r.variable)}`;
+    const inner = `${indent}        `;
+    lines.push(`${indent}    subgraph ${rid}["${r.variable}"]`);
+    for (const s of r.states) {
+      lines.push(`${inner}${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      declared.add(s);
+    }
+    if (r.start) lines.push(`${inner}startNode_${rid}((" ")) --> ${san(r.start)}`);
+    for (const t of r.transitions) lines.push(`${inner}${san(t.from)} -->${t.guard ? `|"${flowLabel(t.guard)}"|` : ''} ${san(t.to)}`);
+    for (const f of r.finals) lines.push(`${inner}${san(f)} --> endNode_${rid}(((" ")))`);
+    lines.push(`${indent}    end`);
+  }
+  lines.push(`${indent}end`);
+  declared.add(state);
+}
+
+/** A state with parallel regions, as a stateDiagram composite with "--" between the regions */
+function emitStateRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], stateDescriptions?: Map<string, string>) {
+  const desc = stateDescriptions?.get(state);
+  const label = desc ? `${state}<br/><span class='node-desc'>${wrapDescription(desc.replace(/"/g, "'"), 32)}</span>` : state;
+  lines.push(`${indent}state "${label}" as ${san(state)} {`);
+  regions.forEach((r, i) => {
+    const inner = `${indent}    `;
+    if (i > 0) lines.push(`${inner}--`);
+    if (r.start) lines.push(`${inner}[*] --> ${san(r.start)}`);
+    for (const s of r.states) lines.push(`${inner}${san(s)}`);
+    for (const t of r.transitions) lines.push(`${inner}${san(t.from)} --> ${san(t.to)}${t.guard ? `: ${esc(t.guard)}` : ''}`);
+    for (const f of r.finals) lines.push(`${inner}${san(f)} --> [*]`);
+  });
+  lines.push(`${indent}}`);
+}
+
 function emitFlowchartSubgraph(
   lines: string[],
   gname: string,
@@ -1073,7 +1352,9 @@ function emitFlowchartSubgraph(
   childGroups: Map<string, string[]>,
   depth: number,
   declared: Set<string>,
-  stateDescriptions?: Map<string, string>
+  stateDescriptions?: Map<string, string>,
+  regions: Map<string, ParallelRegion[]> = new Map(),
+  choicesOf: Map<string, string[]> = new Map()
 ) {
   const indent = ' '.repeat(depth * 4);
   const bodyIndent = ' '.repeat((depth + 1) * 4);
@@ -1085,16 +1366,23 @@ function emitFlowchartSubgraph(
   if (members) {
     for (const s of members) {
       if (declared.has(s)) continue;
-      lines.push(`${bodyIndent}${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      const own = regions.get(s);
+      if (own) emitFlowchartRegions(lines, bodyIndent, s, own, declared, stateDescriptions);
+      else lines.push(`${bodyIndent}${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      for (const c of choicesOf.get(s) ?? []) lines.push(`${bodyIndent}${c}{" "}`);
       declared.add(s);
     }
   }
+
+  const first = groups.groupFirstState.get(gname);
+  if (first && groups.markedInitial?.has(gname) && declared.has(first)) lines.push(`${bodyIndent}startNode_${gid}((" ")) --> ${san(first)}`);
+  for (const f of groups.groupFinals?.get(gname) ?? []) if (declared.has(f)) lines.push(`${bodyIndent}${san(f)} --> endNode_${gid}(((" ")))`);
 
   const kids = childGroups.get(gname);
   if (kids) {
     const sortedKids = [...kids].sort();
     for (const child of sortedKids) {
-      emitFlowchartSubgraph(lines, child, groups, childGroups, depth + 1, declared, stateDescriptions);
+      emitFlowchartSubgraph(lines, child, groups, childGroups, depth + 1, declared, stateDescriptions, regions, choicesOf);
     }
   }
 
@@ -1108,7 +1396,9 @@ function emitComposite(
   childGroups: Map<string, string[]>,
   depth: number,
   exitStates: Set<string>,
-  stateDescriptions?: Map<string, string>
+  stateDescriptions?: Map<string, string>,
+  regions: Map<string, ParallelRegion[]> = new Map(),
+  choicesOf: Map<string, string[]> = new Map()
 ) {
   const indent = ' '.repeat(depth * 4);
   const bodyIndent = ' '.repeat((depth + 1) * 4);
@@ -1124,6 +1414,12 @@ function emitComposite(
   const members = groups.groups.get(gname);
   if (members) {
     for (const s of members) {
+      for (const c of choicesOf.get(s) ?? []) lines.push(`${bodyIndent}state ${c} <<choice>>`);
+      const own = regions.get(s);
+      if (own) {
+        emitStateRegions(lines, bodyIndent, s, own, stateDescriptions);
+        continue;
+      }
       const desc = stateDescriptions?.get(s);
       if (desc) {
         const formattedDesc = wrapDescription(desc.replace(/"/g, "'"), 32);
@@ -1138,12 +1434,14 @@ function emitComposite(
   if (kids) {
     const sortedKids = [...kids].sort();
     for (const child of sortedKids) {
-      emitComposite(lines, child, groups, childGroups, depth + 1, exitStates, stateDescriptions);
+      emitComposite(lines, child, groups, childGroups, depth + 1, exitStates, stateDescriptions, regions, choicesOf);
     }
   }
 
+  const finals = groups.groupFinals?.get(gname);
   const last = groups.groupLastState.get(gname);
-  if (last && exitStates.has(last)) {
+  if (finals) for (const f of finals) lines.push(`${bodyIndent}${san(f)} --> [*]`);
+  else if (last && exitStates.has(last)) {
     lines.push(`${bodyIndent}${san(last)} --> [*]`);
   }
 
@@ -1171,7 +1469,10 @@ function buildMermaid(
   flowchartOutput = false,
   showTransitionPriorities = true,
   priorityFormat: PriorityFormat = 'paren',
-  emitted?: ModelEdge[]
+  emitted?: ModelEdge[],
+  finals: Set<string> = new Set(),
+  regions: Map<string, ParallelRegion[]> = new Map(),
+  choiceNodes = false
 ): string {
   const firstStateToGroup = new Map<string, string>();
   for (const [k, v] of groups.groupFirstState.entries()) {
@@ -1180,8 +1481,10 @@ function buildMermaid(
 
   const lastStateToGroup = new Map<string, string>();
   for (const [k, v] of groups.groupLastState.entries()) {
-    lastStateToGroup.set(v, k);
+    // (a composite with final states marked: those are its exits)
+    if (!groups.groupFinals?.has(k)) lastStateToGroup.set(v, k);
   }
+  for (const [k, list] of groups.groupFinals ?? []) for (const s of list) lastStateToGroup.set(s, k);
 
   for (const t of tr) {
     if (groups.compositeToId.has(t.to)) t.redirectedTo = groups.compositeToId.get(t.to);
@@ -1320,7 +1623,7 @@ function buildMermaid(
 
   // The transitions of the code behind a drawn edge: the same target, guard and origin, and the ones folded into
   // a composite's border exit
-  const recordEdge = (t: Transition, label: string) => {
+  const recordEdge = (t: Transition, label: string, fromNode?: string) => {
     if (!emitted) return;
     const members = tr
       .filter(
@@ -1331,9 +1634,27 @@ function buildMermaid(
           (!showTransitionPriorities || (m.priority ?? '') === (t.priority ?? '')) &&
           (m.effectiveFrom === t.effectiveFrom || (redundant.has(m) && groups.stateToGroup.get(m.from) === t.effectiveFrom))
       )
-      .map((m) => ({ from: m.from, frames: m.frames ?? [] }));
-    emitted.push({ from: san(t.effectiveFrom), to: san(t.effectiveTo), label: label.trim(), source: t.source, members });
+      .map((m) => ({ from: m.from, to: m.to, frames: m.frames ?? [] }));
+    emitted.push({ from: fromNode ?? san(t.effectiveFrom), to: san(t.effectiveTo), label: label.trim(), source: t.source, members });
   };
+
+  // Choices: per state, a top-level IF whose arms hold two or more of its (not redirected) transitions
+  const choiceOf = new Map<Transition, string>();
+  const choicesOf = new Map<string, string[]>();
+  if (choiceNodes) {
+    const arms = new Map<string, Set<number>>();
+    const key = (t: Transition) => `${t.from}#${t.choice!.id}`;
+    const eligible = (t: Transition) => !!t.choice && t.source === 'doState' && t.effectiveFrom === t.from && t.effectiveFrom !== t.effectiveTo;
+    for (const t of uniq) if (eligible(t)) arms.set(key(t), (arms.get(key(t)) ?? new Set()).add(t.choice!.arm));
+    for (const t of uniq) {
+      if (!eligible(t) || (arms.get(key(t))?.size ?? 0) < 2) continue;
+      const id = `choice_${san(t.from)}_${t.choice!.id}`;
+      choiceOf.set(t, id);
+      const list = choicesOf.get(t.from) ?? [];
+      if (!list.includes(id)) choicesOf.set(t.from, [...list, id]);
+    }
+  }
+  const choiceLinked = new Set<string>();
 
   if (flowchartOutput) {
     const lines: string[] = ['flowchart TD'];
@@ -1344,19 +1665,25 @@ function buildMermaid(
       .sort();
 
     for (const gname of topLevel) {
-      emitFlowchartSubgraph(lines, gname, groups, childGroups, 1, declared, stateDescriptions);
+      emitFlowchartSubgraph(lines, gname, groups, childGroups, 1, declared, stateDescriptions, regions, choicesOf);
     }
 
     const sortedStates = Array.from(states).sort();
     for (const s of sortedStates) {
       if (declared.has(s)) continue;
       if (s === 'AnyState') continue;
-      lines.push(`    ${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      const own = regions.get(s);
+      if (own) emitFlowchartRegions(lines, '    ', s, own, declared, stateDescriptions);
+      else lines.push(`    ${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      for (const c of choicesOf.get(s) ?? []) lines.push(`    ${c}{" "}`);
       declared.add(s);
     }
 
     if (groups.machineStartState) {
       lines.push(`    startNode((" ")) --> ${san(groups.machineStartState)}`);
+    }
+    for (const s of [...finals].sort()) {
+      if (states.has(s) && !groups.stateToGroup.has(s)) lines.push(`    ${san(s)} --> endNode(((" ")))`);
     }
 
     for (const t of uniq) {
@@ -1364,6 +1691,16 @@ function buildMermaid(
       if (t.effectiveFrom === t.effectiveTo) continue;
 
       const lbl = formatTransitionLabel(t);
+      const choice = choiceOf.get(t);
+      if (choice) {
+        if (!choiceLinked.has(choice)) {
+          choiceLinked.add(choice);
+          lines.push(`    ${san(t.from)} --> ${choice}`);
+        }
+        lines.push(lbl ? `    ${choice} -->|"${flowLabel(lbl)}"| ${san(t.effectiveTo)}` : `    ${choice} --> ${san(t.effectiveTo)}`);
+        recordEdge(t, lbl ? flowLabel(lbl) : '', choice);
+        continue;
+      }
 
       if (!lbl) {
         lines.push(`    ${san(t.effectiveFrom)} --> ${san(t.effectiveTo)}`);
@@ -1382,11 +1719,18 @@ function buildMermaid(
       .sort();
 
     for (const gname of topLevel) {
-      emitComposite(lines, gname, groups, childGroups, 1, exitStates, stateDescriptions);
+      emitComposite(lines, gname, groups, childGroups, 1, exitStates, stateDescriptions, regions, choicesOf);
     }
+    // States with regions outside the composites
+    for (const [s, own] of regions) if (!groups.stateToGroup.has(s) && states.has(s)) emitStateRegions(lines, '    ', s, own, stateDescriptions);
 
+    // The choices of states outside the composites
+    for (const [s, list] of choicesOf) if (!groups.stateToGroup.has(s)) for (const c of list) lines.push(`    state ${c} <<choice>>`);
     if (groups.machineStartState) {
       lines.push(`    [*] --> ${san(groups.machineStartState)}`);
+    }
+    for (const s of [...finals].sort()) {
+      if (states.has(s) && !groups.stateToGroup.has(s)) lines.push(`    ${san(s)} --> [*]`);
     }
 
     for (const t of uniq) {
@@ -1394,6 +1738,16 @@ function buildMermaid(
       if (t.effectiveFrom === t.effectiveTo) continue;
 
       const lbl = formatTransitionLabel(t);
+      const choice = choiceOf.get(t);
+      if (choice) {
+        if (!choiceLinked.has(choice)) {
+          choiceLinked.add(choice);
+          lines.push(`    ${san(t.from)} --> ${choice}`);
+        }
+        lines.push(lbl ? `    ${choice} --> ${san(t.effectiveTo)}: ${esc(lbl)}` : `    ${choice} --> ${san(t.effectiveTo)}`);
+        recordEdge(t, lbl ? esc(lbl) : '', choice);
+        continue;
+      }
 
       if (!lbl) {
         lines.push(`    ${san(t.effectiveFrom)} --> ${san(t.effectiveTo)}`);
@@ -1440,6 +1794,8 @@ export function generateStatechartModel(
   const priorityFormat = options.priorityFormat ?? 'circled';
 
   const doc = parseXmlDoc(tcPouContent);
+  // (the IF statements numbered from 1 for each chart: a choice keeps its id)
+  ifSeq = 0;
   const doStateSt = getMethodSt(doc, tcPouContent, 'doState');
   const preProcessSt = getMethodSt(doc, tcPouContent, 'preProcess');
 
@@ -1477,7 +1833,7 @@ export function generateStatechartModel(
   if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder));
   if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states);
 
-  const groups =
+  const groups: GroupingResult =
     tryLoadUmlGrouping(doc) ?? loadEnumGrouping(decl) ?? {
       groups: new Map(),
       stateToGroup: new Map(),
@@ -1488,9 +1844,33 @@ export function generateStatechartModel(
       enumOrder: [],
     };
 
+  applyEnumRegions(groups, loadEnumRegions(decl));
+  // Parallel regions: their states are drawn inside their state, not in the composites
+  const regions = parseParallelRegions(doStateSt, stateVarName, new Set(enumOrder));
+  for (const list of regions.values()) for (const r of list) for (const s of r.states) removeStateFromGroup(s, groups);
   reorderGroupsByEnum(groups, enumOrder);
   applyEnumConventions(groups, enumOrder);
+  // A declared initial value (or one set in initialize()) is the initial state
+  const declaredStart = declaredInitialState(tcPouContent, stateVarName) ?? initializedState(getMethodSt(doc, tcPouContent, 'initialize'), stateVarName);
+  if (declaredStart && states.has(declaredStart)) groups.machineStartState = declaredStart;
   determineCompositeStartStates(transitions, groups);
+  // Marked states: a composite's @initial is its entry, its final states its exits; an @initial outside the
+  // composites is the chart's initial state (unless the declaration / initialize() give one)
+  const marks = enumStateMarks(decl);
+  const finalStates = new Set([...finalStatesOf(doStateSt), ...marks.final]);
+  groups.markedInitial = new Set();
+  groups.groupFinals = new Map();
+  for (const s of marks.initial) {
+    const g = groups.stateToGroup.get(s);
+    if (g) {
+      groups.groupFirstState.set(g, s);
+      groups.markedInitial.add(g);
+    } else if (states.has(s) && !declaredStart) groups.machineStartState = s;
+  }
+  for (const s of finalStates) {
+    const g = groups.stateToGroup.get(s);
+    if (g) groups.groupFinals.set(g, [...(groups.groupFinals.get(g) ?? []), s]);
+  }
   extractErrorSinkStates(transitions, groups, collapseErrorSinkEdges);
 
   const edges: ModelEdge[] = [];
@@ -1502,7 +1882,10 @@ export function generateStatechartModel(
     flowchartOutput,
     showTransitionPriorities,
     priorityFormat,
-    edges
+    edges,
+    finalStates,
+    regions,
+    options.choiceNodes ?? false
   );
-  return { markdown, stateVar: stateVarName, edges };
+  return { markdown, stateVar: stateVarName, edges, composites: Object.fromEntries([...groups.groups].map(([k, v]) => [k, [...v]])) };
 }

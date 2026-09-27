@@ -35,6 +35,47 @@ export interface PouStatesExtractionResult {
 /**
  * Extracts all identified states and their transition metadata from a .TcPOU and optional .TcDUT.
  */
+/**
+ * The main CASE of doState(): its body (to its own END_CASE, nested CASEs counted), the CASE / IF nesting depth at a
+ * position of the body (0: the main CASE's level) and where its ELSE starts (-1: none)
+ */
+function mainCaseBody(st: string): { body: string; depthAt: (pos: number) => number; elseAt: number } | null {
+  // Comments blanked (same length) for the keywords
+  const code = st.replace(/\(\*[\s\S]*?\*\)/g, (c) => c.replace(/[^\n]/g, ' ')).replace(/\/\/[^\n]*/g, (c) => ' '.repeat(c.length));
+  const head = code.match(/\bCASE\b\s*\(?\s*[A-Za-z0-9_.]+\s*\)?\s*\bOF\b/i);
+  if (!head || head.index === undefined) return null;
+  const from = head.index + head[0].length;
+  // Block keywords after the head: depth changes
+  const marks: { pos: number; delta: number; kw: string }[] = [];
+  const kw = /\b(END_CASE|END_IF|CASE|IF)\b/gi;
+  kw.lastIndex = from;
+  let depth = 0;
+  let end = code.length;
+  let m: RegExpExecArray | null;
+  while ((m = kw.exec(code))) {
+    const k = m[1].toUpperCase();
+    if (k === 'END_CASE' && depth === 0) {
+      end = m.index;
+      break;
+    }
+    const delta = k === 'CASE' || k === 'IF' ? 1 : -1;
+    depth += delta;
+    marks.push({ pos: m.index - from, delta, kw: k });
+  }
+  const body = st.slice(from, end);
+  const bodyCode = code.slice(from, end);
+  const depthAt = (pos: number) => marks.reduce((d, x) => (x.pos < pos ? d + x.delta : d), 0);
+  let elseAt = -1;
+  const elseRx = /^[ \t]*ELSE\b/gim;
+  while ((m = elseRx.exec(bodyCode))) {
+    if (depthAt(m.index) === 0) {
+      elseAt = m.index;
+      break;
+    }
+  }
+  return { body, depthAt, elseAt };
+}
+
 export function extractIdentifiedStatesFromPou(
   pouXml: string,
   dutContent?: string
@@ -108,29 +149,23 @@ export function extractIdentifiedStatesFromPou(
 
   // 7. Parse CASE branches in doState()
   if (doStateSt) {
-    const caseRx = /(\bCASE\b\s*\(?\s*([A-Za-z0-9_\.]+)\s*\)?\s*\bOF\b)([\s\S]*?)(\bEND_CASE\b;?)/i;
-    const caseMatch = doStateSt.match(caseRx);
-    if (caseMatch) {
-      const body = caseMatch[3];
-      // Matches lines like "  TABLEMANAGER_DISABLED:", "STATE_A, STATE_B:" or "E_X_States.DISABLED:"
+    const main = mainCaseBody(doStateSt);
+    if (main) {
+      const { body, depthAt, elseAt } = main;
+      // Matches lines like "  TABLEMANAGER_DISABLED:", "STATE_A, STATE_B:" or "E_X_States.DISABLED:" (the main CASE's)
       const labelPattern = caseLabelLinePattern();
       const matches: RegExpExecArray[] = [];
       let m: RegExpExecArray | null;
       while ((m = labelPattern.exec(body)) !== null) {
-        matches.push(m);
+        if (depthAt(m.index) === 0 && (elseAt < 0 || m.index < elseAt)) matches.push(m);
       }
 
       for (let i = 0; i < matches.length; i++) {
         const curMatch = matches[i];
         const rawLabels = splitStateLabels(curMatch[1]);
         const startIdx = curMatch.index + curMatch[0].length;
-        let endIdx = i + 1 < matches.length ? matches[i + 1].index : body.length;
-
-        const slice = body.slice(startIdx, endIdx);
-        const elseMatch = slice.match(/^[ \t]*ELSE\b/im);
-        if (elseMatch && elseMatch.index !== undefined) {
-          endIdx = startIdx + elseMatch.index;
-        }
+        // To the next label, or the main CASE's ELSE / END_CASE
+        const endIdx = i + 1 < matches.length ? matches[i + 1].index : elseAt >= 0 ? elseAt : body.length;
 
         const rawCode = body.slice(startIdx, endIdx);
         const outgoing = parseTransitionsFromStateCode(rawCode, stateVar);

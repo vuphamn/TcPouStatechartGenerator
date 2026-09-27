@@ -103,7 +103,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   s = await state('raw-tcdut-xml-editor', 'TABLEMANAGER_AUTOFEED_FEED_OUT_DONE');
   expect(s && s.line > 0 && s.highlighted === s.line && s.inView, `XML: line ${s?.line} highlighted and in view`);
 
-  // 4. Same tab group as the diagram (the default): the jump waits until the Enum Editor is shown
+  // 4. Same tab group as the diagram (the default): a click in Identified States selects the state and the Enum
+  //    Editor, still shown (no tab is switched), goes to its member
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: 'load' });
   await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
@@ -111,11 +112,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(600);
   await clickCard('TABLEMANAGER_AUTOFEED_INSTOP_BACK_TO_STOP');
   await sleep(500);
-  const diagramActive = await page.evaluate(() => !!document.querySelector('#mermaid-canvas-area') && document.querySelector('#mermaid-canvas-area').getBoundingClientRect().width > 0);
-  await page.click('#dock-tab-enum');
+  const diagramActive = await page.evaluate(() => document.getElementById('st-dut-editor')?.offsetParent !== null);
   await sleep(900);
   s = await state('st-dut-editor', 'TABLEMANAGER_AUTOFEED_INSTOP_BACK_TO_STOP');
-  expect(diagramActive && s && s.highlighted === s.line && s.inView, `hidden while selecting, then shown: line ${s?.line} highlighted (${JSON.stringify(s)})`);
+  expect(diagramActive && s && s.highlighted === s.line && s.inView, `the Enum Editor stays shown and goes to the member: line ${s?.line} highlighted (${JSON.stringify(s)})`);
 
   console.log('page errors:', errors.slice(0, 5));
   await browser.close().catch(() => {});

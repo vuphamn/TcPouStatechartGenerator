@@ -335,6 +335,67 @@ path.path-edge {
     filter: drop-shadow(0 0 16px rgba(52, 211, 153, 1));
   }
 }
+/* Stuck: longer in the state than its time limit */
+.live-stuck-node > rect,
+.live-stuck-node > polygon,
+.live-stuck-node > circle,
+.live-stuck-node > path.basic,
+.live-stuck-node .outer {
+  stroke: #f87171 !important;
+  animation: live-stuck-pulse 1s ease-in-out infinite !important;
+}
+/* A transition's start / end handle dragged over a state: dropped there, the transition moves to it */
+.edge-drop-target > rect,
+.edge-drop-target > polygon,
+.edge-drop-target > circle,
+.edge-drop-target > path.basic,
+.edge-drop-target .outer {
+  stroke: #38bdf8 !important;
+  stroke-width: 3px !important;
+  stroke-dasharray: 6 3 !important;
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9));
+}
+/* A transition's end released on a state: the connection confirmed */
+.edge-drop-snapped > rect,
+.edge-drop-snapped > polygon,
+.edge-drop-snapped > circle,
+.edge-drop-snapped > path.basic,
+.edge-drop-snapped .outer {
+  animation: edge-drop-snapped 0.9s ease-out;
+}
+@keyframes edge-drop-snapped {
+  0% {
+    stroke: #34d399;
+    stroke-width: 4px;
+    filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.95));
+  }
+  100% {
+    filter: none;
+  }
+}
+@keyframes live-stuck-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 4px rgba(248, 113, 113, 0.6));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px rgba(248, 113, 113, 1));
+  }
+}
+/* Live: a state with parallel regions (a cluster), and each region's current state */
+.live-active-cluster > rect {
+  stroke: #34d399 !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 8px rgba(52, 211, 153, 0.7));
+}
+.live-region-node > rect,
+.live-region-node > polygon,
+.live-region-node > circle,
+.live-region-node > path.basic {
+  stroke: #34d399 !important;
+  stroke-width: 2.5px !important;
+  fill: rgba(16, 185, 129, 0.25) !important;
+}
 .live-previous-node > rect,
 .live-previous-node > polygon,
 .live-previous-node > circle,

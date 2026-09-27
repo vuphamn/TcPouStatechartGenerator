@@ -123,7 +123,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     </span>
     <label
       className="flex items-center gap-1 shrink-0 cursor-pointer hover:text-slate-200"
-      title="Details follow the selection: a state shows its documentation, a transition opens its guard on the first click"
+      title="Details follow the selection: a selected state brings its documentation forward"
     >
       <input id="status-follow-selection" type="checkbox" className="w-3 h-3" checked={followSelection} onChange={(e) => onFollowSelectionChange(e.target.checked)} />
       Follow selection

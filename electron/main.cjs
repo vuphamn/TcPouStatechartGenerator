@@ -1,7 +1,7 @@
 const { app, BrowserWindow, shell, dialog, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { readPouWithDutCandidates } = require('./tcSourceFiles.cjs');
+const { readPouWithDutCandidates, saveSources, writeSource } = require('./tcSourceFiles.cjs');
 const createLiveSession = require('./tcLive.cjs');
 
 // ---- Opening a .TcPOU from Windows Explorer ("Open in Kval StateScope", or a file dropped on the exe) ----
@@ -129,12 +129,32 @@ function createWindow(startupPou = null, launch = null, query = null) {
   });
 
   // Open external links (like mermaid.live) in the user's default browser
+  // (the app's own pages, such as window.html for a tab moved to a window of its own, open as windows of the app)
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https:') || url.startsWith('http:')) {
+    let own = false;
+    try {
+      own = new URL(url).origin === new URL(mainWindow.webContents.getURL()).origin;
+    } catch {
+      own = false;
+    }
+    if (!own && (url.startsWith('https:') || url.startsWith('http:'))) {
       shell.openExternal(url);
       return { action: 'deny' };
     }
-    return { action: 'allow' };
+    return { action: 'allow', overrideBrowserWindowOptions: { autoHideMenuBar: true, backgroundColor: '#020617' } };
+  });
+  // Unsaved edits: the page holds the window open (beforeunload); ask whether to leave them
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      buttons: ['Close without saving', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Kval StateScope',
+      message: 'The POU or the enum has unsaved edits.',
+      detail: 'Save writes them to the files. Close anyway and lose them?',
+    });
+    if (choice === 0) event.preventDefault();
   });
   // The window title follows the page's <title> (the app puts the POU's name in it)
   const id = mainWindow.webContents.id;
@@ -189,6 +209,27 @@ ipcMain.handle('tc:project-pous', async (_event, fromPath) => {
 });
 
 // A save dialog for a document (the project documentation); opens it afterwards
+// Save: the edited .TcPOU / .TcDUT back to their files (conflicts when changed on disk since they were read)
+ipcMain.handle('tc:save-sources', (_event, files) => saveSources(files));
+
+// Save As: a .TcPOU / .TcDUT to a file the user picks
+ipcMain.handle('tc:save-source-as', async (event, name, content, defaultDir) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const dut = /\.tcdut$/i.test(String(name));
+  const result = await dialog.showSaveDialog(win, {
+    title: dut ? 'Save the enum as' : 'Save the function block as',
+    defaultPath: path.join(typeof defaultDir === 'string' && defaultDir ? defaultDir : app.getPath('documents'), path.basename(String(name || (dut ? 'E_States.TcDUT' : 'SM_Machine.TcPOU')))),
+    filters: [dut ? { name: 'TwinCAT DUT', extensions: ['TcDUT'] } : { name: 'TwinCAT POU', extensions: ['TcPOU'] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  try {
+    await writeSource(result.filePath, content);
+    return { path: result.filePath };
+  } catch (err) {
+    return { error: String(err?.message ?? err) };
+  }
+});
+
 ipcMain.handle('tc:save-file', async (event, name, content) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showSaveDialog(win, {

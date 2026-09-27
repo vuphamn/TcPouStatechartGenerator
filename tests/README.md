@@ -1,6 +1,7 @@
 # Tests
 
 ```
+test.cmd                 # Windows: all four suites (test.cmd unit web, test.cmd web --filter pou, …)
 npm test                 # unit + web + live (what CI runs)
 npm run test:unit        # one suite: unit | web | live | desktop
 npm run test:all         # all four

@@ -68,6 +68,8 @@ import { StateStylePopup } from './StateStylePopup.tsx';
 import { DiagramContextMenu, ContextMenuExtraItem } from './DiagramContextMenu.tsx';
 import { NoteDialog } from './NoteDialog.tsx';
 import { NotesDrawer } from './NotesDrawer.tsx';
+import { StatechartPalette, PALETTE_MIME, PaletteElement } from './StatechartPalette.tsx';
+import { listenOnAppWindows } from '../utils/appWindows.ts';
 import { NoteOverlaysLayer } from './NoteOverlaysLayer.tsx';
 import { ExportModal } from './ExportModal.tsx';
 import { TransitionGuardInspector } from './TransitionGuardInspector.tsx';
@@ -179,9 +181,8 @@ export interface MermaidViewerProps {
   /** States with lint problems (Problems tab): a badge on their node */
   problemMarkers?: Record<string, 'error' | 'warning'>;
   /** Live view: the PLC's current state (and the one it came from) are highlighted */
-  liveHighlight?: { stateId: string; previousStateId?: string } | null;
-  /** Details follow the selection: the first click on a transition also opens its Transition Guard window */
-  openGuardOnSelect?: boolean;
+  /** stuck: longer in the state than its time limit (red) */
+  liveHighlight?: { stateId: string; previousStateId?: string; stuck?: boolean; regionStates?: string[] } | null;
   /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
   diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
   /** Live view: each transition's guard result (TRUE / FALSE / unknown) and its variables' values, by edge id */
@@ -194,6 +195,21 @@ export interface MermaidViewerProps {
   connectFrom?: string | null;
   onConnectTo?: (stateId: string) => void;
   onConnectCancel?: () => void;
+  /** A transition's start or end handle dropped on another state: the app changes the code (the drag is undone) */
+  onEdgeEndpointDrop?: (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => void;
+  /**
+   * The statechart palette is shown: an element dropped on a state, in a composite or on the canvas (at: where), or
+   * clicked (at: null)
+   */
+  onPaletteElement?: (kind: PaletteElement, at: { stateId: string | null; composite: string | null; x: number; y: number } | null) => void;
+  /** Undo / Redo (on the palette) */
+  history?: { canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void };
+  /** A state's node dragged and released: the composites (cluster labels) under the pointer, smallest first */
+  onStateDropped?: (stateId: string, composites: string[], altKey: boolean) => void;
+  /** Move this (new) state's node to that point of the screen, once the chart has it */
+  placeRequest?: { stateId: string; x: number; y: number; nonce: number } | null;
+  /** Keys on the canvas (not while typing or with a menu / dialog open), with the selection; true: handled */
+  onCanvasKey?: (e: KeyboardEvent, selection: { stateId: string | null; edge: EdgeInfo | null }) => boolean;
   nodeOffsets?: NodeOffsetsMap;
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -954,7 +970,7 @@ function enhanceSvgWithPriorityCircles(
         const labelText = node.querySelector('.nodeLabel')?.textContent?.trim() || node.textContent?.trim();
         if (labelText) rawId = cleanNodeId(labelText);
       }
-      if (rawId && rawId !== 'root_start' && rawId !== 'root_end' && rawId !== 'startNode') {
+      if (rawId && rawId !== 'root_start' && rawId !== 'root_end' && !/^(startNode|endNode|choice_)/.test(rawId)) {
         node.setAttribute('data-state-id', rawId);
         const label =
           node.querySelector('.nodeLabel')?.textContent?.trim() ||
@@ -1236,7 +1252,7 @@ function enhanceSvgWithPriorityCircles(
         l.classList.add('clickable-edge-label', 'tc-interactive-edge-label');
         l.setAttribute('data-edge', 'true');
         l.setAttribute('style', 'cursor: pointer !important; pointer-events: all !important;');
-        l.setAttribute('title', 'Click to toggle Transition Guard & Condition Inspector');
+        l.setAttribute('title', 'Double-click to toggle Transition Guard & Condition Inspector');
       }
 
       if (paths.length === 0 || labels.length === 0) continue;
@@ -1432,7 +1448,7 @@ function enhanceSvgWithPriorityCircles(
           badgeG.setAttribute('data-priority', String(prioInfo.priority));
         }
         badgeG.setAttribute('style', 'cursor: pointer !important; pointer-events: all !important;');
-        badgeG.setAttribute('title', 'Click to toggle Transition Guard & Condition Inspector');
+        badgeG.setAttribute('title', 'Double-click to toggle Transition Guard & Condition Inspector');
 
         if (activeEdgeId && (activeEdgeId === matchedEdge?.id || activeEdgeId === pathDataId)) {
           badgeG.classList.add('tc-priority-badge-active');
@@ -1513,7 +1529,6 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onShowInXae,
     problemMarkers,
     liveHighlight,
-    openGuardOnSelect = false,
     pathHighlight,
     diffHighlight,
     liveGuards,
@@ -1521,6 +1536,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     connectFrom = null,
     onConnectTo,
     onConnectCancel,
+    onEdgeEndpointDrop,
+    onCanvasKey,
+    onPaletteElement,
+    onStateDropped,
+    history,
+    placeRequest = null,
     onStyleChange: onStyleChangeProp,
     onResetStateStyle: onResetStateStyleProp,
     onClearAllCustomStyles: onClearAllCustomStylesProp,
@@ -1678,16 +1699,25 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const edgeSelectedBeforePressRef = useRef<boolean>(false);
   // True when this press started on an edge (and therefore already selected it)
   const edgePressedRef = useRef<boolean>(false);
+  // The transition under the last mouse-down (a right-click's menu is for it, although the press re-drew it)
+  const pressedEdgeRef = useRef<{ edge: EdgeInfo; t: number } | null>(null);
   // Set when mouse-up handled an edge click, so the click event of the same gesture is ignored
   const edgeClickHandledRef = useRef<boolean>(false);
 
   /**
-   * Edge click: the first click selects and highlights the transition; clicking the already selected
-   * transition again opens (or closes) the Transition Guard & Condition Inspector.
+   * Edge click: a click selects and highlights the transition; a double-click opens (or closes) the Transition
+   * Guard & Condition Inspector.
    */
-  const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, wasSelected: boolean) => {
+  const lastEdgeClickRef = useRef<{ id: string; t: number } | null>(null);
+  const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, _wasSelected?: boolean) => {
     setSelectedEdge(edge);
-    if (wasSelected || openGuardOnSelect) {
+    const now = Date.now();
+    const last = lastEdgeClickRef.current;
+    // (one click can be reported twice, by mouse-up and by click: that is not a second click)
+    const repeat = !!last && last.id === edge.id && now - last.t <= 40;
+    const double = !!last && last.id === edge.id && now - last.t > 40 && now - last.t < 500;
+    if (!repeat) lastEdgeClickRef.current = { id: edge.id, t: double ? 0 : now };
+    if (double) {
       toggleConditionOverlay(edge, anchor);
     } else {
       // Selecting a different transition closes an inspector that belongs to another one
@@ -3262,12 +3292,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   useEffect(() => {
     const svg = renderedSvg;
     if (!svg) return;
-    svg.querySelectorAll('.live-active-node, .live-previous-node').forEach((el) => el.classList.remove('live-active-node', 'live-previous-node'));
+    svg.querySelectorAll('.live-active-node, .live-previous-node, .live-stuck-node, .live-active-cluster, .live-region-node').forEach((el) =>
+      el.classList.remove('live-active-node', 'live-previous-node', 'live-stuck-node', 'live-active-cluster', 'live-region-node')
+    );
     svg.querySelectorAll('.live-last-edge').forEach((el) => el.classList.remove('live-last-edge'));
     svg.classList.toggle('diagram-live-active', !!liveHighlight);
     if (!liveHighlight) return;
     const node = (id: string) => svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`);
     node(liveHighlight.stateId)?.classList.add('live-active-node');
+    if (liveHighlight.stuck) node(liveHighlight.stateId)?.classList.add('live-stuck-node');
+    // A state with parallel regions is a cluster: it glows as one, each region's state inside it too
+    const sid = liveHighlight.stateId.replace(/[.-]/g, '_');
+    svg.querySelector(`g.cluster[id$="-${CSS.escape(sid)}"], g.cluster[id="${CSS.escape(sid)}"]`)?.classList.add('live-active-cluster');
+    for (const r of liveHighlight.regionStates ?? []) node(r)?.classList.add('live-region-node');
     const prev = liveHighlight.previousStateId;
     if (prev && prev !== liveHighlight.stateId) {
       node(prev)?.classList.add('live-previous-node');
@@ -3634,6 +3671,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   ).length;
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 2) {
+      // A right-click: its menu is for the transition pressed (the release may re-draw it away from the pointer)
+      const t = e.target as Element;
+      const key = t.closest?.('[data-edge-key]')?.getAttribute('data-edge-key');
+      const found = resolveEdgeFromElement(t, getDiagramSvg(), availableEdges);
+      const edge = (key ? availableEdges.find((x) => `${x.from}->${x.to}` === key) : undefined) ?? (found?.from && found?.to ? found : null);
+      pressedEdgeRef.current = edge ? { edge, t: Date.now() } : null;
+    }
     if (e.button !== 0) return;
     mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
     edgeSelectedBeforePressRef.current = false;
@@ -3766,6 +3811,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
     if (clickedEdge && clickedEdge.from && clickedEdge.to && clickedEdge.from.trim() && clickedEdge.to.trim()) {
       edgeSelectedBeforePressRef.current = selectedEdge?.id === clickedEdge.id;
+      pressedEdgeRef.current = { edge: clickedEdge, t: Date.now() };
       edgePressedRef.current = true;
       setSelectedEdge(clickedEdge);
       if (svg) {
@@ -3803,6 +3849,243 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
+  // An edge's start / end handle over another state: that state is marked; dropped there, the app moves the end
+  const dropTargetRef = useRef<Element | null>(null);
+  // (by the nodes' boxes: while dragging, the nodes take no pointer events; the smallest box wins, not a cluster)
+  const endpointNodeAt = (x: number, y: number): Element | null => {
+    let best: Element | null = null;
+    let bestArea = Infinity;
+    getDiagramSvg()?.querySelectorAll('g.node[data-state-id]').forEach((node) => {
+      if (node.closest('g.note')) return;
+      const r = node.getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
+      if (r.width * r.height < bestArea) {
+        best = node;
+        bestArea = r.width * r.height;
+      }
+    });
+    return best;
+  };
+  // A handle's transition (handles are keyed by the path's id: the transition is the path's)
+  const edgeOfHandleKey = (key: string): EdgeInfo | undefined => {
+    const svg = getDiagramSvg();
+    const pathEl = svg?.querySelector(`path[data-path-id="${CSS.escape(key)}"]`) ?? svg?.querySelector(`path#${CSS.escape(key)}`);
+    const edgeId = pathEl?.getAttribute('data-edge-id');
+    const edgeKey = pathEl?.getAttribute('data-edge-key');
+    return (
+      availableEdges.find((x) => x.id === key || (!!x.pathId && x.pathId === key)) ??
+      (edgeId ? availableEdges.find((x) => x.id === edgeId) : undefined) ??
+      (edgeKey ? availableEdges.find((x) => `${x.from}->${x.to}` === edgeKey) : undefined) ??
+      (selectedEdge && selectedEdge.id !== '->' ? selectedEdge : undefined)
+    );
+  };
+  const endpointTarget = (x: number, y: number) => {
+    const eId = draggedEdgeIdRef.current;
+    const type = draggedHandleTypeRef.current;
+    if (!onEdgeEndpointDrop || !eId || (type !== 'start' && type !== 'end')) return null;
+    const edge = edgeOfHandleKey(eId);
+    const node = endpointNodeAt(x, y);
+    const id = node?.getAttribute('data-state-id');
+    if (!edge || !node || !id || id === (type === 'start' ? edge.from : edge.to)) return null;
+    return { edge, type, id, node } as const;
+  };
+  const markDropTarget = (node: Element | null) => {
+    if (dropTargetRef.current === node) return;
+    dropTargetRef.current?.classList.remove('edge-drop-target');
+    node?.classList.add('edge-drop-target');
+    dropTargetRef.current = node;
+  };
+  // A state confirms a connection: a short flash
+  const flashNode = (node: Element) => {
+    node.classList.remove('edge-drop-snapped');
+    void (node as SVGGElement).getBBox?.();
+    node.classList.add('edge-drop-snapped');
+    window.setTimeout(() => node.classList.remove('edge-drop-snapped'), 900);
+  };
+  /**
+   * A handle released over its own state: the end moves onto the state's border, where the line from its center
+   * toward the pointer crosses it
+   */
+  const snapEndpointToNode = (x: number, y: number) => {
+    const eId = draggedEdgeIdRef.current;
+    const type = draggedHandleTypeRef.current;
+    if (!eId || (type !== 'start' && type !== 'end') || !edgeMovedRef.current) return;
+    const node = endpointNodeAt(x, y);
+    const current = currentEdgeOffsetsRef.current[eId];
+    if (!node || !current) return;
+    const r = node.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let dx = x - cx;
+    let dy = y - cy;
+    if (!dx && !dy) dy = -1;
+    const k = Math.min(dx ? r.width / 2 / Math.abs(dx) : Infinity, dy ? r.height / 2 / Math.abs(dy) : Infinity);
+    const sx = cx + dx * k;
+    const sy = cy + dy * k;
+    const scale = dragUnitScaleRef.current;
+    const next: EdgeOffset = { ...current };
+    if (type === 'start') {
+      next.startDx = Math.round((current.startDx || 0) + (sx - x) / scale.x);
+      next.startDy = Math.round((current.startDy || 0) + (sy - y) / scale.y);
+    } else {
+      next.endDx = Math.round((current.endDx || 0) + (sx - x) / scale.x);
+      next.endDy = Math.round((current.endDy || 0) + (sy - y) / scale.y);
+    }
+    currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [eId]: next };
+    const svg = getDiagramSvg();
+    if (svg) applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, eId, layoutEngine, flowchartCurve);
+    flashNode(node);
+  };
+  /** At the end of a handle drag: true when it was dropped on another state (the reroute is undone) */
+  const finishEndpointDrop = (x: number, y: number) => {
+    markDropTarget(null);
+    const target = edgeMovedRef.current ? endpointTarget(x, y) : null;
+    if (!target) {
+      snapEndpointToNode(x, y);
+      return false;
+    }
+    flashNode(target.node);
+    const eId = target.edge.id;
+    currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [eId]: edgeInitialOffsetRef.current };
+    const svg = getDiagramSvg();
+    if (svg) applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, eId, layoutEngine, flowchartCurve);
+    onEdgeEndpointDrop?.(target.edge, target.type, target.id);
+    return true;
+  };
+  // The composite (cluster) at a point of the screen: its label (the smallest cluster holding the point)
+  const compositeAt = (x: number, y: number): string | null => {
+    let best: string | null = null;
+    let bestArea = Infinity;
+    getDiagramSvg()?.querySelectorAll('g.cluster').forEach((c) => {
+      const r = (c.querySelector(':scope > rect') ?? c).getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
+      const label = (c.querySelector('.cluster-label, .nodeLabel, text')?.textContent ?? '').trim();
+      if (label && r.width * r.height < bestArea) {
+        best = label;
+        bestArea = r.width * r.height;
+      }
+    });
+    return best;
+  };
+  // The composites (cluster labels) at a point of the screen, smallest first
+  const compositesAt = (x: number, y: number): string[] => {
+    const hits: { label: string; area: number }[] = [];
+    getDiagramSvg()?.querySelectorAll('g.cluster').forEach((c) => {
+      const r = (c.querySelector(':scope > rect') ?? c).getBoundingClientRect();
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
+      const label = (c.querySelector('.cluster-label, .nodeLabel, text')?.textContent ?? '').trim();
+      if (label) hits.push({ label, area: r.width * r.height });
+    });
+    return hits.sort((a, b) => a.area - b.area).map((h) => h.label);
+  };
+  const isPaletteDrag = (e: React.DragEvent) => !!onPaletteElement && Array.from(e.dataTransfer.types).includes(PALETTE_MIME);
+  const handlePaletteDragOver = (e: React.DragEvent) => {
+    if (!isPaletteDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    markDropTarget(endpointNodeAt(e.clientX, e.clientY));
+  };
+  const handlePaletteDrop = (e: React.DragEvent) => {
+    if (!isPaletteDrag(e)) return;
+    e.preventDefault();
+    markDropTarget(null);
+    const kind = e.dataTransfer.getData(PALETTE_MIME) as PaletteElement;
+    if (kind === 'note') return addFreeNoteAt(e.clientX, e.clientY);
+    const node = endpointNodeAt(e.clientX, e.clientY);
+    onPaletteElement?.(kind, { stateId: node?.getAttribute('data-state-id') ?? null, composite: compositeAt(e.clientX, e.clientY), x: e.clientX, y: e.clientY });
+  };
+  // A free note: its card's corner where it was dropped (in the zoom wrapper's units, like the other notes)
+  const addFreeNoteAt = (x: number, y: number) => {
+    const wrapper = (getDiagramSvg()?.closest('#mermaid-svg-wrapper') ?? document.getElementById('mermaid-svg-wrapper')) as HTMLElement | null;
+    if (!wrapper) return;
+    const w = wrapper.getBoundingClientRect();
+    const scale = wrapper.offsetWidth > 0 && w.width > 0 ? w.width / wrapper.offsetWidth : zoom || 1;
+    const id = `note_${Date.now().toString(36)}`;
+    onUpdateNotePositionProp?.(id, { x: Math.round((x - w.left) / scale), y: Math.round((y - w.top) / scale) });
+    handleOpenAddNote({ type: 'node', id, label: 'Note' });
+  };
+  const handlePaletteClick = (kind: PaletteElement) => {
+    if (kind !== 'note') return onPaletteElement?.(kind, null);
+    const r = containerRef.current?.getBoundingClientRect();
+    if (r) addFreeNoteAt(r.left + r.width / 2 - 80, r.top + r.height / 3);
+  };
+  // The canvas' top in the viewer (the bars above it change height): the palette's corner
+  const [canvasTop, setCanvasTop] = useState(0);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => setCanvasTop(el.offsetTop);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    if (el.parentElement) ro.observe(el.parentElement);
+    return () => ro.disconnect();
+  }, [svgContent]);
+  // A new state's node moved to where it was dropped
+  const placedNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!placeRequest || placedNonceRef.current === placeRequest.nonce) return;
+    const node = getDiagramSvg()?.querySelector(`g.node[data-state-id="${CSS.escape(placeRequest.stateId)}"]`) as SVGGElement | null;
+    if (!node) return;
+    placedNonceRef.current = placeRequest.nonce;
+    const r = node.getBoundingClientRect();
+    const scale = getSvgUnitScale(node.parentElement, zoom);
+    const current = effectiveNodeOffsets[placeRequest.stateId] ?? { x: 0, y: 0 };
+    setNodeOffsets({
+      ...effectiveNodeOffsets,
+      [placeRequest.stateId]: {
+        x: Math.round(current.x + (placeRequest.x - (r.left + r.width / 2)) / scale.x),
+        y: Math.round(current.y + (placeRequest.y - (r.top + r.height / 2)) / scale.y),
+      },
+    });
+  });
+
+  const finishEndpointDropRef = useRef(finishEndpointDrop);
+  finishEndpointDropRef.current = finishEndpointDrop;
+
+  // The app's canvas keys (priority, copy / paste, delete), with the selected state or transition
+  const canvasKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  canvasKeyRef.current = (e: KeyboardEvent) => {
+    if (!onCanvasKey || e.defaultPrevented) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (!containerRef.current || containerRef.current.offsetParent === null) return;
+    // (menus and modal dialogs; the canvas' own windows, such as the style window, do not count)
+    if (document.querySelector('#diagram-context-menu, #dock-context-menu, #window-menu, #text-prompt-overlay, [aria-modal="true"]')) return;
+    // Only while the canvas is the last thing used (not a code editor next to it)
+    if (!canvasActiveRef.current) return;
+    // The selection made last (a state and a transition can both be selected)
+    const edge = selectedEdge && selectedEdge.id !== '->' ? selectedEdge : null;
+    const stateId = effectiveSelectedStateId ?? null;
+    const latest = lastSelectedKindRef.current;
+    const selection = edge && stateId ? (latest === 'edge' ? { stateId: null, edge } : { stateId, edge: null }) : { stateId, edge };
+    if (onCanvasKey(e, selection)) e.preventDefault();
+  };
+  const lastSelectedKindRef = useRef<'state' | 'edge' | null>(null);
+  useEffect(() => {
+    if (selectedEdge && selectedEdge.id !== '->') lastSelectedKindRef.current = 'edge';
+  }, [selectedEdge]);
+  useEffect(() => {
+    if (effectiveSelectedStateId) lastSelectedKindRef.current = 'state';
+  }, [effectiveSelectedStateId]);
+  // The last press or focus was on the canvas (its mouse-down takes no focus: a button used before keeps it)
+  const canvasActiveRef = useRef(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => canvasKeyRef.current(e);
+    const onPress = (e: Event) => {
+      canvasActiveRef.current = !!containerRef.current?.contains(e.target as Node);
+    };
+    window.addEventListener('keydown', onKey);
+    // (in the windows tabs were moved to too: their keys come to this window, their presses do not)
+    const offPress = listenOnAppWindows('pointerdown', onPress, true);
+    const offFocus = listenOnAppWindows('focusin', onPress, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      offPress();
+      offFocus();
+    };
+  }, []);
+
   const handleMouseMove = (e: React.MouseEvent) => {
     // 1. Dragging edge handle (Start endpoint, End endpoint, or Midpoint)
     if (isDraggingEdgeHandleRef.current && draggedEdgeIdRef.current && draggedHandleTypeRef.current) {
@@ -3817,6 +4100,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         if (handleType === 'label') setIsNodeDragging(true);
       }
 
+      if (edgeMovedRef.current && (handleType === 'start' || handleType === 'end')) markDropTarget(endpointTarget(e.clientX, e.clientY)?.node ?? null);
       if (edgeMovedRef.current) {
         const canvasDx = screenDx / dragUnitScaleRef.current.x;
         const canvasDy = screenDy / dragUnitScaleRef.current.y;
@@ -4139,7 +4423,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     // 1. Released edge handle
     if (isDraggingEdgeHandleRef.current) {
       const edgeId = draggedEdgeIdRef.current;
-      const wasMoved = edgeMovedRef.current;
+      const dropped = finishEndpointDrop(e.clientX, e.clientY);
+      const wasMoved = edgeMovedRef.current && !dropped;
       isDraggingEdgeHandleRef.current = false;
       draggedEdgeIdRef.current = null;
       draggedHandleTypeRef.current = null;
@@ -4166,6 +4451,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setIsNodeDragging(false);
 
       if (wasMoved && stateId) {
+        const dropComposites = compositesAt(e.clientX, e.clientY);
         const nextOffsets = { ...currentNodeOffsetsRef.current };
         setNodeOffsets(nextOffsets);
         if (onNodeOffsetsChange) {
@@ -4187,6 +4473,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             }
           }
         }
+        // (after its position is kept: a move into a composite drops it again, for the layout to place it there)
+        onStateDropped?.(stateId, dropComposites, e.altKey);
         return;
       }
 
@@ -4436,8 +4724,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     // 2. Clicked on an edge
     const svg = getDiagramSvg();
     let edge = resolveEdgeFromElement(target, svg, availableEdges);
-    if (!edge && svg) {
-      edge = findEdgeNearPoint(svg, e.clientX, e.clientY, availableEdges, 24);
+    if (!edge?.from || !edge?.to) {
+      // (a path whose id does not name its states: its "FROM->TO" key does; a handle: its path's)
+      const key = target.closest('[data-edge-key]')?.getAttribute('data-edge-key');
+      const handleKey = target.closest('.tc-edge-handle[data-edge-id]')?.getAttribute('data-edge-id');
+      edge =
+        (key ? availableEdges.find((x) => `${x.from}->${x.to}` === key) : undefined) ??
+        (handleKey ? edgeOfHandleKey(handleKey) : undefined) ??
+        (svg ? findEdgeNearPoint(svg, e.clientX, e.clientY, availableEdges, 24) : null) ??
+        (pressedEdgeRef.current && Date.now() - pressedEdgeRef.current.t < 1500 ? pressedEdgeRef.current.edge : null) ??
+        edge;
     }
     if (edge && edge.from && edge.to && edge.from.trim() && edge.to.trim()) {
       const note =
@@ -4523,11 +4819,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // Window-level mouseup listener to guarantee drag never gets orphaned
   useEffect(() => {
-    const handleWindowMouseUp = () => {
+    const handleWindowMouseUp = (e: MouseEvent) => {
       flushLabelDrag();
       if (isDraggingEdgeHandleRef.current) {
         const edgeId = draggedEdgeIdRef.current;
-        const wasMoved = edgeMovedRef.current;
+        const dropped = finishEndpointDropRef.current(e.clientX, e.clientY);
+        const wasMoved = edgeMovedRef.current && !dropped;
         isDraggingEdgeHandleRef.current = false;
         draggedEdgeIdRef.current = null;
         draggedHandleTypeRef.current = null;
@@ -5887,6 +6184,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         ? createPortal(toolbarContent, effectivePortalTarget)
         : toolbarContent}
 
+      {/* The statechart palette: over the canvas, not in it (the canvas' first <svg> is the diagram) */}
+      {onPaletteElement && !error && svgContent && <StatechartPalette onClick={handlePaletteClick} history={history} top={canvasTop + 8} />}
       {/* Main Diagram Canvas */}
       <div
         ref={containerRef}
@@ -5902,6 +6201,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         onClick={handleClick}
         onWheel={handleWheel}
         onContextMenu={handleContextMenu}
+        onDragOver={handlePaletteDragOver}
+        onDragLeave={(e) => {
+          if (!containerRef.current?.contains(e.relatedTarget as Node)) markDropTarget(null);
+        }}
+        onDrop={handlePaletteDrop}
         className={`flex-1 relative overflow-hidden [background-size:16px_16px] cursor-grab transition-colors duration-200 ${
           isNodeDragging ? 'tc-node-dragging ' : ''
         }${

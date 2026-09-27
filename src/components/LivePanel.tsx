@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid } from 'lucide-react';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
+import { formatLimit, parseDuration } from '../utils/stateLimits.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
 
 export interface LiveStatus {
@@ -77,7 +78,48 @@ interface LivePanelProps {
   onOpenSymbols?: () => void;
   /** Opens the Machine Overview tab */
   onOpenOverview?: () => void;
+  /** Stuck-state alert: the current state's time limit (ms; its own or the default), and whether it is over it */
+  limitMs?: number | null;
+  /** The current state's own limit (ms; null: none) and how to set it */
+  stateLimitMs?: number | null;
+  onStateLimitChange?: (ms: number | null) => void;
+  defaultLimitMs?: number | null;
+  onDefaultLimitChange?: (ms: number | null) => void;
+  notify?: boolean;
+  onNotifyChange?: (on: boolean) => void;
 }
+
+/** A duration field ("30", "1.5 s", "2 min"): applied on Enter or when it loses focus; empty clears it */
+const LimitField: React.FC<{ id: string; valueMs: number | null | undefined; onChange: (ms: number | null) => void; placeholder: string; title: string }> = ({ id, valueMs, onChange, placeholder, title }) => {
+  const [text, setText] = useState(formatLimit(valueMs ?? null));
+  useEffect(() => setText(formatLimit(valueMs ?? null)), [valueMs]);
+  const commit = () => {
+    const ms = text.trim() ? parseDuration(text) : null;
+    if (text.trim() && ms === null) {
+      setText(formatLimit(valueMs ?? null));
+      return;
+    }
+    if (ms !== (valueMs ?? null)) onChange(ms);
+    setText(formatLimit(ms));
+  };
+  return (
+    <input
+      id={id}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          commit();
+        }
+      }}
+      placeholder={placeholder}
+      title={title}
+      className="w-20 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
+    />
+  );
+};
 
 const GUARD_BADGE = {
   true: { symbol: '\u2713', cls: 'bg-emerald-400 text-slate-950', word: 'TRUE' },
@@ -115,6 +157,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   openTarget = 'window',
   onOpenSymbols,
   onOpenOverview,
+  limitMs,
+  stateLimitMs,
+  onStateLimitChange,
+  defaultLimitMs,
+  onDefaultLimitChange,
+  notify = false,
+  onNotifyChange,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   // The instance this window follows (or will), and the others the PLC has
@@ -145,6 +194,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   }
 
   const inState = session.current ? Math.max(0, now - (session.clockOffset ?? 0) - session.current.since) : 0;
+  const stuck = status.state === 'connected' && !!limitMs && !!session.current && inState > limitMs;
   const shown = session.transitions.slice(-MAX_SHOWN).reverse();
   const statusColor =
     status.state === 'connected'
@@ -467,13 +517,41 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             >
               {session.current.state}
             </button>
-            <span className="text-slate-500 font-mono">= {session.current.value}</span>
-            <span id="live-time-in-state" className="ml-auto text-slate-300 font-mono">
+            <span className="text-slate-500 font-mono shrink-0 whitespace-nowrap">= {session.current.value}</span>
+            {stuck && (
+              <span id="live-stuck" className="ml-auto shrink-0 px-1.5 rounded-full bg-rose-600 text-[9px] font-bold tracking-wide text-white" title={`Longer in ${session.current.state} than its limit (${formatLimit(limitMs ?? null)})`}>
+                STUCK
+              </span>
+            )}
+            <span id="live-time-in-state" className={`${stuck ? '' : 'ml-auto '}shrink-0 whitespace-nowrap font-mono ${stuck ? 'text-rose-300 font-bold' : 'text-slate-300'}`} title={limitMs ? `Limit: ${formatLimit(limitMs)}` : undefined}>
               {formatDuration(inState)}
+              {limitMs ? <span className="text-slate-500 font-normal"> / {formatLimit(limitMs)}</span> : null}
             </span>
           </div>
         ) : (
           <div className="text-slate-500">—</div>
+        )}
+        {/* Stuck-state alert: how long a state may last (per POU type, kept for this viewer) */}
+        {onStateLimitChange && (
+          <div id="live-limits" className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+            {session.current && (
+              <label className="flex items-center gap-1" title={`How long ${session.current.state} may last before it counts as stuck`}>
+                Limit
+                <LimitField id="live-state-limit" valueMs={stateLimitMs} onChange={onStateLimitChange} placeholder={defaultLimitMs ? formatLimit(defaultLimitMs) : 'none'} title="This state's time limit, e.g. 30 s or 2 min (empty: the default)" />
+              </label>
+            )}
+            {onDefaultLimitChange && (
+              <label className="flex items-center gap-1" title="The limit of every state that has none of its own">
+                Default
+                <LimitField id="live-default-limit" valueMs={defaultLimitMs} onChange={onDefaultLimitChange} placeholder="none" title="The limit of the states without their own, e.g. 1 min (empty: none)" />
+              </label>
+            )}
+            {onNotifyChange && (
+              <label className="flex items-center gap-1 cursor-pointer" title="A notification when a machine goes over its limit (this one, and the Machine Overview's)">
+                <input id="live-notify" type="checkbox" checked={notify} onChange={(e) => onNotifyChange(e.target.checked)} /> Notify
+              </label>
+            )}
+          </div>
         )}
         {!hasEnumNames && session.current && (
           <div className="mt-1 text-[11px] text-amber-300/80">Load the .TcDUT enum to see state names instead of numbers.</div>

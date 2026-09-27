@@ -16,7 +16,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 30000 });
   await sleep(1000);
   for (let i = 0; i < 4; i++) { await p.click('#zoom-in-button'); await sleep(120); }
-  await p.evaluate(() => [...document.querySelectorAll('#identified-states-scrollable-list *')].find((e) => e.children.length === 0 && e.textContent.trim() === 'TABLEMANAGER_CLAMPED')?.click());
+  // Go to State centers it (a plain click on the item only selects it, unless Follow is on)
+  await p.evaluate(() => [...document.getElementById('state-list-item-TABLEMANAGER_CLAMPED').querySelectorAll('button')].find((b) => /Go to State/.test(b.textContent))?.click());
   await sleep(1500);
   const key = 'TABLEMANAGER_CLAMPED->TABLEMANAGER_UNCLAMP_START';
   // Select the edge with a click on its line
@@ -31,9 +32,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   }, key);
   await p.mouse.click(pt.x, pt.y);
   await sleep(800);
-  // The click opens the Transition Guard window (follow selection): close it, it covers the handles
-  await p.keyboard.press('Escape');
-  await sleep(400);
+  // (a click only selects: the Transition Guard window opens on a double-click)
   console.log('   after click:', JSON.stringify(await p.evaluate((key) => ({ selected: document.querySelector('#mermaid-canvas-area path.tc-edge-path[data-edge-key="' + key + '"]').getAttribute('class'), handles: [...document.querySelectorAll('#mermaid-canvas-area .tc-edge-handle')].map((h) => h.getAttribute('data-handle-type') + ':' + (() => { const r = h.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e ? e.tagName + '.' + (e.getAttribute('class') || '').slice(0, 40) : 'none'; })()) }), key)));
   for (const type of ['end', 'mid']) {
     const hd = await p.evaluate((type) => {

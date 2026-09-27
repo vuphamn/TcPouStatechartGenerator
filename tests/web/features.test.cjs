@@ -102,7 +102,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await menuClick('context-menu-add-transition-btn');
   expect(!!(await page.$('#connect-mode-hint')), 'connect mode on');
   const t = await nodePoint('TABLEMANAGER_NEW_STEP');
-  const inView = await page.evaluate((t) => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return t.x > r.x && t.x < r.right && t.y > r.y && t.y < r.bottom; }, t);
+  // (in view and not under the palette or another panel)
+  const inView = await page.evaluate((t) => !!document.elementFromPoint(t.x, t.y)?.closest('#mermaid-canvas-area g.node[data-state-id="TABLEMANAGER_NEW_STEP"]'), t);
   console.log('     target in view:', inView, JSON.stringify(t));
   await page.mouse.move(t.x - 40, t.y - 40);
   if (inView) {

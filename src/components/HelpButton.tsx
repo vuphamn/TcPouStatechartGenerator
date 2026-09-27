@@ -110,7 +110,7 @@ export const HelpButton: React.FC = () => {
             <div className="font-semibold text-slate-100 text-xs mb-1">On the diagram</div>
             <ul className="list-disc pl-4 space-y-0.5">
               <li>Click a state to select it; click it again to style it.</li>
-              <li>Click a transition to select it; click it again for its guard and style.</li>
+              <li>Click a transition to select it; double-click it for its guard and style. Right-click it (or Alt+↑ / Alt+↓) for its priority; drag its start or end handle onto another state to move it.</li>
               <li>Right-click for paths, adding states and transitions, renaming, and notes.</li>
               <li>Drag states, lines, labels and notes to tidy the layout.</li>
             </ul>

@@ -23,7 +23,7 @@ The diagram toolbar (search, view and editing controls) and the diagram **Option
 - **Focus mode:** `Z`, or the focus button in the header, hides the side panels, the header and the status bar, so the diagram fills the window. Press `Z` or `Esc`, or use the exit button, to bring them back.
 - **POU Editor:** the POU's own Structured Text, as TwinCAT XAE shows it when you open the POU. The declaration (`FUNCTION_BLOCK ... EXTENDS ...`, `VAR_INPUT` / `VAR_OUTPUT` / `VAR ... END_VAR`) is on top and the body (the POU's implementation) below; drag the bar between them to resize. Both can be edited: **Save to POU** (Ctrl+S) writes them into the `.TcPOU` and leaves its methods as they are (those are in the Method Editor). Find searches both panels (Enter / F3), the body folds like the Method Editor's, and Reset goes back to the POU's code. Right-click (as in the Method Editor): **Go to Definition** (F12) highlights the variable's line in the declaration, or opens a method of the POU in the Method Editor; **Find References** searches for it in both panels; **Copy Symbol Name**; and in the body, **Toggle Block Fold** folds the block around the cursor. A body that is not Structured Text (SFC, FBD, ...) is left as it is; its declaration can still be edited.
 - **Code views, as in Visual Studio / TwinCAT XAE:** in the Method Editor, the POU Editor, the Enum Editor, Mermaid Markdown and the Documentation tab (whose band covers the whole line, wrapped rows included; its Preview zooms too), the line with the cursor has a highlight band and a bright line number; it is dimmer when the view is not focused. In Mermaid Markdown, which is read-only, click a line or use the arrow keys, PageUp / PageDown and Ctrl+Home / Ctrl+End to move it. **Ctrl+mouse wheel** changes the text size (50% to 300%), as do Ctrl+Shift+. and Ctrl+Shift+, ; Ctrl+0 or a click on the zoom badge in the bottom-left corner goes back to 100%. The size is the same in all of them and is remembered.
-- **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Selecting a transition opens its Transition Guard window. Turn this off with **Follow selection** in the status bar.
+- **Panels follow the selection:** selecting a state brings its **Documentation** forward, unless you are working in Live, Problems, Paths or Changes. Turn this off with **Follow selection** in the status bar.
 - **Status bar:** messages appear in the status bar at the bottom rather than as pop-ups. It also shows the Live state, the number of changes and of problems, the state and transition counts, and the file with its unsaved / changed-in-XAE state. After opening a referenced state machine, it has a **Back** button.
 - **A layout per host:** the layout inside XAE is saved separately from the browser / desktop one. It starts compact, with the LeftPanel hidden and a narrower RightPanel, to suit a document tab. Layouts saved by older versions get the new RightPanel once; your other tabs are kept.
 
@@ -47,6 +47,7 @@ When more than one `.TcDUT` matches, the header shows the count; click the enum 
 - **Right-click a tab** for Close, Close All But This, Float, New Vertical Document Group (MiddlePanel) / New Horizontal Tab Group (RightPanel), and Move to Next / Previous Tab Group.
 - **Drag a tab** onto another group's tab strip or onto the middle of a group to move it there, or onto a group's left/right (MiddlePanel) or top/bottom (RightPanel) edge to create a new group. Tabs can only be moved within their own panel.
 - **Float a document**: double-click a MiddlePanel tab (or choose *Float*) to undock it into a window that can be moved and resized within the MiddlePanel. Double-click the window's title bar or use its dock button to dock it again.
+- **Move a document to a window of its own** (outside the app, e.g. to another monitor): *Move to New Window* in a MiddlePanel tab's or floating window's menu, or the window button on a floating window's title bar. It is the same tab, with its content and state, in a browser window you can move anywhere. **Back to the app**, the dock button, or closing that window brings it back. The app's shortcuts work in them (keys pressed outside text fields go to the app). The windows close with the app. When it starts again, such a tab comes back floating, with **Reopen in its own window** (a browser opens a window only on a click). Dialogs such as prompts open in the main window. In a web browser the window shows the app's address with its name (e.g. `…/window.html?POU-Editor`): browsers always show a page-opened window's address. The desktop app and XAE show none.
 - **Close a tab** with its `×` button or a middle-click.
 - **Reopen closed tabs** from the **Window** menu in the header. A reopened tab returns to its original panel and tab group. The Window menu also shows/hides the Left and Right panels and resets the layout.
 - **Resize** panels and tab groups by dragging the splitters; double-click a side-panel splitter to restore its default width.
@@ -75,12 +76,12 @@ The layout (panel widths, tab groups, floating windows) is saved in the browser 
 - **Layout Locking**: Lock diagram layout to preserve custom manual positions across code edits or automatic re-layouts.
 - **In-Place State Selection**: Click any node on the canvas to select it and highlight its transitions. The canvas and the layout stay as they are: no tab is opened. The Method Editor and Documentation tabs follow the selection when they are shown. In **Identified States**, clicking a state selects it the same way. **Go to State** (or the "Jump to state" picker) centers it on the canvas, and with **Follow** ticked a click does too.
 - **State Style Window**: Click the selected state again (or right-click it and choose *Customize Style...*) to open the State Style window beside it: background, text and border colours plus quick presets. Click the state once more, or press Esc, to close it.
-- **Transition Style**: Click a transition to select it, then click it again to open the Transition Guard window. Its *Style* card sets the line colour, width and dash pattern, and the label's fill, text colour, font size, bold / italic / underline and border.
+- **Transition Style**: Click a transition to select it, then double-click it to open the Transition Guard window. Its *Style* card sets the line colour, width and dash pattern, and the label's fill, text colour, font size, bold / italic / underline and border.
 - **Crosshair / Jump to State**: Jump directly to any state from the sidebar, minimap, or legend with smooth centering and SVG-safe animated glowing highlight rings.
 - **Interactive Minimap**: Live bird's-eye overview of the entire diagram, as an overlay on the canvas, with a draggable viewport indicator and quick-navigation clicks.
 - **Interactive Diagram Legend**: A canvas overlay with a color-coded breakdown of states (initial, composite, logic, error sinks), transition priority markers, and note indicators.
 - **Canvas Sticky Notes & Annotations**: Attach custom color-coded markdown notes to states or transitions directly on the canvas.
-- **Transition Guard & Priority Overlay**: Click transition paths or priority badges to view guard conditions, trigger logic, and execution priorities.
+- **Transition Guard & Priority Overlay**: Double-click transition paths or priority badges to view guard conditions, trigger logic, and execution priorities.
 
 ### 2. Deep TwinCAT Structured Text Parsing
 - **Dual Method Analysis**: Seamlessly extracts state transitions from `CASE stateVar OF` in `doState()` and pre-emptive condition handling in `preProcess()`.
@@ -108,6 +109,9 @@ The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the res
 | Dead end: no transition out, in its branch or in `preProcess()` | Warning (Info for error-like states) | |
 | Same guard, different targets: only the first can fire | Warning | |
 | Self-transition, unused enum member, `CASE` without `ELSE` | Info | |
+| Several initial states: more than one `// @initial` in one composite (or outside the composites) | Warning | |
+| Parallel region without a final state: its join never fires | Warning | |
+| Region state never entered: neither where its region starts nor a target in it | Warning | |
 
 - **Scanning:** comments, strings and nested `CASE` / `IF` blocks are skipped over, so only the state `CASE`'s own labels and `ELSE` count.
 - **Lifecycle states:** the enum members up to `…_ENABLING` are driven by the base class (enable / disable), so the unreachable and dead-end rules skip them. The diagram groups states the same way.
@@ -116,10 +120,54 @@ The **Problems** tab (RightPanel) checks `doState()`, `preProcess()` and the res
 ### 5. Editing from the diagram
 Right-click a state or the canvas:
 - **Add state...** adds a member to the `.TcDUT` enum and an empty `CASE` branch to `doState()`.
+- **Add new state from here…** asks for the new state's name, then the condition. It adds the state (an enum member at the end of the list, or last in the state's `{region}` composite, a `CASE` branch and a `getStateDescription()` line) and the transition to it at the end of the state's branch. The canvas then scrolls to it.
 - **Add transition from here** starts a line from the state. Click the target state, then enter the condition. The transition is written at the end of the source state's branch, as `IF <condition> THEN machineState := <target>; END_IF`. `Esc` or a click on empty canvas cancels.
 - **Rename state...** renames it everywhere, as a whole word: in the enum, in every method of the POU, and in its notes, styles and positions on the canvas. The name is checked against the enum and ST identifiers first.
+- **Copy state** (`Ctrl+C` with the state selected), then `Ctrl+V` or **Paste a copy of …**, adds a new state named `<STATE>_COPY`. It gets a copy of the state's code: the branch in `doState()`, its actions and transitions out, placed right after the original. A `machineState := <STATE>` inside the copy goes to the copy. Its line in `getStateDescription()` is copied with " (copy)", and it becomes a new enum member at the end of the list, so no other state changes value. The name is asked for straight away.
+- **Delete state…** (`Delete`) shows what goes and asks first: the transitions into it (in `doState()` and `preProcess()`), its branches, and its enum member. It also lists what still refers to it, such as a range bound in `preProcess()`, for you to change. Members after it in the enum get new values when they have none of their own, and the dialog says so.
+- **Setting a state's role:** **Set as initial state** (the machine's) and **Mark as final state** do the same as the palette's Initial and Final. **Initial state of <composite>** makes it its composite's initial state. **Move to composite…** moves its enum member into another composite.
 
-The edits land in the Method Editor and Enum Editor like hand edits, so **Save** (or **Save to project** in XAE) writes them.
+#### Initial and final states in the enum
+Mark a member with a comment on its line in the `.TcDUT`. The comment is ignored by the compiler, and the canvas writes and reads it:
+```
+TABLEMANAGER_IDLE_FEED_OFF,     // @initial
+TABLEMANAGER_RESET_DONE,        // @final
+TABLEMANAGER_ERROR              (* @final  the machine stops here *)
+```
+- **In a composite:** its `@initial` state is where it starts. The composite gets its own start node, and transitions into that state from outside point at the composite's border. Its `@final` states are its exits: each gets an end node in the composite, and their transitions out start at the composite's border. This keeps the canvas uncluttered. Without marks, the composite's entry is the state entered most often from outside, and its exit is its last enum member, as before.
+- **Outside the composites:** `@initial` is the machine's initial state, unless the declaration or `initialize()` sets one. `@final` draws the state to the chart's end node.
+- `(* final *)` on a state's `CASE` label in `doState()` also marks it final (the canvas writes it when no `.TcDUT` is loaded). A final state is not reported as a dead end.
+
+Transitions:
+- **Priority:** right-click a transition for **Raise priority** / **Lower priority** / **Priority n of m…**, or press `Alt+↑` / `Alt+↓` with it selected. The priority is the order of a state's transitions in its `doState()` branch. The IF / ELSIF arms of one IF swap (the first keeps `IF`), and so do separate statements. A comment right above an arm moves with it. An `ELSE` stays last, and transitions that share a block with others are left for the Method Editor. The message says which. For `preProcess()` transitions, the same items change their order there.
+- **Moving an end:** drag a selected transition's end handle onto another state (the state is marked while you drag) to change its target (`machineState := NEW`). Drag its start handle onto another state to move its code (its IF, or its IF / ELSIF arm as an IF of its own) to the end of that state's branch. Released over its own state, the end snaps onto the state's border, and the state flashes to confirm the connection. Dropped on empty canvas, the handles only reshape the line, as before.
+- **Delete transition…** (`Delete` with it selected) removes its code block after showing it.
+- A click selects a transition. A **double-click** opens its Transition Guard window.
+
+The edits land in the Method Editor and Enum Editor like hand edits: in the app's copy of the POU and the enum, until they are saved (see *Saving the files*).
+
+**Undo / Redo:** `Ctrl+Z` and `Ctrl+Y` (or `Ctrl+Shift+Z`) on the canvas, or the arrows at the top of the palette, undo and redo edits to the POU and the enum. That covers the canvas' edits and the editors' saves. Edits within a second of each other are one step, the history keeps 100 steps, and opening another file starts a new one. Inside a text editor, `Ctrl+Z` is that editor's own undo.
+
+**Composites by dragging:** drag a state onto a `{region}` composite and hold **Alt** as you release it to move its enum member into that composite. Alt-drop it outside to move it out. Without Alt, a drop across a composite's border only reshapes the canvas and shows the hint. The layout then places it in the composite's box.
+
+**Choices** (in the options, off by default): a state's top-level `IF / ELSIF / ELSE` with two or more of its transitions in different arms is drawn as a choice. That is a diamond the state goes to, with each arm's transition leaving it. The canvas' transition edits (priority, moving an end) work on transitions drawn from states, not from a choice.
+
+### Statechart palette
+The toolbar on the left of the canvas holds the elements of TwinCAT's UML statechart toolbox. Drag one onto the canvas, a state or a composite; clicking one uses the selected state instead. Each becomes Structured Text:
+
+| Element | Dropped | Written to |
+| --- | --- | --- |
+| **Pointer** | (click) | Ends drawing a transition |
+| **State** | on the canvas, or in a composite | An enum member (at the end, or last in the composite), a `CASE` branch in `doState()`, a line in `getStateDescription()`. It is placed where you dropped it, except in a composite, where the layout keeps it in the composite's box |
+| **Initial** | on a state | In a composite: that composite's initial state (`// @initial` in the enum). Elsewhere: the machine's, the state variable's initial value in the declaration (`machineState : E_X := STATE;`); when the base FB declares it, it is set in `initialize()` after `SUPER^.initialize()` |
+| **Final** | on the canvas / on a state | A new final state / the state marked final or not: `// @final` on its line in the enum (`(* final *)` on its `CASE` label without a `.TcDUT`). In a composite its transitions out start at the composite's border |
+| **Choice** | on a state | Conditions and targets (and an optional `ELSE`) as `IF / ELSIF / ELSE` at the end of its branch |
+| **Composite** | on a state / on the canvas | `{region "Name"}` … `{endregion}` around its enum member(s). Regions can be nested; TwinCAT's editor folds them. A composite's members are consecutive, as `preProcess()`'s `>= FIRST AND <= LAST` scopes expect |
+| **Transition** | on the source state | Then click the target and enter the condition: `IF <condition> THEN machineState := TARGET; END_IF` at the end of its branch |
+| **Completion** | on the source state | Then click the target: `machineState := TARGET;` with no condition, taken once the state's code has run |
+| **Exception** | on a state / in a composite | Then click the target and enter the condition. Checked first: the state's branch becomes `IF <condition> THEN machineState := TARGET; ELSE <branch> END_IF`. From a composite it goes in `preProcess()`: `IF machineState >= FIRST AND machineState <= LAST AND (<condition>) THEN …` |
+| **Fork/Join** | on a state | Parallel regions inside the state: each a state variable of the enum's type (declared in the POU, e.g. `regionA : E_X;`) and its states (new enum members, a `CASE regionA OF` in the state's branch; the last one final). On entry (`IF bFirstPass THEN`) every region starts in its first state (fork); the state goes to the target when every region is in its final state (join: `IF regionA = A_DONE AND regionB = B_DONE THEN machineState := TARGET; END_IF`). The chart draws the regions inside the state. Transitions drawn between a region's states set its variable (`regionA := …`); one into another region is refused. Live, the state glows and each region's current state is marked (the app reads the region variables too) |
+| **Note** | on the canvas | A sticky note with its corner exactly where you dropped it |
 
 ### 6. Paths, changes and referenced state machines
 - **Paths** tab: pick two states, or right-click a state and choose *Paths from here* / *Paths to here*. It lists the paths between them, with each step's guard, shortest first, and highlights them on the diagram. Click a path to show only that one. The search stops after 25 paths.
@@ -166,6 +214,20 @@ Samples 6 and 7 use a `{attribute 'qualified_only'}` enum, so their code names s
 ### Prerequisites
 - Node.js (v18 or higher recommended)
 - npm or pnpm
+
+### Saving the files
+Edits (the canvas', and an editor's **Save** / `Ctrl+S`, which puts its code into the POU) change the app's copy of the `.TcPOU` and the `.TcDUT`. The header's **Save** button counts the files with unsaved edits, and so does the status bar. Saving writes them:
+
+| Edition | Save | ▾ menu |
+|---|---|---|
+| **XAE** | **Save to project**: into the TwinCAT project. A file changed in XAE since it was loaded is refused unless you chose *Keep mine* | |
+| **Desktop** | Back to the files they were opened from, with their BOM (as TwinCAT writes them). A sample, which has no file, is saved with Save As | **Save .TcPOU As… / Save .TcDUT As…** |
+| **Web, Chrome / Edge** | Back to the file opened with **Browse** or dropped on the header, and to the enum found in the folder you granted. The browser asks for write access once | **Download .TcPOU / .TcDUT** |
+| **Web, other browsers** (or a sample) | Downloaded, to replace the original with | **Download** |
+
+- **`Ctrl+S`** saves the files (outside an editor). In an editor it first puts the editor's code into the POU, then saves the files when they can be written in place.
+- **A file changed on disk since it was opened** (saved in TwinCAT or another editor): Save asks before overwriting it. Files that did not change are saved.
+- **Unsaved edits are not lost silently:** opening another POU (Browse, a drop, a sample) asks first, and closing or reloading does too (the desktop app asks in a dialog). What is kept per viewer (layout, notes, styles, positions, options) is never the code.
 
 ### Development
 ```bash
@@ -269,14 +331,24 @@ While live, the **Machine Overview** tab lists every state machine of the PLC wi
 - **Watch** (or a double-click) opens that machine's diagram in its own tab or window, live on it, as in Symbols.
 - **Limit:** the first 80 machines are followed. Use the filter or a deeper root for the others.
 
+## Stuck-state alerts
+
+A state can have a **time limit**: how long a machine may stay in it before it counts as stuck.
+- **Setting one:** right-click a state on the canvas and choose **Time limit…**, for example `30 s` or `2 min`. While live, the Live tab also has a **Limit** field for the current state and a **Default** for every state that has none. Limits are kept per POU type, such as `SM_TableManager`, so they apply to all its instances, in every window and in the Machine Overview. They are stored per viewer.
+- **Over the limit:** the Live tab shows **STUCK** and the time in red (with the limit, e.g. `6.01 s / 2 s`), and the state's node on the canvas pulses red. The Machine Overview marks the machine in amber with **STUCK** and counts it in the header, and **Problems only** shows stuck and error machines. A state already named as an error is not also counted as stuck.
+- **Notify:** a notification each time a machine goes over, once per stay in the state (a Windows notification in the desktop app; in the web edition, after the browser asks for permission). It covers this window's machine and the Machine Overview's.
+
 ## PLC symbols
 
-While live, **Symbols** in the Live tab opens the **PLC Symbols** window. It shows the PLC's variables as a tree, from a root that is `MAIN.mainStateMachine` by default; you can type another root and click **Browse**.
+The **PLC Symbols** tab, right after Machine Overview (or **Symbols** in the Live tab), shows the PLC's symbols while live. Before that, it says to go live first. It shows the PLC's variables as a tree, from a root that is `MAIN.mainStateMachine` by default; you can type another root and click **Browse**.
 - **Members, one level at a time:** open a function block, a structure or an array (up to 100 elements) to read its members from the PLC's data types. Members inherited from a base function block are included.
 - **Values:** numbers, booleans, strings and enums show their value live, with the same change notifications as the guard values. The first 60 values on show are followed; close members to see others. Pointers and references are listed without a value.
 - **State machines:** a member that has the state variable (`machineState`) is marked. **Watch** opens its diagram in its own tab (XAE, web) or window (desktop), live on that instance, so its transitions are logged in the Live tab and can go to Transition History. XAE and the desktop app find the POU in the PLC project. Otherwise you are asked to pick its `.TcPOU`. The new window uses the same PLC connection.
 - **Filter** narrows the opened members by name or type. **Refresh** reads them again, for example after a download.
 - Closing the window stops reading its values. The window can be moved and resized, and remembers where it was.
+
+## Simulation
+The **Simulation** tab (RightPanel, after Live) steps through the state machine without a PLC. Pick a start and **Start**: the canvas marks the state as Live does, and the editors show its code. The tab lists its transitions in the order they are checked: `preProcess()`'s that apply to it first, since it runs first, then by priority, each with its condition's result. **Take** one, or set the values its conditions read (TRUE / FALSE / a number) and press **Step**, which takes the first that holds. **Back** undoes a step, and the steps are listed. The canvas shows each condition's result like Live does. The tab is off while Live is on.
 
 ## Live guard values
 

@@ -114,12 +114,12 @@ const cfg = writeSymbolsPlc();
   }
   expect(/SM_DoorDasher \(MAIN\.mainStateMachine\.aDoors\[1\]\)/.test(t3) && s3.includes('aDoors[1].machineState on') && !s3.startsWith(' ['), `Watch aDoors[1]: "${t3}", live ${s3}`);
 
-  // Closing the window stops following its values
+  // Closing the tab stops following its values
   await w1.bringToFront();
-  await w1.click('#symbol-browser-close');
+  await w1.click('#dock-tab-symbols [title="Close tab"]');
   await sleep(1500);
   const released = fs.readFileSync(plcLog, 'utf8');
-  expect(/release handle MAIN\.mainStateMachine\.nCount/.test(released), 'closing the window released its values');
+  expect(/release handle MAIN\.mainStateMachine\.nCount/.test(released), 'closing the tab released its values');
 
   await browser.close().catch(() => {});
   app.kill();

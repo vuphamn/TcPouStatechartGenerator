@@ -32,7 +32,7 @@ async function findDutFiles(rootDir) {
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.tcdut')) {
         try {
           const content = stripBom(await fs.readFile(full, 'utf8'));
-          found.push({ name: entry.name, relativePath: path.relative(rootDir, full).split(path.sep).join('/'), content });
+          found.push({ name: entry.name, relativePath: path.relative(rootDir, full).split(path.sep).join('/'), path: full, content });
         } catch {
           // skip unreadable file
         }
@@ -49,4 +49,49 @@ async function readPouWithDutCandidates(pouPath) {
   return { name: path.basename(pouPath), path: pouPath, content, dutCandidates };
 }
 
-module.exports = { findDutFiles, readPouWithDutCandidates };
+const SOURCE_RX = /\.tc(pou|dut)$/i;
+
+/** Writes a source file, with the BOM it has on disk (TwinCAT's files have one; a new file gets one) */
+async function writeSource(file, content) {
+  let bom = true;
+  try {
+    bom = (await fs.readFile(file, 'utf8')).charCodeAt(0) === 0xfeff;
+  } catch {
+    // a new file
+  }
+  await fs.writeFile(file, (bom ? '\ufeff' : '') + String(content), 'utf8');
+}
+
+/**
+ * Saves edited sources back to their files: each only when the file is still what the app read (its baseline), else
+ * it is a conflict (unless force). Only .TcPOU / .TcDUT files.
+ */
+async function saveSources(files) {
+  const out = { saved: [], conflicts: [], errors: [] };
+  for (const f of Array.isArray(files) ? files : []) {
+    const file = String(f?.path ?? '');
+    if (!path.isAbsolute(file) || !SOURCE_RX.test(file)) {
+      out.errors.push({ path: file, error: 'Only .TcPOU and .TcDUT files are saved' });
+      continue;
+    }
+    let current = null;
+    try {
+      current = stripBom(await fs.readFile(file, 'utf8'));
+    } catch {
+      current = null; // gone: written again
+    }
+    if (!f.force && current !== null && typeof f.baseline === 'string' && current !== f.baseline) {
+      out.conflicts.push({ path: file });
+      continue;
+    }
+    try {
+      await writeSource(file, f.content);
+      out.saved.push(file);
+    } catch (err) {
+      out.errors.push({ path: file, error: err.message });
+    }
+  }
+  return out;
+}
+
+module.exports = { findDutFiles, readPouWithDutCandidates, saveSources, writeSource, SOURCE_RX };

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Binary, ChevronDown, ChevronRight, Eye, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react';
+import { Binary, ChevronDown, ChevronRight, Eye, ListTree, Loader2, RefreshCw, Search } from 'lucide-react';
 import type { LiveBrowseResult, SymbolChild } from '../utils/xaeHost.ts';
 import type { LiveValue, WatchedVar } from '../utils/liveGuards.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 
 /**
- * Symbols window (Live, while connected): the PLC's symbols from a root (default MAIN.mainStateMachine), one level at
+ * PLC Symbols tab (Live, while connected): the PLC's symbols from a root (default MAIN.mainStateMachine), one level at
  * a time, with the values of numbers, booleans and strings. A member that holds the state variable is a state
  * machine: Watch follows it in its own tab / window, live, recording its transitions.
  */
@@ -15,7 +15,6 @@ export const DEFAULT_SYMBOL_ROOT = 'MAIN.mainStateMachine';
 export const MAX_SYMBOL_VALUES = 60;
 
 interface SymbolBrowserWindowProps {
-  onClose: () => void;
   connected: boolean;
   root: string;
   onRootChange: (root: string) => void;
@@ -37,7 +36,6 @@ export const symbolWatchId = (path: string) => `sym:${path.toLowerCase()}`;
 
 type Loaded = { state: 'loading' } | { state: 'error'; error: string } | { state: 'ok'; node: LiveBrowseResult };
 
-const POS_KEY = 'kss.symbols.window';
 
 function formatValue(v: LiveValue | undefined): { text: string; cls: string } {
   if (v === undefined) return { text: '…', cls: 'text-slate-600' };
@@ -47,7 +45,6 @@ function formatValue(v: LiveValue | undefined): { text: string; cls: string } {
 }
 
 export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
-  onClose,
   connected,
   root,
   onRootChange,
@@ -64,17 +61,6 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState('');
   const [rootDraft, setRootDraft] = useState(root);
-  const [pos, setPos] = useState<{ x: number; y: number; w: number; h: number }>(() => {
-    try {
-      const p = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
-      if (p && [p.x, p.y, p.w, p.h].every((n) => typeof n === 'number')) return p;
-    } catch {
-      // per-viewer convenience only
-    }
-    return { x: Math.max(16, window.innerWidth - 560), y: 90, w: 520, h: Math.min(640, window.innerHeight - 140) };
-  });
-  const posRef = useRef(pos);
-  posRef.current = pos;
   const boxRef = useRef<HTMLDivElement>(null);
   // Latest load per path (a reload replaces an answer still on its way)
   const seqRef = useRef(new Map<string, number>());
@@ -153,63 +139,16 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   useEffect(() => () => onVisibleValues([]), [onVisibleValues]);
   const valueCount = rows.filter((r) => r.child.kind === 'value').length;
 
-  // Drag by the title bar, resize from the corner (kept per viewer)
-  const startDrag = (e: React.MouseEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button, input')) return;
-    e.preventDefault();
-    const start = { x: e.clientX, y: e.clientY, px: posRef.current.x, py: posRef.current.y };
-    const move = (ev: MouseEvent) =>
-      setPos((p) => ({
-        ...p,
-        x: Math.min(Math.max(0, start.px + ev.clientX - start.x), window.innerWidth - 120),
-        y: Math.min(Math.max(0, start.py + ev.clientY - start.y), window.innerHeight - 40),
-      }));
-    const up = () => {
-      window.removeEventListener('mousemove', move, true);
-      window.removeEventListener('mouseup', up, true);
-      try {
-        localStorage.setItem(POS_KEY, JSON.stringify(posRef.current));
-      } catch {
-        // per-viewer convenience only
-      }
-    };
-    window.addEventListener('mousemove', move, true);
-    window.addEventListener('mouseup', up, true);
-  };
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      if (Math.abs(w - posRef.current.w) > 1 || Math.abs(h - posRef.current.h) > 1) {
-        setPos((p) => ({ ...p, w, h }));
-        try {
-          localStorage.setItem(POS_KEY, JSON.stringify({ ...posRef.current, w, h }));
-        } catch {
-          // per-viewer convenience only
-        }
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
   const rootLoad = loaded[root];
 
   return (
     <div
       id="symbol-browser-window"
       ref={boxRef}
-      role="dialog"
       aria-label="PLC symbols"
-      className="fixed z-[70] flex flex-col rounded-lg border border-slate-700 bg-slate-900/98 shadow-2xl shadow-black/60 text-xs overflow-hidden"
-      style={{ left: pos.x, top: pos.y, width: pos.w, height: pos.h, resize: 'both', minWidth: 340, minHeight: 240, maxWidth: '96vw', maxHeight: '92vh' }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose();
-      }}
+      className="flex-1 min-h-0 flex flex-col bg-slate-950 text-xs overflow-hidden"
     >
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800 bg-slate-950/80 cursor-move select-none" onMouseDown={startDrag}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800 bg-slate-900/80 select-none">
         <ListTree className="w-3.5 h-3.5 text-sky-400" />
         <span className="font-semibold text-slate-200">PLC Symbols</span>
         {connected ? (
@@ -221,9 +160,6 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
         )}
         <button id="symbol-browser-refresh" onClick={refresh} disabled={!connected} className="ml-auto p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800 disabled:opacity-40" title="Read the members again (after a download)">
           <RefreshCw className="w-3.5 h-3.5" />
-        </button>
-        <button id="symbol-browser-close" onClick={onClose} className="p-1 rounded text-slate-400 hover:text-rose-300 hover:bg-slate-800" title="Close (Esc)">
-          <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
@@ -269,7 +205,11 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
 
       <div id="symbol-browser-tree" className="flex-1 min-h-0 overflow-auto py-1 font-mono text-[11px]">
         {!connected ? (
-          <div className="p-4 text-center text-slate-500 font-sans">Go live to browse the PLC's symbols.</div>
+          <div id="symbol-browser-not-live" className="flex flex-col items-center justify-center gap-2 h-full p-6 text-center text-slate-400 font-sans text-xs">
+            <ListTree className="w-7 h-7 text-slate-600" />
+            <p>Go live (Live tab) to browse the PLC's symbols and their values.</p>
+            <p className="text-slate-500">The tree starts at {root}. Watch opens a state machine found in it, live.</p>
+          </div>
         ) : !rootLoad || rootLoad.state === 'loading' ? (
           <div className="p-4 flex items-center justify-center gap-2 text-slate-400 font-sans">
             <Loader2 className="w-3.5 h-3.5 animate-spin" /> Reading {root}...

@@ -17,6 +17,7 @@ import {
   Code2,
   Blocks,
   LayoutGrid,
+  Timer,
   Lock,
   Unlock,
   Printer,
@@ -53,6 +54,17 @@ import {
   Link2,
   FileStack,
   Route,
+  ArrowUp,
+  ArrowDown,
+  ListOrdered,
+  ClipboardCopy,
+  ClipboardPaste,
+  Trash2,
+  CircleDot,
+  Circle,
+  SquareStack,
+  ListTree,
+  FlaskConical,
 } from 'lucide-react';
 import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
 import {
@@ -83,10 +95,14 @@ import {
   isDesktopApp,
   canPickFolder,
   PouSource,
+  canWriteBack,
+  downloadSource,
+  writeWebSource,
 } from './utils/sourceFileAccess.ts';
+import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
-import { LintFinding, addCaseBranch, addEnumMember, lintStateMachine } from './utils/stateMachineLint.ts';
+import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
 import { StatusBar } from './components/StatusBar.tsx';
 import { PathsPanel } from './components/PathsPanel.tsx';
@@ -101,6 +117,33 @@ import { declarationLineCount, implementationLineCount, stateAtLine } from './ut
 import { findPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
 import { addState, addTransition, checkNewStateName, renameEdgeKeys, renameKey, renameState } from './utils/stateEdits.ts';
+import { deleteTransition, moveTransitionStart, retargetTransition, setTransitionPriority, transitionOrder, TransitionEditResult } from './utils/transitionEdits.ts';
+import { copyName, copyState, deleteState, removeEnumMember } from './utils/stateCopyDelete.ts';
+import {
+  addChoice,
+  addCompletionTransition,
+  addExceptionTransition,
+  addForkJoinRegions,
+  regionVariables,
+  addEnumMemberIn,
+  addStateDescription,
+  compositeOf,
+  describeName,
+  dropEmptyComposites,
+  enumComposites,
+  initialStateOf,
+  isFinalState,
+  enumMarksOf,
+  setEnumMark,
+  isValidCompositeName,
+  setFinalState,
+  setInitialState,
+  wrapInComposite,
+} from './utils/statechartEdits.ts';
+import type { PaletteElement } from './components/StatechartPalette.tsx';
+import { ChoiceDialog, ChoiceRequest } from './components/ChoiceDialog.tsx';
+import { ForkJoinDialog, ForkJoinRequest } from './components/ForkJoinDialog.tsx';
+import { SimulationPanel, SimTransition } from './components/SimulationPanel.tsx';
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
 import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
@@ -108,6 +151,7 @@ import {
   buildEnumTables,
   buildGuardEdges,
   evaluateGuards,
+  appliesToState,
   symbolCandidates,
   variablesToWatch,
   type GuardInputs,
@@ -121,6 +165,7 @@ import { useStoredSecret } from './hooks/useStoredSecret.ts';
 import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
 import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
 import { MachineOverview, overviewWatchId } from './components/MachineOverview.tsx';
+import { formatLimit, limitFor, notifyStuck, parseDuration, requestNotifyPermission, setDefaultLimit, setNotify, setStateLimit, useDefaultLimit, useNotify, useStateLimits } from './utils/stateLimits.ts';
 
 /** Guard variables and Symbols values followed at once (a gateway allows 100 by default) */
 const MAX_WATCHED = 100;
@@ -250,6 +295,22 @@ export const App: React.FC = () => {
 
   const [flowchartOutput, setFlowchartOutput] = useState<boolean>(SAMPLES[0].defaultFlowchart);
   const [collapseErrorSinkEdges, setCollapseErrorSinkEdges] = useState<boolean>(true);
+  // A state's IF / ELSIF / ELSE of transitions as a choice (a diamond): per viewer
+  const [choiceNodes, setChoiceNodesState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.choiceNodes') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const setChoiceNodes = useCallback((on: boolean) => {
+    setChoiceNodesState(on);
+    try {
+      localStorage.setItem('kss.choiceNodes', String(on));
+    } catch {
+      // (not remembered)
+    }
+  }, []);
   const [includeStateDescriptions, setIncludeStateDescriptions] = useState<boolean>(
     SAMPLES[0].defaultIncludeDescriptions
   );
@@ -339,7 +400,7 @@ export const App: React.FC = () => {
   const setIsSidebarOpen = useCallback((open: boolean) => setDockLayout((l) => ({ ...l, leftVisible: open })), []);
 
   // Details follow the selection: a selected state brings the Documentation tab forward (unless an interactive
-  // tool tab is in front), a selected transition opens its Transition Guard window on the first click
+  // tool tab is in front); a transition opens its Transition Guard window on a double-click
   const [followSelection, setFollowSelection] = useState(() => {
     try {
       return localStorage.getItem('kss.followSelection') !== 'false';
@@ -561,7 +622,7 @@ export const App: React.FC = () => {
       setGenerationError(null);
       const result = generateStatechart(dutContent, pouContent, {
         flowchartOutput,
-        collapseErrorSinkEdges,
+        collapseErrorSinkEdges, choiceNodes,
         includeStateDescriptions,
         showTransitionPriorities,
         priorityFormat,
@@ -588,7 +649,7 @@ export const App: React.FC = () => {
     dutContent,
     pouContent,
     flowchartOutput,
-    collapseErrorSinkEdges,
+    collapseErrorSinkEdges, choiceNodes,
     includeStateDescriptions,
     showTransitionPriorities,
     priorityFormat,
@@ -773,7 +834,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges,
+            collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions,
             showTransitionPriorities,
             priorityFormat,
@@ -806,7 +867,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges,
+      collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions,
       showTransitionPriorities,
       priorityFormat,
@@ -841,7 +902,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges,
+            collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions,
             showTransitionPriorities,
             priorityFormat,
@@ -874,7 +935,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges,
+      collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions,
       showTransitionPriorities,
       priorityFormat,
@@ -891,14 +952,14 @@ export const App: React.FC = () => {
       try {
         const startTime = performance.now();
         setGenerationError(null);
-        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat });
+        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat });
         setRawMarkdown(result);
         setGenerationStats({ statesCount: (result.match(/-->/g) || []).length, linesCount: result.split('\n').length, timeMs: Math.round(performance.now() - startTime) });
       } catch (genErr: unknown) {
         setGenerationError(genErr instanceof Error ? genErr.message : String(genErr));
       }
     },
-    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat]
+    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat]
   );
 
   const handleSavePreProcessCode = useCallback(
@@ -918,7 +979,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges,
+            collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions,
             showTransitionPriorities,
             priorityFormat,
@@ -951,7 +1012,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges,
+      collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions,
       showTransitionPriorities,
       priorityFormat,
@@ -969,7 +1030,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(newDutContent, pouContent, {
             flowchartOutput,
-            collapseErrorSinkEdges,
+            collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions,
             showTransitionPriorities,
             priorityFormat,
@@ -1001,7 +1062,7 @@ export const App: React.FC = () => {
     [
       pouContent,
       flowchartOutput,
-      collapseErrorSinkEdges,
+      collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions,
       showTransitionPriorities,
       priorityFormat,
@@ -1022,7 +1083,11 @@ export const App: React.FC = () => {
   }, [handleGenerate, liveUpdate]);
 
   // Handle sample selection
-  const handleSelectSample = (sample: SampleItem) => {
+  const handleSelectSample = (sample: SampleItem, discard = false) => {
+    if (!discard && localDirtyRef.current) {
+      confirmDiscard(() => handleSelectSample(sample, true));
+      return;
+    }
     setSelectedSampleId(sample.id);
     setDutFileName(sample.dutName);
     setDutContent(sample.dutContent);
@@ -1088,6 +1153,7 @@ export const App: React.FC = () => {
     setDutContent(dut?.content ?? '');
     setDutRelativePath(dut?.relativePath);
     setDutPath(dut?.path);
+    setSavedSources((b) => ({ ...b, dut: dut?.content ?? '' }));
   }, []);
 
   /** Picks the enum that declares the most doState() states; `forceFirst` keeps a hand-picked file without a match */
@@ -1134,6 +1200,7 @@ export const App: React.FC = () => {
       setPouFileName(src.name);
       setPouContent(src.content);
       setPouPath(src.path);
+      setSavedSources((b) => ({ ...b, pou: src.content }));
       setSelectedSampleId('');
       if (src.dutCandidates) {
         applyDutCandidates(src.content, src.dutCandidates);
@@ -1147,7 +1214,7 @@ export const App: React.FC = () => {
     [applyDutCandidates, applyDut]
   );
 
-  const handleBrowsePou = useCallback(async () => {
+  const browseNow = useCallback(async () => {
     if (isXaeHost()) {
       postToHost({ type: 'browsePou' });
       return;
@@ -1159,6 +1226,7 @@ export const App: React.FC = () => {
       showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error');
     }
   }, [applyLoadedPou, showCopyToast]);
+  const handleBrowsePou = useCallback(() => confirmDiscard(() => void browseNow()), [browseNow]);
 
   // Desktop: a .TcPOU opened from Windows Explorer ("Open in Kval StateScope"): at start-up, or later in this window
   useEffect(() => {
@@ -1197,8 +1265,10 @@ export const App: React.FC = () => {
   }, []);
 
   const handleDropPou = useCallback(
-    async (file: File) => {
-      applyLoadedPou(await readDroppedPou(file));
+    async (file: File, handle?: Promise<unknown>) => {
+      // (the handle is asked for during the drop: taken before any question)
+      const fileHandle = handle ? await handle.catch(() => null) : null;
+      confirmDiscard(() => void readDroppedPou(file, fileHandle).then(applyLoadedPou));
     },
     [applyLoadedPou]
   );
@@ -1427,6 +1497,171 @@ export const App: React.FC = () => {
     return files;
   }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent]);
 
+  // ---- Save (desktop, web): each source as read / last saved, what differs from it, writing it back ----
+  const pouKey = `${pouPath ?? ''}|${pouFileName}`;
+  const dutKey = `${dutPath ?? ''}|${dutRelativePath ?? ''}|${dutFileName}`;
+  const [savedSources, setSavedSources] = useState<{ pouKey: string; pou: string; dutKey: string; dut: string }>(() => ({ pouKey, pou: pouContent, dutKey, dut: dutContent }));
+  // (another file, a sample, a Save As: what it is now is its saved version)
+  useEffect(() => {
+    setSavedSources((b) => (b.pouKey === pouKey ? b : { ...b, pouKey, pou: pouContent }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pouKey]);
+  useEffect(() => {
+    setSavedSources((b) => (b.dutKey === dutKey ? b : { ...b, dutKey, dut: dutContent }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dutKey]);
+  const localSave = !isXaeHost();
+  const pouDirty = localSave && !!pouContent && savedSources.pouKey === pouKey && pouContent !== savedSources.pou;
+  const dutDirty = localSave && !!dutContent && savedSources.dutKey === dutKey && dutContent !== savedSources.dut;
+  const localDirtyCount = Number(pouDirty) + Number(dutDirty);
+  const localDirtyRef = useRef(false);
+  localDirtyRef.current = localDirtyCount > 0;
+  const markSaved = (kind: 'pou' | 'dut', content: string) => setSavedSources((b) => (kind === 'pou' ? { ...b, pou: content } : { ...b, dut: content }));
+  type DesktopSave = {
+    saveSources?: (files: unknown[]) => Promise<{ saved: string[]; conflicts: { path: string }[]; errors: { path: string; error: string }[] }>;
+    saveSourceAs?: (name: string, content: string, dir?: string | null) => Promise<{ path?: string; canceled?: boolean; error?: string }>;
+  };
+  const desktopSave = () => (window as unknown as { tcDesktop?: DesktopSave }).tcDesktop;
+  const defaultName = (kind: 'pou' | 'dut') => (kind === 'pou' ? pouFileName || 'SM_Machine.TcPOU' : dutFileName || 'E_States.TcDUT');
+  /** Unsaved edits: go on only after the user agrees to lose them */
+  const confirmDiscard = (proceed: () => void) => {
+    if (!localDirtyRef.current) return proceed();
+    setPromptRequest({
+      title: 'Unsaved edits',
+      label: 'The POU or the enum has unsaved edits. Open the other file and lose them? (Cancel, then Save, to keep them.)',
+      confirmOnly: true,
+      danger: true,
+      submitLabel: 'Lose the edits',
+      onSubmit: proceed,
+    });
+  };
+  /** Save As (desktop: a file picked; web: a download) */
+  const handleSaveAs = useCallback(
+    async (kind: 'pou' | 'dut') => {
+      const content = kind === 'pou' ? pouContent : dutContent;
+      if (!content) return;
+      const d = desktopSave();
+      if (d?.saveSourceAs) {
+        const dir = (kind === 'pou' ? pouPath : dutPath ?? pouPath)?.replace(/[\\/][^\\/]*$/, '') ?? null;
+        const r = await d.saveSourceAs(defaultName(kind), content, dir);
+        if (r.error) return showCopyToast(`Could not save: ${r.error}`, 'error', 8000);
+        if (!r.path) return;
+        const base = r.path.split(/[\\/]/).pop() ?? r.path;
+        // (the file it is now: its saved version, through the key)
+        if (kind === 'pou') {
+          setPouPath(r.path);
+          setPouFileName(base);
+        } else {
+          setDutPath(r.path);
+          setDutFileName(base);
+        }
+        return showCopyToast(`Saved ${base}`, 'success');
+      }
+      downloadSource(defaultName(kind), content);
+      markSaved(kind, content);
+      showCopyToast(`Downloaded ${defaultName(kind)}`, 'success');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, dutContent, pouPath, dutPath, pouFileName, dutFileName, showCopyToast]
+  );
+  /**
+   * Save: the edited sources back to their files (desktop), or through the browser's handles (web; a download when
+   * it cannot write them). A file changed on disk since it was read is overwritten only when the user says so.
+   * quiet: from an editor's Ctrl+S (no message when there is nothing to save, no download)
+   */
+  const handleSaveSources = useCallback(
+    async (opts: { force?: boolean; quiet?: boolean } = {}) => {
+      const items = [
+        pouDirty ? { kind: 'pou' as const, name: defaultName('pou'), path: pouPath, relativePath: undefined as string | undefined, content: pouContent, baseline: savedSources.pou } : null,
+        dutDirty ? { kind: 'dut' as const, name: defaultName('dut'), path: dutPath, relativePath: dutRelativePath, content: dutContent, baseline: savedSources.dut } : null,
+      ].filter((i): i is NonNullable<typeof i> => !!i);
+      if (!items.length) {
+        if (!opts.quiet) showCopyToast('No unsaved edits', 'success');
+        return;
+      }
+      const saved: string[] = [];
+      const downloaded: string[] = [];
+      const conflicts: string[] = [];
+      const d = desktopSave();
+      if (d?.saveSources) {
+        // (a sample, or a dropped file: no file to write back to)
+        for (const i of items.filter((x) => !x.path)) if (!opts.quiet) await handleSaveAs(i.kind);
+        const withPath = items.filter((x) => x.path);
+        if (withPath.length) {
+          const r = await d.saveSources(withPath.map((i) => ({ path: i.path, content: i.content, baseline: i.baseline, force: !!opts.force })));
+          for (const i of withPath) {
+            if (r.saved.includes(i.path!)) {
+              markSaved(i.kind, i.content);
+              saved.push(i.name);
+            } else if (r.conflicts.some((c) => c.path === i.path)) conflicts.push(i.name);
+          }
+          for (const e of r.errors) showCopyToast(`Could not save ${e.path}: ${e.error}`, 'error', 8000);
+        }
+      } else {
+        for (const i of items) {
+          let res: WebSaveResult = 'no-handle';
+          try {
+            res = await writeWebSource(i.kind, i.relativePath, i.content, i.baseline, !!opts.force);
+          } catch (e) {
+            showCopyToast(`Could not write ${i.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000);
+          }
+          if (res === 'saved') {
+            markSaved(i.kind, i.content);
+            saved.push(i.name);
+          } else if (res === 'conflict') conflicts.push(i.name);
+          else if (!opts.quiet) {
+            downloadSource(i.name, i.content);
+            markSaved(i.kind, i.content);
+            downloaded.push(i.name);
+          }
+        }
+      }
+      if (saved.length) showCopyToast(`Saved ${saved.join(' and ')}`, 'success');
+      if (downloaded.length)
+        showCopyToast(`Downloaded ${downloaded.join(' and ')}: ${canWriteBack() ? 'open it with Browse to save in place next time' : 'this browser cannot write files back'}; replace the original with it`, 'success', 9000);
+      if (conflicts.length)
+        setPromptRequest({
+          title: 'Changed on disk',
+          label: `${conflicts.join(' and ')} changed on disk since ${conflicts.length > 1 ? 'they were' : 'it was'} opened (saved in TwinCAT or another editor?). Overwrite with your version?`,
+          confirmOnly: true,
+          danger: true,
+          submitLabel: 'Overwrite',
+          onSubmit: () => void handleSaveSources({ force: true }),
+        });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast]
+  );
+  const saveSourcesRef = useRef(handleSaveSources);
+  saveSourcesRef.current = handleSaveSources;
+  // Ctrl+S saves the files (an editor's Ctrl+S first puts its code into the POU: then the files are saved too)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 's') return;
+      const t = e.target as HTMLElement | null;
+      const inEditor = !!t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable);
+      if (inEditor) {
+        if (e.defaultPrevented && !isXaeHost()) window.setTimeout(() => void saveSourcesRef.current({ quiet: true }), 60);
+        return;
+      }
+      e.preventDefault();
+      if (isXaeHost()) handleSaveToProjectRef.current();
+      else void saveSourcesRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  // Closing / reloading with unsaved edits: the browser (the desktop app: its dialog) asks first
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!localDirtyRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
+
   const handleSaveToProject = useCallback(() => {
     if (hostDirtyFiles.length === 0) return;
     pendingHostSaveRef.current = hostDirtyFiles;
@@ -1441,6 +1676,8 @@ export const App: React.FC = () => {
       })),
     });
   }, [hostDirtyFiles, hostSavedContent]);
+  const handleSaveToProjectRef = useRef(handleSaveToProject);
+  handleSaveToProjectRef.current = handleSaveToProject;
 
   /** Opens TwinCAT's editor at a state's CASE branch or a transition's assignment (POU loaded from the project) */
   const handleShowInXae = useCallback(
@@ -1631,7 +1868,7 @@ export const App: React.FC = () => {
     } finally {
       setDocProgress(null);
     }
-  }, [pouPath, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
+  }, [pouPath, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
 
   // Edits from the diagram: rename a state, add a state, add a transition (connect mode)
   const [promptRequest, setPromptRequest] = useState<TextPromptRequest | null>(null);
@@ -1702,11 +1939,55 @@ export const App: React.FC = () => {
       }),
     [pouContent, dutContent, handleReplaceSources, showCopyToast]
   );
+  // Parallel regions (Fork / Join): a region's transitions set its own state variable
+  const regionOf = useMemo(() => regionVariables(pouContent, dutContent, stateVarName), [pouContent, dutContent, stateVarName]);
+  const regionOfRef = useRef(regionOf);
+  regionOfRef.current = regionOf;
+  const varFor = useCallback((state: string) => regionOfRef.current.get(state)?.variable ?? stateVarName, [stateVarName]);
+
+  // What a connect-mode click makes: a transition (with a condition), a completion transition (none), an exception
+  // transition (checked first; from a composite: in preProcess())
+  const connectKindRef = useRef<{ kind: 'transition' | 'completion' | 'exception'; composite?: string }>({ kind: 'transition' });
   const handleConnectTo = useCallback(
     (to: string) => {
       const from = connectFrom;
+      const { kind, composite } = connectKindRef.current;
+      connectKindRef.current = { kind: 'transition' };
       setConnectFrom(null);
       if (!from) return;
+      // In a parallel region: its own variable, and only its own states
+      const region = regionOf.get(from);
+      if (!composite && (regionOf.get(to)?.variable ?? null) !== (region?.variable ?? null)) {
+        showCopyToast(region ? `${to} is not in ${from}'s region (${region.variable})` : `${to} is in a parallel region: its fork enters it`, 'error');
+        return;
+      }
+      const v = region?.variable ?? stateVarName;
+      if (kind === 'completion') {
+        const r = addCompletionTransition(pouContent, from, to, v);
+        if ('error' in r) return showCopyToast(r.error, 'error');
+        handleReplaceSources(r.pou, null);
+        showCopyToast(`Added the completion transition ${from} → ${to} (no condition, last in its branch)`, 'success');
+        return;
+      }
+      if (kind === 'exception') {
+        setPromptRequest({
+          title: `Exception transition ${from} → ${to}`,
+          label: composite
+            ? `Condition (Structured Text). Checked in preProcess() for every state of ${composite}:`
+            : "Condition (Structured Text). Checked before the state's code and its other transitions:",
+          initial: 'bError',
+          monospace: true,
+          submitLabel: 'Add exception transition',
+          validate: (v) => (v ? null : 'Enter a condition'),
+          onSubmit: (condition) => {
+            const r = addExceptionTransition(pouContent, dutContent, composite ? { composite } : { state: from }, to, condition, v);
+            if ('error' in r) return showCopyToast(r.error, 'error');
+            handleReplaceSources(r.pou, null);
+            showCopyToast(`Added the exception transition ${from} → ${to} in ${r.where}`, 'success');
+          },
+        });
+        return;
+      }
       setPromptRequest({
         title: `New transition ${from} → ${to}`,
         label: "Condition (Structured Text). The transition is added at the end of the state's branch:",
@@ -1716,7 +1997,7 @@ export const App: React.FC = () => {
         submitLabel: 'Add transition',
         validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
         onSubmit: (condition) => {
-          const code = addTransition(pouContent, from, to, condition, stateVarName);
+          const code = addTransition(pouContent, from, to, condition, v);
           if (!code) {
             showCopyToast(`${from} has no CASE branch in doState()`, 'error');
             return;
@@ -1727,11 +2008,601 @@ export const App: React.FC = () => {
         },
       });
     },
-    [connectFrom, pouContent, stateVarName, handleSaveMethodCode, showCopyToast]
+    [connectFrom, pouContent, dutContent, stateVarName, regionOf, handleSaveMethodCode, handleReplaceSources, showCopyToast]
+  );
+
+  // Transitions edited on the canvas (priority, start / end moved): doState() / preProcess() rewritten, the chart
+  // regenerated (Save writes the files)
+  const applyTransitionEdit = useCallback(
+    (r: TransitionEditResult) => {
+      if ('error' in r) {
+        showCopyToast(r.error, 'error', 6000);
+        return false;
+      }
+      const result = handleSaveMethodCode(r.method, r.code);
+      if (!result?.success) {
+        showCopyToast(result?.error || 'Could not change the code', 'error');
+        return false;
+      }
+      showCopyToast(r.message, 'success');
+      return true;
+    },
+    [handleSaveMethodCode, showCopyToast]
+  );
+  // The edge as the chart has it now (its priority changes with each edit)
+  const currentEdge = useCallback((edge: EdgeInfo) => availableEdges.find((e) => e.id === edge.id) ?? edge, [availableEdges]);
+  const handleTransitionPriority = useCallback(
+    (edge: EdgeInfo, priority: number) => pouContent && applyTransitionEdit(setTransitionPriority(pouContent, currentEdge(edge), priority, varFor(edge.from))),
+    [pouContent, applyTransitionEdit, currentEdge, stateVarName]
+  );
+  const handleTransitionPriorityStep = useCallback(
+    (edge: EdgeInfo, delta: number) => {
+      if (!pouContent) return;
+      const order = transitionOrder(pouContent, currentEdge(edge), varFor(edge.from));
+      if ('error' in order) showCopyToast(order.error, 'error', 6000);
+      else if (order.count < 2) showCopyToast(`${edge.from} has only this transition`, 'error');
+      else handleTransitionPriority(edge, order.priority + delta);
+    },
+    [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast]
+  );
+  const knownStates = useMemo(() => new Set(identifiedStatesResult.states.map((st) => st.id)), [identifiedStatesResult]);
+  const handleEdgeEndpointDrop = useCallback(
+    (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => {
+      if (!pouContent) return;
+      if (!knownStates.has(stateId)) {
+        showCopyToast(`${stateId} is not a state of the enum / doState() (a composite state?)`, 'error');
+        return;
+      }
+      const e = currentEdge(edge);
+      if ((regionOfRef.current.get(e.from)?.variable ?? null) !== (regionOfRef.current.get(stateId)?.variable ?? null)) {
+        showCopyToast(`${stateId} is ${regionOfRef.current.has(stateId) ? 'in another parallel region' : 'outside the parallel region'}`, 'error');
+        return;
+      }
+      applyTransitionEdit(end === 'end' ? retargetTransition(pouContent, e, stateId, varFor(e.from)) : moveTransitionStart(pouContent, e, stateId, varFor(e.from)));
+    },
+    [pouContent, knownStates, currentEdge, applyTransitionEdit, stateVarName, showCopyToast]
+  );
+  // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
+  const copiedStateRef = useRef<string | null>(null);
+  const [pendingRename, setPendingRename] = useState<string | null>(null);
+  const handleCopyState = useCallback(
+    (id: string) => {
+      copiedStateRef.current = id;
+      showCopyToast(`Copied ${id}: Ctrl+V (or right-click the canvas) pastes a new state with its code`, 'success');
+    },
+    [showCopyToast]
+  );
+  const handlePasteState = useCallback(() => {
+    const from = copiedStateRef.current;
+    if (!from || !pouContent) return;
+    if (!knownStates.has(from)) {
+      showCopyToast(`${from} is no longer a state`, 'error');
+      return;
+    }
+    const name = copyName(pouContent, dutContent, from);
+    const r = copyState(pouContent, dutContent, from, name, stateVarName);
+    if ('error' in r) {
+      showCopyToast(r.error, 'error', 6000);
+      return;
+    }
+    handleReplaceSources(r.pou, r.dut);
+    setCustomNodeStyles((m) => (m[from] ? { ...m, [name]: m[from] } : m));
+    setPendingRename(name);
+    showCopyToast(`Pasted ${name}: ${r.dut ? 'the enum, ' : ''}${r.methods.map((m) => `${m}()`).join(', ')}. Connect it with Add transition`, 'success', 6000);
+  }, [pouContent, dutContent, knownStates, stateVarName, handleReplaceSources, showCopyToast]);
+  // Once the chart has the pasted state: shown, selected, and its name asked for
+  useEffect(() => {
+    if (!pendingRename || !knownStates.has(pendingRename)) return;
+    const name = pendingRename;
+    setPendingRename(null);
+    handleJumpToState(name);
+    handleRenameState(name);
+  }, [pendingRename, knownStates, handleJumpToState, handleRenameState]);
+
+  const dropStateKeys = useCallback((id: string) => {
+    const drop = <T,>(m: Record<string, T> | undefined) => {
+      if (!m || !(id in m)) return m;
+      const next = { ...m };
+      delete next[id];
+      return next;
+    };
+    setCustomNodeStyles((m) => drop(m) ?? m);
+    setNodeOffsets((m) => drop(m) ?? m);
+    setCanvasPositions((m) => drop(m) ?? m);
+    setDiagramNotes((n) => ({ ...n, nodes: drop(n.nodes) ?? n.nodes, positions: drop(n.positions), styles: drop(n.styles) }));
+  }, []);
+  const handleDeleteState = useCallback(
+    (id: string) => {
+      if (!pouContent || id === '[*]') return;
+      const r = deleteState(pouContent, dutContent, id, stateVarName);
+      if ('error' in r) {
+        showCopyToast(r.error, 'error', 6000);
+        return;
+      }
+      const details = [
+        ...(r.dut ? [`The enum member ${id}${r.renumbered ? ' (the members after it get new values: they have none of their own)' : ''}`] : []),
+        ...r.methods.map((m) => `Its branch in ${m}()`),
+        ...r.transitions.map((t) => `The transition ${t}`),
+        ...r.kept.map((k) => `Not deleted, change it yourself: ${k}`),
+        ...r.remaining.map((k) => `Still refers to it: ${k}`),
+      ];
+      setPromptRequest({
+        title: `Delete ${id}?`,
+        label: 'Deleted from the POU and the enum (Save writes them to the project):',
+        details,
+        confirmOnly: true,
+        danger: true,
+        submitLabel: 'Delete state',
+        onSubmit: () => {
+          handleReplaceSources(r.pou, r.dut);
+          dropStateKeys(id);
+          if (selectedStateId === id) {
+            setSelectedStateId(null);
+            setSelectedStateLabel('');
+          }
+          const left = r.kept.length + r.remaining.length;
+          showCopyToast(`Deleted ${id}${r.transitions.length ? ` and ${r.transitions.length} transition${r.transitions.length === 1 ? '' : 's'} into it` : ''}${left ? `: ${left} place${left === 1 ? '' : 's'} still refer to it (Problems)` : ''}`, left ? 'error' : 'success', 7000);
+        },
+      });
+    },
+    [pouContent, dutContent, stateVarName, handleReplaceSources, dropStateKeys, selectedStateId, showCopyToast]
+  );
+  const handleDeleteTransition = useCallback(
+    (edge: EdgeInfo) => {
+      if (!pouContent) return;
+      const e = currentEdge(edge);
+      const r = deleteTransition(pouContent, e, varFor(e.from));
+      if ('error' in r) {
+        showCopyToast(r.error, 'error', 6000);
+        return;
+      }
+      const gone = (r.removed ?? []).map((l) => l.trim()).filter(Boolean);
+      setPromptRequest({
+        title: `Delete ${e.from} → ${e.to}?`,
+        label: `Its code in ${r.method}() is deleted (Save writes it to the project):`,
+        details: gone.length <= 12 ? gone : [...gone.slice(0, 11), `… ${gone.length - 11} more lines`],
+        confirmOnly: true,
+        danger: true,
+        submitLabel: 'Delete transition',
+        onSubmit: () => applyTransitionEdit(r),
+      });
+    },
+    [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast]
+  );
+
+  // The statechart palette: elements dropped on the canvas become ST (Save writes the files)
+  const [choiceRequest, setChoiceRequest] = useState<ChoiceRequest | null>(null);
+  const [forkJoinRequest, setForkJoinRequest] = useState<ForkJoinRequest | null>(null);
+  const [placeRequest, setPlaceRequest] = useState<{ stateId: string; x: number; y: number; nonce: number } | null>(null);
+  // The POU's child state machines (members of state-machine types)
+  const machineMembers = useMemo(() => declaredMachineMembers(pouContent), [pouContent]);
+  const composites = useMemo(() => (dutContent ? enumComposites(dutContent) : []), [dutContent]);
+  const chartComposites = useMemo(() => {
+    try {
+      return pouContent ? generateStatechartModel(dutContent, pouContent, {}).composites : {};
+    } catch {
+      return {} as Record<string, string[]>;
+    }
+  }, [pouContent, dutContent]);
+  const compositeOfState = useCallback((state: string) => Object.entries(chartComposites).find(([, members]) => members.includes(state))?.[0] ?? null, [chartComposites]);
+  const isFinal = useCallback((state: string) => isFinalState(pouContent, state) || (!!dutContent.trim() && enumMarksOf(dutContent, state).final), [pouContent, dutContent]);
+  const compositeNames = useMemo(() => new Set(composites.map((c) => c.name)), [composites]);
+  const stateNames = useMemo(() => [...knownStates].filter((st) => st !== '[*]').sort(), [knownStates]);
+  // A name for a new state: the machine's prefix and a free suffix
+  const newStateName = useCallback(
+    (suffix: string) => {
+      const prefix = stateNames.length > 1 ? stateNames.reduce((a, b) => { let k = 0; while (k < a.length && k < b.length && a[k] === b[k]) k++; return a.slice(0, k); }).replace(/[^_]*$/, '') : '';
+      for (let i = 1; ; i++) {
+        const n = `${prefix}${suffix}${i === 1 ? '' : i}`;
+        if (!checkNewStateName(pouContent, dutContent, n)) return n;
+      }
+    },
+    [stateNames, pouContent, dutContent]
+  );
+  /** A new state (optionally final, in a composite), its description, placed where it was dropped */
+  const createState = useCallback(
+    (name: string, opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string; from?: { state: string; condition: string } }) => {
+      let pou = addCaseBranch(pouContent, name);
+      if (!pou) return showCopyToast('doState() has no CASE to add the state to', 'error');
+      const u = updateMethodCodeInPou(pouContent, 'doState', pou);
+      if (!u.success) return showCopyToast(u.error || 'Could not add the state', 'error');
+      pou = u.updatedPou;
+      // From a state: the transition to it (at the end of that state's branch)
+      if (opts.from) {
+        const code = addTransition(pou, opts.from.state, name, opts.from.condition, stateVarName);
+        const t = code ? updateMethodCodeInPou(pou, 'doState', code) : null;
+        if (!t?.success) return showCopyToast(`${opts.from.state} has no CASE branch in doState()`, 'error');
+        pou = t.updatedPou;
+      }
+      pou = addStateDescription(pou, name, describeName(name, stateNames));
+      if (opts.final && !dutContent.trim()) {
+        const fin = setFinalState(pou, name, true);
+        if ('error' in fin) return showCopyToast(fin.error, 'error');
+        pou = fin.pou;
+      }
+      let dut: string | null = null;
+      if (dutContent.trim()) {
+        dut = addEnumMemberIn(dutContent, name, opts.composite ?? null);
+        if (dut && opts.newComposite) dut = wrapInComposite(dut, name, opts.newComposite);
+        if (dut && opts.final) dut = setEnumMark(dut, name, 'final', true);
+        if (!dut) return showCopyToast(`Could not add ${name} to the enum${opts.composite ? ` (in ${opts.composite})` : ''}`, 'error');
+      } else if (opts.composite || opts.newComposite) {
+        return showCopyToast('Load the .TcDUT enum first: composites are regions in it', 'error');
+      }
+      handleReplaceSources(pou, dut);
+      if (opts.from) setPendingShow(name);
+      // (a state in a composite stays where the layout puts it: in the composite's box)
+      if (opts.at && !opts.composite && !opts.newComposite) setPlaceRequest({ stateId: name, x: opts.at.x, y: opts.at.y, nonce: Date.now() });
+      const where = opts.newComposite ? ` in the new composite ${opts.newComposite}` : opts.composite ? ` in ${opts.composite}` : '';
+      showCopyToast(
+        opts.from
+          ? `Added ${name}${where} and the transition ${opts.from.state} → ${name}: ${dut ? 'the enum, ' : ''}doState()${pou.includes('getStateDescription') ? ', getStateDescription()' : ''}`
+          : `Added ${opts.final ? 'the final state ' : ''}${name}${where}: ${dut ? 'the enum, ' : ''}doState()${pou.includes('getStateDescription') ? ', getStateDescription()' : ''}. Connect it with Transition`,
+        'success',
+        6000
+      );
+    },
+    [pouContent, dutContent, stateNames, stateVarName, handleReplaceSources, showCopyToast]
+  );
+  // A state added from another: shown (and selected) once the chart has it
+  const [pendingShow, setPendingShow] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pendingShow || !knownStates.has(pendingShow)) return;
+    const name = pendingShow;
+    setPendingShow(null);
+    handleJumpToState(name);
+  }, [pendingShow, knownStates, handleJumpToState]);
+  /** Right-click a state > Add new state from here: its name, then the transition's condition */
+  const handleAddStateFrom = useCallback(
+    (from: string) => {
+      if (regionOf.has(from)) return showCopyToast(`${from} is in a parallel region: add its states with the region's CASE in the Method Editor`, 'error');
+      const composite = dutContent.trim() ? compositeOf(dutContent, from) : null;
+      setPromptRequest({
+        title: `New state from ${from}`,
+        label: `Name of the new state (an enum member${composite ? ` in ${composite}` : ''}, a CASE branch in doState()). Then the condition of ${from} → it.`,
+        initial: newStateName(`${from.replace(/^.*?_/, '')}_NEXT`.replace(/^_/, '')),
+        monospace: true,
+        submitLabel: 'Next: condition',
+        validate: (v) => (v ? checkNewStateName(pouContent, dutContent, v) : 'Enter a name'),
+        onSubmit: (name) =>
+          // (after this dialog closes)
+          setTimeout(
+            () =>
+              setPromptRequest({
+                title: `Transition ${from} → ${name}`,
+                label: `Condition (Structured Text). Written at the end of ${from}'s branch:`,
+                initial: 'TRUE',
+                monospace: true,
+                hint: `IF <condition> THEN ${stateVarName} := ${name}; END_IF`,
+                submitLabel: 'Add state and transition',
+                validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
+                onSubmit: (condition) => createState(name, { composite, from: { state: from, condition } }),
+              }),
+            0
+          ),
+      });
+    },
+    [regionOf, dutContent, pouContent, stateVarName, newStateName, createState, showCopyToast]
+  );
+  const askNewState = useCallback(
+    (opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string }) =>
+      setPromptRequest({
+        title: opts.final ? 'New final state' : opts.newComposite ? `First state of ${opts.newComposite}` : `New state${opts.composite ? ` in ${opts.composite}` : ''}`,
+        label: `Name (an enum member${opts.composite || opts.newComposite ? ' in the composite' : ''} and a CASE branch in doState()${opts.final ? ', marked (* final *)' : ''})`,
+        initial: newStateName(opts.final ? 'DONE' : 'NEW_STATE'),
+        monospace: true,
+        submitLabel: 'Add state',
+        validate: (v) => (v ? checkNewStateName(pouContent, dutContent, v) : 'Enter a name'),
+        onSubmit: (name) => createState(name, opts),
+      }),
+    [newStateName, pouContent, dutContent, createState]
+  );
+  const askCompositeName = useCallback(
+    (title: string, onName: (name: string) => void) =>
+      setPromptRequest({
+        title,
+        label: 'Composite name (a {region "…"} around its members in the enum)',
+        initial: 'NewComposite',
+        monospace: true,
+        submitLabel: 'OK',
+        validate: (v) =>
+          !isValidCompositeName(v) ? 'Letters, digits, _ and spaces' : compositeNames.has(v) ? `${v} already exists` : knownStates.has(v) ? `${v} is a state` : null,
+        onSubmit: onName,
+      }),
+    [compositeNames, knownStates]
+  );
+  const dropNodeOffset = useCallback((state: string) => setNodeOffsets((m) => {
+    if (!m || !(state in m)) return m;
+    const next = { ...m };
+    delete next[state];
+    return next;
+  }), []);
+  const handleSetInitial = useCallback(
+    (state: string) => {
+      const r = setInitialState(pouContent, stateVarName, state);
+      if ('error' in r) return showCopyToast(r.error, 'error');
+      handleReplaceSources(r.pou, null);
+      showCopyToast(`${state} is the initial state: ${stateVarName} := ${state} in ${r.where}`, 'success');
+    },
+    [pouContent, stateVarName, handleReplaceSources, showCopyToast]
+  );
+  // A composite's initial state: marked in the enum (the only one of its composite); its entry on the chart
+  const handleSetCompositeInitial = useCallback(
+    (state: string) => {
+      const composite = compositeOfState(state);
+      if (!composite || !dutContent.trim()) return showCopyToast(`${state} is in no composite`, 'error');
+      let dut: string | null = dutContent;
+      for (const other of chartComposites[composite] ?? []) if (other !== state && dut && enumMarksOf(dut, other).initial) dut = setEnumMark(dut, other, 'initial', false);
+      dut = dut && setEnumMark(dut, state, 'initial', true);
+      if (!dut) return showCopyToast(`${state} was not found in the enum`, 'error');
+      handleReplaceSources(null, dut);
+      showCopyToast(`${state} is the initial state of ${composite} (// @initial in the enum): transitions into it end at the composite`, 'success', 6000);
+    },
+    [dutContent, chartComposites, compositeOfState, handleReplaceSources, showCopyToast]
+  );
+  const handleToggleFinal = useCallback(
+    (state: string) => {
+      const final = !isFinal(state);
+      // In the enum (// @final) when there is one, else on the CASE label; not final: both gone
+      let pou = pouContent;
+      let dut: string | null = null;
+      if (!final || !dutContent.trim()) {
+        const r = setFinalState(pouContent, state, final);
+        if ('error' in r) {
+          if (!dutContent.trim()) return showCopyToast(r.error, 'error');
+        } else pou = r.pou;
+      }
+      if (dutContent.trim()) {
+        dut = setEnumMark(dutContent, state, 'final', final);
+        if (!dut) return showCopyToast(`${state} was not found in the enum`, 'error');
+      }
+      const r = { pou };
+      handleReplaceSources(r.pou === pouContent ? null : r.pou, dut);
+      const out = availableEdges.filter((e) => e.from === state && e.to !== '[*]').length;
+      // (in a composite, a final state's transitions out are the composite's: drawn from its border)
+      const composite = compositeOfState(state);
+      const where = dutContent.trim() ? ' (// @final in the enum)' : ' (* final *)';
+      const note = composite ? `: its transitions out start at ${composite}` : out ? `: it still has ${out} transition${out === 1 ? '' : 's'} out` : '';
+      showCopyToast(final ? `${state} is a final state${where}${note}` : `${state} is no final state`, final && out && !composite ? 'error' : 'success');
+    },
+    [pouContent, dutContent, availableEdges, isFinal, handleReplaceSources, showCopyToast]
+  );
+  const handleMoveToComposite = useCallback(
+    (state: string) => {
+      if (!dutContent.trim()) return showCopyToast('Load the .TcDUT enum first: composites are regions in it', 'error');
+      const current = compositeOf(dutContent, state);
+      setPromptRequest({
+        title: `Composite of ${state}`,
+        label: `${current ? `In ${current} now. ` : ''}The composite to move it to (empty: none). The members after its old and new place get new values when they have none of their own.${composites.length ? ` Composites: ${composites.map((c) => c.name).join(', ')}` : ''}`,
+        initial: current ?? '',
+        monospace: true,
+        submitLabel: 'Move',
+        validate: (v) => (!v || compositeNames.has(v) ? null : `No composite ${v} (add one with the palette's Composite)`),
+        onSubmit: (target) => {
+          if ((target || null) === current) return;
+          const removed = removeEnumMember(dutContent, state);
+          const added = removed && addEnumMemberIn(removed.dut, state, target || null);
+          if (!added) return showCopyToast(`Could not move ${state} in the enum`, 'error');
+          handleReplaceSources(null, dropEmptyComposites(added));
+          dropNodeOffset(state);
+          showCopyToast(target ? `${state} is in ${target}` : `${state} is in no composite`, 'success');
+        },
+      });
+    },
+    [dutContent, composites, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
+  );
+  // A state's node released over another {region} composite (or out of its own): with Alt it moves there
+  const handleStateDropped = useCallback(
+    (state: string, clusters: string[], altKey: boolean) => {
+      if (!dutContent.trim() || !knownStates.has(state) || regionOf.has(state)) return;
+      const current = compositeOf(dutContent, state);
+      const target = clusters.find((c) => compositeNames.has(c)) ?? null;
+      if (target === current) return;
+      if (!altKey) {
+        showCopyToast(target ? `Hold Alt while dropping to move ${state} into ${target}` : `Hold Alt while dropping to move ${state} out of ${current}`, 'success', 5000);
+        return;
+      }
+      const removed = removeEnumMember(dutContent, state);
+      const added = removed && addEnumMemberIn(removed.dut, state, target);
+      if (!added) return showCopyToast(`Could not move ${state} in the enum`, 'error');
+      handleReplaceSources(null, dropEmptyComposites(added));
+      dropNodeOffset(state);
+      showCopyToast(
+        `${target ? `${state} is in ${target}` : `${state} is in no composite`}${removed.renumbered ? ' (the members after its old place get new values: they have none of their own)' : ''}`,
+        'success',
+        6000
+      );
+    },
+    [dutContent, knownStates, regionOf, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
+  );
+  const handlePaletteElement = useCallback(
+    (kind: PaletteElement, at: { stateId: string | null; composite: string | null; x: number; y: number } | null) => {
+      if (!pouContent) return;
+      // A drop on a composite's own node (stateDiagram) is a drop in it
+      const onComposite = at?.stateId && compositeNames.has(at.stateId) ? at.stateId : null;
+      const state = at ? (at.stateId && knownStates.has(at.stateId) && at.stateId !== '[*]' ? at.stateId : null) : selectedStateId;
+      const composite = onComposite ?? at?.composite ?? null;
+      const where = at ? { x: at.x, y: at.y } : null;
+      const needState = (what: string) => showCopyToast(`Drop ${what} on a state${at ? '' : ' (or select one and click it)'}`, 'error');
+      switch (kind) {
+        case 'state':
+          return askNewState({ composite: composite && compositeNames.has(composite) ? composite : null, at: where });
+        case 'final':
+          if (state && at) return handleToggleFinal(state);
+          return askNewState({ composite: composite && compositeNames.has(composite) ? composite : null, final: true, at: where });
+        case 'initial':
+          if (!state) return needState('Initial');
+          // Dropped in a composite: its initial state; else the machine's
+          return at?.composite && compositeOfState(state) && dutContent.trim() ? handleSetCompositeInitial(state) : handleSetInitial(state);
+        case 'choice':
+          if (!state) return needState('Choice');
+          return setChoiceRequest({
+            from: state,
+            states: stateNames,
+            onSubmit: (rows, elseTo) => {
+              const res = addChoice(pouContent, state, rows, elseTo, varFor(state));
+              if ('error' in res) return showCopyToast(res.error, 'error');
+              handleReplaceSources(res.pou, null);
+              showCopyToast(`Added a choice to ${state}: ${rows.length + (elseTo ? 1 : 0)} transitions`, 'success');
+            },
+          });
+        case 'composite':
+          if (!dutContent.trim()) return showCopyToast('Load the .TcDUT enum first: composites are regions in it', 'error');
+          if (state && at) {
+            return askCompositeName(`New composite around ${state}`, (name) => {
+              const dut = wrapInComposite(dutContent, state, name);
+              if (!dut) return showCopyToast(`${state} was not found in the enum`, 'error');
+              handleReplaceSources(null, dut);
+              dropNodeOffset(state);
+              showCopyToast(`${state} is in the new composite ${name}: add states to it with State`, 'success');
+            });
+          }
+          return askCompositeName('New composite', (name) => askNewState({ composite: composite && compositeNames.has(composite) ? composite : null, newComposite: name, at: where }));
+        case 'transition':
+        case 'completion':
+          if (!state) return needState(kind === 'completion' ? 'Completion transition' : 'Transition');
+          connectKindRef.current = { kind };
+          setConnectFrom(state);
+          return;
+        case 'exception': {
+          // From a state, or (dropped in a composite, off its states) from the composite
+          const fromComposite = !state && composite && compositeNames.has(composite) ? composite : null;
+          if (!state && !fromComposite) return needState('Exception transition');
+          connectKindRef.current = { kind: 'exception', composite: fromComposite ?? undefined };
+          setConnectFrom(state ?? fromComposite);
+          return;
+        }
+        case 'pointer':
+          connectKindRef.current = { kind: 'transition' };
+          setConnectFrom(null);
+          return;
+        case 'forkjoin':
+          // The child state machines run in parallel: the state starts them and waits for all of them
+          if (!state) return needState('Fork/Join');
+          if (regionOf.has(state)) return showCopyToast(`${state} is in a parallel region already`, 'error');
+          {
+            // Suggested regions: free variable and state names
+            const taken = (n: string) => new RegExp(`\\b${n}\\b`, 'i').test(pouContent) || knownStates.has(n);
+            const free = (base: string) => {
+              for (let i = 1; ; i++) if (!taken(`${base}${i === 1 ? '' : i}`)) return `${base}${i === 1 ? '' : i}`;
+            };
+            const nextRegion = (i: number) => {
+              const letter = String.fromCharCode(65 + (i % 26));
+              return { variable: free(`region${letter}`), states: [free(`${state}_${letter}_RUN`), free(`${state}_${letter}_DONE`)] };
+            };
+            return setForkJoinRequest({
+              from: state,
+              states: stateNames.filter((st) => !regionOf.has(st)),
+              regions: [nextRegion(0), nextRegion(1)],
+              nextRegion,
+              onSubmit: (regions, target) => {
+                const res = addForkJoinRegions(pouContent, dutContent, state, regions, target, stateVarName);
+                if ('error' in res) return showCopyToast(res.error, 'error', 6000);
+                handleReplaceSources(res.pou, res.dut);
+                showCopyToast(`Added a fork / join to ${state}: ${regions.map((x) => x.variable).join(', ')} in parallel, then ${target} when all are done. Draw the regions' transitions with Transition`, 'success', 7000);
+              },
+            });
+          }
+      }
+    },
+    [pouContent, dutContent, compositeNames, knownStates, selectedStateId, stateNames, stateVarName, regionOf, varFor, askNewState, askCompositeName, handleToggleFinal, handleSetInitial, handleSetCompositeInitial, compositeOfState, handleReplaceSources, dropNodeOffset, showCopyToast]
+  );
+
+  // Undo / Redo: the POU and the enum as they were before each edit (edits within a second of each other are one
+  // step); another file starts a new history
+  type Snapshot = { pou: string; dut: string };
+  const historyRef = useRef<{ past: Snapshot[]; future: Snapshot[]; last: Snapshot | null; lastAt: number; applying: boolean; file: string }>({
+    past: [],
+    future: [],
+    last: null,
+    lastAt: 0,
+    applying: false,
+    file: '',
+  });
+  const [historyVersion, setHistoryVersion] = useState(0);
+  useEffect(() => {
+    const h = historyRef.current;
+    const snap = { pou: pouContent, dut: dutContent };
+    const file = `${pouPath ?? ''}|${pouFileName}`;
+    if (h.file !== file || !h.last) {
+      h.file = file;
+      h.past = [];
+      h.future = [];
+      h.last = snap;
+      h.applying = false;
+      setHistoryVersion((v) => v + 1);
+      return;
+    }
+    if (h.last.pou === snap.pou && h.last.dut === snap.dut) return;
+    if (h.applying) h.applying = false;
+    else {
+      const now = Date.now();
+      if (now - h.lastAt > 1000 || h.past.length === 0) h.past.push(h.last);
+      if (h.past.length > 100) h.past.shift();
+      h.future = [];
+      h.lastAt = now;
+    }
+    h.last = snap;
+    setHistoryVersion((v) => v + 1);
+  }, [pouContent, dutContent, pouPath, pouFileName]);
+  const stepHistory = useCallback(
+    (back: boolean) => {
+      const h = historyRef.current;
+      const from = back ? h.past : h.future;
+      const to = back ? h.future : h.past;
+      const snap = from.pop();
+      if (!snap || !h.last) return showCopyToast(back ? 'Nothing to undo' : 'Nothing to redo', 'error');
+      to.push(h.last);
+      h.applying = true;
+      h.lastAt = 0;
+      handleReplaceSources(snap.pou !== pouContent ? snap.pou : null, snap.dut !== dutContent ? snap.dut : null);
+      setHistoryVersion((v) => v + 1);
+      showCopyToast(`${back ? 'Undone' : 'Redone'} (${h.past.length} to undo, ${h.future.length} to redo)`, 'success');
+    },
+    [pouContent, dutContent, handleReplaceSources, showCopyToast]
+  );
+  const historyState = useMemo(() => ({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 }), [historyVersion]);
+
+  const handleCanvasKey = useCallback(
+    (e: KeyboardEvent, sel: { stateId: string | null; edge: EdgeInfo | null }) => {
+      // Alt+Up / Alt+Down: the selected transition's priority up (checked earlier) / down
+      if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && sel.edge) {
+        handleTransitionPriorityStep(sel.edge, e.key === 'ArrowUp' ? -1 : 1);
+        return true;
+      }
+      const ctrl = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+      const textSelected = !!window.getSelection()?.toString();
+      // Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z): the last edit undone / redone
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'z') {
+        stepHistory(!e.shiftKey);
+        return true;
+      }
+      if (ctrl && e.key.toLowerCase() === 'y') {
+        stepHistory(false);
+        return true;
+      }
+      // Ctrl+C / Ctrl+V: copy the selected state, paste a new state with its code
+      if (ctrl && e.key.toLowerCase() === 'c' && sel.stateId && sel.stateId !== '[*]' && !sel.edge && !textSelected && pouContent) {
+        handleCopyState(sel.stateId);
+        return true;
+      }
+      if (ctrl && e.key.toLowerCase() === 'v' && copiedStateRef.current && pouContent) {
+        handlePasteState();
+        return true;
+      }
+      // Delete: the selected transition, else the selected state (after a confirmation)
+      if (e.key === 'Delete' && !e.ctrlKey && !e.altKey && !e.metaKey && pouContent) {
+        if (sel.edge) handleDeleteTransition(sel.edge);
+        else if (sel.stateId && sel.stateId !== '[*]') handleDeleteState(sel.stateId);
+        else return false;
+        return true;
+      }
+      return false;
+    },
+    [handleTransitionPriorityStep, pouContent, handleCopyState, handlePasteState, handleDeleteTransition, handleDeleteState, stepHistory]
   );
 
   // Open a state machine the diagram references (its POU in the same PLC project), with Back
-  const machineMembers = useMemo(() => declaredMachineMembers(pouContent), [pouContent]);
   const [pouHistory, setPouHistory] = useState<{ path: string; name: string }[]>([]);
   const openPouInProject = useCallback(
     async (typeName?: string, backPath?: string) => {
@@ -1771,9 +2642,13 @@ export const App: React.FC = () => {
   }, [pouHistory, openPouInProject]);
 
   // The app's own context menu actions (paths, rename, add a transition / state, open a referenced state machine)
+  // (the limits are set up further down: read when a menu opens)
+  const limitMenuRef = useRef<{ stateLimits: Record<string, number>; defaultLimit: number | null; handleStateLimit: (state: string, ms: number | null) => void; pouTypeName?: string }>({ stateLimits: {}, defaultLimit: null, handleStateLimit: () => {} });
   const diagramContextMenuItems = useCallback(
     (target: ContextMenuTarget): ContextMenuExtraItem[] => {
       const items: ContextMenuExtraItem[] = [];
+      // A free note (from the palette): only the viewer's note items
+      if (target.type === 'node' && (target.id.startsWith('note_') || target.id.startsWith('choice_'))) return items;
       if (target.type === 'node') {
         items.push(
           { id: 'paths-from-btn', label: 'Paths from here', icon: <Route className="w-3.5 h-3.5" />, onSelect: () => findPathsFor(target.id, 'from') },
@@ -1781,14 +2656,99 @@ export const App: React.FC = () => {
         );
         if (target.id !== '[*]' && pouContent) {
           items.push(
+            { id: 'add-state-from-btn', label: 'Add new state from here…', icon: <SquarePlus className="w-3.5 h-3.5" />, title: 'A new state and the transition to it', onSelect: () => handleAddStateFrom(target.id) },
             { id: 'add-transition-btn', label: 'Add transition from here…', icon: <ArrowRightLeft className="w-3.5 h-3.5" />, title: 'Then click the target state', onSelect: () => setConnectFrom(target.id) },
-            { id: 'rename-state-btn', label: 'Rename state…', icon: <PencilLine className="w-3.5 h-3.5" />, onSelect: () => handleRenameState(target.id) }
+            { id: 'rename-state-btn', label: 'Rename state…', icon: <PencilLine className="w-3.5 h-3.5" />, onSelect: () => handleRenameState(target.id) },
+            { id: 'copy-state-btn', label: 'Copy state', icon: <ClipboardCopy className="w-3.5 h-3.5" />, title: 'Ctrl+C: then paste a new state with its code (Ctrl+V)', onSelect: () => handleCopyState(target.id) },
+            { id: 'delete-state-btn', label: 'Delete state…', icon: <Trash2 className="w-3.5 h-3.5" />, title: 'Delete: the state, its code, the transitions into it and its enum member', onSelect: () => handleDeleteState(target.id) }
           );
+          if (knownStates.has(target.id)) {
+            if (initialStateOf(pouContent, stateVarName) !== target.id)
+              items.push({ id: 'set-initial-btn', label: 'Set as initial state', icon: <CircleDot className="w-3.5 h-3.5" />, title: `${stateVarName} starts in it (its initial value in the declaration)`, onSelect: () => handleSetInitial(target.id) });
+            const inComposite = dutContent.trim() ? compositeOfState(target.id) : null;
+            if (inComposite && !enumMarksOf(dutContent, target.id).initial)
+              items.push({ id: 'set-composite-initial-btn', label: `Initial state of ${inComposite}`, icon: <CircleDot className="w-3.5 h-3.5" />, title: '// @initial in the enum: transitions into it end at the composite', onSelect: () => handleSetCompositeInitial(target.id) });
+            items.push({
+              id: 'toggle-final-btn',
+              label: isFinal(target.id) ? 'Not a final state' : 'Mark as final state',
+              icon: <Circle className="w-3.5 h-3.5" />,
+              title: dutContent.trim() ? '// @final in the enum: in a composite, its transitions out start at the composite' : '(* final *) on its CASE label',
+              onSelect: () => handleToggleFinal(target.id),
+            });
+            if (dutContent.trim()) items.push({ id: 'move-composite-btn', label: 'Move to composite…', icon: <SquareStack className="w-3.5 h-3.5" />, onSelect: () => handleMoveToComposite(target.id) });
+          }
+        }
+        // Stuck-state alert: how long this state may last (live: over it the state turns red)
+        const { stateLimits, defaultLimit, handleStateLimit, pouTypeName: limitType } = limitMenuRef.current;
+        if (target.id !== '[*]' && limitType) {
+          const own = stateLimits[target.id] ?? null;
+          items.push({
+            id: 'time-limit-btn',
+            label: own ? `Time limit (${formatLimit(own)})…` : 'Time limit…',
+            icon: <Timer className="w-3.5 h-3.5" />,
+            title: 'Live: how long the state may last before it counts as stuck',
+            onSelect: () =>
+              setPromptRequest({
+                title: `Time limit of ${target.id}`,
+                label: `How long ${target.id} may last before it counts as stuck (e.g. 30 s, 2 min). Empty: ${defaultLimit ? `the default, ${formatLimit(defaultLimit)}` : 'no limit'}.`,
+                initial: formatLimit(own),
+                placeholder: defaultLimit ? formatLimit(defaultLimit) : 'e.g. 30 s',
+                monospace: true,
+                submitLabel: 'Set',
+                validate: (v) => (!v.trim() || parseDuration(v) !== null ? null : 'A duration, e.g. 30, 1.5 s, 2 min or 1 h'),
+                onSubmit: (v) => handleStateLimit(target.id, v.trim() ? parseDuration(v) : null),
+              }),
+          });
         }
       }
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
       if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
         items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
+        if (copiedStateRef.current)
+          items.push({ id: 'paste-state-btn', label: `Paste a copy of ${copiedStateRef.current}`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+V: a new state with its code', onSelect: handlePasteState });
+      }
+      // A transition's priority (its order in the state's doState() branch, or in preProcess())
+      if (target.type === 'edge' && pouContent) {
+        const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
+        const order = transitionOrder(pouContent, edge, varFor(edge.from));
+        if (!('error' in order) && order.count > 1) {
+          const pre = order.method === 'preProcess';
+          const where = pre ? 'preProcess()' : `${edge.from}`;
+          if (order.priority > 1)
+            items.push({
+              id: 'priority-up-btn',
+              label: pre ? `Earlier in preProcess() (${order.priority} → ${order.priority - 1})` : `Raise priority (${order.priority} → ${order.priority - 1})`,
+              icon: <ArrowUp className="w-3.5 h-3.5" />,
+              title: 'Checked before the transition above it (Alt+↑)',
+              onSelect: () => handleTransitionPriority(edge, order.priority - 1),
+            });
+          if (order.priority < order.count)
+            items.push({
+              id: 'priority-down-btn',
+              label: pre ? `Later in preProcess() (${order.priority} → ${order.priority + 1})` : `Lower priority (${order.priority} → ${order.priority + 1})`,
+              icon: <ArrowDown className="w-3.5 h-3.5" />,
+              title: 'Checked after the transition below it (Alt+↓)',
+              onSelect: () => handleTransitionPriority(edge, order.priority + 1),
+            });
+          items.push({
+            id: 'priority-set-btn',
+            label: `Priority ${order.priority} of ${order.count}…`,
+            icon: <ListOrdered className="w-3.5 h-3.5" />,
+            title: `The order of the transitions of ${where}`,
+            onSelect: () =>
+              setPromptRequest({
+                title: `Priority of ${edge.from} → ${edge.to}`,
+                label: `1 is checked first. The transitions of ${where} now: ${order.targets.map((t, i) => `${i + 1} ${t}`).join(', ')}`,
+                initial: String(order.priority),
+                monospace: true,
+                submitLabel: 'Set priority',
+                validate: (v) => (/^\d+$/.test(v.trim()) && +v >= 1 && +v <= order.count ? null : `A number from 1 to ${order.count}`),
+                onSubmit: (v) => handleTransitionPriority(edge, +v),
+              }),
+          });
+        }
+        if (edge.from !== '[*]')
+          items.push({ id: 'delete-transition-btn', label: 'Delete transition…', icon: <Trash2 className="w-3.5 h-3.5" />, title: 'Delete: its code in doState() / preProcess()', onSelect: () => handleDeleteTransition(edge) });
       }
       // State machines this state's code / this transition's guard uses: open their charts
       if ((target.type === 'node' || target.type === 'edge') && machineMembers.size > 0) {
@@ -1817,7 +2777,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, pouContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced]
+    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom]
   );
   // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
   const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number } | null>(null);
@@ -2102,7 +3062,8 @@ export const App: React.FC = () => {
     [pouPath, pouFileName, pouContent, dutFileName, dutContent, dutPath, selectedSampleId, showCopyToast, liveSettings]
   );
   // ---- Live > Symbols: the PLC's symbols from a root, with values; Watch follows a state machine in its own window ----
-  const [symbolsOpen, setSymbolsOpen] = useState(false);
+  // The PLC Symbols tab on show: its values are followed
+  const symbolsOpen = isDockTabVisible(dockLayout, 'symbols');
   const [symbolRoot, setSymbolRootState] = useState<string>(() => {
     try {
       return localStorage.getItem('kss.symbols.root') || DEFAULT_SYMBOL_ROOT;
@@ -2239,14 +3200,65 @@ export const App: React.FC = () => {
     setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: 'Not connected' }));
   }, []);
   const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
+  // Stuck-state alerts: this POU type's time limits (and the default); over the limit the state is "stuck"
+  const stateLimits = useStateLimits(pouTypeName);
+  const defaultLimit = useDefaultLimit();
+  const notifyOn = useNotify();
+  const liveLimit = limitFor(stateLimits, defaultLimit, liveSession.current?.state);
+  const [liveNow, setLiveNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!liveActive || !liveLimit) return;
+    const t = window.setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [liveActive, liveLimit]);
+  const liveInState = liveSession.current ? liveNow - (liveSession.clockOffset ?? 0) - liveSession.current.since : 0;
+  const liveStuck = liveStatus.state === 'connected' && !!liveLimit && !!liveSession.current && liveInState > liveLimit;
+  // Notify once per stay in the state
+  const notifiedStuckRef = useRef('');
+  useEffect(() => {
+    if (!liveStuck || !notifyOn || !liveSession.current) return;
+    const key = `${liveSession.current.state}@${liveSession.current.since}`;
+    if (notifiedStuckRef.current === key) return;
+    notifiedStuckRef.current = key;
+    const who = liveStatus.instance ?? (pouTypeName || 'The state machine');
+    void notifyStuck(`Kval StateScope: ${who} is stuck`, `In ${liveSession.current.state} for more than ${formatLimit(liveLimit)}`, `kss-stuck-${who}`);
+  }, [liveStuck, notifyOn, liveSession, liveLimit, liveStatus.instance, pouTypeName]);
+  const handleStateLimit = useCallback(
+    (state: string, ms: number | null) => {
+      if (pouTypeName) setStateLimit(pouTypeName, state, ms);
+    },
+    [pouTypeName]
+  );
+  limitMenuRef.current = { stateLimits, defaultLimit, handleStateLimit, pouTypeName };
+  // The live state's parallel regions (Fork / Join): their variables, read with the guards' ones
+  const liveRegions = useMemo(() => {
+    const cur = liveActive ? liveSession.current?.state : undefined;
+    if (!cur) return [] as { variable: string; states: string[] }[];
+    const byVar = new Map<string, string[]>();
+    for (const r of regionOf.values()) if (r.parent === cur) byVar.set(r.variable, r.states);
+    return [...byVar].map(([variable, states]) => ({ variable, states }));
+  }, [liveActive, liveSession.current?.state, regionOf]);
+  const liveRegionStates = useMemo(
+    () =>
+      liveRegions
+        .map((r) => {
+          const v = liveVarValues[r.variable.toLowerCase()];
+          const name = typeof v === 'number' ? liveEnumNames.get(v) : undefined;
+          return name && r.states.includes(name) ? name : undefined;
+        })
+        .filter((s): s is string => !!s),
+    [liveRegions, liveVarValues, liveEnumNames]
+  );
   const liveHighlight = useMemo(() => {
     if (!liveActive || !liveSession.current) return null;
     const last = liveSession.transitions[liveSession.transitions.length - 1];
     return {
       stateId: liveSession.current.state,
       previousStateId: last && last.to === liveSession.current.state ? last.from : undefined,
+      stuck: liveStuck,
+      regionStates: liveRegionStates,
     };
-  }, [liveActive, liveSession]);
+  }, [liveActive, liveSession, liveStuck, liveRegionStates]);
   // Follow: keep the active state in view
   const liveCurrentState = liveSession.current?.state;
   useEffect(() => {
@@ -2317,7 +3329,7 @@ export const App: React.FC = () => {
     try {
       const model = generateStatechartModel(dutContent, pouContent, {
         flowchartOutput,
-        collapseErrorSinkEdges,
+        collapseErrorSinkEdges, choiceNodes,
         includeStateDescriptions,
         showTransitionPriorities,
         priorityFormat,
@@ -2327,7 +3339,7 @@ export const App: React.FC = () => {
     } catch {
       return null;
     }
-  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
+  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
   const liveGuardInputs = useMemo<GuardInputs | null>(
     () =>
       liveGuardEdges
@@ -2344,9 +3356,11 @@ export const App: React.FC = () => {
   );
   // The variables to follow change with the active state (or the scope); the host keeps the ones still wanted
   const liveWatchKey = useMemo(() => {
-    if (!liveGuardEdges || !liveGuardInputs || liveStatus.state !== 'connected' || !liveStatus.instance) return '';
-    return variablesToWatch(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all').sort().join('\n');
-  }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope]);
+    if (liveStatus.state !== 'connected' || !liveStatus.instance) return '';
+    const guards = liveGuardEdges && liveGuardInputs ? variablesToWatch(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all') : [];
+    // (and the current state's regions' variables)
+    return [...new Set([...guards, ...liveRegions.map((r) => r.variable)])].sort().join('\n');
+  }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions]);
   const sendLiveWatch = useCallback(
     (vars: LiveWatchVar[]) => {
       if (liveMode === 'xae') postToHost({ type: 'liveWatch', vars });
@@ -2380,6 +3394,83 @@ export const App: React.FC = () => {
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
   );
+  // ---- Offline simulation: a state, the values its transitions' conditions read, the steps taken ----
+  const [sim, setSim] = useState<{ active: boolean; current: string | null; history: { from: string; to: string; label: string }[]; values: Record<string, LiveValue> }>({
+    active: false,
+    current: null,
+    history: [],
+    values: {},
+  });
+  const simOn = sim.active && !liveActive && !!sim.current;
+  const simGuardEdges = useMemo(() => {
+    if (!simOn) return null;
+    try {
+      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat });
+      return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
+    } catch {
+      return null;
+    }
+  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, liveEnums]);
+  const simInputs = useMemo<GuardInputs | null>(
+    () =>
+      simGuardEdges && sim.current
+        ? {
+            values: sim.values,
+            watched: {},
+            stateVar: simGuardEdges.stateVar,
+            stateValue: (liveEnums.literals.get(sim.current.toLowerCase()) as number | undefined) ?? null,
+            currentState: sim.current,
+            enums: liveEnums,
+          }
+        : null,
+    [simGuardEdges, sim.current, sim.values, liveEnums]
+  );
+  const simViews = useMemo(() => (simGuardEdges && simInputs ? evaluateGuards(simGuardEdges.edges, simInputs, false, null) : null), [simGuardEdges, simInputs]);
+  // The current state's transitions: preProcess()'s first (it runs before doState()), then by priority
+  const simTransitions = useMemo<(SimTransition & { target: string })[]>(() => {
+    if (!simGuardEdges || !simInputs) return [];
+    const list = simGuardEdges.edges
+      .map((e) => ({ e, applying: e.members.filter((m) => appliesToState(m, simInputs)) }))
+      .filter(({ applying }) => applying.length > 0)
+      .map(({ e, applying }) => {
+        const info = availableEdges.find((x) => x.id === e.edgeId);
+        return {
+          edgeId: e.edgeId,
+          to: e.to,
+          target: applying[0].to || e.to,
+          priority: info?.priority,
+          label: (info?.condition ?? info?.label ?? '').replace(/<br\s*\/?>/g, ' '),
+          source: applying[0].source,
+          result: (e.conditional ? simViews?.[e.edgeId]?.result ?? 'unknown' : 'always') as SimTransition['result'],
+        };
+      });
+    const rank = (t: { source: string; priority?: number }) => (t.source === 'preProcess' ? -1 : t.priority ?? 999);
+    return list.sort((a, b) => rank(a) - rank(b));
+  }, [simGuardEdges, simInputs, simViews, availableEdges]);
+  const simVariables = useMemo(() => {
+    const names = new Set<string>();
+    for (const t of simTransitions) for (const r of simGuardEdges?.edges.find((e) => e.edgeId === t.edgeId)?.refs ?? []) names.add(r);
+    return [...names].sort().map((name) => ({ name, value: sim.values[name.toLowerCase()] as boolean | number | string | undefined }));
+  }, [simTransitions, simGuardEdges, sim.values]);
+  const simTake = useCallback(
+    (edgeId: string) => {
+      const t = simTransitions.find((x) => x.edgeId === edgeId);
+      if (!t || !sim.current) return;
+      const from = sim.current;
+      setSim((s) => ({ ...s, current: t.target, history: [...s.history, { from, to: t.target, label: t.label }] }));
+    },
+    [simTransitions, sim.current]
+  );
+  const simHighlight = useMemo(
+    () => (simOn ? { stateId: sim.current!, previousStateId: sim.history[sim.history.length - 1]?.from, stuck: false } : null),
+    [simOn, sim.current, sim.history]
+  );
+  const simStartState = useMemo(() => {
+    const init = pouContent ? initialStateOf(pouContent, stateVarName) : null;
+    const first = dutContent.trim() ? enumMembers(dutContent)[0] : undefined;
+    return (init && knownStates.has(init) ? init : first && knownStates.has(first) ? first : null) ?? [...knownStates].filter((s) => s !== '[*]')[0] ?? null;
+  }, [pouContent, dutContent, stateVarName, knownStates]);
+
   // The Live tab lists the active state's transitions with their results
   const liveActiveGuards = useMemo(() => {
     if (!liveGuardViews || !liveGuardEdges) return [];
@@ -2595,6 +3686,7 @@ export const App: React.FC = () => {
       },
       enum: { title: 'Enum Editor', icon: <Code2 />, tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
       overview: { title: 'Machine Overview', icon: <LayoutGrid />, tooltip: 'Every state machine of the PLC with its current state (while live)' },
+      symbols: { title: 'PLC Symbols', icon: <ListTree />, tooltip: "The PLC's symbols and their values (while live); Watch opens a state machine" },
       complexity: {
         title: 'Complexity Report',
         icon: <Activity />,
@@ -2624,6 +3716,7 @@ export const App: React.FC = () => {
         tooltip: 'Load a CSV or text log of PLC state changes into Transition History',
       },
       docs: { title: 'Documentation', icon: <BookOpen />, tooltip: 'State purpose, notes & documentation' },
+      simulate: { title: 'Simulation', icon: <FlaskConical />, tooltip: 'Step through the state machine without a PLC' },
       live: {
         title: 'Live',
         icon: <Radio />,
@@ -2749,7 +3842,34 @@ export const App: React.FC = () => {
             dutMatches={dutMatches}
             dutStatus={dutStatus}
             canSearchFolder={isDesktopApp() || canPickFolder() || isXaeHost()}
-            hostSave={isXaeHost() && pouPath ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject } : undefined}
+            hostSave={
+              isXaeHost()
+                ? pouPath
+                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject }
+                  : undefined
+                : pouContent
+                ? {
+                    id: 'save-sources-btn',
+                    label: 'Save',
+                    dirtyCount: localDirtyCount,
+                    onSave: () => void handleSaveSources(),
+                    title: desktopSave()?.saveSources
+                      ? `Write the edits back to ${[pouDirty && (pouPath ? pouFileName : `${pouFileName} (Save As)`), dutDirty && dutFileName].filter(Boolean).join(' and ')} (Ctrl+S)`
+                      : canWriteBack()
+                      ? 'Write the edits back to the files opened with Browse (else download them) (Ctrl+S)'
+                      : 'Download the edited files (this browser cannot write them back) (Ctrl+S)',
+                    menu: desktopSave()?.saveSourceAs
+                      ? [
+                          { id: 'save-pou-as', label: 'Save .TcPOU As…', onSelect: () => void handleSaveAs('pou') },
+                          ...(dutContent ? [{ id: 'save-dut-as', label: 'Save .TcDUT As…', onSelect: () => void handleSaveAs('dut') }] : []),
+                        ]
+                      : [
+                          { id: 'download-pou', label: `Download ${defaultName('pou')}`, onSelect: () => void handleSaveAs('pou') },
+                          ...(dutContent ? [{ id: 'download-dut', label: `Download ${defaultName('dut')}`, onSelect: () => void handleSaveAs('dut') }] : []),
+                        ],
+                  }
+                : undefined
+            }
             hostConflict={hostConflictActions}
             onBrowsePou={handleBrowsePou}
             onDropPou={handleDropPou}
@@ -3218,7 +4338,7 @@ export const App: React.FC = () => {
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
               selectedStateId={selectedStateId}
-              liveStateId={liveActive ? liveSession.current?.state ?? null : null}
+              liveStateId={liveActive ? liveSession.current?.state ?? null : simHighlight?.stateId ?? null}
               liveFollow={liveFollow}
               onLiveFollowChange={setLiveFollow}
               onJumpToState={handleJumpToState}
@@ -3378,6 +4498,18 @@ export const App: React.FC = () => {
                   className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
                 />
                 <span className="text-slate-300">Collapse error-sink edges</span>
+              </label>
+
+              {/* A state's IF / ELSIF / ELSE of transitions as a choice (a diamond) */}
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="A state's IF / ELSIF / ELSE with two or more of its transitions: drawn as a choice (a diamond)">
+                <input
+                  id="choice-nodes-checkbox"
+                  type="checkbox"
+                  checked={choiceNodes}
+                  onChange={(e) => setChoiceNodes(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                />
+                <span className="text-slate-300">Choices</span>
               </label>
 
               {/* Include state description */}
@@ -3630,15 +4762,20 @@ export const App: React.FC = () => {
                   onEdgeStyleChange={handleEdgeStyleChange}
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
-                  liveHighlight={liveHighlight}
-                  openGuardOnSelect={followSelection}
+                  liveHighlight={liveHighlight ?? simHighlight}
                   pathHighlight={pathHighlight}
                   diffHighlight={diffHighlight}
-                  liveGuards={liveGuardViews}
+                  liveGuards={liveGuardViews ?? simViews}
                   contextMenuItems={diagramContextMenuItems}
                   connectFrom={connectFrom}
                   onConnectTo={handleConnectTo}
                   onConnectCancel={() => setConnectFrom(null)}
+                  onEdgeEndpointDrop={pouContent ? handleEdgeEndpointDrop : undefined}
+                  onCanvasKey={handleCanvasKey}
+                  onPaletteElement={pouContent ? handlePaletteElement : undefined}
+                  onStateDropped={pouContent ? handleStateDropped : undefined}
+                  history={{ ...historyState, onUndo: () => stepHistory(true), onRedo: () => stepHistory(false) }}
+                  placeRequest={placeRequest}
                   nodeOffsets={nodeOffsets}
                   onNodeOffsetsChange={setNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
@@ -3687,7 +4824,7 @@ export const App: React.FC = () => {
               panelMode={mode}
               selectedStateId={inspectorStateId}
               selectedStateLabel={inspectorStateLabel}
-              liveStateId={liveActive ? liveSession.current?.state ?? null : null}
+              liveStateId={liveActive ? liveSession.current?.state ?? null : simHighlight?.stateId ?? null}
               availableStates={identifiedStatesResult.states}
               customStyles={customNodeStyles}
               onStyleChange={handleStyleChange}
@@ -3717,6 +4854,44 @@ export const App: React.FC = () => {
             mode
           )
       )}
+
+      {isDockTabMounted('simulate') &&
+        createPortal(
+          <SimulationPanel
+            live={liveActive}
+            active={sim.active}
+            states={[...knownStates].filter((s) => s !== '[*]').sort()}
+            startState={simStartState}
+            current={sim.current}
+            history={sim.history}
+            transitions={simTransitions}
+            variables={simVariables}
+            onStart={(state) => {
+              setSim((s) => ({ ...s, active: true, current: state, history: [] }));
+              handleJumpToState(state);
+            }}
+            onStop={() => setSim((s) => ({ ...s, active: false, current: null, history: [] }))}
+            onTake={simTake}
+            onStep={() => {
+              const t = simTransitions.find((x) => x.result === 'true' || x.result === 'always');
+              if (t) simTake(t.edgeId);
+              else showCopyToast('No transition holds with these values', 'error');
+            }}
+            onBack={() =>
+              setSim((s) => (s.history.length ? { ...s, current: s.history[s.history.length - 1].from, history: s.history.slice(0, -1) } : s))
+            }
+            onSetValue={(name, value) =>
+              setSim((s) => {
+                const values = { ...s.values };
+                if (value === undefined) delete values[name.toLowerCase()];
+                else values[name.toLowerCase()] = value;
+                return { ...s, values };
+              })
+            }
+            onGoTo={handleJumpToState}
+          />,
+          dockRegistry.nodes.simulate
+        )}
 
       {isDockTabMounted('overview') &&
         createPortal(
@@ -3777,15 +4952,25 @@ export const App: React.FC = () => {
             guards={liveActiveGuards}
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
-            onOpenSymbols={liveMode ? () => setSymbolsOpen(true) : undefined}
+            onOpenSymbols={liveMode ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenOverview={liveMode ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
+            limitMs={liveLimit}
+            stateLimitMs={liveSession.current ? stateLimits[liveSession.current.state] ?? null : null}
+            onStateLimitChange={pouTypeName ? (ms) => liveSession.current && handleStateLimit(liveSession.current.state, ms) : undefined}
+            defaultLimitMs={defaultLimit}
+            onDefaultLimitChange={setDefaultLimit}
+            notify={notifyOn}
+            onNotifyChange={(on) => {
+              if (on) requestNotifyPermission();
+              setNotify(on);
+            }}
           />,
           dockRegistry.nodes.live
         )}
 
-      {symbolsOpen && (
+      {isDockTabMounted('symbols') &&
+        createPortal(
         <SymbolBrowserWindow
-          onClose={() => setSymbolsOpen(false)}
           connected={liveStatus.state === 'connected'}
           root={symbolRoot}
           onRootChange={setSymbolRoot}
@@ -3797,8 +4982,9 @@ export const App: React.FC = () => {
           stateVar={liveStateVar}
           onWatch={handleWatchMachine}
           openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
-        />
-      )}
+        />,
+          dockRegistry.nodes.symbols
+        )}
 
       {changesTabMounted &&
         createPortal(
@@ -3932,6 +5118,8 @@ export const App: React.FC = () => {
         )}
 
       {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
+      {choiceRequest && <ChoiceDialog request={choiceRequest} onClose={() => setChoiceRequest(null)} />}
+      {forkJoinRequest && <ForkJoinDialog request={forkJoinRequest} onClose={() => setForkJoinRequest(null)} />}
 
       {docProgress && (
         <div id="doc-progress-overlay" className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50">
@@ -3961,7 +5149,7 @@ export const App: React.FC = () => {
             setPdfToast(null);
           }}
           fileName={pouFileName}
-          unsavedCount={hostDirtyFiles.length}
+          unsavedCount={isXaeHost() ? hostDirtyFiles.length : localDirtyCount}
           changedInXae={!!hostConflict}
           statesCount={identifiedStatesResult.states.length}
           transitionsCount={availableEdges.length}

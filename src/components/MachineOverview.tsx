@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Eye, LayoutGrid, Loader2, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, Eye, LayoutGrid, Loader2, RefreshCw, Search, Timer } from 'lucide-react';
+import { formatLimit, limitFor, notifyStuck, useDefaultLimit, useLimitsOfTypes, useNotify } from '../utils/stateLimits.ts';
 import type { LiveBrowseResult, SymbolChild } from '../utils/xaeHost.ts';
 import type { LiveValue } from '../utils/liveGuards.ts';
 import { formatDuration } from '../utils/liveView.ts';
@@ -8,7 +9,8 @@ import { sameInstance } from '../utils/instanceLaunch.ts';
 /**
  * Machine Overview (MiddlePanel tab, while live): every state machine under a root (default MAIN.mainStateMachine),
  * found by walking the PLC's symbols, with its current state, time in state and the changes seen. Error states
- * stand out; Watch opens a machine's diagram in its own tab / window, live on it.
+ * stand out, and so do stuck ones (longer in a state than its time limit, see utils/stateLimits.ts); Watch opens a
+ * machine's diagram in its own tab / window, live on it.
  */
 
 export interface OverviewMachine {
@@ -179,6 +181,11 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
     if (!connected) tracks.current.clear();
   }, [connected]);
 
+  // Stuck: longer in the state than its limit (the machine type's, else the default)
+  const limitsByType = useLimitsOfTypes(followed.map((m) => lastSegment(m.type)));
+  const defaultLimit = useDefaultLimit();
+  const notifyOn = useNotify();
+
   const stateName = (m: OverviewMachine, value: number | null) => {
     if (value === null) return null;
     const plc = m.stateNames?.[String(value)];
@@ -194,15 +201,39 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
       const t = tracks.current.get(m.path);
       const value = t?.value ?? null;
       const name = stateName(m, value);
-      return { m, value, name, error: !!name && ERROR_STATE.test(name), since: t?.since ?? now, changes: t?.changes ?? 0, sinceStart: t?.sinceStart ?? true };
+      const since = t?.since ?? now;
+      const limit = limitFor(limitsByType[lastSegment(m.type).toLowerCase()] ?? {}, defaultLimit, name);
+      const error = !!name && ERROR_STATE.test(name);
+      const stuck = !error && value !== null && !!limit && now - since > limit;
+      return { m, value, name, error, stuck, limit, since, changes: t?.changes ?? 0, sinceStart: t?.sinceStart ?? true };
     });
-    const shown = list.filter((r) => (!errorsOnly || r.error) && (!q || r.m.path.toLowerCase().includes(q) || r.m.type.toLowerCase().includes(q) || (r.name ?? '').toLowerCase().includes(q)));
-    if (sort === 'state') shown.sort((a, b) => Number(b.error) - Number(a.error) || (a.name ?? `#${a.value}`).localeCompare(b.name ?? `#${b.value}`));
+    const shown = list.filter((r) => (!errorsOnly || r.error || r.stuck) && (!q || r.m.path.toLowerCase().includes(q) || r.m.type.toLowerCase().includes(q) || (r.name ?? '').toLowerCase().includes(q)));
+    if (sort === 'state') shown.sort((a, b) => Number(b.error) - Number(a.error) || Number(b.stuck) - Number(a.stuck) || (a.name ?? `#${a.value}`).localeCompare(b.name ?? `#${b.value}`));
     else if (sort === 'time') shown.sort((a, b) => a.since - b.since);
     return shown;
     // (values / tick re-render this; tracks is a ref)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [followed, values, filter, errorsOnly, sort, now]);
+  }, [followed, values, filter, errorsOnly, sort, now, limitsByType, defaultLimit]);
+  // (all the machines followed, whatever the filter)
+  const stuckCount = followed.filter((m) => {
+    const t = tracks.current.get(m.path);
+    const name = stateName(m, t?.value ?? null);
+    const limit = limitFor(limitsByType[lastSegment(m.type).toLowerCase()] ?? {}, defaultLimit, name);
+    return !!t && t.value !== null && !(name && ERROR_STATE.test(name)) && !!limit && now - t.since > limit;
+  }).length;
+  // Notify once per stay in a state (the same tag as the Live tab's, so a machine followed there too is not doubled)
+  const notified = useRef(new Set<string>());
+  useEffect(() => {
+    if (!notifyOn) return;
+    for (const r of rows) {
+      // (the machine this window follows is notified by the Live tab)
+      if (!r.stuck || sameInstance(r.m.path, currentInstance)) continue;
+      const key = `${r.m.path}@${r.since}`;
+      if (notified.current.has(key)) continue;
+      notified.current.add(key);
+      void notifyStuck(`Kval StateScope: ${r.m.path} is stuck`, `In ${r.name ?? `#${r.value}`} for more than ${formatLimit(r.limit)}`, `kss-stuck-${r.m.path}`);
+    }
+  }, [rows, notifyOn, currentInstance]);
   const errorCount = followed.filter((m) => {
     const n = stateName(m, tracks.current.get(m.path)?.value ?? null);
     return !!n && ERROR_STATE.test(n);
@@ -240,13 +271,13 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
           <input id="overview-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter machines, types, states" className="w-52 bg-slate-900 border border-slate-700 rounded pl-6 pr-1.5 py-0.5 text-[11px] text-slate-200 placeholder:text-slate-500" />
         </div>
         <label className="flex items-center gap-1 text-slate-400 cursor-pointer">
-          <input id="overview-errors-only" type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> Errors only
+          <input id="overview-errors-only" type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> Problems only
         </label>
         <label className="flex items-center gap-1 text-slate-400">
           Sort
           <select id="overview-sort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200">
             <option value="path">by machine</option>
-            <option value="state">errors first, by state</option>
+            <option value="state">problems first, by state</option>
             <option value="time">longest in state first</option>
           </select>
         </label>
@@ -255,6 +286,11 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
           {errorCount > 0 && (
             <span className="ml-2 inline-flex items-center gap-1 px-1.5 rounded-full bg-rose-950 border border-rose-800 text-rose-300">
               <AlertTriangle className="w-3 h-3" /> {errorCount} in error
+            </span>
+          )}
+          {stuckCount > 0 && (
+            <span id="overview-stuck-count" className="ml-2 inline-flex items-center gap-1 px-1.5 rounded-full bg-amber-950 border border-amber-700 text-amber-300">
+              <Timer className="w-3 h-3" /> {stuckCount} stuck
             </span>
           )}
         </span>
@@ -298,9 +334,10 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
                   return (
                     <tr
                       key={r.m.path}
-                      className={`overview-row border-b border-slate-800/70 ${r.error ? 'bg-rose-950/40' : 'hover:bg-slate-900/60'}`}
+                      className={`overview-row border-b border-slate-800/70 ${r.error ? 'bg-rose-950/40' : r.stuck ? 'bg-amber-950/40' : 'hover:bg-slate-900/60'}`}
                       data-path={r.m.path}
                       data-error={r.error ? 'true' : undefined}
+                      data-stuck={r.stuck ? 'true' : undefined}
                       onDoubleClick={() => !here && onWatch({ name: lastSegment(r.m.path), path: r.m.path, type: r.m.type, kind: 'struct', stateMachine: true })}
                     >
                       <td className="px-3 py-1 font-mono text-slate-200" title={r.m.path}>
@@ -310,9 +347,15 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
                       <td className={`overview-state px-2 py-1 font-mono font-semibold ${r.error ? 'text-rose-300' : r.value === null ? 'text-slate-600' : 'text-emerald-300'}`} title={r.value === null ? `${r.m.path}.${stateVar}: no value yet` : `${r.m.path}.${stateVar} = ${r.value}`}>
                         {r.error && <AlertTriangle className="inline w-3 h-3 mr-1 -mt-0.5" />}
                         {r.value === null ? '…' : r.name ?? `#${r.value}`}
+                        {r.stuck && (
+                          <span className="ml-1.5 px-1 rounded bg-amber-600 font-sans text-[9px] font-bold tracking-wide text-white" title={`Longer in this state than its limit (${formatLimit(r.limit)})`}>
+                            STUCK
+                          </span>
+                        )}
                       </td>
-                      <td className="overview-time px-2 py-1 text-right font-mono text-slate-300" title={r.sinceStart ? 'At least this long: since the overview started following it' : undefined}>
+                      <td className={`overview-time px-2 py-1 text-right font-mono ${r.stuck ? 'text-amber-300 font-bold' : 'text-slate-300'}`} title={[r.sinceStart ? 'At least this long: since the overview started following it' : '', r.limit ? `Limit: ${formatLimit(r.limit)}` : ''].filter(Boolean).join('. ') || undefined}>
                         {r.value === null ? '' : `${r.sinceStart ? '≥ ' : ''}${formatDuration(now - r.since)}`}
+                        {r.limit && r.value !== null ? <span className="text-slate-500 font-normal"> / {formatLimit(r.limit)}</span> : null}
                       </td>
                       <td className="overview-changes px-2 py-1 text-right font-mono text-slate-400">{r.changes}</td>
                       <td className="px-3 py-1 text-right">

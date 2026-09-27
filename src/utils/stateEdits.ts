@@ -86,7 +86,27 @@ export function addTransition(pouXml: string, from: string, to: string, conditio
   const eol = method.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = method.code.split(/\r?\n/);
   const code = blankComments(lines.join('\n')).split('\n');
-  // The branch: from its label to the next label / ELSE / END_CASE of the same CASE (nesting counted)
+  const range = caseBranchRange(code, from);
+  if (!range) return null;
+  const { start, end } = range;
+  // Insert after the branch's last non-empty line, indented like the branch body
+  let last = end - 1;
+  while (last > start && !lines[last].trim()) last--;
+  const labelIndent = lines[start].match(/^[ \t]*/)![0];
+  const body = lines.slice(start + 1, end).find((l) => l.trim());
+  const indent = body ? body.match(/^[ \t]*/)![0] : labelIndent + '\t';
+  const cond = condition.trim() || 'TRUE';
+  // The target like the other assignments (a qualified_only enum needs "E_X.STATE")
+  const target = `${stateQualifier(method.code, stateVar)}${to}`;
+  lines.splice(last + 1, 0, `${indent}IF ${cond} THEN`, `${indent}\t${stateVar} := ${target};`, `${indent}END_IF`);
+  return lines.join(eol);
+}
+
+/**
+ * A state's CASE branch in doState(): from its label line to the next label / ELSE / END_CASE of the same CASE
+ * (nesting counted), end exclusive. code: the method's lines with comments blanked. null: the state has no branch.
+ */
+export function caseBranchRange(code: string[], from: string): { start: number; end: number } | null {
   const labelRx = new RegExp(`^\\s*(?:[A-Za-z_][\\w.]*\\s*,\\s*)*(?:[A-Za-z_]\\w*\\.)?${escapeRx(from)}\\s*(?:,\\s*[A-Za-z_][\\w.]*\\s*)*:(?!=)`);
   const start = code.findIndex((l) => labelRx.test(l));
   if (start < 0) return null;
@@ -106,15 +126,5 @@ export function addTransition(pouXml: string, from: string, to: string, conditio
       break;
     }
   }
-  // Insert after the branch's last non-empty line, indented like the branch body
-  let last = end - 1;
-  while (last > start && !lines[last].trim()) last--;
-  const labelIndent = lines[start].match(/^[ \t]*/)![0];
-  const body = lines.slice(start + 1, end).find((l) => l.trim());
-  const indent = body ? body.match(/^[ \t]*/)![0] : labelIndent + '\t';
-  const cond = condition.trim() || 'TRUE';
-  // The target like the other assignments (a qualified_only enum needs "E_X.STATE")
-  const target = `${stateQualifier(method.code, stateVar)}${to}`;
-  lines.splice(last + 1, 0, `${indent}IF ${cond} THEN`, `${indent}\t${stateVar} := ${target};`, `${indent}END_IF`);
-  return lines.join(eol);
+  return { start, end };
 }

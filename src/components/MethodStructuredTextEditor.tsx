@@ -247,6 +247,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     symbol: string | null;
     memberOf?: string;
     sourceScope: 'implementation' | 'declaration';
+    /** The caret's line in the code (implementation: folded blocks counted in full) */
+    line?: number;
   } | null>(null);
 
   const [highlightedCaseLine, setHighlightedCaseLine] = useState<number | null>(null);
@@ -777,16 +779,35 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   );
 
   // Right-click context menu handlers
+  // A line as shown (a folded block is one line) to its line in the code
+  const toCodeLine = (viewLine: number) => {
+    const top = foldableBlocks
+      .filter((b) => foldedBlockIds.has(b.id))
+      .filter((b, _i, all) => !all.some((o) => o !== b && foldedBlockIds.has(o.id) && o.startLine < b.startLine && b.endLine <= o.endLine))
+      .sort((a, b) => a.startLine - b.startLine);
+    let line = viewLine;
+    for (const b of top) if (b.startLine < line) line += b.endLine - b.startLine;
+    return line;
+  };
+  // The innermost block that holds a line of the code
+  const blockAtLine = (line: number) =>
+    foldableBlocks
+      .filter((b) => b.startLine <= line && line <= b.endLine)
+      .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0];
+
   const handleImplContextMenu = (e: React.MouseEvent<HTMLTextAreaElement>) => {
     e.preventDefault();
     const textarea = e.currentTarget;
-    const resolved = resolveSymbolFromText(code, textarea.selectionStart, textarea.selectionEnd);
+    // (the text as shown: the caret position is in it, folded or not)
+    const resolved = resolveSymbolFromText(textarea.value, textarea.selectionStart, textarea.selectionEnd);
+    const viewLine = textarea.value.slice(0, textarea.selectionStart).split('\n').length;
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
       symbol: resolved?.symbol || null,
       memberOf: resolved?.memberOf,
       sourceScope: 'implementation',
+      line: toCodeLine(viewLine),
     });
   };
 
@@ -1732,12 +1753,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           onCopySymbol={(sym) => {
             navigator.clipboard.writeText(sym).catch(() => {});
           }}
-          onToggleFoldCurrent={() => {
-            if (contextMenu.sourceScope === 'implementation' && foldableBlocks.length > 0) {
-              const firstFoldable = foldableBlocks[0];
-              if (firstFoldable) handleToggleFold(firstFoldable.id);
-            }
-          }}
+          onToggleFoldCurrent={
+            contextMenu.sourceScope === 'implementation' && contextMenu.line && blockAtLine(contextMenu.line)
+              ? () => {
+                  // The block around the caret
+                  const b = blockAtLine(contextMenu.line!);
+                  if (b) handleToggleFold(b.id);
+                }
+              : undefined
+          }
           onClose={() => setContextMenu(null)}
         />
       )}

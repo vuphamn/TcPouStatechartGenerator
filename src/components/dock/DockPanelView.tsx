@@ -12,6 +12,7 @@ import {
   PanelTopClose,
   XSquare,
   RotateCcw,
+  AppWindow,
 } from 'lucide-react';
 import {
   DOCK_TAB_HOME,
@@ -26,6 +27,8 @@ import {
   closeOtherDockTabs,
   dockFloatingTab,
   floatDockTab,
+  popInDockTab,
+  popOutDockTab,
   isDockTabOpen,
   moveDockTab,
   moveDockTabToAdjacentGroup,
@@ -34,6 +37,7 @@ import {
   updateFloatingWindow,
 } from '../../utils/dockLayout.ts';
 import { DockHostRegistry, DockTabSlot } from './DockHost.tsx';
+import { ExternalDockWindow } from './ExternalDockWindow.tsx';
 import { DockSplitter } from './DockSplitter.tsx';
 import { DockMenu, DockMenuItem } from './DockMenu.tsx';
 
@@ -186,6 +190,12 @@ export const DockPanelView: React.FC<DockPanelViewProps> = ({ id, panel, layout,
         hint: 'Double-click',
         onSelect: () => onLayoutChange((l) => floatDockTab(l, tabId, defaultFloatRect())),
       });
+      items.push({
+        id: 'new-window',
+        label: 'Move to New Window',
+        icon: <AppWindow className="w-3.5 h-3.5" />,
+        onSelect: () => onLayoutChange((l) => popOutDockTab(l, tabId, defaultFloatRect())),
+      });
     }
     items.push({
       id: isRow ? 'new-vertical-group' : 'new-horizontal-group',
@@ -242,6 +252,12 @@ export const DockPanelView: React.FC<DockPanelViewProps> = ({ id, panel, layout,
           icon: <PanelTopClose className="w-3.5 h-3.5" />,
           hint: 'Double-click',
           onSelect: () => onLayoutChange((l) => dockFloatingTab(l, tabId)),
+        },
+        {
+          id: 'new-window',
+          label: 'Move to New Window',
+          icon: <AppWindow className="w-3.5 h-3.5" />,
+          onSelect: () => onLayoutChange((l) => popOutDockTab(l, tabId, defaultFloatRect())),
         },
         {
           id: 'close',
@@ -605,8 +621,19 @@ export const DockPanelView: React.FC<DockPanelViewProps> = ({ id, panel, layout,
 
       {allowFloating &&
         state.floating.map((stored, zIndex) => {
+          const meta = tabMeta[stored.tabId];
+          if (stored.external)
+            return (
+              <ExternalDockWindow
+                key={`external-${stored.tabId}`}
+                win={stored}
+                meta={meta}
+                registry={registry}
+                onPopIn={() => onLayoutChange((l) => popInDockTab(l, stored.tabId))}
+                onDock={() => onLayoutChange((l) => dockFloatingTab(l, stored.tabId))}
+              />
+            );
           const win = clampFloat(liveFloat?.tabId === stored.tabId ? liveFloat : stored);
-          const meta = tabMeta[win.tabId];
           return (
             <FloatingDockWindow
               key={win.tabId}
@@ -617,6 +644,7 @@ export const DockPanelView: React.FC<DockPanelViewProps> = ({ id, panel, layout,
               onRaise={() => onLayoutChange((l) => activateDockTab(l, win.tabId))}
               onGesture={(e, mode) => startFloatGesture(e, stored, mode)}
               onDock={() => onLayoutChange((l) => dockFloatingTab(l, win.tabId))}
+              onPopOut={() => onLayoutChange((l) => popOutDockTab(l, win.tabId, win))}
               onClose={() => onLayoutChange((l) => closeDockTab(l, win.tabId))}
               onContextMenu={(e) => openFloatMenu(e, win.tabId)}
             />
@@ -636,6 +664,7 @@ interface FloatingDockWindowProps {
   onRaise: () => void;
   onGesture: (e: React.PointerEvent, mode: 'move' | 'resize-e' | 'resize-s' | 'resize-se') => void;
   onDock: () => void;
+  onPopOut: () => void;
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
@@ -648,6 +677,7 @@ const FloatingDockWindow: React.FC<FloatingDockWindowProps> = ({
   onRaise,
   onGesture,
   onDock,
+  onPopOut,
   onClose,
   onContextMenu,
 }) => {
@@ -676,10 +706,20 @@ const FloatingDockWindow: React.FC<FloatingDockWindowProps> = ({
         onDoubleClick={onDock}
         onContextMenu={onContextMenu}
         className="flex items-center gap-1.5 h-7 px-2 shrink-0 bg-slate-900 border-b border-slate-800 text-[11px] font-medium text-slate-200 cursor-move select-none touch-none"
-        title="Drag to move within the document area. Double-click to dock."
+        title="Drag to move within the document area. Double-click to dock. To move it outside the app: New window"
       >
         <span className="shrink-0 text-sky-400 [&>svg]:w-3.5 [&>svg]:h-3.5">{meta.icon}</span>
         <span className="flex-1 truncate">{meta.title}</span>
+        <button
+          type="button"
+          id={`dock-float-popout-${win.tabId}`}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onPopOut}
+          title="Move to a new window (outside the app, e.g. to another monitor)"
+          className="p-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-700"
+        >
+          <AppWindow className="w-3.5 h-3.5" />
+        </button>
         <button
           type="button"
           id={`dock-float-dock-${win.tabId}`}
@@ -698,6 +738,14 @@ const FloatingDockWindow: React.FC<FloatingDockWindowProps> = ({
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
+      {win.reopen && (
+        <div className="flex items-center gap-2 px-2 py-1 shrink-0 bg-sky-950/70 border-b border-sky-800 text-[11px] text-sky-200">
+          <span className="flex-1">It was in a window of its own.</span>
+          <button id={`dock-float-reopen-${win.tabId}`} type="button" onClick={onPopOut} className="px-1.5 py-0.5 rounded bg-sky-700 hover:bg-sky-600 text-white">
+            Reopen in its own window
+          </button>
+        </div>
+      )}
       <div ref={bodyRef} className="relative flex-1 min-h-0 flex flex-col">
         <DockTabSlot tabId={win.tabId} registry={registry} />
       </div>

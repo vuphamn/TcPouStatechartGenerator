@@ -202,7 +202,8 @@ export function extractEdgesFromMermaid(code: string, notes?: DiagramNotes): Edg
       const from = m[1].trim();
       const label = m[2]?.trim();
       const to = m[3].trim();
-      if (from === 'startNode' || to === 'startNode') continue;
+      // (start / end nodes: of the chart, of a composite or of a parallel region)
+      if (/^(startNode|endNode)/.test(from) || /^(startNode|endNode)/.test(to)) continue;
       const baseKey = getEdgeKey(from, to);
       let id = baseKey;
       if (seenIds.has(id)) {

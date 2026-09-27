@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   projectPous: (fromPath) => ipcRenderer.invoke('tc:project-pous', fromPath),
   /** A save dialog for a document: { path } | { canceled } | { error } */
   saveFile: (name, content) => ipcRenderer.invoke('tc:save-file', name, content),
+  // The edited sources back to their files; Save As a new file
+  saveSources: (files) => ipcRenderer.invoke('tc:save-sources', files),
+  saveSourceAs: (name, content, defaultDir) => ipcRenderer.invoke('tc:save-source-as', name, content, defaultDir || null),
   /** The committed (git HEAD) version of a file: { content } or { error } */
   gitShow: (path) => ipcRenderer.invoke('tc:git-show', path),
   /** Live view over ADS to a PLC on another computer (see electron/tcLive.cjs) */

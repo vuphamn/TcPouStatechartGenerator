@@ -661,15 +661,6 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                               {transStats.totalCount} tot
                             </span>
                           )}
-
-                          {state.hasCaseBranch && (
-                            <span
-                              className="px-1 py-0.2 rounded text-[9px] font-mono bg-sky-950/60 text-sky-400 border border-sky-800/40"
-                              title="Has explicit logic in doState() CASE"
-                            >
-                              doState
-                            </span>
-                          )}
                         </div>
                       </div>
                     </div>

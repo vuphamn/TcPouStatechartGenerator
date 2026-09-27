@@ -74,7 +74,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   });
   await page.mouse.click(lp.x, lp.y);
   await sleep(900);
-  expect(!!(await page.$('#guard-inspector-show-in-xae-btn, [id^="guard-inspector"], #transition-guard-inspector')), 'first click on a transition opens its guard window');
+  expect(!(await page.$('#transition-guard-inspector')), 'a click on a transition only selects it');
+  await page.mouse.click(lp.x, lp.y, { clickCount: 1 });
+  await sleep(80);
+  await page.mouse.click(lp.x, lp.y, { clickCount: 2 });
+  await sleep(900);
+  expect(!!(await page.$('#guard-inspector-show-in-xae-btn, [id^="guard-inspector"], #transition-guard-inspector')), 'a double-click opens its guard window');
   await page.screenshot({ path: path.join(h.OUT, 'layout-default.png') });
 
   // 4. Focus mode

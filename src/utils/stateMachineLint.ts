@@ -7,6 +7,7 @@
 import type { EdgeInfo } from '../types.ts';
 import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
+import { parseParallelRegions } from '../generator.ts';
 import { LABEL_RX, escapeRx, labelNames, locateTransition } from './sourceLocation.ts';
 import { extractCleanGuardText } from './stateMachineStats.ts';
 
@@ -22,7 +23,10 @@ export type LintRuleId =
   | 'duplicate-guard'
   | 'self-transition'
   | 'unused-enum'
-  | 'no-else';
+  | 'no-else'
+  | 'multiple-initial'
+  | 'region-no-final'
+  | 'region-unreachable';
 
 export type LintFix = { kind: 'add-enum-member'; name: string } | { kind: 'add-case-branch'; name: string };
 
@@ -94,6 +98,21 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'info',
     title: 'CASE without ELSE',
     description: 'doState() has no ELSE branch, so an unexpected state value is silently ignored.',
+  },
+  'multiple-initial': {
+    severity: 'warning',
+    title: 'Several initial states',
+    description: 'More than one enum member of the same composite ({region}), or outside the composites, is marked // @initial: only one is where it starts.',
+  },
+  'region-no-final': {
+    severity: 'warning',
+    title: 'Parallel region without a final state',
+    description: 'A parallel region (Fork / Join) has no state marked (* final *), so a join waiting for it never fires.',
+  },
+  'region-unreachable': {
+    severity: 'warning',
+    title: 'Region state never entered',
+    description: 'A state of a parallel region is neither where the region starts nor the target of one of its transitions.',
   },
 };
 
@@ -276,6 +295,7 @@ export function enumMembers(dutContent: string): string[] {
   const range = enumListRange(decl);
   if (!range) return [];
   return blankComments(decl)
+    .replace(/\{[^{}\n]*\}/g, (m) => ' '.repeat(m.length))
     .slice(range.start + 1, range.end)
     .split(',')
     .map((part) => part.match(/^\s*([A-Za-z_]\w*)/)?.[1])
@@ -299,6 +319,7 @@ export function enumListRange(decl: string): { start: number; end: number } | nu
 // ---------------------------------------------------------------------------------------------------------------
 // Rules
 
+const FINAL_LABEL = /:(?!=)\s*\(\*\s*final\s*\*\)/i;
 const ERROR_LIKE = /ERROR|FAULT|FAIL|ALARM|ABORT|EMERGENCY|ESTOP/i;
 
 export function lintStateMachine(pouXml: string, dutContent: string, edges: EdgeInfo[] = []): LintFinding[] {
@@ -372,6 +393,9 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   const lifecycle = new Set(enablingIdx >= 0 ? enumItems.slice(0, enablingIdx + 1) : [initial]);
 
   // Reachability and exits
+  const rawDoState = getMethodCodeFromPou(pouXml, 'doState').code.split(/\r?\n/);
+  // (or "// @final" on its line in the enum)
+  const markedFinal = (state: string) => new RegExp(`^[ \\t]*,?[ \\t]*${escapeRx(state)}\\b[^\\n]*@final\\b`, 'im').test(dutContent || '');
   const exitsOf = (state: string) => {
     const out = new Set<string>();
     const b = labelled.get(state);
@@ -385,7 +409,8 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
       add({ key: `unreachable:${state}`, rule: 'unreachable', stateId: state, ...at(doState, b.line),
         message: `No transition in this POU leads to ${state}` });
     }
-    if (!lifecycle.has(state) && exitsOf(state).size === 0) {
+    // (a final state, "(* final *)" on its label, has no way out on purpose)
+    if (!lifecycle.has(state) && exitsOf(state).size === 0 && !FINAL_LABEL.test(rawDoState[b.line] ?? '') && !markedFinal(state)) {
       const errorLike = ERROR_LIKE.test(state);
       add({ key: `dead-end:${state}`, rule: 'dead-end', stateId: state, ...at(doState, b.line),
         severity: errorLike ? 'info' : 'warning',
@@ -430,6 +455,44 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     }
   }
 
+  // Initial states marked in the enum: one per composite ({region}) and one outside them
+  if (dutContent) {
+    const byComposite = new Map<string, string[]>();
+    const stack: string[] = [];
+    const list = (dutContent.match(/<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] ?? dutContent).split(/\r?\n/);
+    for (const line of list) {
+      const region = line.match(/^\s*\{\s*region\b\s*(?:"([^"]*)"|'([^']*)'|([^}]*?))\s*\}/i);
+      if (region) {
+        stack.push((region[1] ?? region[2] ?? region[3] ?? '').trim());
+        continue;
+      }
+      if (/^\s*\{\s*endregion\b/i.test(line)) {
+        stack.pop();
+        continue;
+      }
+      const member = blankComments(line).replace(/^\s*,/, '').match(/^\s*([A-Za-z_]\w*)/)?.[1];
+      if (!member || !/@initial\b/i.test(line)) continue;
+      const key = stack[stack.length - 1] ?? '';
+      byComposite.set(key, [...(byComposite.get(key) ?? []), member]);
+    }
+    for (const [composite, members] of byComposite)
+      if (members.length > 1)
+        add({ key: `multiple-initial:${composite}`, rule: 'multiple-initial', stateId: members[1], message: `${members.join(', ')} are all marked // @initial ${composite ? `in ${composite}` : 'outside the composites'}` });
+  }
+
+  // Parallel regions (Fork / Join): a final state each, every state entered
+  // (the raw code: the regions' final states are marked in comments)
+  for (const list of parseParallelRegions(rawDoState.join('\n'), variable, new Set(enumItems)).values()) {
+    for (const r of list) {
+      if (!r.finals.length)
+        add({ key: `region-no-final:${r.parent}.${r.variable}`, rule: 'region-no-final', stateId: r.parent, message: `${r.parent}'s region ${r.variable} has no final state: its join never fires` });
+      const entered = new Set([r.start, ...r.transitions.map((t) => t.to)]);
+      for (const st of r.states)
+        if (!entered.has(st))
+          add({ key: `region-unreachable:${st}`, rule: 'region-unreachable', stateId: st, message: `${st} (region ${r.variable} of ${r.parent}) is never entered` });
+    }
+  }
+
   if (mainCase.elseLine === null && mainCase.endCaseLine !== null) {
     add({ key: 'no-else', rule: 'no-else', ...at(doState, mainCase.endCaseLine), message: `CASE ${variable} OF has no ELSE branch` });
   }
@@ -470,7 +533,8 @@ export function declarationLineCount(pouXml: string, method: string): number | n
 export function addEnumMember(dutContent: string, name: string): string | null {
   const declMatch = dutContent.match(/(<Declaration>\s*<!\[CDATA\[)([\s\S]*?)(\]\]>)/i);
   const decl = declMatch ? declMatch[2] : dutContent;
-  const code = blankComments(decl);
+  // (pragmas such as {endregion} are no member: the comma goes after the last member)
+  const code = blankComments(decl).replace(/\{[^{}\n]*\}/g, (m) => ' '.repeat(m.length));
   const range = enumListRange(decl);
   if (!range) return null;
   const { start: listStart, end: close } = range;
@@ -486,6 +550,19 @@ export function addEnumMember(dutContent: string, name: string): string | null {
   const indent = lineText.match(/^[ \t]*/)![0] || '\t';
   const leadingCommas = /\n[ \t]*,/.test(code.slice(listStart, close));
   let next: string;
+  // The list ends with a composite's {endregion}: the new member after it (at the top level), before ")"
+  if (!leadingCommas && /\{\s*endregion\b/i.test(decl.slice(end, close))) {
+    const withComma = decl.slice(0, end) + ',' + decl.slice(end);
+    const closeAt = close + 1;
+    const closeLine = withComma.lastIndexOf('\n', closeAt - 1) + 1;
+    const ownLine = !withComma.slice(closeLine, closeAt).trim();
+    const at = ownLine ? closeLine : closeAt;
+    // Indented like the last (outermost) {endregion}
+    const er = withComma.toLowerCase().lastIndexOf('{endregion', closeAt);
+    const listIndent = withComma.slice(withComma.lastIndexOf('\n', er) + 1, er).match(/^[ \t]*/)![0];
+    next = withComma.slice(0, at) + `${ownLine ? '' : eol}${listIndent || indent}${name}${eol}` + withComma.slice(at);
+    return declMatch ? dutContent.replace(declMatch[0], declMatch[1] + next + declMatch[3]) : next;
+  }
   if (leadingCommas) {
     const insertAt = decl[lineEnd - 1] === '\r' ? lineEnd - 1 : lineEnd;
     next = decl.slice(0, insertAt) + `${eol}${indent.replace(/,.*$/, '')}, ${name}` + decl.slice(insertAt);

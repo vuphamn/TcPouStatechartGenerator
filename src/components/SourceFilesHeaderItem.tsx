@@ -22,12 +22,13 @@ export interface SourceFilesHeaderItemProps {
   /** The folder can be searched from here (desktop, or a browser with folder access) */
   canSearchFolder: boolean;
   onBrowsePou: () => void;
-  onDropPou: (file: File) => void;
+  /** A .TcPOU dropped here, with its file handle when the browser gives one (it can be written back) */
+  onDropPou: (file: File, handle?: Promise<unknown>) => void;
   onFindDut: () => void;
   onChooseDutFiles: () => void;
   onSelectDut: (match: DutMatch) => void;
-  /** TwinCAT XAE extension: write the edited .TcPOU / .TcDUT back into the project */
-  hostSave?: { dirtyCount: number; onSave: () => void };
+  /** Write the edited .TcPOU / .TcDUT back (XAE: into the project; desktop / web: to the files), with a menu */
+  hostSave?: { dirtyCount: number; onSave: () => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
   /** TwinCAT XAE extension: a file with unsaved edits here was changed in XAE */
   hostConflict?: { name: string; onReload: () => void; onKeepMine: () => void };
 }
@@ -50,6 +51,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   hostConflict,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const [saveMenuAnchor, setSaveMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const closedAtRef = useRef(0);
 
@@ -158,7 +160,10 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         e.preventDefault();
         setIsDragOver(false);
         const file = Array.from(e.dataTransfer.files).find((f) => /\.tcpou$/i.test(f.name));
-        if (file) onDropPou(file);
+        // (the handle is only given during the drop)
+        const item = Array.from(e.dataTransfer.items ?? []).find((i) => i.kind === 'file' && /\.tcpou$/i.test(i.getAsFile()?.name ?? ''));
+        const handle = (item as unknown as { getAsFileSystemHandle?: () => Promise<unknown> } | undefined)?.getAsFileSystemHandle?.();
+        if (file) onDropPou(file, handle);
       }}
       className={`flex items-center whitespace-nowrap gap-1.5 bg-slate-800/80 border rounded-lg px-1.5 sm:px-2 py-1 text-xs shrink-0 transition-colors ${
         isDragOver ? 'border-sky-400 bg-sky-900/40' : 'border-slate-700/60'
@@ -213,8 +218,9 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         </div>
       )}
       {hostSave && (
+        <>
         <button
-          id="xae-save-to-project-btn"
+          id={hostSave.id ?? 'xae-save-to-project-btn'}
           type="button"
           onClick={hostSave.onSave}
           disabled={hostSave.dirtyCount === 0}
@@ -225,13 +231,32 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           }`}
           title={
             hostSave.dirtyCount > 0
-              ? `Write ${hostSave.dirtyCount === 1 ? 'the edited file' : 'both edited files'} back into the TwinCAT project (a backup is kept)`
+              ? hostSave.title ?? `Write ${hostSave.dirtyCount === 1 ? 'the edited file' : 'both edited files'} back into the TwinCAT project (a backup is kept)`
               : 'No unsaved edits'
           }
         >
           <Save className="w-3 h-3 shrink-0" />
-          Save to project{hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
+          {hostSave.label ?? 'Save to project'}
+          {hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
         </button>
+        {hostSave.menu && hostSave.menu.length > 0 && (
+          <button
+            id="save-sources-menu-btn"
+            type="button"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setSaveMenuAnchor({ x: r.left, y: r.bottom + 4 });
+            }}
+            className="px-0.5 py-0.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800"
+            title="Save As / Download"
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        )}
+        </>
+      )}
+      {saveMenuAnchor && hostSave?.menu && (
+        <DockMenu id="save-sources-menu" x={saveMenuAnchor.x} y={saveMenuAnchor.y} items={hostSave.menu} onClose={() => setSaveMenuAnchor(null)} />
       )}
       {menuAnchor && (
         <DockMenu

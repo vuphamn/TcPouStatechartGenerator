@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   StickyNote,
   Trash2,
@@ -104,9 +104,14 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
     };
   }, [onClose]);
 
-  // Adjust menu position so it doesn't overflow viewport
+  // Adjust menu position so it doesn't overflow viewport (its real height, measured once shown: items vary)
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const h = menuRef.current?.offsetHeight;
+    if (h && h !== measuredHeight) setMeasuredHeight(h);
+  });
   const menuWidth = 240;
-  const menuHeight = 220;
+  const menuHeight = measuredHeight ?? 220;
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 16);
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 16);
 
@@ -134,8 +139,8 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
     <div
       ref={menuRef}
       id="diagram-context-menu"
-      style={{ left: `${Math.max(8, adjustedX)}px`, top: `${Math.max(8, adjustedY)}px` }}
-      className="fixed z-50 w-60 rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700/80 shadow-2xl p-1.5 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-100 select-none"
+      style={{ left: `${Math.max(8, adjustedX)}px`, top: `${Math.max(8, adjustedY)}px`, maxHeight: 'calc(100vh - 16px)' }}
+      className="fixed z-50 w-60 overflow-y-auto rounded-xl bg-slate-900/95 backdrop-blur-md border border-slate-700/80 shadow-2xl p-1.5 text-xs text-slate-200 animate-in fade-in zoom-in-95 duration-100 select-none"
       onContextMenu={(e) => e.preventDefault()}
     >
       {/* Header Info */}

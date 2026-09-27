@@ -17,6 +17,9 @@ interface FsHandle {
 interface FsFileHandle extends FsHandle {
   kind: 'file';
   getFile(): Promise<File>;
+  queryPermission?(options: { mode: 'read' | 'readwrite' }): Promise<'granted' | 'denied' | 'prompt'>;
+  requestPermission?(options: { mode: 'read' | 'readwrite' }): Promise<'granted' | 'denied' | 'prompt'>;
+  createWritable?(): Promise<{ write(data: string | Blob): Promise<void>; close(): Promise<void> }>;
 }
 interface FsDirectoryHandle extends FsHandle {
   kind: 'directory';
@@ -42,6 +45,8 @@ const SKIP_DIRS = new Set(['node_modules', '_boot', '_compileinfo', '_libraries'
 // Web: the last .TcPOU picked and the folder the user granted, reused while later POUs are inside it
 let lastPouHandle: FsFileHandle | null = null;
 let grantedFolder: FsDirectoryHandle | null = null;
+/** The .TcDUT files found in the granted folder, by relative path: they can be written back */
+const dutHandles = new Map<string, FsFileHandle>();
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
@@ -57,6 +62,7 @@ async function readCandidates(dir: FsDirectoryHandle): Promise<DutCandidate[]> {
       } else if (entry.name.toLowerCase().endsWith('.tcdut')) {
         try {
           found.push({ name: entry.name, relativePath: prefix + entry.name, content: await (await entry.getFile()).text() });
+          dutHandles.set(prefix + entry.name, entry);
         } catch {
           // unreadable file
         }
@@ -131,9 +137,13 @@ export async function browseForPou(): Promise<PouSource | null> {
   return { name: files[0].name, content: await files[0].text(), dutCandidates: null };
 }
 
-/** A .TcPOU dropped on the page (no folder access: the enum is found with findDutCandidates) */
-export async function readDroppedPou(file: File): Promise<PouSource> {
-  lastPouHandle = null;
+/**
+ * A .TcPOU dropped on the page (no folder access: the enum is found with findDutCandidates); with its file handle
+ * (Chrome / Edge) it can be written back
+ */
+export async function readDroppedPou(file: File, handle?: unknown): Promise<PouSource> {
+  const h = handle as FsFileHandle | null | undefined;
+  lastPouHandle = h && h.kind === 'file' && typeof h.getFile === 'function' ? h : null;
   return { name: file.name, content: await file.text(), dutCandidates: null };
 }
 
@@ -162,4 +172,48 @@ export async function chooseDutFiles(): Promise<DutCandidate[] | null> {
   const files = await pickWithInput('.TcDUT', true);
   if (!files) return null;
   return Promise.all(files.map(async (f) => ({ name: f.name, relativePath: f.name, content: await f.text() })));
+}
+
+// ---- Saving (web) ----
+
+/** Whether this browser can write a file back (the File System Access API: Chrome / Edge) */
+export const canWriteBack = () => typeof w.showOpenFilePicker === 'function';
+
+const hasBom = async (file: File) => {
+  const b = new Uint8Array(await file.slice(0, 3).arrayBuffer());
+  return b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf;
+};
+
+export type WebSaveResult = 'saved' | 'conflict' | 'no-handle' | 'denied';
+
+/**
+ * Writes a source back to the file it was read from: the .TcPOU picked with Browse, or a .TcDUT found in the granted
+ * folder. conflict: the file changed since it was read (its baseline), unless force. The BOM it had is kept.
+ */
+export async function writeWebSource(kind: 'pou' | 'dut', relativePath: string | undefined, content: string, baseline: string | null, force: boolean): Promise<WebSaveResult> {
+  const handle = kind === 'pou' ? lastPouHandle : relativePath ? dutHandles.get(relativePath) : undefined;
+  if (!handle?.createWritable) return 'no-handle';
+  let permission = (await handle.queryPermission?.({ mode: 'readwrite' })) ?? 'prompt';
+  if (permission !== 'granted') permission = (await handle.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+  if (permission !== 'granted') return 'denied';
+  const file = await handle.getFile();
+  if (!force && baseline !== null && (await file.text()) !== baseline) return 'conflict';
+  const bom = file.size === 0 || (await hasBom(file));
+  const writable = await handle.createWritable();
+  await writable.write((bom ? '\ufeff' : '') + content);
+  await writable.close();
+  return 'saved';
+}
+
+/** A source downloaded (the browser cannot write it back): with a BOM, as TwinCAT writes them */
+export function downloadSource(name: string, content: string) {
+  const blob = new Blob(['\ufeff' + content], { type: 'application/xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 5000);
 }

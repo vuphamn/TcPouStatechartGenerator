@@ -447,6 +447,8 @@ export function buildEnumTables(dutContents: string[]): EnumTables {
 export interface GuardMember {
   /** The state whose CASE branch has the transition, or "AnyState" for preProcess() */
   from: string;
+  /** The state it goes to (the edge may end at a composite's border) */
+  to: string;
   source: string;
   expr: Expr;
   /** IF levels that test the state variable (preProcess() scope): they decide whether the transition applies */
@@ -479,6 +481,7 @@ export function buildGuardEdges(model: ModelEdge[], edges: EdgeInfo[], stateVar:
       const scopeFrames = mem.frames.filter((f) => f.cond && stateVarRx.test(f.cond) && m.source === 'preProcess');
       return {
         from: mem.from,
+        to: mem.to,
         source: m.source,
         expr: frameExpression(mem.frames),
         scope: scopeFrames.length ? frameExpression(scopeFrames.map((f) => ({ cond: f.cond, prior: [] }))) : null,

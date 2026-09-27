@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { StickyNote, Pencil, Trash2, Move, X, Palette } from 'lucide-react';
 import { DiagramNotes, ContextMenuTarget, StateNodeInfo, EdgeInfo, NotePosition, NodeDisplayProperties } from '../types.ts';
 import { cleanNodeId, findNodeElement, findEdgePathElement, getEdgeAnchorPoint } from '../utils/nodeDragger.ts';
@@ -28,6 +29,27 @@ interface NoteItemWithPos {
   targetAnchor: { x: number; y: number };
   targetObject: ContextMenuTarget;
 }
+
+/** The style popover in document.body, fixed at its note card's corner (the popover draws itself above that) */
+const NoteStylePortal: React.FC<{ cardId: string; children: React.ReactNode }> = ({ cardId, children }) => {
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    const update = () => setRect(document.getElementById(cardId)?.getBoundingClientRect() ?? null);
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [cardId]);
+  if (!rect) return null;
+  // (the popover is 18rem tall above its anchor: below the card when there is no room above)
+  const room = 18 * 16 + 12;
+  const top = rect.top < room ? rect.bottom + room : rect.top;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 18 * 16 - 8));
+  return createPortal(<div style={{ position: 'fixed', left, top, zIndex: 60 }}>{children}</div>, document.body);
+};
 
 export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
   notes,
@@ -118,7 +140,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
 
     const nodeId = cleanNodeId(rawNodeId);
     const state = availableStates.find((s) => cleanNodeId(s.id) === nodeId || s.id === nodeId || s.id === rawNodeId);
-    const label = state?.label || nodeId;
+    // (a free note, from the palette: no state)
+    const label = state?.label || (rawNodeId.startsWith('note_') ? 'Note' : nodeId);
 
     let targetX = 150;
     let targetY = 150;
@@ -493,8 +516,8 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
           >
             {/* Note Style Popover */}
             {isStyling && isSelected && (
-              // Counter-scale so the style controls stay readable however small the card is drawn
-              <div style={{ transform: `scale(${1 / svgUnitScale})`, transformOrigin: '0 0', position: 'relative', zIndex: 40 }}>
+              // At screen size, over the canvas (not in the zoomed card): above the card, or below it near the top
+              <NoteStylePortal cardId={`note-overlay-${note.id}`}>
                 <NoteStylePopover
                   noteId={note.id}
                   noteLabel={note.label}
@@ -504,7 +527,7 @@ export const NoteOverlaysLayer: React.FC<NoteOverlaysLayerProps> = ({
                   }}
                   onClose={() => setIsStylingNoteId(null)}
                   />
-              </div>
+              </NoteStylePortal>
             )}
 
             {/* Note Title Bar - ONLY rendered when note is selected / focused */}

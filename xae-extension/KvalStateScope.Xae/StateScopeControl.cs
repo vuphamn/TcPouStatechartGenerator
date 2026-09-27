@@ -172,9 +172,12 @@ namespace KvalStateScope.Xae
                 core.WebMessageReceived += OnWebMessage;
                 core.NewWindowRequested += (s, e) =>
                 {
+                    // A tab moved to a window of its own (the app's window.html): WebView2's popup window, the page fills it
+                    if (string.IsNullOrEmpty(e.Uri) || e.Uri == "about:blank") return;
+                    if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) && string.Equals(uri.Host, AppHost, StringComparison.OrdinalIgnoreCase)) return;
                     // Links such as mermaid.live open in the default browser
                     e.Handled = true;
-                    if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http"))
+                    if (uri != null && (uri.Scheme == "https" || uri.Scheme == "http"))
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
                 };
                 _status.Visibility = System.Windows.Visibility.Collapsed;

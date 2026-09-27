@@ -24,9 +24,11 @@ export type DockTabId =
   | 'history'
   | 'logger'
   | 'overview'
+  | 'symbols'
   | 'docs'
   | 'problems'
   | 'live'
+  | 'simulate'
   | 'changes'
   | 'paths'
   | 'markdown'
@@ -46,9 +48,11 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'history',
   'logger',
   'overview',
+  'symbols',
   'docs',
   'problems',
   'live',
+  'simulate',
   'changes',
   'paths',
   'markdown',
@@ -68,9 +72,11 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   history: 'middle',
   logger: 'middle',
   overview: 'middle',
+  symbols: 'middle',
   docs: 'right',
   problems: 'right',
   live: 'right',
+  simulate: 'right',
   changes: 'right',
   paths: 'right',
   markdown: 'right',
@@ -95,6 +101,10 @@ export interface DockFloatingWindow {
   y: number;
   width: number;
   height: number;
+  /** In a browser window of its own (outside the app, e.g. on another monitor); x / y are unused then */
+  external?: boolean;
+  /** Was in a window of its own when the app closed: offer to reopen it (a window only opens on a click) */
+  reopen?: boolean;
 }
 
 export interface DockPanelState {
@@ -160,7 +170,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
       groups: [
         {
           id: 'middle-main',
-          tabs: ['diagram', 'pou', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger', 'overview'],
+          tabs: ['diagram', 'pou', 'method', 'enum', 'complexity', 'frequency', 'history', 'logger', 'overview', 'symbols'],
           active: 'diagram',
           size: 1,
         },
@@ -171,7 +181,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
       groups: [
         {
           id: 'right-main',
-          tabs: ['docs', 'problems', 'live', 'changes', 'paths', 'search', 'stats', 'heatmap', 'notes', 'markdown'],
+          tabs: ['docs', 'problems', 'live', 'simulate', 'changes', 'paths', 'search', 'stats', 'heatmap', 'notes', 'markdown'],
           active: 'docs',
           size: 1,
         },
@@ -444,6 +454,20 @@ export function floatDockTab(
   return withPanel(detached, panel, { ...state, floating: [...state.floating, { tabId, ...rect }] });
 }
 
+/** Moves a MiddlePanel tab into a window of its own (it floats, marked external) */
+export function popOutDockTab(layout: DockLayout, tabId: DockTabId, rect: Omit<DockFloatingWindow, 'tabId'>): DockLayout {
+  if (DOCK_TAB_HOME[tabId] !== 'middle') return layout;
+  const loc = findDockTab(layout, tabId);
+  const floating = loc?.kind === 'float' ? layout : floatDockTab(layout, tabId, rect);
+  return updateFloatingWindow(floating, tabId, { external: true, reopen: false });
+}
+
+/** A tab's own window back into the app, as a floating window */
+export function popInDockTab(layout: DockLayout, tabId: DockTabId): DockLayout {
+  const loc = findDockTab(layout, tabId);
+  return loc?.kind === 'float' ? updateFloatingWindow(layout, tabId, { external: false }) : layout;
+}
+
 /** Docks a floating window back into its last tab group (or the first group) */
 export function dockFloatingTab(layout: DockLayout, tabId: DockTabId, groupId?: string): DockLayout {
   const loc = findDockTab(layout, tabId);
@@ -509,6 +533,8 @@ function sanitizePanel(raw: unknown, panel: DockPanelId, seen: Set<DockTabId>): 
             keepTab(w.tabId) &&
             [w.x, w.y, w.width, w.height].every((n) => typeof n === 'number' && Number.isFinite(n))
         )
+        // (a window of its own cannot reopen by itself: back in the app, floating, with a button to reopen it)
+        .map(({ external, reopen, ...w }) => (external || reopen ? { ...w, reopen: true } : w))
       : [];
 
   return { groups: pruneGroups(groups.length ? groups : [{ id: newGroupId(), tabs: [], active: null, size: 1 }]), floating };
