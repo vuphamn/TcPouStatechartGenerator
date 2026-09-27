@@ -347,7 +347,9 @@ In the Live tab, enter your access token (or **Sign in** with your company accou
 
 - **Sign-in with company accounts:** OpenID Connect (Microsoft Entra ID / Microsoft 365, ADFS, Okta, Google). The gateway checks who may use it (users, e-mail domains, groups) and logs the user's name. Tokens can stay or be turned off.
 - **Alerts:** the gateway follows the machines under a root by itself, with no browser open, and posts to a Teams, Slack or JSON webhook when one is stuck or in an error state, and when it recovers. Set them up on the setup page. The gateway keeps the alert history. **Acknowledge** (with a note) shows everyone who is on it and posts that to the webhook too.
-- **Operator board:** `https://<gateway>:8443/?board` (or **Operator board** in the Live tab) is a full-screen view for a screen by the line. It has a tile per machine, green, amber (stuck) or red (error) with problems first, and the alerts with Acknowledge. See [gateway/README.md](gateway/README.md#operator-board).
+- **Escalation, quiet hours, maintenance:** an alert nobody acknowledges in time is posted again, for example to a supervisor. Quiet hours per rule mute alerts at planned times. **Maintenance** on the board mutes a PLC for a while, with who and why, and announces it.
+- **Recordings on the gateway:** the gateway records the machines all day and keeps N days. **Gateway recordings...** in the Live tab replays any machine's time window, and its **Trends** tab shows each state's daily average over the last days, marking the states that are getting slower.
+- **Operator board:** `https://<gateway>:8443/?board` (saved boards: `?board=<id>`). New alerts chime and flash. A tile opens that machine's diagram live. On a phone the board has Machines / Alerts tabs. (or **Operator board** in the Live tab) is a full-screen view for a screen by the line. It has a tile per machine, green, amber (stuck) or red (error) with problems first, and the alerts with Acknowledge. See [gateway/README.md](gateway/README.md#operator-board).
 
 Through Link, the Live tab's **Browse** also searches the network (Link runs the search on this computer) and offers **Add route**, as in the desktop app.
 
@@ -375,6 +377,7 @@ A state can have a **time limit**: how long a machine may stay in it before it c
 Every live session is recorded while it runs: the state variable's changes and the guard values, with the PLC's time stamps.
 - **Save recording** (Live tab) writes the session so far to a `.kssrec.json` file (XAE and desktop: a save dialog; web: a download).
 - **Replay...** plays a recording back on the diagram as if live: the active state glows, the trail and Transition History fill, the guard values show. **Play** / **Pause**, a speed from 1x to 600x, and a slider to any moment of the recording. **Stop** ends the replay. A replay needs no PLC, so a night's recording can be looked at on any computer.
+- **State times:** while live or replaying, the Live tab's **State times** lists, per state, the stays measured, the average, 90% and longest time in it, and the total. A click shows the state on the diagram. **On the diagram** colours each measured state's border, with a badge (average and count), from quick (green) to slow (red).
 - **Seen transitions:** the transitions the PLC took (live, not replays) are counted per POU type and kept in the app. Deleting one of them, or a state the PLC used, says so in the confirmation (how often, when last). Moving a transition's end that the PLC took shows a warning. **Save** asks first when the edit removes transitions the PLC has taken, and lists them.
 
 ## PLC symbols

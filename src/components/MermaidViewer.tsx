@@ -183,6 +183,8 @@ export interface MermaidViewerProps {
   /** Live view: the PLC's current state (and the one it came from) are highlighted */
   /** stuck: longer in the state than its time limit (red) */
   liveHighlight?: { stateId: string; previousStateId?: string; stuck?: boolean; regionStates?: string[] } | null;
+  /** Measured state times on the diagram: level 0 (quick) to 4 (slow), the badge's text and its tooltip */
+  stateTimes?: Record<string, { level: number; label: string; title: string }> | null;
   /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
   diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
   /** Live view: each transition's guard result (TRUE / FALSE / unknown) and its variables' values, by edge id */
@@ -1529,6 +1531,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onShowInXae,
     problemMarkers,
     liveHighlight,
+    stateTimes,
     pathHighlight,
     diffHighlight,
     liveGuards,
@@ -3287,6 +3290,46 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       svg.querySelectorAll(`g.edgeLabel[data-from="${CSS.escape(e.from)}"][data-to="${CSS.escape(e.to)}"]`).forEach((l) => l.classList.add('path-edge-label'));
     }
   }, [renderedSvg, pathHighlight, availableEdges]);
+
+  // Measured state times: each measured state's border and a badge under it, quick (green) to slow (red)
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.state-time-badge').forEach((el) => el.remove());
+    svg.querySelectorAll('[class*="state-time-l"]').forEach((el) => el.classList.remove('state-time-l0', 'state-time-l1', 'state-time-l2', 'state-time-l3', 'state-time-l4'));
+    if (!stateTimes) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    for (const [id, t] of Object.entries(stateTimes)) {
+      const node = svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`) as SVGGElement | null;
+      if (!node) continue;
+      node.classList.add(`state-time-l${t.level}`);
+      let box: DOMRect;
+      try {
+        box = node.getBBox();
+      } catch {
+        continue;
+      }
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', `state-time-badge state-time-badge-l${t.level}`);
+      g.setAttribute('data-state-id', id);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = t.title;
+      const text = document.createElementNS(ns, 'text');
+      text.textContent = t.label;
+      text.setAttribute('x', String(box.x + box.width / 2));
+      text.setAttribute('y', String(box.y + box.height + 13));
+      text.setAttribute('text-anchor', 'middle');
+      const rect = document.createElementNS(ns, 'rect');
+      g.append(title, rect, text);
+      node.appendChild(g);
+      const tb = text.getBBox();
+      rect.setAttribute('x', String(tb.x - 5));
+      rect.setAttribute('y', String(tb.y - 2));
+      rect.setAttribute('width', String(tb.width + 10));
+      rect.setAttribute('height', String(tb.height + 4));
+      rect.setAttribute('rx', '6');
+    }
+  }, [renderedSvg, stateTimes]);
 
   // Live view: the PLC's current state glows, the previous one and the transition taken are marked
   useEffect(() => {

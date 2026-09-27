@@ -22,6 +22,50 @@ const formatDuration = (ms) => {
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
 };
 
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const dayNumber = (d) => {
+  const i = DAYS.indexOf(d.toLowerCase().slice(0, 3));
+  if (i < 0) throw new Error(`"${d}" is not a day (Mon, Tue, ...)`);
+  return i;
+};
+const minutes = (hm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hm);
+  if (!m || Number(m[1]) > 24 || Number(m[2]) > 59) throw new Error(`"${hm}" is not a time (HH:MM)`);
+  return Number(m[1]) * 60 + Number(m[2]);
+};
+
+/**
+ * Quiet hours: "Mon-Fri 22:00-06:00; Sat,Sun" (days, a time range that may pass midnight, or whole days; a range
+ * without days is every day). Returns [{ days: Set of 0-6 (Sun 0), from, to (minutes) }]; throws why not.
+ */
+function parseQuietHours(text) {
+  const out = [];
+  for (const part of String(text ?? '').split(';').map((p) => p.trim()).filter(Boolean)) {
+    const m = /^([A-Za-z,\- ]+?)?\s*(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})?$/.exec(part);
+    if (!m || (!m[1] && !m[2])) throw new Error(`"${part}": days and / or a time range, such as Mon-Fri 22:00-06:00`);
+    const days = new Set();
+    for (const item of (m[1] ?? '').split(',').map((d) => d.trim()).filter(Boolean)) {
+      const [a, b] = item.split('-').map((d) => d.trim());
+      if (b) for (let d = dayNumber(a), n = 0; n < 7; d = (d + 1) % 7, n++) {
+        days.add(d);
+        if (d === dayNumber(b)) break;
+      }
+      else days.add(dayNumber(a));
+    }
+    if (!days.size) for (let d = 0; d < 7; d++) days.add(d);
+    const [from, to] = m[2] ? m[2].split('-').map((x) => minutes(x.trim())) : [0, 24 * 60];
+    out.push({ days, from, to });
+  }
+  return out;
+}
+
+/** Is this time within the quiet hours (a range past midnight belongs to the day it starts on) */
+function isQuiet(ranges, date = new Date()) {
+  const day = date.getDay();
+  const t = date.getHours() * 60 + date.getMinutes();
+  return ranges.some((r) => (r.from <= r.to ? r.days.has(day) && t >= r.from && t < r.to : (r.days.has(day) && t >= r.from) || (r.days.has((day + 6) % 7) && t < r.to)));
+}
+
 /** A rule from config.json, checked; throws with a message for the setup page */
 function checkRule(r, i, plcIds) {
   const where = `Alert ${i + 1}`;
@@ -49,9 +93,22 @@ function checkRule(r, i, plcIds) {
   const webhook = String(r?.webhook ?? '').trim() || null;
   if (webhook && !/^https?:\/\/[^\s]+$/i.test(webhook)) throw new Error(`${where}: the webhook is an http(s) URL (or empty)`);
   const format = ['teams', 'slack', 'json'].includes(r?.format) ? r.format : 'json';
+  // Escalation: not acknowledged within this time, posted again (to the escalation webhook, else the rule's)
+  const escalateAfterMin = r?.escalateAfterMin == null || r.escalateAfterMin === '' ? null : Number(r.escalateAfterMin);
+  if (escalateAfterMin !== null && (!Number.isFinite(escalateAfterMin) || escalateAfterMin < 1)) throw new Error(`${where}: "escalate after" is at least 1 minute`);
+  const escalateWebhook = String(r?.escalateWebhook ?? '').trim() || null;
+  if (escalateWebhook && !/^https?:\/\/[^\s]+$/i.test(escalateWebhook)) throw new Error(`${where}: the escalation webhook is an http(s) URL (or empty)`);
+  if (escalateAfterMin !== null && !escalateWebhook && !webhook) throw new Error(`${where}: escalation needs a webhook`);
+  const quietHours = String(r?.quietHours ?? '').trim() || null;
+  try {
+    parseQuietHours(quietHours);
+  } catch (err) {
+    throw new Error(`${where}: quiet hours: ${err.message}`);
+  }
   return {
     id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, stuckAfterMs, stateLimits,
     onError: r?.onError !== false, errorPattern, notifyRecovery: r?.notifyRecovery !== false, webhook, format,
+    escalateAfterMin, escalateWebhook, escalateFormat: ['teams', 'slack', 'json'].includes(r?.escalateFormat) ? r.escalateFormat : format, quietHours,
   };
 }
 
@@ -169,6 +226,7 @@ class AlertMonitor {
       // (the gateway's clock: the first value's time is when it was first seen)
       const next = { value: s.v, since: now, first: !t, stuck: false, error: false, sent: t?.sent ?? {} };
       this.tracks.set(s.id, next);
+      this.env.onSample?.(m, s.v, s.t || now);
       const name = this.name(m, s.v);
       if (was && (was.stuck || was.error) && this.rule.notifyRecovery) this.alert('recovered', m, next, `✅ ${m.path} left ${was.name}: now ${name}`);
       if (this.rule.onError && new RegExp(this.rule.errorPattern, 'i').test(name)) {
@@ -182,8 +240,8 @@ class AlertMonitor {
       const name = this.name(m, t.value);
       const limit = this.rule.stateLimits[name] ?? this.rule.stuckAfterMs;
       if (!limit || now - t.since <= limit) continue;
-      t.stuck = true;
-      this.alert('stuck', m, t, `⚠️ ${m.path} is stuck in ${name} for more than ${formatDuration(limit)}`);
+      // (muted: not marked, so it is reported once the maintenance or the quiet hours end)
+      if (this.alert('stuck', m, t, `⚠️ ${m.path} is stuck in ${name} for more than ${formatDuration(limit)}`)) t.stuck = true;
     }
   }
 
@@ -191,9 +249,14 @@ class AlertMonitor {
     return m.stateNames?.[String(value)] ?? `#${value}`;
   }
 
+  /** Posts an alert; false when muted (maintenance, quiet hours) or repeated too soon */
   alert(kind, m, t, text) {
     const now = Date.now();
-    if (kind !== 'recovered' && t.sent[kind] && now - t.sent[kind] < REPEAT_MS) return;
+    if (kind !== 'recovered' && t.sent[kind] && now - t.sent[kind] < REPEAT_MS) return false;
+    if (this.muted(now)) {
+      if (kind !== 'recovered') this.env.log(`alerts: ${kind} ${m.path} muted (${this.env.maintenanceOf?.(this.rule.plc) ? 'maintenance' : 'quiet hours'})`);
+      return false;
+    }
     t.sent[kind] = now;
     const plc = this.env.plcOf(this.rule.plc);
     const event = {
@@ -206,6 +269,15 @@ class AlertMonitor {
     // The alert history (the web app lists and acknowledges it), then the webhook
     this.env.onEvent?.(event, this.rule);
     if (this.rule.webhook) void postWebhook(this.rule.webhook, this.rule.format, event, this.env.log);
+    return true;
+  }
+
+  /** In maintenance (set on the board) or within the rule's quiet hours */
+  muted(now = Date.now()) {
+    if (this.env.maintenanceOf?.(this.rule.plc)) return true;
+    if (!this.rule.quietHours) return false;
+    this.quiet ??= parseQuietHours(this.rule.quietHours);
+    return isQuiet(this.quiet, new Date(now));
   }
 
   /** The machines now (the operator board): state, since when (gateway time), in error, the limit that applies */
@@ -289,4 +361,4 @@ function createAlerts(env) {
   };
 }
 
-module.exports = { createAlerts, checkRule, postWebhook, AlertMonitor, DEFAULT_ERROR };
+module.exports = { createAlerts, checkRule, postWebhook, AlertMonitor, parseQuietHours, isQuiet, DEFAULT_ERROR };

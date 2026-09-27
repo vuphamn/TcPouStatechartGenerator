@@ -169,6 +169,8 @@ import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } f
 import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
 import { MachineOverview, overviewWatchId } from './components/MachineOverview.tsx';
 import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
+import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.tsx';
+import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
 import type { SidePlc, SideVia } from './utils/sideLive.ts';
 import { formatLimit, limitFor, notifyStuck, parseDuration, requestNotifyPermission, setDefaultLimit, setNotify, setStateLimit, useDefaultLimit, useNotify, useStateLimits } from './utils/stateLimits.ts';
 
@@ -1279,6 +1281,39 @@ export const App: React.FC = () => {
     // At start-up only
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Opened from the operator board (a tile): ?watch=<POU type>&instance=<path>&plc=<gateway PLC>[&gateway=]. A sample of
+  // that type loads at once; else the banner asks for the .TcPOU (a file dialog needs a click). Live once it is loaded.
+  const [watchRequest, setWatchRequest] = useState<{ type: string; instance: string; connection: Record<string, string> } | null>(() => {
+    const q = new URLSearchParams(window.location.search);
+    const type = q.get('watch');
+    const instance = q.get('instance');
+    if (!type || !/^[A-Za-z_]\w*$/.test(type) || !instance || !isSymbolPathText(instance)) return null;
+    const connection: Record<string, string> = { via: 'gateway', plc: q.get('plc') ?? '' };
+    if (q.get('gateway')) connection.gateway = q.get('gateway')!;
+    return { type, instance, connection };
+  });
+  useEffect(() => {
+    if (!watchRequest) return;
+    const sample = SAMPLES.find((s) => s.pouName.toLowerCase() === `${watchRequest.type}.tcpou`.toLowerCase());
+    if (sample) handleSelectSample(sample);
+    // At start-up only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const handleWatchBrowse = useCallback(async () => {
+    if (!watchRequest) return;
+    try {
+      const src = await browseForPou();
+      if (!src) return;
+      if (src.name.replace(/\.TcPOU$/i, '').toLowerCase() !== watchRequest.type.toLowerCase()) {
+        showCopyToast(`${src.name} is not ${watchRequest.type}.TcPOU: ${watchRequest.instance} is a ${watchRequest.type}`, 'error', 7000);
+        return;
+      }
+      applyLoadedPou(src);
+    } catch (e) {
+      showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  }, [watchRequest, applyLoadedPou, showCopyToast]);
 
   const handleDropPou = useCallback(
     async (file: File, handle?: Promise<unknown>) => {
@@ -3010,6 +3045,16 @@ export const App: React.FC = () => {
   }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
   useEffect(() => () => gatewayRef.current?.close(), []);
   const pouTypeName = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
+  // From the operator board: once the POU of that type is loaded (and its live settings), live on the machine
+  useEffect(() => {
+    if (!watchRequest || !pouTypeName || pouTypeName.toLowerCase() !== watchRequest.type.toLowerCase() || liveSettingsLoadedKey !== liveSettingsKey) return;
+    adoptLiveConnection(pouFileName, watchRequest.connection);
+    setWindowInstance(watchRequest.instance);
+    setAutoLivePending(true);
+    setWatchRequest(null);
+    setDockLayout((l) => activateDockTab(l, 'live'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchRequest, pouTypeName, liveSettingsLoadedKey, liveSettingsKey]);
   // Another POU: stop following the old one (the XAE extension does that itself)
   useEffect(() => {
     if (!isXaeHost()) void desktopLive()?.stop();
@@ -3335,13 +3380,10 @@ export const App: React.FC = () => {
   }, [pouTypeName, pouFileName, liveStatus.instance, liveStatus.target, liveSettings.instance, identifiedStatesResult.stateVarName, showCopyToast]);
   // What the replay has shown: up to which sample (a seek back starts again from the beginning)
   const replayFedRef = useRef({ values: 0, vars: 0, pos: -Infinity });
-  const handleOpenRecording = useCallback(
-    async (file: File) => {
-      const rec = parseRecording(await file.text());
-      if ('error' in rec) {
-        showCopyToast(`${file.name}: ${rec.error}`, 'error', 7000);
-        return;
-      }
+  // A recording played back (a file, or a machine's time window from a gateway recording)
+  const startReplay = useCallback(
+    (rec: LiveRecording, name: string) => {
+      const file = { name };
       if (liveStatus.state === 'connected' || liveStatus.state === 'connecting') {
         if (isXaeHost()) postToHost({ type: 'liveStop' });
         else if (desktopLive()) void desktopLive()!.stop();
@@ -3355,9 +3397,33 @@ export const App: React.FC = () => {
       setLiveWatched(rec.watched);
       setReplay({ rec, file: file.name, from: span.from, to: span.to, pos: span.from, playing: true, speed: 1 });
       setLiveStatus({ state: 'connected', message: `Replay: ${file.name}`, instance: rec.instance, target: rec.target, plcState: 'Replay', instances: rec.instance ? [rec.instance] : [] });
-      if (rec.pou && pouTypeName && rec.pou !== pouTypeName) showCopyToast(`${file.name} was recorded with ${rec.pou}; this is ${pouTypeName}: states are shown by their values`, 'error', 8000);
+      if (rec.pou && pouTypeName && rec.pou.toLowerCase() !== pouTypeName.toLowerCase()) showCopyToast(`${file.name} was recorded with ${rec.pou}; this is ${pouTypeName}: states are shown by their values`, 'error', 8000);
     },
     [liveStatus.state, pouTypeName, showCopyToast]
+  );
+  const handleOpenRecording = useCallback(
+    async (file: File) => {
+      const rec = parseRecording(await file.text());
+      if ('error' in rec) {
+        showCopyToast(`${file.name}: ${rec.error}`, 'error', 7000);
+        return;
+      }
+      startReplay(rec, file.name);
+    },
+    [startReplay, showCopyToast]
+  );
+  // Gateway recordings (web edition through a gateway): the gateway's list, one machine's time window replayed
+  const [gatewayRecordingsOpen, setGatewayRecordingsOpen] = useState(false);
+  const gatewayRequest = useCallback(
+    async <T,>(message: Record<string, unknown>, replyType: string): Promise<T> => {
+      const address = liveSettings.gateway || gatewayOrigin;
+      if (!address) throw new Error('Enter the gateway address');
+      if (!gatewayToken && !ssoUser) throw new Error(ssoHere ? 'Sign in first' : 'Enter your gateway access token first');
+      const c = gatewayConnection();
+      await c.connect(address, gatewayToken, !!ssoUser);
+      return c.request<T>(message, replyType, 60000);
+    },
+    [liveSettings.gateway, gatewayOrigin, gatewayToken, ssoUser, ssoHere, gatewayConnection]
   );
   // The replay's clock: 100 ms steps times the speed, until the end
   const replayPlaying = !!replay?.playing;
@@ -3463,6 +3529,24 @@ export const App: React.FC = () => {
     return rememberedPlcs.map((p) => ({ key: `plc-${p.netId}`, name: p.name, netId: p.netId, ip: p.ip, port: p.port, localNetId: p.localNetId }));
   }, [sideVia, liveStatus.plcs, rememberedPlcs]);
   const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
+  // Measured state times (the session's transitions: live or a replay), on the diagram when asked for
+  const measuredStateTimes = useMemo(() => stateTimes(liveSession.transitions), [liveSession.transitions]);
+  const stateTimeBadges = useMemo(() => stateTimeLevels(measuredStateTimes), [measuredStateTimes]);
+  const [showStateTimes, setShowStateTimesState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.stateTimes.diagram') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setShowStateTimes = useCallback((on: boolean) => {
+    setShowStateTimesState(on);
+    try {
+      localStorage.setItem('kss.stateTimes.diagram', on ? '1' : '0');
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
   // Stuck-state alerts: this POU type's time limits (and the default); over the limit the state is "stuck"
   const stateLimits = useStateLimits(pouTypeName);
   const defaultLimit = useDefaultLimit();
@@ -5028,6 +5112,7 @@ export const App: React.FC = () => {
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
                   liveHighlight={liveHighlight ?? simHighlight}
+                  stateTimes={showStateTimes && measuredStateTimes.length ? stateTimeBadges : null}
                   pathHighlight={pathHighlight}
                   diffHighlight={diffHighlight}
                   liveGuards={liveGuardViews ?? simViews}
@@ -5228,6 +5313,9 @@ export const App: React.FC = () => {
             guardScope={liveGuardScope}
             onGuardScopeChange={setLiveGuardScope}
             guards={liveActiveGuards}
+            stateTimes={measuredStateTimes}
+            showStateTimes={showStateTimes}
+            onShowStateTimesChange={setShowStateTimes}
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
@@ -5262,6 +5350,7 @@ export const App: React.FC = () => {
             canSaveRecording={!recorderRef.current.empty && !replay}
             onSaveRecording={() => void handleSaveRecording()}
             onOpenRecording={(f) => void handleOpenRecording(f)}
+            onOpenGatewayRecordings={liveMode === 'web' && liveVia === 'gateway' ? () => setGatewayRecordingsOpen(true) : undefined}
             replay={replayView}
             onReplayPlay={(playing) => setReplay((r) => (r ? { ...r, playing, pos: playing && r.pos >= r.to ? r.from : r.pos } : r))}
             onReplaySeek={(pos) => setReplay((r) => (r ? { ...r, pos: Math.max(r.from, Math.min(r.to, pos)) } : r))}
@@ -5425,6 +5514,28 @@ export const App: React.FC = () => {
         )}
 
       {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
+      {watchRequest && pouTypeName?.toLowerCase() !== watchRequest.type.toLowerCase() && (
+        <div id="watch-banner" className="fixed top-14 left-1/2 -translate-x-1/2 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-sky-700 bg-slate-900 shadow-xl text-sm text-slate-200">
+          <span>
+            To watch <span className="font-mono text-sky-300">{watchRequest.instance}</span> live, open <span className="font-mono">{watchRequest.type}.TcPOU</span>
+          </span>
+          <button id="watch-banner-browse" onClick={() => void handleWatchBrowse()} className="px-3 py-1 rounded bg-sky-700 hover:bg-sky-600 text-white">
+            Browse...
+          </button>
+          <button onClick={() => setWatchRequest(null)} className="px-2 py-1 rounded hover:bg-slate-800 text-slate-400" title="Not now">
+            ×
+          </button>
+        </div>
+      )}
+      {gatewayRecordingsOpen && (
+        <GatewayRecordingsDialog
+          onClose={() => setGatewayRecordingsOpen(false)}
+          request={gatewayRequest}
+          onReplay={startReplay}
+          pouTypeName={pouTypeName}
+          stateName={(type, value) => ((type.split('.').pop() ?? '').toLowerCase() === (pouTypeName ?? '').toLowerCase() ? liveEnumNames.get(Number(value)) ?? null : null)}
+        />
+      )}
       {choiceRequest && <ChoiceDialog request={choiceRequest} onClose={() => setChoiceRequest(null)} />}
       {forkJoinRequest && <ForkJoinDialog request={forkJoinRequest} onClose={() => setForkJoinRequest(null)} />}
 

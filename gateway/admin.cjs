@@ -44,7 +44,20 @@ function checkPlcs(list) {
   });
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, discover, localNetworks, sha256, version, log, alerts }) {
+/** A saved operator board, checked */
+function checkBoard(b, i, plcIds) {
+  const where = `Board ${i + 1}`;
+  const id = String(b?.id ?? '').trim();
+  if (!/^[\w-]{1,40}$/.test(id)) throw new Error(`${where}: the id (in the address, ?board=<id>) is letters, digits, - or _`);
+  const plcs = Array.isArray(b?.plcs) ? b.plcs.filter((p) => plcIds.includes(p)) : [];
+  const root = String(b?.root ?? 'MAIN.mainStateMachine').trim();
+  if (!/^[A-Za-z_]\w*(\[-?\d+\])*(\.[A-Za-z_]\w*(\[-?\d+\])*)*$/.test(root)) throw new Error(`${where}: the root is a symbol path such as MAIN.mainStateMachine`);
+  const stuck = b?.stuck == null || b.stuck === '' ? null : Number(b.stuck);
+  if (stuck !== null && (!Number.isFinite(stuck) || stuck < 1)) throw new Error(`${where}: "stuck after" is at least 1 s`);
+  return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
+}
+
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, discover, localNetworks, sha256, version, log, alerts, recordings }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -117,6 +130,31 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, d
       });
       log(`admin: alerts saved (${rules.length})`);
       return { rules, status: alerts.status(), plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) };
+    },
+    'GET boards': async () => ({ boards: getConfig().boards ?? [], plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) }),
+    'POST boards': async (body) => {
+      if (!Array.isArray(body.boards) || body.boards.length > 50) throw new Error('A list of boards is expected');
+      const ids = (getConfig().plcs ?? []).map((p) => p.id);
+      const boards = body.boards.map((b, i) => checkBoard(b, i, ids));
+      if (new Set(boards.map((b) => b.id.toLowerCase())).size !== boards.length) throw new Error('Two boards have the same id');
+      update((c) => {
+        c.boards = boards;
+      });
+      log(`admin: boards saved (${boards.map((b) => b.id).join(', ') || 'none'})`);
+      return { boards, plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) };
+    },
+    'GET recordings': async () => ({ rules: getConfig().recordings ?? [], status: recordings?.list() ?? [], plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) }),
+    'POST recordings': async (body) => {
+      if (!recordings) throw new Error('Recordings are not available');
+      if (!Array.isArray(body.rules) || body.rules.length > 20) throw new Error('A list of recordings is expected');
+      const ids = (getConfig().plcs ?? []).map((p) => p.id);
+      const rules = body.rules.map((r, i) => recordings.check(r, i, ids));
+      if (new Set(rules.map((r) => r.id)).size !== rules.length) throw new Error('Two recordings have the same id');
+      update((c) => {
+        c.recordings = rules;
+      });
+      log(`admin: recordings saved (${rules.length})`);
+      return { rules, status: recordings.list(), plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) };
     },
     'POST alerts/test': async (body) => {
       if (!alerts) throw new Error('Alerts are not available');
@@ -270,6 +308,22 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-alerts"></div>
   <div class="row mt"><button id="admin-alert-add">Add an alert</button><span class="grow"></span><button class="primary" id="admin-alerts-save">Save alerts</button></div>
   <div class="msg" id="admin-alerts-msg"></div>
+</section>
+
+<section>
+  <h2>Operator boards</h2>
+  <p class="hint flush">Saved boards: open one at /?board=&lt;id&gt; (for a screen by the line). Without PLCs ticked, a board shows all of them.</p>
+  <div id="admin-boards"></div>
+  <div class="row mt"><button id="admin-board-add">Add a board</button><span class="grow"></span><button class="primary" id="admin-boards-save">Save boards</button></div>
+  <div class="msg" id="admin-boards-msg"></div>
+</section>
+
+<section>
+  <h2>Recordings</h2>
+  <p class="hint flush">The gateway records every state change of the machines under a root, all day, one file per day (recordings/ next to config.json), and keeps them for the days you choose. Engineers replay a machine's time window from the web app's Live tab (Gateway recordings...).</p>
+  <div id="admin-recordings"></div>
+  <div class="row mt"><button id="admin-recording-add">Add a recording</button><span class="grow"></span><button class="primary" id="admin-recordings-save">Save recordings</button></div>
+  <div class="msg" id="admin-recordings-msg"></div>
 </section>
 <p class="hint" id="admin-foot"></p>
 </main>
@@ -483,6 +537,8 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         el('tr', {}, el('th', {}, 'Stuck after (s)'), el('td', {}, stuck), el('th', {}, 'Per state (s)'), el('td', {}, limits)),
         el('tr', {}, el('th', {}, 'Error states'), el('td', {}, el('div', { class: 'row nowrap' }, check('onError', 'alert'), input('errorPattern', { class: 'mono', placeholder: 'ERROR|FAULT|ALARM|E_?STOP|ABORT' }))), el('th', {}, 'Recovery'), el('td', {}, check('notifyRecovery', 'also when it recovers'))),
         el('tr', {}, el('th', {}, 'Webhook'), el('td', {}, input('webhook', { class: 'mono', placeholder: 'https://... (empty: the operator board and the history only)' })), el('th', {}, 'Format'), el('td', {}, format)),
+        el('tr', {}, el('th', {}, 'Escalate after (min)'), el('td', {}, el('input', { type: 'number', min: '1', value: r.escalateAfterMin == null ? '' : String(r.escalateAfterMin), 'data-key': 'escalateAfterMin', placeholder: 'not acknowledged: post again', on: { input: (e) => { r.escalateAfterMin = e.target.value ? Number(e.target.value) : null; } } })), el('th', {}, 'Escalation webhook'), el('td', {}, input('escalateWebhook', { class: 'mono', placeholder: 'https://... (empty: the webhook above)' }))),
+        el('tr', {}, el('th', {}, 'Quiet hours'), el('td', { colSpan: 3 }, input('quietHours', { class: 'mono', placeholder: 'no alerts then, e.g. Mon-Fri 22:00-06:00; Sat,Sun' }))),
       ));
       const test = el('button', { class: 'admin-alert-test', on: { click: async () => {
         test.disabled = true;
@@ -519,6 +575,92 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   });
   loadAlerts().catch(() => {});
   window.setInterval(() => { if (!document.activeElement || !$('admin-alerts').contains(document.activeElement)) call('alerts').then((a) => { alertStatus = a.status; alertPlcs = a.plcs; for (const s of a.status) { const card = document.querySelector('.admin-alert[data-alert="' + s.id + '"] .status'); if (card) { card.textContent = s.state + ': ' + s.message + (s.lastAlert ? ' (last: ' + s.lastAlert.kind + ' ' + s.lastAlert.machine + ' ' + new Date(s.lastAlert.at).toLocaleString() + ')' : ''); card.className = 'status ' + (s.state === 'watching' ? 'ok' : s.state === 'error' ? 'bad' : 'busy'); } } }).catch(() => {}); }, 5000);
+
+  // ---- Saved boards ----
+  let boardList = [];
+  let boardPlcs = [];
+  function renderBoards() {
+    const box = $('admin-boards');
+    box.replaceChildren();
+    if (!boardList.length) box.append(el('p', { class: 'hint' }, 'No saved boards: /?board shows all PLCs.'));
+    boardList.forEach((b, i) => {
+      const input = (key, props = {}) => el('input', { type: 'text', value: b[key] == null ? '' : String(b[key]), 'data-key': key, ...props, on: { input: (e) => { b[key] = e.target.value; } } });
+      const ticks = el('div', { class: 'row' }, ...boardPlcs.map((p) => el('label', { class: 'row nowrap' }, el('input', { type: 'checkbox', checked: (b.plcs || []).includes(p.id), 'data-plc': p.id, on: { change: (e) => { b.plcs = e.target.checked ? [...(b.plcs || []), p.id] : (b.plcs || []).filter((x) => x !== p.id); } } }), p.name)));
+      const link = el('a', { href: '/?board=' + encodeURIComponent(b.id || ''), target: '_blank', class: 'mono' }, '/?board=' + (b.id || ''));
+      box.append(el('div', { class: 'token admin-board', 'data-board': b.id || String(i) },
+        el('div', { class: 'row' }, el('span', {}, 'Open: '), link, el('span', { class: 'grow' }), el('button', { class: 'danger', on: { click: () => { boardList.splice(i, 1); renderBoards(); } } }, 'Remove')),
+        el('table', {}, el('tbody', {},
+          el('tr', {}, el('th', {}, 'Id'), el('td', {}, input('id', { class: 'mono', placeholder: 'line202' })), el('th', {}, 'Title'), el('td', {}, input('title', { placeholder: 'Line 202' }))),
+          el('tr', {}, el('th', {}, 'PLCs'), el('td', { colSpan: 3 }, ticks)),
+          el('tr', {}, el('th', {}, 'Root'), el('td', {}, input('root', { class: 'mono', placeholder: 'MAIN.mainStateMachine' })), el('th', {}, 'Stuck after (s)'), el('td', {}, el('input', { type: 'number', min: '1', value: b.stuck == null ? '' : String(b.stuck), 'data-key': 'stuck', placeholder: 'for PLCs without an alert rule', on: { input: (e) => { b.stuck = e.target.value ? Number(e.target.value) : null; } } }))),
+        ))));
+    });
+  }
+  const loadBoards = async () => {
+    const a = await call('boards');
+    boardList = a.boards.map((b) => ({ ...b, plcs: [...(b.plcs || [])] }));
+    boardPlcs = a.plcs;
+    renderBoards();
+  };
+  $('admin-board-add').addEventListener('click', () => {
+    boardList.push({ id: 'board' + (boardList.length + 1), title: '', plcs: [], root: 'MAIN.mainStateMachine', stuck: null });
+    renderBoards();
+  });
+  $('admin-boards-save').addEventListener('click', async () => {
+    try {
+      const a = await call('boards', { boards: boardList });
+      boardList = a.boards.map((b) => ({ ...b, plcs: [...(b.plcs || [])] }));
+      renderBoards();
+      say('admin-boards-msg', 'Saved: open boards pick it up when they load again.', true);
+    } catch (err) { say('admin-boards-msg', err.message, false); }
+  });
+  loadBoards().catch(() => {});
+
+  // ---- Recordings ----
+  let recRules = [];
+  let recPlcs = [];
+  let recStatus = [];
+  function renderRecordings() {
+    const box = $('admin-recordings');
+    box.replaceChildren();
+    if (!recRules.length) box.append(el('p', { class: 'hint' }, 'No recordings yet.'));
+    recRules.forEach((r, i) => {
+      const st = recStatus.find((s) => s.id === r.id);
+      const input = (key, props = {}) => el('input', { type: 'text', value: r[key] == null ? '' : String(r[key]), 'data-key': key, ...props, on: { input: (e) => { r[key] = e.target.value; } } });
+      const plc = el('select', { 'data-key': 'plc', on: { change: (e) => { r.plc = e.target.value; } } }, ...recPlcs.map((p) => el('option', { value: p.id, selected: p.id === r.plc }, p.name + ' (' + p.id + ')')));
+      const status = el('span', { class: 'status ' + (st ? (st.state === 'watching' ? 'ok' : st.state === 'error' ? 'bad' : 'busy') : '') }, st ? st.state + ': ' + st.message + (st.days.length ? ' · ' + st.days.length + ' day(s) kept, from ' + st.days[0] : '') : 'not saved yet');
+      box.append(el('div', { class: 'token admin-recording', 'data-recording': r.id || String(i) },
+        el('div', { class: 'row' }, el('label', { class: 'row nowrap' }, el('input', { type: 'checkbox', checked: r.enabled !== false, on: { change: (e) => { r.enabled = e.target.checked; } } }), 'On'), el('span', { class: 'grow' }), status, el('button', { class: 'danger', on: { click: () => { recRules.splice(i, 1); renderRecordings(); } } }, 'Remove')),
+        el('table', {}, el('tbody', {},
+          el('tr', {}, el('th', {}, 'Id'), el('td', {}, input('id', { class: 'mono' })), el('th', {}, 'Name'), el('td', {}, input('name'))),
+          el('tr', {}, el('th', {}, 'PLC'), el('td', {}, plc), el('th', {}, 'Keep (days)'), el('td', {}, el('input', { type: 'number', min: '1', max: '366', value: String(r.days ?? 7), 'data-key': 'days', on: { input: (e) => { r.days = Number(e.target.value); } } }))),
+          el('tr', {}, el('th', {}, 'Root'), el('td', {}, input('root', { class: 'mono', placeholder: 'MAIN.mainStateMachine' })), el('th', {}, 'State variable'), el('td', {}, input('stateVar', { class: 'mono', placeholder: 'machineState' }))),
+        ))));
+    });
+  }
+  const loadRecordings = async () => {
+    const a = await call('recordings');
+    recRules = a.rules.map((r) => ({ ...r }));
+    recPlcs = a.plcs;
+    recStatus = a.status;
+    renderRecordings();
+  };
+  $('admin-recording-add').addEventListener('click', () => {
+    if (!recPlcs.length) return say('admin-recordings-msg', 'Add and save a PLC first.', false);
+    recRules.push({ id: 'rec' + (recRules.length + 1), name: '', enabled: true, plc: recPlcs[0].id, root: 'MAIN.mainStateMachine', stateVar: 'machineState', days: 7 });
+    renderRecordings();
+  });
+  $('admin-recordings-save').addEventListener('click', async () => {
+    try {
+      const a = await call('recordings', { rules: recRules });
+      recRules = a.rules.map((r) => ({ ...r }));
+      recStatus = a.status;
+      renderRecordings();
+      say('admin-recordings-msg', 'Saved: the gateway records them now.', true);
+      window.setTimeout(() => loadRecordings().catch(() => {}), 2500);
+    } catch (err) { say('admin-recordings-msg', err.message, false); }
+  });
+  loadRecordings().catch(() => {});
 
   call('state').then(render, (err) => { $('admin-sub').textContent = err.message; });
 })();

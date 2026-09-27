@@ -23,7 +23,8 @@ const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
 const { createAlerts, checkRule, postWebhook } = require('./alerts.cjs');
 const { createAuth } = require('./auth.cjs');
-const { createAlertLog, createBoards } = require('./board.cjs');
+const { createAlertLog, createBoards, createMaintenance, mutedFor } = require('./board.cjs');
+const { createRecorders, checkRecording } = require('./recorder.cjs');
 
 const VERSION = '1.0.0';
 const args = process.argv.slice(2);
@@ -344,11 +345,15 @@ function start() {
     for (const [id, p] of nextPlcs) plcs.set(id, p);
     config.alerts = next.alerts ?? [];
     alerts?.apply(config.alerts);
+    config.boards = next.boards ?? [];
+    config.recordings = next.recordings ?? [];
+    recorders?.apply(config.recordings);
     config.oidc = next.oidc;
     configMtime = mtime();
   };
   // Alerts: the machines of the rules' PLCs followed by the gateway itself (webhooks when stuck / in error)
   let alerts = null;
+  let recorders = null;
   setInterval(() => {
     if (mtime() === configMtime) return;
     try {
@@ -416,10 +421,20 @@ function start() {
     }
   };
   // The alert history (listed and acknowledged in the web app) and the operator boards' monitors
-  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: () => config.alerts ?? [] });
-  const boards = createBoards({ connectionFor, plcOf: (id) => plcs.get(id), rules: () => config.alerts ?? [], log, retryMs: config.alertRetryMs ?? 30000 });
-  alerts = createAlerts({ connectionFor, plcOf: (id) => plcs.get(id), log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e) });
+  const plcOf = (id) => plcs.get(id);
+  const rulesNow = () => config.alerts ?? [];
+  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow });
+  // Maintenance (set on the board: a PLC's alerts muted until a time)
+  const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf });
+  const boards = createBoards({ connectionFor, plcOf, rules: rulesNow, log, retryMs: config.alertRetryMs ?? 30000, maintenance });
+  alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id) });
   alerts.apply(config.alerts ?? []);
+  // Escalation: open alerts not acknowledged in time, posted again
+  const muted = mutedFor(maintenance);
+  setInterval(() => alertLog.escalate(Date.now(), muted), config.escalationCheckMs ?? 30000).unref();
+  // Recordings on the gateway (config.recordings)
+  recorders = createRecorders({ dir: path.join(baseDir, 'recordings'), connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000 });
+  recorders.apply(config.recordings ?? []);
   const admin = createAdmin({
     configPath,
     getConfig: () => config,
@@ -434,6 +449,7 @@ function start() {
     sha256,
     version: VERSION,
     log,
+    recordings: { list: () => recorders.list(), check: checkRecording },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval StateScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
   const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
@@ -579,6 +595,37 @@ function start() {
         alertsOff ??= alertLog.subscribe((event) => send({ type: 'alertEvent', event }));
         return;
       }
+      // Saved boards (config.json "boards", the setup page edits them)
+      if (m.type === 'boardList') return send({ type: 'boardList', boards: config.boards ?? [] });
+      // Maintenance: a PLC's alerts muted for some minutes (0: ends it)
+      if (m.type === 'maintenanceSet') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const minutes = Number(m.minutes);
+        if (!plcs.has(m.plc) || !Number.isFinite(minutes) || minutes < 0 || minutes > 7 * 24 * 60) return send({ type: 'maintenanceResult', requestId, ok: false, message: 'A PLC of this gateway, and up to 7 days' });
+        const now = maintenance.set(m.plc, Math.round(minutes), user, typeof m.note === 'string' ? m.note : '');
+        return send({ type: 'maintenanceResult', requestId, ok: true, maintenance: now });
+      }
+      // Recordings on the gateway: the list, and one machine's values over a time window
+      if (m.type === 'recordingsList') {
+        return send({ type: 'recordingsList', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, recordings: recorders.list() });
+      }
+      // State-time trends of one machine from a recording: per day and state (the latest 1 to 90 days)
+      if (m.type === 'recordingStats') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const n = Number.isInteger(m.days) && m.days >= 1 && m.days <= 90 ? m.days : 14;
+        if (typeof m.id !== 'string' || !ads.isSymbolPath(m.machine)) return send({ type: 'recordingStats', requestId, error: 'A recording and a machine' });
+        return send({ type: 'recordingStats', requestId, ...recorders.stats(m.id, m.machine, n) });
+      }
+      if (m.type === 'recordingQuery') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const from = Number(m.from);
+        const to = Number(m.to);
+        if (typeof m.id !== 'string' || !ads.isSymbolPath(m.machine) || !(from < to) || to - from > 31 * 86400000) {
+          return send({ type: 'recordingData', requestId, error: 'A recording, a machine and a time window of at most 31 days' });
+        }
+        log(`recordings: ${user} replays ${m.machine} from ${m.id}`);
+        return send({ type: 'recordingData', requestId, ...recorders.query(m.id, m.machine, from, to) });
+      }
       if (m.type === 'alertAck') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const e = typeof m.id === 'string' ? alertLog.ack(m.id, user, typeof m.note === 'string' ? m.note : '') : null;
@@ -714,6 +761,8 @@ function start() {
   });
   // A malformed reply from a device can throw inside the ADS client's socket handling: drop the PLC connections
   // (viewers go live again) instead of stopping the gateway for everyone
+  // (a failure in an async message handler: logged, not silent)
+  process.on('unhandledRejection', (err) => log(`internal error (async): ${err?.stack ?? err}`));
   process.on('uncaughtException', async (err) => {
     log(`internal error: ${err?.stack ?? err}`);
     for (const c of connections.values()) {
@@ -725,6 +774,7 @@ function start() {
     log('stopping');
     alerts.stop();
     boards.stop();
+    recorders.stop();
     for (const c of connections.values()) await c.close();
     process.exit(0);
   };

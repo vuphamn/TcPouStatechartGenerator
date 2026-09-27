@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer } from 'lucide-react';
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
+import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
@@ -72,6 +73,10 @@ interface LivePanelProps {
   onGuardScopeChange?: (scope: 'active' | 'all' | 'off') => void;
   /** The active state's transitions with their guard result and values */
   guards?: (EdgeGuardView & { edgeId: string; to: string })[];
+  /** Measured state times of the session (live or a replay), and whether the diagram shows them */
+  stateTimes?: StateTime[];
+  showStateTimes?: boolean;
+  onShowStateTimesChange?: (on: boolean) => void;
   /** Another instance of the POU in its own tab / window, live (a POU can be declared several times) */
   onOpenInstance?: (instance: string) => void;
   /** What Open makes: a tab (XAE, web) or a window (desktop) */
@@ -104,6 +109,8 @@ interface LivePanelProps {
   canSaveRecording?: boolean;
   onSaveRecording?: () => void;
   onOpenRecording?: (file: File) => void;
+  /** Web edition through a gateway: replay a machine's time window from the gateway's recordings */
+  onOpenGatewayRecordings?: () => void;
   replay?: { file: string; from: number; to: number; pos: number; playing: boolean; speed: number; samples: number };
   onReplayPlay?: (playing: boolean) => void;
   onReplaySeek?: (pos: number) => void;
@@ -182,6 +189,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   guardScope = 'active',
   onGuardScopeChange,
   guards = [],
+  stateTimes = [],
+  showStateTimes = false,
+  onShowStateTimesChange,
   onOpenInstance,
   openTarget = 'window',
   onOpenSymbols,
@@ -203,6 +213,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   canSaveRecording = false,
   onSaveRecording,
   onOpenRecording,
+  onOpenGatewayRecordings,
   replay,
   onReplayPlay,
   onReplaySeek,
@@ -220,6 +231,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const viaGateway = mode === 'web' && via === 'gateway';
   // ADS from this computer: the desktop app, or the web edition through the local helper
   const direct = mode === 'desktop' || (mode === 'web' && via === 'link');
+  // The State times table: open or collapsed
+  const [timesOpen, setTimesOpen] = useState(true);
   // Browse: the list of PLCs, and the name of the one picked from it (for Remember)
   const [browsing, setBrowsing] = useState(false);
   const [pickedName, setPickedName] = useState<{ netId: string; name: string } | null>(null);
@@ -372,6 +385,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   }}
                 />
               </label>
+            )}
+            {onOpenGatewayRecordings && !running && (
+              <button
+                id="live-gw-recordings"
+                onClick={onOpenGatewayRecordings}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+                title="Replay a machine's time window from the gateway's recordings"
+              >
+                <Database className="w-3 h-3" /> Gateway recordings...
+              </button>
             )}
           </div>
         )}
@@ -806,6 +829,51 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           <div className="mt-1 text-[11px] text-amber-300/80">Load the .TcDUT enum to see state names instead of numbers.</div>
         )}
       </div>
+
+      {/* Measured state times: per state, how long the PLC stayed (from this session's transitions) */}
+      {stateTimes.length > 0 && (
+        <div id="live-state-times" className="border-b border-slate-800 shrink-0">
+          <div className="flex items-center gap-2 px-2.5 py-1.5">
+            <button id="live-state-times-toggle" onClick={() => setTimesOpen((o) => !o)} className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 hover:text-slate-200" title="Show / hide the table">
+              <Timer className="w-3 h-3" /> State times
+              <span className="normal-case font-normal text-slate-500">({stateTimes.length} states, {stateTimes.reduce((n, t) => n + t.n, 0)} stays)</span>
+            </button>
+            {onShowStateTimesChange && (
+              <label className="ml-auto flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer" title="Colour the diagram's states by their average time, quick (green) to slow (red)">
+                <input id="live-state-times-diagram" type="checkbox" checked={showStateTimes} onChange={(e) => onShowStateTimesChange(e.target.checked)} /> On the diagram
+              </label>
+            )}
+          </div>
+          {timesOpen && (
+            <div className="max-h-48 overflow-y-auto px-2.5 pb-2">
+              <table id="live-state-times-table" className="w-full text-[11px]">
+                <thead>
+                  <tr className="text-slate-500 text-left">
+                    <th className="font-normal">State</th>
+                    <th className="font-normal text-right" title="Stays measured">n</th>
+                    <th className="font-normal text-right">average</th>
+                    <th className="font-normal text-right" title="90% of the stays are within this">90%</th>
+                    <th className="font-normal text-right">longest</th>
+                    <th className="font-normal text-right" title="All the time in this state">total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stateTimes.map((t) => (
+                    <tr key={t.state} className="live-state-time-row hover:bg-slate-800 cursor-pointer" data-state={t.state} onClick={() => onSelectState(t.state)} title="Show on the diagram">
+                      <td className="font-mono text-slate-200 truncate max-w-[12rem]">{t.state}</td>
+                      <td className="text-right font-mono text-slate-400">{t.n}</td>
+                      <td className="text-right font-mono text-slate-200">{formatDuration(t.avgMs)}</td>
+                      <td className="text-right font-mono text-slate-400">{formatDuration(t.p90Ms)}</td>
+                      <td className="text-right font-mono text-slate-400">{formatDuration(t.maxMs)}</td>
+                      <td className="text-right font-mono text-slate-400">{formatDuration(t.totalMs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

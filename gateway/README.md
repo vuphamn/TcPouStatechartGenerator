@@ -72,8 +72,10 @@ Requires Node.js 20 or later on the gateway machine.
 - **PLCs:** edit the list (id, name, AMS NetId, address, ADS port), add one by hand, remove one. **Test** connects to the PLC and reports its TwinCAT state and the PLC runtimes it finds on ports 851 to 854. When the PLC doesn't answer, it says which ADS route to add on the PLC. **Save to config.json** writes the list. The running gateway applies it at once: viewers of a PLC whose settings changed go live again.
 - **Access tokens:** the names and creation dates; **Create token** shows the new token once, with a *Copy* button; **Revoke** stops a token at once.
 - **Alerts:** add, change and remove alert rules, **Send a test message** to a webhook, and see each rule's state (watching how many machines, the last alert).
+- **Operator boards:** saved boards (id, title, PLCs, root, a default limit), each with its link `/?board=<id>`.
+- **Recordings:** what the gateway records all day, and for how many days.
 
-The page writes only `localNetId`, `plcs`, `tokens` and `alerts`; other settings in `config.json` stay as they are. Changes are only accepted from the page itself (its origin is checked) and under the gateway's own host names. The ADS routes themselves are added on the PLCs, as before.
+The page writes only `localNetId`, `plcs`, `tokens`, `alerts`, `boards` and `recordings`; other settings in `config.json` stay as they are. Changes are only accepted from the page itself (its origin is checked) and under the gateway's own host names. The ADS routes themselves are added on the PLCs, as before.
 
 Settings:
 - `"admin": { "enabled": false }` turns the page off.
@@ -110,6 +112,10 @@ The time in state counts from when the gateway first saw the machine in it (afte
 
 A rule without a webhook still records its alerts: they go to the alert history and the operator board only.
 
+- **Escalation:** `"escalateAfterMin": 15` posts an alert again when nobody has acknowledged it within 15 minutes (once): *"⏰ Not acknowledged for 15 min: ..."*. It goes to `"escalateWebhook"` (for example a supervisor's channel, with `"escalateFormat"`), else to the rule's webhook. The board marks it **escalated**.
+- **Quiet hours:** `"quietHours": "Mon-Fri 22:00-06:00; Sat,Sun"`. No alerts at those times: days (`Mon`-`Sun`, ranges and lists), a time range (it may pass midnight; it belongs to the day it starts on), or whole days. A machine stuck during quiet hours is reported when they end, if it is still stuck.
+- **Maintenance:** set on the operator board (**Maintenance...** on a PLC: 30 min to 8 h, with a note). The PLC's alerts are muted until then, the board shows who set it and why, and the PLC's rule webhooks get a message when it starts and ends. It is kept in `maintenance.json` (a restart keeps it) and ends by itself, or with **End**.
+
 ### Alert history and acknowledging
 
 Every alert is kept in `alerts-history.json` next to `config.json` (the latest 1000). People signed in to the gateway (token or company account) see the list on the [operator board](#operator-board).
@@ -122,8 +128,13 @@ Every alert is kept in `alerts-history.json` next to `config.json` (the latest 1
 A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/?board`. The Live tab links to it (**Operator board**) when it goes through a gateway.
 - **One tile per state machine** of the gateway's PLCs. Green is normal, amber is stuck (longer in a state than its limit), red is an error state; problems come first. Each tile shows the machine, its state and its time in state ("≥" when it was already in that state when the gateway began watching). The header counts the machines, the errors and the stuck ones, and has a clock.
 - **The alerts panel** lists the alert history, newest first, with **Acknowledge** on the open ones. The bell hides it and counts the open ones.
+- **A new alert** chimes (error: three times, stuck: once, escalated: its own tone) and its machine's tile flashes until the alert is acknowledged or resolved (at most a minute); the header flashes too. The speaker button turns the sound off and on (kept in that browser; `&sound=0` starts with it off). Browsers play sound only after the page was clicked or tapped once: until then the board says "tap once to enable sound".
+- **A tile opens the machine's diagram**, live on that machine, in a new tab. When the web app has a sample of that POU type, it loads it at once. Otherwise a banner asks for the `.TcPOU` (**Browse...**); the app then goes live on the machine.
+- **On a phone** (a narrow screen), the board shows **Machines** or **Alerts**, with a tab for each and the count of open alerts, and smaller tiles.
 - **Watching:** the gateway follows the machines itself: one monitor per PLC, shared by every board, stopped a minute after the last board closes. The limits and error names come from an alert rule for that PLC and root when there is one.
 - **Signing in:** the board asks for a token (kept in that browser, for a wall screen), or offers **Sign in** when company sign-in is set up. After a lost connection it connects again by itself.
+- **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
+- **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles.
 - **Address options:**
   - `&plcs=line202,line237`: only these PLCs (default: all);
   - `&root=MAIN.mainStateMachine`: where the machines are looked for;
@@ -131,6 +142,20 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - `&stuck=300`: a default limit in seconds, for PLCs without an alert rule;
   - `&alerts=0`: start with the alerts panel hidden;
   - `&gateway=host:8443`: a board served from somewhere else (with a token).
+
+## Recordings
+
+The gateway can record the state machines of a PLC all day, with no browser open. It records every change of their state variables, with the PLC's time, into one file per day: `recordings/<id>/<YYYY-MM-DD>.jsonl` next to `config.json`. Days older than the rule keeps are deleted.
+```json
+"recordings": [
+  { "id": "line202", "name": "Line 202", "plc": "line202", "root": "MAIN.mainStateMachine", "stateVar": "machineState", "days": 14 }
+]
+```
+In the web app, the Live tab (through the gateway) has **Gateway recordings...**: pick a recording, a machine and a time window (the last hour, 8 h, a day, 3 days, or any dates), and **Replay** plays it on the diagram like a saved recording, with the trail, Transition History and the measured state times. Only the state variables are recorded on the gateway, not guard values. A window is at most 31 days.
+
+**Trends** (the dialog's second tab): for a machine and the last 7 to 90 days, per state: the stays, the average, the latest day's average and 90%, the daily average as a small line, and **change**. **Change** compares the latest 3 days' average with the days before; more than +25% is shown in red, because the state is getting slower (for example a wearing sensor or axis). The slowest-growing states come first. A stay counts for the day it ends. When the gateway was off, the stay across the gap counts as one long stay.
+
+Each line of a file is small (about 60 bytes). A machine that changes state every second makes about 5 MB a day.
 
 ## Sign-in with company accounts
 
@@ -182,7 +207,7 @@ With `"insecure": true` and no `tls` entry, the gateway serves plain HTTP / WS a
 The log goes to the console, one line per event with a time stamp:
 - sign-ins (tokens and company accounts), rejected tokens and users, sign-outs, and IP addresses blocked after 10 failures a minute;
 - alerts: the rules' machines followed, each message sent (or a webhook that failed), and acknowledgements;
-- operator boards: who watches which PLCs;
+- operator boards: who watches which PLCs; maintenance set and ended; escalations; replays of recordings;
 - the setup page's actions (searches, PLC lists saved, tokens created or revoked) and refused requests to it;
 - "go live" requests, with user, PLC and variable;
 - ADS connections to the PLCs, and handles released.

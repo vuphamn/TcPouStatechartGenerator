@@ -315,6 +315,35 @@ path.path-edge {
   opacity: 1 !important;
 }
 
+/* Operator board: a new alert's tile flashes (until acknowledged or resolved, at most a minute); the header too */
+@keyframes board-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.85); }
+}
+.board-tile-flash { animation: board-flash 0.9s ease-in-out infinite; }
+@keyframes board-header-flash {
+  0%, 100% { background-color: rgb(15 23 42); }
+  50% { background-color: rgb(136 19 55); }
+}
+.board-header-flash { animation: board-header-flash 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .board-tile-flash, .board-header-flash { animation-duration: 3s; }
+}
+
+/* Measured state times: the state's border and its badge, quick (green) to slow (red) */
+.state-time-l0 > rect, .state-time-l0 > polygon { stroke: #22c55e !important; stroke-width: 3px !important; }
+.state-time-l1 > rect, .state-time-l1 > polygon { stroke: #a3e635 !important; stroke-width: 3px !important; }
+.state-time-l2 > rect, .state-time-l2 > polygon { stroke: #facc15 !important; stroke-width: 3px !important; }
+.state-time-l3 > rect, .state-time-l3 > polygon { stroke: #f97316 !important; stroke-width: 3px !important; }
+.state-time-l4 > rect, .state-time-l4 > polygon { stroke: #ef4444 !important; stroke-width: 4px !important; }
+.state-time-badge text { font: 600 11px ui-monospace, Consolas, monospace; fill: #0f172a; pointer-events: none; }
+.state-time-badge rect { stroke: none !important; }
+.state-time-badge-l0 rect { fill: #22c55e; }
+.state-time-badge-l1 rect { fill: #a3e635; }
+.state-time-badge-l2 rect { fill: #facc15; }
+.state-time-badge-l3 rect { fill: #fb923c; }
+.state-time-badge-l4 rect { fill: #f87171; }
+
 /* Live view: the PLC's current state, the previous one and the transition taken */
 .live-active-node > rect,
 .live-active-node > polygon,
