@@ -79,6 +79,8 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
     - the PLCs ticked **Remember** (they are kept in the app, for every POU). With an empty target the project's target is used, as before;
     - **Add route** on a device without a route: with the PLC's user and password, the route is added both ways through XAE's Automation Interface (the route settings item `TIRR`, `<AddRoute>`), as XAE's own Add Route dialog does. The password is passed to XAE only.
   - **Recording and replay:** **Save recording** writes the session (a save dialog), **Replay...** plays one back on the diagram; see the main README.
+  - **The PLC switcher** shows which remembered PLCs answer (the extension opens a TCP connection to each one's ADS router port, nothing is sent).
+- **Updates:** the app asks the extension for its version (`hostInfo`) and looks for a newer `xae-v*` release on GitHub (see *Updates* in the main README).
   - **Port:** the PLC's ADS port from the project's `.xti` (usually 851). Enter a port to use another.
 - **Instance:** the extension finds where the function block is instantiated from the declarations in the PLC project, e.g. `MAIN.mainStateMachine.smTableManager`. It follows the first instance the PLC actually has. With several, the others are offered in the Instance field. You can also type a path.
 - **Change notification:** the PLC sends every new value with its PLC time stamp, checked every task cycle (at most every 1 ms). A state that lasts one cycle is not missed, which polling would not guarantee.

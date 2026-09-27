@@ -162,7 +162,7 @@ import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHos
 import { desktopLive } from './utils/liveHost.ts';
 import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
 import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap } from './utils/seenTransitions.ts';
-import { addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
+import { probePlcs, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
 import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
 import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
@@ -170,7 +170,12 @@ import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './compo
 import { MachineOverview, overviewWatchId } from './components/MachineOverview.tsx';
 import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
 import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.tsx';
+import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
+import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
 import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
+import { loadPathChecks, pathCheckFindings, pathCheckFrom, runPathChecks, savePathChecks, type PathCheck } from './utils/pathChecks.ts';
+import { downloadCsv, toCsv } from './utils/csv.ts';
+import { appInfo, checkForUpdate, loadUpdateSettings, saveUpdateSettings } from './utils/updates.ts';
 import type { SidePlc, SideVia } from './utils/sideLive.ts';
 import { formatLimit, limitFor, notifyStuck, parseDuration, requestNotifyPermission, setDefaultLimit, setNotify, setStateLimit, useDefaultLimit, useNotify, useStateLimits } from './utils/stateLimits.ts';
 
@@ -1805,9 +1810,20 @@ export const App: React.FC = () => {
   );
 
   // Lint findings (Problems tab); ignored ones are remembered per POU
+  // Path checks (kept from a live session or a recording, per POU type): their transitions the diagram no longer has
+  const [pathChecks, setPathChecksState] = useState<PathCheck[]>([]);
+  useEffect(() => setPathChecksState(loadPathChecks(seenPouType)), [seenPouType]);
+  const setPathChecks = useCallback(
+    (list: PathCheck[]) => {
+      setPathChecksState(list);
+      savePathChecks(seenPouType, list);
+    },
+    [seenPouType]
+  );
+  const pathCheckResults = useMemo(() => runPathChecks(pathChecks, availableEdges), [pathChecks, availableEdges]);
   const lintFindings = useMemo(
-    () => lintStateMachine(pouContent, dutContent, availableEdges),
-    [pouContent, dutContent, availableEdges]
+    () => [...lintStateMachine(pouContent, dutContent, availableEdges), ...pathCheckFindings(pathCheckResults)],
+    [pouContent, dutContent, availableEdges, pathCheckResults]
   );
   const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;
   const [lintIgnored, setLintIgnored] = useState<Set<string>>(new Set());
@@ -1924,6 +1940,16 @@ export const App: React.FC = () => {
     isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined
       ? { pou: hostSavedContent[pouPath], dut: (dutPath && hostSavedContent[dutPath]) || dutContent }
       : loadedBaseline;
+  // Review and save: the version as saved (XAE: saved in XAE) against the edit, side by side
+  const [review, setReview] = useState<{ before: { pou: string; dut: string }; after: { pou: string; dut: string }; diff: ReturnType<typeof diffCharts>; label: string } | null>(null);
+  const openReview = () => {
+    const xae = isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined;
+    const before = xae ? { pou: hostSavedContent[pouPath!], dut: (dutPath && hostSavedContent[dutPath]) || dutContent } : { pou: savedSources.pou, dut: savedSources.dut || dutContent };
+    const after = { pou: pouContent, dut: dutContent };
+    setReview({ before, after, diff: diffCharts(before, after), label: xae ? 'saved in XAE' : 'last saved' });
+  };
+  // Compare recordings (Live tab)
+  const [compareOpen, setCompareOpen] = useState(false);
   const chartDiff = useMemo(() => {
     if (!changesTabMounted) return null;
     const baseline = compareBase === 'git' ? (gitBaseline?.pou ? { pou: gitBaseline.pou, dut: gitBaseline.dut ?? dutContent } : null) : savedBaseline;
@@ -3412,6 +3438,37 @@ export const App: React.FC = () => {
     },
     [startReplay, showCopyToast]
   );
+  // Path checks: this session's transitions kept (named), checked against every edit (Problems)
+  const handleKeepPathCheck = useCallback(() => {
+    const trans = liveSession.transitions;
+    if (!trans.length) return;
+    const unique = new Set(trans.map((t) => `${t.from}->${t.to}`)).size;
+    setPromptRequest({
+      title: 'Keep as a path check',
+      label: `This session's ${unique} different transition${unique === 1 ? '' : 's'} (${trans.length} in all) are checked against every edit: one the diagram no longer has shows in Problems.`,
+      initial: `${replay ? replay.file.replace(/\.kssrec\.json$|\.json$/i, '') : `Live ${liveStatus.instance?.split('.').pop() ?? ''}`} ${new Date().toLocaleDateString()}`.trim(),
+      submitLabel: 'Keep',
+      validate: (v) => (v.trim() ? null : 'A name'),
+      onSubmit: (name) => {
+        setPathChecks([...pathChecks, pathCheckFrom(name, replay ? `recording ${replay.file}` : `live ${liveStatus.instance ?? ''}`, trans)]);
+        showCopyToast(`Path check "${name}" kept: ${unique} transitions`, 'success');
+      },
+    });
+  }, [liveSession.transitions, replay, liveStatus.instance, pathChecks, setPathChecks, showCopyToast]);
+  const pathCheckView = useMemo(
+    () => pathCheckResults.map((r) => ({ id: r.check.id, name: r.check.name, transitions: r.check.transitions.length, missing: r.missing.map((t) => `${t.from} → ${t.to}`) })),
+    [pathCheckResults]
+  );
+  // During a replay: its recorded variables (at most 8, thinned to 400 points each) for the small charts
+  const replayVars = useMemo(() => {
+    if (!replay?.rec.vars.length) return [];
+    const by = new Map<string, { t: number; v: number | boolean | string | null }[]>();
+    for (const x of replay.rec.vars) {
+      if (!by.has(x.id)) by.set(x.id, []);
+      by.get(x.id)!.push({ t: x.t, v: x.v });
+    }
+    return [...by.entries()].slice(0, 8).map(([id, pts]) => ({ id, points: pts.length > 400 ? pts.filter((_, i) => i % Math.ceil(pts.length / 400) === 0 || i === pts.length - 1) : pts }));
+  }, [replay?.rec]);
   // Gateway recordings (web edition through a gateway): the gateway's list, one machine's time window replayed
   const [gatewayRecordingsOpen, setGatewayRecordingsOpen] = useState(false);
   const gatewayRequest = useCallback(
@@ -3532,6 +3589,76 @@ export const App: React.FC = () => {
   // Measured state times (the session's transitions: live or a replay), on the diagram when asked for
   const measuredStateTimes = useMemo(() => stateTimes(liveSession.transitions), [liveSession.transitions]);
   const stateTimeBadges = useMemo(() => stateTimeLevels(measuredStateTimes), [measuredStateTimes]);
+  const handleExportStateTimes = useCallback(() => {
+    void downloadCsv(
+      `state-times-${pouTypeName ?? 'POU'}-${new Date().toISOString().slice(0, 10)}.csv`,
+      toCsv(['state', 'stays', 'average ms', 'median ms', '90% ms', 'shortest ms', 'longest ms', 'total ms'], measuredStateTimes.map((t) => [t.state, t.n, Math.round(t.avgMs), Math.round(t.medianMs), Math.round(t.p90Ms), t.minMs, t.maxMs, t.totalMs]))
+    );
+  }, [measuredStateTimes, pouTypeName]);
+  // The PLC switcher: which remembered PLCs answer (every 30 s while there are some; not through a gateway)
+  const [reachable, setReachable] = useState<Record<string, boolean | null>>({});
+  const probeKey = liveMode && !(liveMode === 'web' && liveVia === 'gateway') ? rememberedPlcs.map((p) => `${p.netId}|${p.ip}`).join(',') : '';
+  useEffect(() => {
+    if (!probeKey) return;
+    let stop = false;
+    const targets = rememberedPlcs.map((p) => ({ key: p.netId, ip: p.ip || p.netId.split('.').slice(0, 4).join('.') }));
+    const run = async () => {
+      let r: Record<string, boolean> = {};
+      if (liveMode === 'web') {
+        if (!linkCode) return;
+        r = await linkRequest<{ reachable: Record<string, boolean> }>({ type: 'probe', targets }, 'probeResult').then((x) => x.reachable).catch(() => ({}));
+      } else r = await probePlcs(targets);
+      if (!stop) setReachable(r);
+    };
+    void run();
+    const t = window.setInterval(() => void run(), 30000);
+    return () => {
+      stop = true;
+      window.clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeKey]);
+  // Updates (desktop, XAE): quietly once a day at start; from the Window menu on request
+  const [updateOffer, setUpdateOffer] = useState<{ edition: string; version: string; current: string; url: string } | null>(null);
+  const runUpdateCheck = useCallback(
+    async (quiet: boolean) => {
+      const info = await appInfo();
+      if (!info) {
+        if (!quiet) showCopyToast('The web edition is updated with its gateway', 'success');
+        return;
+      }
+      const settings = loadUpdateSettings();
+      const r = await checkForUpdate(info.edition, info.version, settings);
+      saveUpdateSettings({ ...settings, lastCheck: Date.now() });
+      if (r.state === 'newer') {
+        if (quiet && settings.skipped === r.version) return;
+        setUpdateOffer({ edition: info.edition, version: r.version, current: info.version, url: r.url });
+      } else if (!quiet) {
+        if (r.state === 'current') showCopyToast(`Kval StateScope ${info.edition === 'xae' ? 'for XAE' : 'desktop'} ${info.version} is the newest`, 'success');
+        else if (r.state === 'no-access') {
+          setPromptRequest({
+            title: 'Updates: GitHub access',
+            label: `${r.message}. A GitHub token with read access to ${settings.repo} (a fine-grained token: Contents, read-only) lets this app see its releases. It is kept in this app only.`,
+            initial: settings.token,
+            placeholder: 'github_pat_...',
+            monospace: true,
+            submitLabel: 'Save and check',
+            onSubmit: (token) => {
+              saveUpdateSettings({ ...loadUpdateSettings(), token: token.trim() });
+              void runUpdateCheck(false);
+            },
+          });
+        } else showCopyToast(r.message, 'error', 7000);
+      }
+    },
+    [showCopyToast]
+  );
+  useEffect(() => {
+    const s = loadUpdateSettings();
+    if (Date.now() - (s.lastCheck ?? 0) < 20 * 3600000) return;
+    const t = window.setTimeout(() => void runUpdateCheck(true), 8000);
+    return () => window.clearTimeout(t);
+  }, [runUpdateCheck]);
   const [showStateTimes, setShowStateTimesState] = useState<boolean>(() => {
     try {
       return localStorage.getItem('kss.stateTimes.diagram') === '1';
@@ -4194,7 +4321,7 @@ export const App: React.FC = () => {
             hostSave={
               isXaeHost()
                 ? pouPath
-                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject }
+                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
                   : undefined
                 : pouContent
                 ? {
@@ -4209,10 +4336,12 @@ export const App: React.FC = () => {
                       : 'Download the edited files (this browser cannot write them back) (Ctrl+S)',
                     menu: desktopSave()?.saveSourceAs
                       ? [
+                          { id: 'review-save', label: 'Review and save…', onSelect: openReview },
                           { id: 'save-pou-as', label: 'Save .TcPOU As…', onSelect: () => void handleSaveAs('pou') },
                           ...(dutContent ? [{ id: 'save-dut-as', label: 'Save .TcDUT As…', onSelect: () => void handleSaveAs('dut') }] : []),
                         ]
                       : [
+                          { id: 'review-save', label: 'Review and save…', onSelect: openReview },
                           { id: 'download-pou', label: `Download ${defaultName('pou')}`, onSelect: () => void handleSaveAs('pou') },
                           ...(dutContent ? [{ id: 'download-dut', label: `Download ${defaultName('dut')}`, onSelect: () => void handleSaveAs('dut') }] : []),
                         ],
@@ -4579,6 +4708,7 @@ export const App: React.FC = () => {
             tabMeta={dockTabMeta}
             onNewWindow={openNewInstance ?? undefined}
             newWindowLabel={desktopNewWindow ? 'New Window' : 'New Tab'}
+            onCheckUpdates={liveMode === 'web' ? undefined : () => void runUpdateCheck(false)}
           />
           <button
             id="focus-mode-btn"
@@ -5316,6 +5446,13 @@ export const App: React.FC = () => {
             stateTimes={measuredStateTimes}
             showStateTimes={showStateTimes}
             onShowStateTimesChange={setShowStateTimes}
+            onExportStateTimes={measuredStateTimes.length ? handleExportStateTimes : undefined}
+            onKeepPathCheck={liveSession.transitions.length ? handleKeepPathCheck : undefined}
+            pathChecks={pathCheckView}
+            onRemovePathCheck={(id) => setPathChecks(pathChecks.filter((c) => c.id !== id))}
+            onCompare={() => setCompareOpen(true)}
+            replayVars={replayVars}
+            reachable={reachable}
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
@@ -5514,6 +5651,25 @@ export const App: React.FC = () => {
         )}
 
       {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
+      {updateOffer && (
+        <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
+          <span>
+            Kval StateScope {updateOffer.edition === 'xae' ? 'for XAE' : 'desktop'} <b>{updateOffer.version}</b> is available (this is {updateOffer.current})
+          </span>
+          <a id="update-open" href={updateOffer.url} target="_blank" rel="noreferrer" onClick={() => setUpdateOffer(null)} className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
+            Get it
+          </a>
+          <button
+            onClick={() => {
+              saveUpdateSettings({ ...loadUpdateSettings(), skipped: updateOffer.version });
+              setUpdateOffer(null);
+            }}
+            className="px-2 py-1 rounded hover:bg-slate-800 text-slate-400"
+          >
+            Later
+          </button>
+        </div>
+      )}
       {watchRequest && pouTypeName?.toLowerCase() !== watchRequest.type.toLowerCase() && (
         <div id="watch-banner" className="fixed top-14 left-1/2 -translate-x-1/2 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-sky-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>
@@ -5526,6 +5682,24 @@ export const App: React.FC = () => {
             ×
           </button>
         </div>
+      )}
+      {review && (
+        <BeforeAfterDialog
+          before={review.before}
+          after={review.after}
+          diff={review.diff}
+          savedLabel={review.label}
+          onClose={() => setReview(null)}
+          onSave={() => (isXaeHost() ? handleSaveToProject() : void handleSaveSources())}
+        />
+      )}
+      {compareOpen && (
+        <CompareRecordingsDialog
+          onClose={() => setCompareOpen(false)}
+          current={liveSession.transitions.length ? { label: replay ? replay.file : 'this session', transitions: liveSession.transitions } : null}
+          names={liveEnumNames}
+          edges={availableEdges}
+        />
       )}
       {gatewayRecordingsOpen && (
         <GatewayRecordingsDialog

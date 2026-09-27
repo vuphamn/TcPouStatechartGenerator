@@ -168,6 +168,10 @@ wss.on('connection', (ws, req) => {
       log(`browse: ${origin} searched the network, ${result.devices.length} device(s)`);
       return send({ type: 'discoverResult', requestId, ...result });
     }
+    if (m.type === 'probe') {
+      const targets = (Array.isArray(m.targets) ? m.targets : []).slice(0, 50).map((t) => ({ key: String(t?.key ?? ''), ip: String(t?.ip ?? '') }));
+      return send({ type: 'probeResult', requestId, reachable: await discovery.probeAll(targets) });
+    }
     if (m.type === 'addRoute') {
       const plcIp = String(m.plcIp ?? '').trim().split(':')[0];
       if (!hostRx.test(plcIp)) return send({ type: 'addRouteResult', requestId, ok: false, message: 'The PLC\'s IP address is needed' });

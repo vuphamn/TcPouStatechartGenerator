@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tcDesktop', {
   isDesktop: true,
+  /** The app's version (updates: compared with the newest desktop release) */
+  appInfo: () => ipcRenderer.invoke('tc:app-info'),
   /** Native open dialog for a .TcPOU; resolves with its content and the .TcDUT files in its folder tree, or null */
   openPou: () => ipcRenderer.invoke('tc:open-pou'),
   /** The .TcPOU the app was started with (Explorer's Open in Kval StateScope), once; null when none */
@@ -43,6 +45,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     discoverPlcs: (options) => ipcRenderer.invoke('tc:discover-plcs', options),
     /** Add Route on a PLC to this computer: { plcIp, user, password, routeName?, localNetId? } -> { ok, message } */
     addRoute: (options) => ipcRenderer.invoke('tc:add-route', options),
+    /** Which PLCs answer: [{ key, ip }] -> { key: boolean } */
+    probePlcs: (targets) => ipcRenderer.invoke('tc:probe-plcs', targets),
     /** Other PLCs in the Machine Overview: monitor sessions by key (browse, watched values; no state variable) */
     side: {
       start: (key, options) => ipcRenderer.invoke('tc:side-start', key, options),

@@ -226,4 +226,28 @@ function addRoute({ plcIp, localNetId, hostAddress, routeName = os.hostname(), u
   });
 }
 
-module.exports = { discover, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };
+/**
+ * Reachable: a TCP connection to the PLC's ADS router (48898, or host:port) opens within timeoutMs; nothing is sent.
+ * targets: [{ key, ip }] -> { key: true | false }
+ */
+async function probeAll(targets, timeoutMs = 1500) {
+  const net = require('net');
+  const one = ({ ip }) =>
+    new Promise((resolve) => {
+      const [host, port] = String(ip ?? '').split(':');
+      if (!/^[A-Za-z0-9.-]{1,253}$/.test(host)) return resolve(false);
+      const sock = net.connect({ host, port: Number(port) || 48898 });
+      const done = (ok) => {
+        sock.destroy();
+        resolve(ok);
+      };
+      sock.setTimeout(timeoutMs, () => done(false));
+      sock.once('connect', () => done(true));
+      sock.once('error', () => done(false));
+    });
+  const out = {};
+  await Promise.all(targets.map(async (t) => (out[t.key] = await one(t))));
+  return out;
+}
+
+module.exports = { probeAll, discover, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };

@@ -22,7 +22,9 @@ function summarize(byValue) {
   return out;
 }
 
-function createTrends({ dir }) {
+function createTrends({ dir, read }) {
+  // read(id, day): the day's text (compressed days too); by default the plain file
+  const readDay = read ?? ((id, d) => fs.readFileSync(path.join(dir, id, `${d}.jsonl`), 'utf8'));
   const cache = new Map(); // `${id}|${day}|${machine}` -> { last, states }
 
   /** One day of one machine: the stays that ended that day (carry: the last sample of the day before) */
@@ -35,7 +37,7 @@ function createTrends({ dir }) {
     }
     let text = '';
     try {
-      text = fs.readFileSync(path.join(dir, id, `${d}.jsonl`), 'utf8');
+      text = readDay(id, d);
     } catch {
       return { last: carry, states: {}, carryT: carry?.t };
     }

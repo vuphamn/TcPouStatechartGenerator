@@ -102,7 +102,7 @@ function client() {
   const mr = await board.wait((m) => m.type === 'maintenanceResult' && m.requestId === 3);
   const shown = await board.wait((m) => m.type === 'boardState' && m.plcs[0]?.maintenance?.by === 'operator');
   await h.sleep(500);
-  expect(mr?.ok && shown?.plcs[0].maintenance.note === 'clamp sensor' && JSON.parse(fs.readFileSync(path.join(dir, 'maintenance.json'), 'utf8')).line202.by === 'operator', 'maintenance: set, on the board, in maintenance.json');
+  expect(mr?.ok && shown?.plcs[0].maintenance.note === 'clamp sensor' && JSON.parse(fs.readFileSync(path.join(dir, 'maintenance.json'), 'utf8')).windows.some((w) => w.plc === 'line202' && w.by === 'operator'), 'maintenance: set, on the board, in maintenance.json');
   expect(posts.some((p) => p.path === '/main' && p.body.event === 'maintenance' && /in maintenance until .* \(operator: clamp sensor\); alerts are muted/.test(p.body.text)), 'announced on the webhook');
   // aDoors[1] leaves DISABLED at 6 s: its recovery is muted, like any alert
   const before = posts.filter((p) => p.path === '/main' && p.body.event !== 'maintenance').length;
@@ -111,7 +111,7 @@ function client() {
   board.send({ type: 'maintenanceSet', requestId: 4, plc: 'line202', minutes: 0 });
   await board.wait((m) => m.type === 'maintenanceResult' && m.requestId === 4);
   await h.sleep(500);
-  expect(posts.some((p) => p.body.event === 'maintenance' && /operator ended the maintenance/.test(p.body.text)) && !JSON.parse(fs.readFileSync(path.join(dir, 'maintenance.json'), 'utf8')).line202, 'ended: announced, cleared');
+  expect(posts.some((p) => p.body.event === 'maintenance' && /operator ended the maintenance/.test(p.body.text)) && !JSON.parse(fs.readFileSync(path.join(dir, 'maintenance.json'), 'utf8')).windows.length && JSON.parse(fs.readFileSync(path.join(dir, 'maintenance.json'), 'utf8')).history.some((w) => w.plc === 'line202'), 'ended: announced, moved to the history');
   expect((await board.wait((m) => m.type === 'maintenanceResult' && m.requestId === 5, 10)) === null && (board.send({ type: 'maintenanceSet', requestId: 5, plc: 'nope', minutes: 10 }), !!(await board.wait((m) => m.type === 'maintenanceResult' && m.requestId === 5 && !m.ok))), 'another PLC: refused');
 
   // Recordings: today's file, the list, one machine's window (DISABLED, then ENABLING at 6 s)

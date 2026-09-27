@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
@@ -77,6 +77,17 @@ interface LivePanelProps {
   stateTimes?: StateTime[];
   showStateTimes?: boolean;
   onShowStateTimesChange?: (on: boolean) => void;
+  onExportStateTimes?: () => void;
+  /** Path checks: keep this session's transitions as one; the kept ones with the transitions the diagram lacks */
+  onKeepPathCheck?: () => void;
+  pathChecks?: { id: string; name: string; transitions: number; missing: string[] }[];
+  onRemovePathCheck?: (id: string) => void;
+  /** Compare two recordings */
+  onCompare?: () => void;
+  /** During a replay: the recorded variables over time (a small chart each, the position marked) */
+  replayVars?: { id: string; points: { t: number; v: number | boolean | string | null }[] }[];
+  /** The remembered PLCs that answer on the network (null: not checked) */
+  reachable?: Record<string, boolean | null>;
   /** Another instance of the POU in its own tab / window, live (a POU can be declared several times) */
   onOpenInstance?: (instance: string) => void;
   /** What Open makes: a tab (XAE, web) or a window (desktop) */
@@ -124,6 +135,38 @@ interface LivePanelProps {
 }
 
 const REPLAY_SPEEDS = [1, 2, 5, 10, 60, 600];
+
+/** A recorded variable over the replay's span: steps (booleans high / low, numbers scaled), the position marked */
+const ReplayVarChart: React.FC<{ id: string; points: { t: number; v: number | boolean | string | null }[]; from: number; to: number; pos: number }> = ({ id, points, from, to, pos }) => {
+  const w = 200;
+  const h = 16;
+  const num = (v: number | boolean | string | null) => (typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'number' ? v : null);
+  const nums = points.map((p) => num(p.v)).filter((x): x is number => x !== null);
+  const lo = Math.min(...nums, 0);
+  const hi = Math.max(...nums, 1);
+  const x = (t: number) => ((Math.max(from, Math.min(to, t)) - from) / (to - from)) * w;
+  const y = (v: number) => h - 2 - ((v - lo) / (hi - lo || 1)) * (h - 4);
+  let d = '';
+  let last: number | null = null;
+  for (const p of points) {
+    const v = num(p.v);
+    if (v === null) continue;
+    d += last === null ? `M${x(p.t).toFixed(1)},${y(v).toFixed(1)}` : `H${x(p.t).toFixed(1)}V${y(v).toFixed(1)}`;
+    last = v;
+  }
+  if (last !== null) d += `H${w}`;
+  const now = [...points].reverse().find((p) => p.t <= pos);
+  return (
+    <div className="live-replay-var flex items-center gap-1.5 text-[10px]" data-var={id}>
+      <span className="w-28 truncate font-mono text-slate-400" title={id}>{id}</span>
+      <svg width={w} height={h} className="shrink-0 bg-slate-950/60 rounded">
+        <path d={d} fill="none" stroke="#a78bfa" strokeWidth="1.2" />
+        <line x1={x(pos)} x2={x(pos)} y1="0" y2={h} stroke="#f472b6" strokeWidth="1" />
+      </svg>
+      <span className="live-replay-var-value font-mono text-violet-200 truncate">{now ? String(now.v) : ''}</span>
+    </div>
+  );
+};
 
 /** A duration field ("30", "1.5 s", "2 min"): applied on Enter or when it loses focus; empty clears it */
 const LimitField: React.FC<{ id: string; valueMs: number | null | undefined; onChange: (ms: number | null) => void; placeholder: string; title: string }> = ({ id, valueMs, onChange, placeholder, title }) => {
@@ -192,6 +235,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   stateTimes = [],
   showStateTimes = false,
   onShowStateTimesChange,
+  onExportStateTimes,
+  onKeepPathCheck,
+  pathChecks = [],
+  onRemovePathCheck,
+  onCompare,
+  replayVars = [],
+  reachable = {},
   onOpenInstance,
   openTarget = 'window',
   onOpenSymbols,
@@ -328,7 +378,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               {!remembered && <option value="">PLC...</option>}
               {rememberedPlcs.map((p) => (
                 <option key={p.netId} value={p.netId}>
+                  {reachable[p.netId] === true ? '● ' : reachable[p.netId] === false ? '○ ' : ''}
                   {p.name}
+                  {reachable[p.netId] === false ? ' (not answering)' : ''}
                 </option>
               ))}
             </select>
@@ -355,7 +407,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           )}
         </div>
         {/* Recording: save the session so far; play a recording back */}
-        {(canSaveRecording || (onOpenRecording && !running)) && !replay && (
+        {(canSaveRecording || (onOpenRecording && !running) || onKeepPathCheck) && (!replay || onKeepPathCheck) && (
           <div className="flex items-center gap-2">
             {canSaveRecording && onSaveRecording && (
               <button
@@ -385,6 +437,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   }}
                 />
               </label>
+            )}
+            {onCompare && (
+              <button id="live-compare" onClick={onCompare} className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Compare two recordings (or this session with one): time per state, transitions only one took">
+                <GitCompare className="w-3 h-3" /> Compare...
+              </button>
+            )}
+            {onKeepPathCheck && (
+              <button id="live-keep-path" onClick={onKeepPathCheck} className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Keep this session's transitions as a path check: every edit is checked against them (Problems)">
+                <ShieldCheck className="w-3 h-3" /> Keep as a path check
+              </button>
             )}
             {onOpenGatewayRecordings && !running && (
               <button
@@ -440,6 +502,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               className="w-full accent-violet-400"
               title="Go to a moment of the recording"
             />
+            {replayVars.length > 0 && (
+              <div id="live-replay-vars" className="space-y-0.5 pt-0.5">
+                {replayVars.map((v) => (
+                  <ReplayVarChart key={v.id} id={v.id} points={v.points} from={replay.from} to={Math.max(replay.to, replay.from + 1)} pos={replay.pos} />
+                ))}
+              </div>
+            )}
             <div className="flex justify-between text-[10px] text-slate-500 font-mono">
               <span>{formatClock(replay.from)}</span>
               <span>{formatDuration(replay.to - replay.from)}, {replay.samples} samples</span>
@@ -830,6 +899,26 @@ export const LivePanel: React.FC<LivePanelProps> = ({
         )}
       </div>
 
+      {/* Path checks kept for this POU type: each checked against the diagram (a broken one is a Problem) */}
+      {pathChecks.length > 0 && (
+        <div id="live-path-checks" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5 space-y-0.5">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Path checks ({pathChecks.length})</div>
+          {pathChecks.map((c) => (
+            <div key={c.id} className="live-path-check flex items-center gap-1.5 text-[11px]" data-check={c.name} data-ok={c.missing.length === 0}>
+              <span className={c.missing.length ? 'text-rose-300' : 'text-emerald-300'}>{c.missing.length ? '✗' : '✓'}</span>
+              <span className="truncate text-slate-200">{c.name}</span>
+              <span className="text-slate-500 shrink-0">{c.transitions} transitions</span>
+              {c.missing.length > 0 && <span className="truncate text-rose-300" title={c.missing.join('\n')}>{c.missing.length} missing: {c.missing[0]}{c.missing.length > 1 ? ', ...' : ''}</span>}
+              {onRemovePathCheck && (
+                <button className="live-path-check-remove ml-auto shrink-0 px-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800" onClick={() => onRemovePathCheck(c.id)} title="Remove this path check">
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Measured state times: per state, how long the PLC stayed (from this session's transitions) */}
       {stateTimes.length > 0 && (
         <div id="live-state-times" className="border-b border-slate-800 shrink-0">
@@ -838,8 +927,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <Timer className="w-3 h-3" /> State times
               <span className="normal-case font-normal text-slate-500">({stateTimes.length} states, {stateTimes.reduce((n, t) => n + t.n, 0)} stays)</span>
             </button>
+            {onExportStateTimes && (
+              <button id="live-state-times-csv" onClick={onExportStateTimes} className="ml-auto flex items-center gap-1 px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800" title="Save the table as CSV (Excel)">
+                <Download className="w-3 h-3" /> CSV
+              </button>
+            )}
             {onShowStateTimesChange && (
-              <label className="ml-auto flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer" title="Colour the diagram's states by their average time, quick (green) to slow (red)">
+              <label className={`${onExportStateTimes ? '' : 'ml-auto '}flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer`} title="Colour the diagram's states by their average time, quick (green) to slow (red)">
                 <input id="live-state-times-diagram" type="checkbox" checked={showStateTimes} onChange={(e) => onShowStateTimesChange(e.target.checked)} /> On the diagram
               </label>
             )}

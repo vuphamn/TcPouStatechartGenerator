@@ -79,6 +79,15 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.click('.live-plc-remembered .live-plc-forget');
   await sleep(300);
   expect((await p.$$('.live-plc-remembered')).length === 0 && !(await p.$eval('#live-plc-remember', (e) => e.checked)) && (await p.evaluate(() => localStorage.getItem('kss.live.plcs'))) === '[]', 'forgotten: gone from the list and the app');
+  // Reachability (the PLC switcher) and the app's version (updates), through the main process
+  const open = require('net').createServer((c) => c.destroy());
+  await new Promise((r) => open.listen(48993, '127.0.0.1', r));
+  const reach = await p.evaluate(() => window.tcDesktop.live.probePlcs([{ key: 'up', ip: '127.0.0.1:48993' }, { key: 'down', ip: '127.0.0.1:1' }]));
+  open.close();
+  expect(reach.up === true && reach.down === false, `reachability: ${JSON.stringify(reach)}`);
+  const info = await p.evaluate(() => window.tcDesktop.appInfo());
+  const pkgVersion = JSON.parse(require('fs').readFileSync(require('path').join(APP, 'package.json'), 'utf8')).version;
+  expect(info?.version === pkgVersion, `app version: ${info?.version} (package.json ${pkgVersion})`);
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close().catch(() => {});
   electron.kill();

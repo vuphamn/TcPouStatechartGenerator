@@ -25,6 +25,9 @@ const { createAlerts, checkRule, postWebhook } = require('./alerts.cjs');
 const { createAuth } = require('./auth.cjs');
 const { createAlertLog, createBoards, createMaintenance, mutedFor } = require('./board.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
+const { createAudit } = require('./audit.cjs');
+const { createReports, checkShifts } = require('./report.cjs');
+const { createService } = require('./service.cjs');
 
 const VERSION = '1.0.0';
 const args = process.argv.slice(2);
@@ -346,6 +349,8 @@ function start() {
     config.alerts = next.alerts ?? [];
     alerts?.apply(config.alerts);
     config.boards = next.boards ?? [];
+    config.shifts = next.shifts ?? [];
+    config.reports = next.reports ?? {};
     config.recordings = next.recordings ?? [];
     recorders?.apply(config.recordings);
     config.oidc = next.oidc;
@@ -425,7 +430,9 @@ function start() {
   const rulesNow = () => config.alerts ?? [];
   const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow });
   // Maintenance (set on the board: a PLC's alerts muted until a time)
-  const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf });
+  // Audit log: who did what (audit-YYYY-MM.jsonl next to config.json)
+  const audit = createAudit({ dir: baseDir, log });
+  const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf, audit });
   const boards = createBoards({ connectionFor, plcOf, rules: rulesNow, log, retryMs: config.alertRetryMs ?? 30000, maintenance });
   alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id) });
   alerts.apply(config.alerts ?? []);
@@ -433,8 +440,13 @@ function start() {
   const muted = mutedFor(maintenance);
   setInterval(() => alertLog.escalate(Date.now(), muted), config.escalationCheckMs ?? 30000).unref();
   // Recordings on the gateway (config.recordings)
-  recorders = createRecorders({ dir: path.join(baseDir, 'recordings'), connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000 });
+  recorders = createRecorders({ dir: path.join(baseDir, 'recordings'), connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, rules: rulesNow, maintenance, onEvent: (e) => alertLog.add(e), audit });
   recorders.apply(config.recordings ?? []);
+  // Shift reports (config.shifts, config.reports.webhook): posted when a shift ends; the board downloads them
+  const maintenanceOfAll = (from, to) => [...plcs.keys()].flatMap((id) => maintenance.windowsBetween(id, from, to).map((w) => ({ plc: id, from: new Date(w.from).toISOString(), until: new Date(w.until).toISOString() })));
+  const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit });
+  // Run at startup (Windows): the gateway as a scheduled task
+  const service = createService({ configPath, log, audit });
   const admin = createAdmin({
     configPath,
     getConfig: () => config,
@@ -449,7 +461,10 @@ function start() {
     sha256,
     version: VERSION,
     log,
-    recordings: { list: () => recorders.list(), check: checkRecording },
+    recordings: { list: () => recorders.list(), check: checkRecording, checkSlowerNow: (id) => recorders.checkSlowerNow(id) },
+    audit,
+    reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
+    service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval StateScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
   const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
@@ -552,6 +567,7 @@ function start() {
           user = ssoUser;
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
+          audit.add(user, 'sign-in', { ip, how: 'company account' });
           return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
         }
         if (!auth.tokensAllowed()) {
@@ -577,6 +593,7 @@ function start() {
         user = hit.name;
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}`);
+        audit.add(user, 'sign-in', { ip, how: 'token' });
         return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
       }
 
@@ -597,17 +614,46 @@ function start() {
       }
       // Saved boards (config.json "boards", the setup page edits them)
       if (m.type === 'boardList') return send({ type: 'boardList', boards: config.boards ?? [] });
-      // Maintenance: a PLC's alerts muted for some minutes (0: ends it)
+      // Maintenance: a PLC's alerts muted for some minutes (0: ends it, or with id removes a planned window); from: planned
       if (m.type === 'maintenanceSet') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const minutes = Number(m.minutes);
-        if (!plcs.has(m.plc) || !Number.isFinite(minutes) || minutes < 0 || minutes > 7 * 24 * 60) return send({ type: 'maintenanceResult', requestId, ok: false, message: 'A PLC of this gateway, and up to 7 days' });
-        const now = maintenance.set(m.plc, Math.round(minutes), user, typeof m.note === 'string' ? m.note : '');
-        return send({ type: 'maintenanceResult', requestId, ok: true, maintenance: now });
+        const from = m.from == null ? null : Number(m.from);
+        if (!plcs.has(m.plc) || !Number.isFinite(minutes) || minutes < 0 || minutes > 7 * 24 * 60 || (from !== null && !(from > 0 && from < Date.now() + 90 * 86400000))) {
+          return send({ type: 'maintenanceResult', requestId, ok: false, message: 'A PLC of this gateway, up to 7 days, starting within 90 days' });
+        }
+        const now = maintenance.set(m.plc, Math.round(minutes), user, typeof m.note === 'string' ? m.note : '', from, typeof m.id === 'string' ? m.id : undefined);
+        return send({ type: 'maintenanceResult', requestId, ok: true, maintenance: now, planned: maintenance.planned(m.plc) });
+      }
+      // Shift report: the last shift, today, yesterday (summary and CSV)
+      if (m.type === 'report') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const which = ['last', 'today', 'yesterday'].includes(m.which) ? m.which : 'last';
+        try {
+          const r = reports.report(which);
+          audit.add(user, 'report', { which, alerts: r.summary.alerts });
+          return send({ type: 'reportResult', requestId, summary: r.summary, csv: r.csv });
+        } catch (err) {
+          return send({ type: 'reportResult', requestId, error: err.message });
+        }
+      }
+      // Availability of a recording's machines over time windows (days or shifts)
+      if (m.type === 'recordingAvailability') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const wins = Array.isArray(m.windows) ? m.windows.filter((w) => w && Number(w.from) < Number(w.to) && Number(w.to) - Number(w.from) <= 31 * 86400000).slice(0, 62).map((w) => ({ label: String(w.label ?? '').slice(0, 40), from: Number(w.from), to: Number(w.to) })) : [];
+        if (typeof m.id !== 'string' || !wins.length) return send({ type: 'recordingAvailability', requestId, error: 'A recording and time windows' });
+        audit.add(user, 'availability', { recording: m.id, windows: wins.length });
+        return send({ type: 'recordingAvailability', requestId, ...recorders.availability(m.id, wins) });
       }
       // Recordings on the gateway: the list, and one machine's values over a time window
       if (m.type === 'recordingsList') {
-        return send({ type: 'recordingsList', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, recordings: recorders.list() });
+        let shifts = [];
+        try {
+          shifts = checkShifts(config.shifts);
+        } catch {
+          shifts = [];
+        }
+        return send({ type: 'recordingsList', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, recordings: recorders.list(), shifts });
       }
       // State-time trends of one machine from a recording: per day and state (the latest 1 to 90 days)
       if (m.type === 'recordingStats') {
@@ -624,11 +670,13 @@ function start() {
           return send({ type: 'recordingData', requestId, error: 'A recording, a machine and a time window of at most 31 days' });
         }
         log(`recordings: ${user} replays ${m.machine} from ${m.id}`);
+        audit.add(user, 'replay', { recording: m.id, machine: m.machine, from: new Date(from).toISOString(), to: new Date(to).toISOString() });
         return send({ type: 'recordingData', requestId, ...recorders.query(m.id, m.machine, from, to) });
       }
       if (m.type === 'alertAck') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const e = typeof m.id === 'string' ? alertLog.ack(m.id, user, typeof m.note === 'string' ? m.note : '') : null;
+        if (e) audit.add(user, 'acknowledge', { alert: e.event, machine: e.machine, note: e.ack?.note ?? '' });
         return send({ type: 'alertAckResult', requestId, ok: !!e, event: e, message: e ? 'Acknowledged' : 'No such alert' });
       }
       // Guard variables of the running session: read like the state variable (a malformed request is ignored)
@@ -732,6 +780,7 @@ function start() {
           if (values) send({ type: 'liveVars', values });
         }, 50);
         log(`live: ${user} follows ${symbol} on ${plc.id} (${entry.viewers.size} viewer(s))`);
+        audit.add(user, 'live', { plc: plc.id, symbol });
         send({
           type: 'liveStatus', state: 'connected', message: `${symbol} on ${plc.name} (PLC ${conn.plcState})`,
           target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type,
@@ -775,6 +824,9 @@ function start() {
     alerts.stop();
     boards.stop();
     recorders.stop();
+    reports.stop();
+    maintenance.stop();
+    audit.stop();
     for (const c of connections.values()) await c.close();
     process.exit(0);
   };

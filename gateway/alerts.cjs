@@ -173,7 +173,11 @@ class AlertMonitor {
       this.machines = await this.discover(conn.client);
       if (this.stopped) return;
       this.vars = new VarWatcher(conn.client, () => {});
-      await this.vars.set(this.machines.map((m) => ({ id: m.path.toLowerCase(), candidates: [`${m.path}.${this.rule.stateVar}`] })));
+      // (and a recording's extra variables, e.g. guard values: ids "var:<path>")
+      await this.vars.set([
+        ...this.machines.map((m) => ({ id: m.path.toLowerCase(), candidates: [`${m.path}.${this.rule.stateVar}`] })),
+        ...(this.rule.extraVars ?? []).map((p) => ({ id: `var:${p.toLowerCase()}`, candidates: [p] })),
+      ]);
       this.timer = setInterval(() => this.tick(), 1000);
       this.state = 'watching';
       this.message = `${this.machines.length} machine${this.machines.length === 1 ? '' : 's'} on ${plc.name}`;
@@ -217,6 +221,12 @@ class AlertMonitor {
   tick() {
     const now = Date.now();
     for (const s of this.vars?.drain() ?? []) {
+      if (s.id.startsWith('var:')) {
+        // (the path as written in the rule, not the lower-case id)
+        const p = (this.rule.extraVars ?? []).find((x) => x.toLowerCase() === s.id.slice(4)) ?? s.id.slice(4);
+        this.env.onVar?.(p, s.v, s.t || now);
+        continue;
+      }
       if (typeof s.v !== 'number') continue;
       const t = this.tracks.get(s.id);
       if (t && t.value === s.v) continue;

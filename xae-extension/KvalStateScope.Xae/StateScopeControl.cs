@@ -333,6 +333,12 @@ namespace KvalStateScope.Xae
                     case "addRoute":
                         HandleAddRoute(msg);
                         break;
+                    case "probePlcs":
+                        HandleProbePlcs(msg);
+                        break;
+                    case "hostInfo":
+                        Post(new { type = "hostInfo", edition = "xae", version = typeof(StateScopeControl).Assembly.GetName().Version.ToString(3) });
+                        break;
                     case "gitShow":
                         HandleGitShow(msg);
                         break;
@@ -608,14 +614,15 @@ namespace KvalStateScope.Xae
                 Post(new { type = "saveDocumentResult", error = "Nothing to save" });
                 return;
             }
-            // A document (HTML, opened after saving) or a live recording (JSON)
+            // A document (HTML, opened after saving), a live recording (JSON) or a table (CSV)
             var recording = (name ?? "").EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+            var csv = (name ?? "").EndsWith(".csv", StringComparison.OrdinalIgnoreCase);
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                Title = recording ? "Save the live recording" : "Save the documentation",
+                Title = recording ? "Save the live recording" : csv ? "Save the table" : "Save the documentation",
                 FileName = string.IsNullOrEmpty(name) ? "documentation.html" : Path.GetFileName(name),
-                Filter = recording ? "Live recording (*.json)|*.json" : "HTML document (*.html)|*.html",
+                Filter = recording ? "Live recording (*.json)|*.json" : csv ? "CSV (Excel) (*.csv)|*.csv" : "HTML document (*.html)|*.html",
                 InitialDirectory = plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null,
             };
             if (dialog.ShowDialog() != true)
@@ -627,7 +634,7 @@ namespace KvalStateScope.Xae
             {
                 File.WriteAllText(dialog.FileName, content, new System.Text.UTF8Encoding(false));
                 Log.Write("docs: saved " + dialog.FileName);
-                if (!recording)
+                if (!recording && !csv)
                 {
                     try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true }); }
                     catch (System.ComponentModel.Win32Exception) { }
@@ -798,6 +805,44 @@ namespace KvalStateScope.Xae
                 {
                     type = "liveBrowseResult", requestId, result.path, result.symbolType, result.kind, result.stateMachine, result.stateType, result.stateNames, result.truncated, result.children, result.error,
                 });
+            });
+        }
+
+        /// <summary>The PLC switcher: which remembered PLCs answer (a TCP connect to their ADS router port, nothing sent)</summary>
+        private void HandleProbePlcs(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var targets = (msg.TryGetValue("targets", out var t) && t is System.Collections.ArrayList list ? list.OfType<Dictionary<string, object>>() : Enumerable.Empty<Dictionary<string, object>>())
+                .Take(50)
+                .Select(x => new { key = x.TryGetValue("key", out var k) ? k as string ?? "" : "", ip = x.TryGetValue("ip", out var i) ? i as string ?? "" : "" })
+                .ToList();
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var reachable = new Dictionary<string, bool>();
+                var tasks = targets.Select(async x =>
+                {
+                    var parts = x.ip.Split(':');
+                    var port = parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 48898;
+                    var ok = false;
+                    if (System.Text.RegularExpressions.Regex.IsMatch(parts[0], @"^[A-Za-z0-9.-]{1,253}$"))
+                    {
+                        using (var c = new System.Net.Sockets.TcpClient())
+                        {
+                            try
+                            {
+                                var connect = c.ConnectAsync(parts[0], port);
+                                ok = await Task.WhenAny(connect, Task.Delay(1500)).ConfigureAwait(false) == connect && c.Connected;
+                            }
+                            catch (System.Net.Sockets.SocketException) { ok = false; }
+                        }
+                    }
+                    lock (reachable) reachable[x.key] = ok;
+                });
+                await Task.WhenAll(tasks);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "probeResult", requestId, reachable });
             });
         }
 

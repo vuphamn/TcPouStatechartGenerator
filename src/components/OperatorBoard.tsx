@@ -52,11 +52,13 @@ interface BoardPlc {
   message: string;
   machines: BoardMachine[];
   maintenance?: Maintenance | null;
+  /** Planned maintenance windows (not started yet) */
+  planned?: (Maintenance & { id: string; from: string })[];
 }
 
 export interface AlertEvent {
   id: string;
-  event: 'stuck' | 'error' | 'recovered';
+  event: 'stuck' | 'error' | 'recovered' | 'slower';
   plc: string;
   plcName: string;
   machine: string;
@@ -73,10 +75,23 @@ const short = (path: string, root: string) => (path.toLowerCase().startsWith(roo
 export const OperatorBoard: React.FC = () => {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   // A saved board (?board=<id>), its settings overridden by the address
+  // Kiosk: &cycle=<s> rotates through the saved boards (&boards=a,b: those), one after the other
+  const cycleSec = Math.max(0, Number(params.get('cycle')) || 0);
+  const [kioskIdx, setKioskIdx] = useState(0);
   const boardId = params.get('board') || '';
   const [saved, setSaved] = useState<SavedBoard[]>([]);
-  const board = saved.find((b) => b.id.toLowerCase() === boardId.toLowerCase()) ?? null;
-  const [boardsLoaded, setBoardsLoaded] = useState(!boardId);
+  const kioskList = useMemo(() => {
+    if (!cycleSec) return [];
+    const ids = (params.get('boards') ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    return ids.length ? ids.map((id) => saved.find((b) => b.id.toLowerCase() === id)).filter((b): b is SavedBoard => !!b) : saved;
+  }, [cycleSec, saved, params]);
+  const board = kioskList.length ? kioskList[kioskIdx % kioskList.length] : saved.find((b) => b.id.toLowerCase() === boardId.toLowerCase()) ?? null;
+  const [boardsLoaded, setBoardsLoaded] = useState(!boardId && !cycleSec);
+  useEffect(() => {
+    if (kioskList.length < 2) return;
+    const t = window.setInterval(() => setKioskIdx((i) => (i + 1) % kioskList.length), cycleSec * 1000);
+    return () => window.clearInterval(t);
+  }, [kioskList.length, cycleSec]);
   const wantedParam = (params.get('plcs') ?? '').split(',').map((x) => x.trim()).filter(Boolean);
   const wanted = useMemo(() => (wantedParam.length ? wantedParam : board?.plcs ?? []), [wantedParam.join(), board]);
   const root = params.get('root') || board?.root || 'MAIN.mainStateMachine';
@@ -86,6 +101,9 @@ export const OperatorBoard: React.FC = () => {
   const [maintFor, setMaintFor] = useState<string | null>(null);
   const [maintMinutes, setMaintMinutes] = useState(60);
   const [maintNote, setMaintNote] = useState('');
+  const [maintAt, setMaintAt] = useState(''); // (empty: now; a datetime-local: planned)
+  // Shift report: which one, the answer
+  const [report, setReport] = useState<{ which: string; text: string; csv: string } | null>(null);
   const [origin, setOrigin] = useState<string | null>(params.get('gateway'));
   const [sso, setSso] = useState<GatewaySso | null>(null);
   const [token, setToken, remember, setRemember] = useStoredSecret('kss.gateway.token');
@@ -216,14 +234,32 @@ export const OperatorBoard: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchKey]);
 
-  const setMaintenance = async (plc: string, minutesFor: number, why: string) => {
+  const setMaintenance = async (plc: string, minutesFor: number, why: string, at?: string, id?: string) => {
     try {
-      await conn.current?.request({ type: 'maintenanceSet', plc, minutes: minutesFor, note: why }, 'maintenanceResult');
+      const from = at ? new Date(at).getTime() : undefined;
+      await conn.current?.request({ type: 'maintenanceSet', plc, minutes: minutesFor, note: why, ...(from ? { from } : {}), ...(id ? { id } : {}) }, 'maintenanceResult');
     } catch {
       // the board shows the state it gets
     }
     setMaintFor(null);
     setMaintNote('');
+    setMaintAt('');
+  };
+  const showReport = async (which: string) => {
+    try {
+      const r = await conn.current?.request<{ summary?: { text: string }; csv?: string; error?: string }>({ type: 'report', which }, 'reportResult');
+      if (r?.error || !r?.summary) throw new Error(r?.error || 'No answer');
+      setReport({ which, text: r.summary.text, csv: r.csv ?? '' });
+    } catch (err) {
+      setReport({ which, text: err instanceof Error ? err.message : String(err), csv: '' });
+    }
+  };
+  const downloadReport = () => {
+    if (!report?.csv) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([report.csv], { type: 'text/csv' }));
+    a.download = `report-${report.which}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
   };
 
   // Limits: the gateway's (its alert rules), else this viewer's per POU type (as the Machine Overview), else &stuck=
@@ -280,6 +316,11 @@ export const OperatorBoard: React.FC = () => {
               <AlertTriangle className="w-4 h-4" /> {counts.error} in error
             </span>
           )}
+          {open.some((a) => a.escalatedAt) && (
+            <span id="board-escalated-count" className="flex items-center gap-1 px-2.5 rounded-full bg-fuchsia-700 text-white" title="Alerts nobody acknowledged in time">
+              ⏰ {open.filter((a) => a.escalatedAt).length} escalated
+            </span>
+          )}
           {counts.stuck > 0 && (
             <span className="flex items-center gap-1 px-2.5 rounded-full bg-amber-500 text-slate-950">
               <Timer className="w-4 h-4" /> {counts.stuck} stuck
@@ -325,6 +366,25 @@ export const OperatorBoard: React.FC = () => {
           </select>
         )}
         {!narrow && <span className="font-mono text-xl text-slate-300">{new Date(now).toLocaleTimeString()}</span>}
+        {kioskList.length > 1 && (
+          <span id="board-kiosk" className="text-sm text-slate-400" title={`Rotating every ${cycleSec} s`}>
+            {(kioskIdx % kioskList.length) + 1} / {kioskList.length}
+          </span>
+        )}
+        {status.state === 'connected' && (
+          <select
+            id="board-report"
+            value=""
+            onChange={(e) => e.target.value && void showReport(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+            title="Shift report: the alerts, time to acknowledge and resolve, the machines with the most"
+          >
+            <option value="">Report...</option>
+            <option value="last">the last shift</option>
+            <option value="today">today</option>
+            <option value="yesterday">yesterday</option>
+          </select>
+        )}
         <button id="board-alerts-toggle" onClick={() => setShowAlerts((s) => !s)} className="relative p-2 rounded hover:bg-slate-800" title="Alerts">
           {showAlerts ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
           {open.length > 0 && <span className="absolute -top-1 -right-1 min-w-[1.25rem] px-1 rounded-full bg-rose-600 text-xs font-bold">{open.length}</span>}
@@ -334,6 +394,19 @@ export const OperatorBoard: React.FC = () => {
         </button>
       </header>
 
+      {report && (
+        <div id="board-report-panel" className="flex flex-wrap items-center gap-3 px-5 py-2 border-b border-sky-900 bg-sky-950/60 text-sm">
+          <span className="flex-1 min-w-[16rem]">{report.text}</span>
+          {report.csv && (
+            <button id="board-report-csv" onClick={downloadReport} className="px-3 py-1 rounded bg-sky-700 hover:bg-sky-600">
+              Download CSV
+            </button>
+          )}
+          <button onClick={() => setReport(null)} className="px-2 py-1 rounded hover:bg-slate-800" title="Close">
+            ×
+          </button>
+        </div>
+      )}
       {needsSignIn ? (
         <div id="board-signin" className="flex-1 flex flex-col items-center justify-center gap-4 text-lg">
           <p className="text-slate-300">Sign in to the gateway to show its machines.</p>
@@ -392,12 +465,25 @@ export const OperatorBoard: React.FC = () => {
                     </button>
                   )}
                 </h2>
-                {maintFor === p.id && !p.maintenance && (
+                {(p.planned ?? []).length > 0 && (
+                  <div className="board-planned mb-2 flex flex-wrap gap-2 text-sm">
+                    {(p.planned ?? []).map((w) => (
+                      <span key={w.id} className="board-planned-item flex items-center gap-2 px-2.5 py-0.5 rounded-full border border-violet-700 text-violet-200">
+                        🗓️ Planned {new Date(w.from).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} to {new Date(w.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} ({w.by}
+                        {w.note ? `: ${w.note}` : ''})
+                        <button className="board-planned-remove px-1.5 rounded hover:bg-violet-800" onClick={() => void setMaintenance(p.id, 0, '', undefined, w.id)} title="Remove this planned window">
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {maintFor === p.id && (
                   <form
                     className="board-maintenance-form mb-3 flex flex-wrap items-center gap-2 p-2 rounded border border-violet-800 bg-violet-950/40 text-sm"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      void setMaintenance(p.id, maintMinutes, maintNote);
+                      void setMaintenance(p.id, maintMinutes, maintNote, maintAt || undefined);
                     }}
                   >
                     <span>Mute {p.name}'s alerts for</span>
@@ -409,7 +495,11 @@ export const OperatorBoard: React.FC = () => {
                       ))}
                     </select>
                     <input className="board-maintenance-note flex-1 min-w-[12rem] bg-slate-900 border border-slate-700 rounded px-2 py-1" placeholder="Why (e.g. changing the clamp sensor)" value={maintNote} onChange={(e) => setMaintNote(e.target.value)} />
-                    <button className="board-maintenance-start px-3 py-1 rounded bg-violet-700 hover:bg-violet-600">Start</button>
+                    <label className="flex items-center gap-1">
+                      starting
+                      <input type="datetime-local" className="board-maintenance-at bg-slate-900 border border-slate-700 rounded px-2 py-1" value={maintAt} onChange={(e) => setMaintAt(e.target.value)} title="Empty: now; a date and time: planned" />
+                    </label>
+                    <button className="board-maintenance-start px-3 py-1 rounded bg-violet-700 hover:bg-violet-600">{maintAt ? 'Plan' : 'Start now'}</button>
                   </form>
                 )}
                 <div className={`grid ${narrow ? 'gap-2 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]' : 'gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]'} ${p.maintenance ? 'opacity-60' : ''}`}>
@@ -451,7 +541,7 @@ export const OperatorBoard: React.FC = () => {
                 {alerts.slice(0, 200).map((a) => {
                   const openOne = a.event !== 'recovered' && !a.ack && !a.resolvedAt;
                   return (
-                    <div key={a.id} className={`board-alert rounded border px-3 py-2 text-sm ${a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' ? 'border-rose-700 bg-rose-950/60' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
+                    <div key={a.id} className={`board-alert rounded border px-3 py-2 text-sm ${a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' ? 'border-rose-700 bg-rose-950/60' : a.event === 'slower' ? 'border-sky-700 bg-sky-950/50' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs text-slate-400">{new Date(a.at).toLocaleString()}</span>
                         {a.escalatedAt && !a.ack && <span className="board-escalated px-1.5 rounded bg-rose-600 text-[10px] font-bold uppercase text-white">escalated</span>}

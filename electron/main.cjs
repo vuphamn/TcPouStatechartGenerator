@@ -232,17 +232,18 @@ ipcMain.handle('tc:save-source-as', async (event, name, content, defaultDir) => 
 
 ipcMain.handle('tc:save-file', async (event, name, content) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  // A document (HTML, opened after saving) or a live recording (JSON)
+  // A document (HTML, opened after saving), a live recording (JSON) or a table (CSV)
   const recording = /\.json$/i.test(String(name));
+  const csv = /\.csv$/i.test(String(name));
   const result = await dialog.showSaveDialog(win, {
-    title: recording ? 'Save the live recording' : 'Save the documentation',
+    title: recording ? 'Save the live recording' : csv ? 'Save the table' : 'Save the documentation',
     defaultPath: String(name || 'documentation.html'),
-    filters: [recording ? { name: 'Live recording', extensions: ['json'] } : { name: 'HTML document', extensions: ['html'] }],
+    filters: [recording ? { name: 'Live recording', extensions: ['json'] } : csv ? { name: 'CSV (Excel)', extensions: ['csv'] } : { name: 'HTML document', extensions: ['html'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   try {
     await require('fs/promises').writeFile(result.filePath, String(content), 'utf8');
-    if (!recording) shell.openPath(result.filePath);
+    if (!recording && !csv) shell.openPath(result.filePath);
     return { path: result.filePath };
   } catch (err) {
     return { error: String(err?.message ?? err) };
@@ -309,6 +310,9 @@ ipcMain.handle('tc:discover-plcs', (_event, options) => {
   const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : localNetworks()[0]?.netId;
   return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
 });
+ipcMain.handle('tc:app-info', () => ({ version: app.getVersion() }));
+// The PLC switcher: which remembered PLCs answer (a TCP connect to their ADS router port, nothing sent)
+ipcMain.handle('tc:probe-plcs', (_event, targets) => require('../shared/tcDiscovery.cjs').probeAll(Array.isArray(targets) ? targets.slice(0, 50) : []));
 // Add Route: a route on the PLC to this computer (its IP towards the PLC and the AMS NetId the live view uses), with
 // the PLC's user name and password as entered (never stored)
 ipcMain.handle('tc:add-route', (_event, options) => {

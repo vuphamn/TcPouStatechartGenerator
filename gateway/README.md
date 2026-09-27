@@ -73,9 +73,12 @@ Requires Node.js 20 or later on the gateway machine.
 - **Access tokens:** the names and creation dates; **Create token** shows the new token once, with a *Copy* button; **Revoke** stops a token at once.
 - **Alerts:** add, change and remove alert rules, **Send a test message** to a webhook, and see each rule's state (watching how many machines, the last alert).
 - **Operator boards:** saved boards (id, title, PLCs, root, a default limit), each with its link `/?board=<id>`.
-- **Recordings:** what the gateway records all day, and for how many days.
+- **Recordings:** what the gateway records all day, for how many days, the disk it uses, and **Check for slowdowns now**.
+- **Shift reports:** the shifts and the reports webhook; **Preview the last shift**, **Send it now**.
+- **Run at startup (Windows):** install, remove, or switch to the startup task (see [Run at startup](#run-at-startup-windows)).
+- **Audit log:** search it (text, last 24 h to a year) and **Export CSV** (see [Audit log](#audit-log)).
 
-The page writes only `localNetId`, `plcs`, `tokens`, `alerts`, `boards` and `recordings`; other settings in `config.json` stay as they are. Changes are only accepted from the page itself (its origin is checked) and under the gateway's own host names. The ADS routes themselves are added on the PLCs, as before.
+The page writes only `localNetId`, `plcs`, `tokens`, `alerts`, `boards`, `recordings`, `shifts` and `reports`; other settings in `config.json` stay as they are. Changes are only accepted from the page itself (its origin is checked) and under the gateway's own host names. The ADS routes themselves are added on the PLCs, as before.
 
 Settings:
 - `"admin": { "enabled": false }` turns the page off.
@@ -114,7 +117,7 @@ A rule without a webhook still records its alerts: they go to the alert history 
 
 - **Escalation:** `"escalateAfterMin": 15` posts an alert again when nobody has acknowledged it within 15 minutes (once): *"⏰ Not acknowledged for 15 min: ..."*. It goes to `"escalateWebhook"` (for example a supervisor's channel, with `"escalateFormat"`), else to the rule's webhook. The board marks it **escalated**.
 - **Quiet hours:** `"quietHours": "Mon-Fri 22:00-06:00; Sat,Sun"`. No alerts at those times: days (`Mon`-`Sun`, ranges and lists), a time range (it may pass midnight; it belongs to the day it starts on), or whole days. A machine stuck during quiet hours is reported when they end, if it is still stuck.
-- **Maintenance:** set on the operator board (**Maintenance...** on a PLC: 30 min to 8 h, with a note). The PLC's alerts are muted until then, the board shows who set it and why, and the PLC's rule webhooks get a message when it starts and ends. It is kept in `maintenance.json` (a restart keeps it) and ends by itself, or with **End**.
+- **Maintenance:** set on the operator board (**Maintenance...** on a PLC: 30 min to 8 h, with a note), now or **planned** for a date and time (**starting**; up to 90 days ahead). The PLC's alerts are muted during the window, the board shows who set it and why (planned windows too, with × to remove one), and the PLC's rule webhooks get a message when it is planned, when it starts and when it ends. It is kept in `maintenance.json` with the past windows (the availability counts them); it ends by itself, or with **End**.
 
 ### Alert history and acknowledging
 
@@ -122,6 +125,12 @@ Every alert is kept in `alerts-history.json` next to `config.json` (the latest 1
 - **Acknowledge**, with an optional note such as "on my way", marks an alert as seen. Every open board shows who acknowledged it and when. The rule's webhook gets a message: *"👤 alice@example.com acknowledged: Line 202: MAIN.mainStateMachine.aDoors[2] is in DOOR_DASHER_ERROR · on my way"*. In the JSON format, `event` is `acknowledged`, with `by` and `note`.
 - **Resolved:** a recovery marks that machine's open alerts as resolved.
 - **Logged:** each acknowledgement goes into the gateway's log.
+
+### Shift reports
+
+Per shift (`"shifts": [{ "name": "Early", "from": "06:00", "to": "14:00" }, { "name": "Late", "from": "14:00", "to": "22:00" }, { "name": "Night", "from": "22:00", "to": "06:00" }]`; none: one per day), a report of the alerts: how many of each kind, how many acknowledged and how long it took (average, longest), how long until resolved, escalations, what is still open, the machines with the most, and the maintenance windows.
+- **Posted** to `"reports": { "webhook": "https://...", "format": "teams" }` when each shift ends (the setup page sets both).
+- **On the board:** **Report...** (the last shift, today, yesterday) shows it, with **Download CSV** (a summary line, then every alert with who acknowledged it and when).
 
 ## Operator board
 
@@ -134,7 +143,9 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
 - **Watching:** the gateway follows the machines itself: one monitor per PLC, shared by every board, stopped a minute after the last board closes. The limits and error names come from an alert rule for that PLC and root when there is one.
 - **Signing in:** the board asks for a token (kept in that browser, for a wall screen), or offers **Sign in** when company sign-in is set up. After a lost connection it connects again by itself.
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
-- **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles.
+- **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles, and its planned windows are listed.
+- **The header** also counts the **escalated** alerts, and has **Report...** (see [Shift reports](#shift-reports)).
+- **Kiosk mode:** `&cycle=30` rotates through the saved boards every 30 s (`&boards=line202,line237`: those only), showing which one of how many.
 - **Address options:**
   - `&plcs=line202,line237`: only these PLCs (default: all);
   - `&root=MAIN.mainStateMachine`: where the machines are looked for;
@@ -151,11 +162,27 @@ The gateway can record the state machines of a PLC all day, with no browser open
   { "id": "line202", "name": "Line 202", "plc": "line202", "root": "MAIN.mainStateMachine", "stateVar": "machineState", "days": 14 }
 ]
 ```
+- **Variables too** (`"vars": ["MAIN.fbLine.bDoorClosed", ...]`, at most 100): recorded with the machines (lines `{ "t", "x": "<path>", "v" }`). A replay then shows their values: the guard values on the diagram, and a small chart each under the replay's slider.
+- **Storage:** past days are compressed (`.jsonl.gz`, `"compress": false` to keep them plain); `"maxMB": 500` deletes the oldest days beyond that size. The setup page shows the disk each recording uses.
+- **Getting slower:** `"slowerPct": 30` checks the trends once a day: a machine's state whose average over the last 3 days is more than 30% above the days before is reported, as a 🐢 alert on the boards (and in the history), and on `"slowerWebhook"` (`"slowerFormat"`). Once per state and day.
+
 In the web app, the Live tab (through the gateway) has **Gateway recordings...**: pick a recording, a machine and a time window (the last hour, 8 h, a day, 3 days, or any dates), and **Replay** plays it on the diagram like a saved recording, with the trail, Transition History and the measured state times. Only the state variables are recorded on the gateway, not guard values. A window is at most 31 days.
+
+**Availability** (the third tab): for today, yesterday and today, or the last 7 or 14 days (per shift when there are shifts), each machine's time normal, in an error state, stuck (the part of stays beyond the limits of the gateway's alert rule for that PLC and root) and in maintenance, as a bar and percentages of the time with data; **CSV** saves it. Before a machine's first recorded value there is no data.
 
 **Trends** (the dialog's second tab): for a machine and the last 7 to 90 days, per state: the stays, the average, the latest day's average and 90%, the daily average as a small line, and **change**. **Change** compares the latest 3 days' average with the days before; more than +25% is shown in red, because the state is getting slower (for example a wearing sensor or axis). The slowest-growing states come first. A stay counts for the day it ends. When the gateway was off, the stay across the gap counts as one long stay.
 
 Each line of a file is small (about 60 bytes). A machine that changes state every second makes about 5 MB a day.
+
+## Run at startup (Windows)
+
+The setup page's **Run at startup** installs the gateway as a Windows scheduled task: it starts with the computer (as SYSTEM, before anyone signs in), is started again within a minute when it stops, and has no time limit. It runs `node gateway.cjs start --config <this config.json>`. Installing and removing need the gateway to run as an administrator once (right-click the console, *Run as administrator*). **Switch to the task now** stops the console gateway and starts the task a few seconds later (the same port).
+
+A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM or WinSW run it the same way.
+
+## Audit log
+
+Who did what, one JSON line per event in `audit-YYYY-MM.jsonl` next to `config.json` (kept 24 months): sign-ins (token or company account, with the address), going live (PLC, variable), acknowledgements (with the note), maintenance set and ended (planned too), replays and availability of recordings, reports, and every change on the setup page. The setup page searches it (any text: a user, an action, a PLC, a machine) over the last 24 h to a year, and exports it as CSV.
 
 ## Sign-in with company accounts
 
@@ -207,7 +234,7 @@ With `"insecure": true` and no `tls` entry, the gateway serves plain HTTP / WS a
 The log goes to the console, one line per event with a time stamp:
 - sign-ins (tokens and company accounts), rejected tokens and users, sign-outs, and IP addresses blocked after 10 failures a minute;
 - alerts: the rules' machines followed, each message sent (or a webhook that failed), and acknowledgements;
-- operator boards: who watches which PLCs; maintenance set and ended; escalations; replays of recordings;
+- operator boards: who watches which PLCs; maintenance planned, set and ended; escalations; replays of recordings; slowdowns; reports posted; the startup task;
 - the setup page's actions (searches, PLC lists saved, tokens created or revoked) and refused requests to it;
 - "go live" requests, with user, PLC and variable;
 - ADS connections to the PLCs, and handles released.

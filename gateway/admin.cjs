@@ -57,7 +57,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, discover, localNetworks, sha256, version, log, alerts, recordings }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -143,6 +143,46 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, d
       log(`admin: boards saved (${boards.map((b) => b.id).join(', ') || 'none'})`);
       return { boards, plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) };
     },
+    'POST recordings/check': async (body) => {
+      if (!recordings) throw new Error('Recordings are not available');
+      return recordings.checkSlowerNow(String(body.id ?? ''));
+    },
+    // Audit log: search (text, time window), newest first
+    'POST audit/search': async (body) => {
+      const from = Number(body.from) || Date.now() - 7 * 86400000;
+      const to = Number(body.to) || Date.now();
+      return { events: audit ? audit.search({ from, to, q: String(body.q ?? '').slice(0, 200), limit: Math.min(5000, Number(body.limit) || 1000) }) : [] };
+    },
+    // Shift reports: the shifts, the webhook; a preview; sent now
+    'GET reports': async () => ({ shifts: getConfig().shifts ?? [], reports: getConfig().reports ?? {} }),
+    'POST reports': async (body) => {
+      if (!reports) throw new Error('Reports are not available');
+      const shifts = (Array.isArray(body.shifts) ? body.shifts : []).filter((x) => x && (x.name || x.from || x.to));
+      reports.checkShifts(shifts);
+      const webhook = String(body.reports?.webhook ?? '').trim() || null;
+      if (webhook && !/^https?:\/\/\S+$/i.test(webhook)) throw new Error('The reports webhook is an http(s) URL (or empty)');
+      const format = ['teams', 'slack', 'json'].includes(body.reports?.format) ? body.reports.format : 'teams';
+      update((c) => {
+        c.shifts = shifts.map((x) => ({ name: String(x.name ?? '').trim().slice(0, 30), from: String(x.from).trim(), to: String(x.to).trim() }));
+        c.reports = { webhook, format };
+      });
+      log(`admin: shifts and reports saved (${shifts.length} shift(s)${webhook ? ', webhook' : ''})`);
+      return { shifts: getConfig().shifts ?? [], reports: getConfig().reports ?? {} };
+    },
+    'POST reports/preview': async (body) => {
+      if (!reports) throw new Error('Reports are not available');
+      const r = reports.report(['last', 'today', 'yesterday'].includes(body.which) ? body.which : 'last');
+      return { summary: r.summary, csv: r.csv };
+    },
+    'POST reports/send': async (body) => {
+      if (!reports) throw new Error('Reports are not available');
+      return reports.send(['last', 'today', 'yesterday'].includes(body.which) ? body.which : 'last');
+    },
+    // Run at startup (Windows): the startup task
+    'GET service': async () => (service ? service.status() : { supported: false, message: 'Not available' }),
+    'POST service/install': async () => service.install(),
+    'POST service/remove': async () => service.remove(),
+    'POST service/switch': async () => service.switchToTask(),
     'GET recordings': async () => ({ rules: getConfig().recordings ?? [], status: recordings?.list() ?? [], plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) }),
     'POST recordings': async (body) => {
       if (!recordings) throw new Error('Recordings are not available');
@@ -226,7 +266,11 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, d
     req.on('end', async () => {
       try {
         const body = raw ? JSON.parse(raw) : {};
-        json(res, 200, await route(body && typeof body === 'object' ? body : {}));
+        const result = await route(body && typeof body === 'object' ? body : {});
+        if (req.method !== 'GET' && !/^(audit\/search|reports\/preview|test|scan)$/.test(url.pathname.slice('/admin/api/'.length))) {
+          audit?.add('setup page', `setup.${url.pathname.slice('/admin/api/'.length)}`, { from: remote });
+        }
+        json(res, 200, result);
       } catch (err) {
         json(res, 400, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -324,6 +368,32 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-recordings"></div>
   <div class="row mt"><button id="admin-recording-add">Add a recording</button><span class="grow"></span><button class="primary" id="admin-recordings-save">Save recordings</button></div>
   <div class="msg" id="admin-recordings-msg"></div>
+</section>
+<section>
+  <h2>Shift reports</h2>
+  <p class="hint flush">The shifts (empty: the whole day). At the end of each shift, its report (alerts, time to acknowledge and to resolve, the machines with the most, maintenance) goes to the webhook; the board downloads it too.</p>
+  <div id="admin-shifts"></div>
+  <div class="row mt"><button id="admin-shift-add">Add a shift</button></div>
+  <table class="mt"><tbody>
+    <tr><th>Reports webhook</th><td><input type="text" class="mono" id="admin-report-webhook" placeholder="https://... (empty: not posted)"></td><th>Format</th><td><select id="admin-report-format"><option value="teams">Teams</option><option value="slack">Slack</option><option value="json">JSON</option></select></td></tr>
+  </tbody></table>
+  <div class="row mt"><button id="admin-report-preview">Preview the last shift</button><button id="admin-report-send">Send it now</button><span class="grow"></span><button class="primary" id="admin-reports-save">Save shifts and reports</button></div>
+  <div class="msg" id="admin-reports-msg"></div>
+</section>
+
+<section>
+  <h2>Run at startup (Windows)</h2>
+  <p class="hint flush">The gateway as a Windows scheduled task: it starts with the computer (as SYSTEM, before anyone signs in), is started again when it stops, and has no time limit. Installing needs this gateway to run as an administrator once.</p>
+  <div class="row"><span class="status" id="admin-service-status">...</span><span class="grow"></span><button id="admin-service-install">Install</button><button id="admin-service-switch">Switch to the task now</button><button class="danger" id="admin-service-remove">Remove</button></div>
+  <div class="msg" id="admin-service-msg"></div>
+</section>
+
+<section>
+  <h2>Audit log</h2>
+  <p class="hint flush">Who did what: sign-ins, going live, acknowledging, maintenance, replays, reports, and the changes on this page. Kept for 24 months (audit-YYYY-MM.jsonl next to config.json).</p>
+  <div class="row"><input type="text" id="admin-audit-q" placeholder="Search (user, action, PLC, machine...)"><select id="admin-audit-range"><option value="1">last 24 h</option><option value="7" selected>last 7 days</option><option value="31">last 31 days</option><option value="366">last year</option></select><button id="admin-audit-search">Search</button><button id="admin-audit-csv">Export CSV</button></div>
+  <div class="scroll mt"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead><tbody id="admin-audit"></tbody></table></div>
+  <div class="msg" id="admin-audit-msg"></div>
 </section>
 <p class="hint" id="admin-foot"></p>
 </main>
@@ -635,7 +705,14 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
           el('tr', {}, el('th', {}, 'Id'), el('td', {}, input('id', { class: 'mono' })), el('th', {}, 'Name'), el('td', {}, input('name'))),
           el('tr', {}, el('th', {}, 'PLC'), el('td', {}, plc), el('th', {}, 'Keep (days)'), el('td', {}, el('input', { type: 'number', min: '1', max: '366', value: String(r.days ?? 7), 'data-key': 'days', on: { input: (e) => { r.days = Number(e.target.value); } } }))),
           el('tr', {}, el('th', {}, 'Root'), el('td', {}, input('root', { class: 'mono', placeholder: 'MAIN.mainStateMachine' })), el('th', {}, 'State variable'), el('td', {}, input('stateVar', { class: 'mono', placeholder: 'machineState' }))),
-        ))));
+          el('tr', {}, el('th', {}, 'Variables too'), el('td', { colSpan: 3 }, el('input', { type: 'text', class: 'mono', 'data-key': 'vars', value: (r.vars || []).join(', '), placeholder: 'guard values to record, e.g. MAIN.mainStateMachine.smTable1.cmd_bHome', on: { input: (e) => { r.vars = e.target.value.split(/[\\s,;]+/).filter(Boolean); } } }))),
+          el('tr', {}, el('th', {}, 'Size limit (MB)'), el('td', {}, el('input', { type: 'number', min: '1', 'data-key': 'maxMB', value: r.maxMB == null ? '' : String(r.maxMB), placeholder: 'none', on: { input: (e) => { r.maxMB = e.target.value ? Number(e.target.value) : null; } } })), el('th', {}, 'Compress past days'), el('td', {}, el('label', { class: 'row nowrap' }, el('input', { type: 'checkbox', checked: r.compress !== false, on: { change: (e) => { r.compress = e.target.checked; } } }), 'gzip'))),
+          el('tr', {}, el('th', {}, 'Getting slower (%)'), el('td', {}, el('input', { type: 'number', min: '5', 'data-key': 'slowerPct', value: r.slowerPct == null ? '' : String(r.slowerPct), placeholder: 'off, e.g. 30', on: { input: (e) => { r.slowerPct = e.target.value ? Number(e.target.value) : null; } } })), el('th', {}, 'Its webhook'), el('td', {}, input('slowerWebhook', { class: 'mono', placeholder: 'https://... (empty: the board only)' }))),
+        )),
+        el('div', { class: 'row mt' }, el('span', { class: 'status' }, st ? 'Disk: ' + (st.bytes / 1048576).toFixed(1) + ' MB, ' + st.days.length + ' day(s) (' + st.compressedDays + ' compressed)' : ''), el('span', { class: 'grow' }), el('button', { class: 'admin-recording-check', on: { click: async () => {
+          try { const c = await call('recordings/check', { id: r.id }); say('admin-recordings-msg', c.error || (c.found.length ? c.found.map((x) => x.text).join(' / ') : 'Nothing getting slower'), !c.error); }
+          catch (err) { say('admin-recordings-msg', err.message, false); }
+        } } }, 'Check for slowdowns now'))));
     });
   }
   const loadRecordings = async () => {
@@ -661,6 +738,88 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-recordings-msg', err.message, false); }
   });
   loadRecordings().catch(() => {});
+
+  // ---- Shift reports ----
+  let shiftList = [];
+  function renderShifts() {
+    const box = $('admin-shifts');
+    box.replaceChildren();
+    if (!shiftList.length) box.append(el('p', { class: 'hint' }, 'No shifts: one report per day.'));
+    shiftList.forEach((x, i) => {
+      const input = (key, props = {}) => el('input', { type: 'text', value: x[key] ?? '', 'data-key': key, ...props, on: { input: (e) => { x[key] = e.target.value; } } });
+      box.append(el('div', { class: 'row admin-shift' }, input('name', { placeholder: 'Early' }), input('from', { class: 'mono', placeholder: '06:00' }), input('to', { class: 'mono', placeholder: '14:00' }), el('button', { class: 'danger', on: { click: () => { shiftList.splice(i, 1); renderShifts(); } } }, 'Remove')));
+    });
+  }
+  const loadReports = async () => {
+    const r = await call('reports');
+    shiftList = (r.shifts || []).map((x) => ({ ...x }));
+    $('admin-report-webhook').value = (r.reports && r.reports.webhook) || '';
+    $('admin-report-format').value = (r.reports && r.reports.format) || 'teams';
+    renderShifts();
+  };
+  $('admin-shift-add').addEventListener('click', () => { shiftList.push({ name: '', from: '', to: '' }); renderShifts(); });
+  $('admin-reports-save').addEventListener('click', async () => {
+    try {
+      await call('reports', { shifts: shiftList, reports: { webhook: $('admin-report-webhook').value.trim(), format: $('admin-report-format').value } });
+      await loadReports();
+      say('admin-reports-msg', 'Saved.', true);
+    } catch (err) { say('admin-reports-msg', err.message, false); }
+  });
+  $('admin-report-preview').addEventListener('click', async () => {
+    try { const r = await call('reports/preview', { which: 'last' }); say('admin-reports-msg', r.summary.text, true); }
+    catch (err) { say('admin-reports-msg', err.message, false); }
+  });
+  $('admin-report-send').addEventListener('click', async () => {
+    try { const r = await call('reports/send', { which: 'last' }); say('admin-reports-msg', r.message, r.ok); }
+    catch (err) { say('admin-reports-msg', err.message, false); }
+  });
+  loadReports().catch(() => {});
+
+  // ---- Run at startup ----
+  const loadService = async () => {
+    const st = await call('service');
+    const box = $('admin-service-status');
+    if (!st.supported) { box.textContent = st.message; box.className = 'status'; ['admin-service-install', 'admin-service-switch', 'admin-service-remove'].forEach((id) => { $(id).disabled = true; }); return; }
+    box.textContent = st.installed ? 'Installed (' + (st.status || '?') + ')' : 'Not installed' + (st.elevated ? '' : ' (this gateway does not run as an administrator: it cannot install it)');
+    box.className = 'status ' + (st.installed ? 'ok' : '');
+    $('admin-service-install').disabled = !st.elevated;
+    $('admin-service-remove').disabled = !st.installed || !st.elevated;
+    $('admin-service-switch').disabled = !st.installed;
+  };
+  const serviceAction = (path, question) => async () => {
+    if (question && !confirm(question)) return;
+    try { const r = await call(path, {}); say('admin-service-msg', r.message + (r.dry ? ' [' + r.dry + ']' : ''), true); await loadService(); }
+    catch (err) { say('admin-service-msg', err.message, false); }
+  };
+  $('admin-service-install').addEventListener('click', serviceAction('service/install'));
+  $('admin-service-remove').addEventListener('click', serviceAction('service/remove', 'Remove the startup task? The gateway then only runs while started by hand.'));
+  $('admin-service-switch').addEventListener('click', serviceAction('service/switch', 'Stop this gateway and start the task? The page reconnects when it is back (a few seconds).'));
+  loadService().catch(() => {});
+
+  // ---- Audit log ----
+  let auditRows = [];
+  const detailsOf = (e) => Object.entries(e).filter(([k]) => !['t', 'user', 'action'].includes(k)).map(([k, v]) => k + ': ' + (typeof v === 'object' ? JSON.stringify(v) : v)).join(', ');
+  const searchAudit = async () => {
+    try {
+      const days = Number($('admin-audit-range').value);
+      const r = await call('audit/search', { q: $('admin-audit-q').value, from: Date.now() - days * 86400000, to: Date.now() });
+      auditRows = r.events;
+      const body = $('admin-audit');
+      body.replaceChildren(...auditRows.slice(0, 500).map((e) => el('tr', { class: 'admin-audit-row' }, el('td', { class: 'mono' }, new Date(e.t).toLocaleString()), el('td', {}, e.user), el('td', { class: 'mono' }, e.action), el('td', { class: 'mono' }, detailsOf(e)))));
+      say('admin-audit-msg', auditRows.length + ' event(s)' + (auditRows.length > 500 ? ' (the first 500 shown; Export CSV has them all)' : ''), true);
+    } catch (err) { say('admin-audit-msg', err.message, false); }
+  };
+  $('admin-audit-search').addEventListener('click', searchAudit);
+  $('admin-audit-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchAudit(); });
+  $('admin-audit-csv').addEventListener('click', () => {
+    const q = (v) => { const t = v == null ? '' : String(v); return /[",;\\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const lines = ['time,user,action,details', ...auditRows.map((e) => [new Date(e.t).toISOString(), e.user, e.action, detailsOf(e)].map(q).join(','))];
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([lines.join('\\r\\n') + '\\r\\n'], { type: 'text/csv' }));
+    a.download = 'audit-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+  });
+  searchAudit();
 
   call('state').then(render, (err) => { $('admin-sub').textContent = err.message; });
 })();

@@ -115,6 +115,29 @@ export function addRouteOnPlc(req: AddRouteRequest): Promise<AddRouteResult> {
   return api.addRoute({ plcIp: req.plcIp, user: req.user, password: req.password, localNetId: req.localNetId || undefined }).catch((err: Error) => ({ ok: false, message: err.message }));
 }
 
+/** Which PLCs answer (desktop, XAE; Link: the App asks Link): [{ key, ip }] -> { key: boolean } */
+export function probePlcs(targets: { key: string; ip: string }[]): Promise<Record<string, boolean>> {
+  if (isXaeHost()) {
+    const requestId = nextRequest++;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve({});
+      }, 8000);
+      const off = onHostMessage((m) => {
+        const msg = m as unknown as { type: string; requestId?: number; reachable?: Record<string, boolean> };
+        if (msg.type !== 'probeResult' || msg.requestId !== requestId) return;
+        window.clearTimeout(timer);
+        off();
+        resolve(msg.reachable ?? {});
+      });
+      postToHost({ type: 'probePlcs', requestId, targets } as unknown as Parameters<typeof postToHost>[0]);
+    });
+  }
+  const api = desktopApi() as (DesktopDiscoveryApi & { probePlcs?: (t: { key: string; ip: string }[]) => Promise<Record<string, boolean>> }) | null;
+  return api?.probePlcs ? api.probePlcs(targets).catch(() => ({})) : Promise.resolve({});
+}
+
 const KEY = 'kss.live.plcs';
 
 export function loadRememberedPlcs(): RememberedPlc[] {

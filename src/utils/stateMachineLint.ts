@@ -26,7 +26,8 @@ export type LintRuleId =
   | 'no-else'
   | 'multiple-initial'
   | 'region-no-final'
-  | 'region-unreachable';
+  | 'region-unreachable'
+  | 'recorded-path';
 
 export type LintFix = { kind: 'add-enum-member'; name: string } | { kind: 'add-case-branch'; name: string };
 
@@ -113,6 +114,11 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'warning',
     title: 'Region state never entered',
     description: 'A state of a parallel region is neither where the region starts nor the target of one of its transitions.',
+  },
+  'recorded-path': {
+    severity: 'error',
+    title: 'Recorded path broken',
+    description: 'A path check (kept from a live session or a recording) has a transition the diagram no longer has: the machine did it, the edited code would not.',
   },
 };
 

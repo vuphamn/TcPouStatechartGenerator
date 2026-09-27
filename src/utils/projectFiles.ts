@@ -74,6 +74,6 @@ export async function saveDocument(name: string, content: string): Promise<{ pat
   if (isXaeHost()) return hostRequest<{ path?: string; error?: string; canceled?: boolean }>({ type: 'saveDocument', name, content }, 'saveDocumentResult', 600000);
   const d = desktop();
   if (d?.saveFile) return d.saveFile(name, content);
-  triggerDownload(new Blob([content], { type: /\.json$/i.test(name) ? 'application/json' : 'text/html;charset=utf-8' }), name);
+  triggerDownload(new Blob([content], { type: /\.json$/i.test(name) ? 'application/json' : /\.csv$/i.test(name) ? 'text/csv;charset=utf-8' : 'text/html;charset=utf-8' }), name);
   return { path: name };
 }

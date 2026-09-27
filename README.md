@@ -251,6 +251,12 @@ npm run build
 npm run preview
 ```
 
+### Review and save
+**Save ▾ > Review and save…** shows the diagram as last saved (XAE: as saved in XAE) and as edited, side by side, with the states added (green), changed (amber) and removed (red), and the states at the ends of changed transitions marked. Every change is listed under the diagrams, and **Save** saves from there. Save itself still saves at once.
+
+### Updates
+The desktop app and the XAE extension look for a newer release of their edition on GitHub (the Release workflow's `desktop-v*` and `xae-v*` releases) once a day at start, and on **Window > Check for updates…**. A newer one shows a banner with **Get it** (the release page) and **Later** (not shown again until a still newer one). A private repository needs a GitHub token with read access to its contents: **Check for updates…** asks for it and keeps it in the app. The web edition is updated with its gateway.
+
 ### Releases (GitHub Actions)
 After the **Tests** workflow passes on `master`, the **Release** workflow (`.github/workflows/release.yml`) releases each edition whose code changed since its last release. An edition with no code changes gets no new version.
 
@@ -318,7 +324,7 @@ The desktop app's **Live** tab follows a state machine in a PLC on another compu
    - **On the network:** the TwinCAT devices that answer the search XAE's *Add Route* dialog uses (UDP 48899), with name, AMS NetId, IP and TwinCAT version. For a PLC behind a router, which the search's broadcast doesn't reach, enter its address in the list's field. The search changes nothing on the devices.
    - **Remembered:** the PLCs you ticked **Remember** for. Remember keeps the PLC (NetId, IP, port, this PC's NetId) in the app for every POU: a POU without a target of its own starts with the last one used. The pencil renames one, *×* forgets it.
    - **Add route:** next to a PLC found on the network. Enter the PLC's user and password (often *Administrator*); the app asks the PLC for an ADS route to this computer, with this PC's AMS NetId and its IP on the PLC's network, as XAE's *Add Route* dialog does for the PLC's side. The password is only sent to the PLC, never kept.
-   - **Switching PLCs:** with two or more remembered PLCs, a list next to **Go live** switches to another in one click. While live, it stops and goes live on the other PLC.
+   - **Switching PLCs:** with two or more remembered PLCs, a list next to **Go live** switches to another in one click. While live, it stops and goes live on the other PLC. It shows which ones answer on the network (● answering, ○ not), checked every 30 s (a TCP connection to the PLC's ADS router port; nothing is sent).
 
    The PLC IP defaults to the first four numbers of the NetId; enter it when it differs, or `host:port` for a forwarded port.
 3. Click **Go live**. Without a route the PLC closes the connection, and the tab says which route to add.
@@ -348,8 +354,9 @@ In the Live tab, enter your access token (or **Sign in** with your company accou
 - **Sign-in with company accounts:** OpenID Connect (Microsoft Entra ID / Microsoft 365, ADFS, Okta, Google). The gateway checks who may use it (users, e-mail domains, groups) and logs the user's name. Tokens can stay or be turned off.
 - **Alerts:** the gateway follows the machines under a root by itself, with no browser open, and posts to a Teams, Slack or JSON webhook when one is stuck or in an error state, and when it recovers. Set them up on the setup page. The gateway keeps the alert history. **Acknowledge** (with a note) shows everyone who is on it and posts that to the webhook too.
 - **Escalation, quiet hours, maintenance:** an alert nobody acknowledges in time is posted again, for example to a supervisor. Quiet hours per rule mute alerts at planned times. **Maintenance** on the board mutes a PLC for a while, with who and why, and announces it.
-- **Recordings on the gateway:** the gateway records the machines all day and keeps N days. **Gateway recordings...** in the Live tab replays any machine's time window, and its **Trends** tab shows each state's daily average over the last days, marking the states that are getting slower.
-- **Operator board:** `https://<gateway>:8443/?board` (saved boards: `?board=<id>`). New alerts chime and flash. A tile opens that machine's diagram live. On a phone the board has Machines / Alerts tabs. (or **Operator board** in the Live tab) is a full-screen view for a screen by the line. It has a tile per machine, green, amber (stuck) or red (error) with problems first, and the alerts with Acknowledge. See [gateway/README.md](gateway/README.md#operator-board).
+- **Recordings on the gateway:** the gateway records the machines (and chosen variables) all day and keeps N days, compressed. **Gateway recordings...** in the Live tab replays any machine's time window. Its **Trends** tab shows each state's daily average over the last days, marking the states that are getting slower (the gateway can also report those once a day). Its **Availability** tab shows each machine's time normal, in error, stuck and in maintenance, per day or shift.
+- **Shift reports, audit log, startup task:** a report per shift of the alerts and how they were handled, posted to a webhook and downloadable on the board. An audit log of who did what, searchable on the setup page. The gateway as a Windows startup task.
+- **Operator board:** `https://<gateway>:8443/?board` (saved boards: `?board=<id>`; `&cycle=30` rotates through them). New alerts chime and flash. A tile opens that machine's diagram live. On a phone the board has Machines / Alerts tabs. Maintenance can be planned ahead, and the header counts escalated alerts. (or **Operator board** in the Live tab) is a full-screen view for a screen by the line. It has a tile per machine, green, amber (stuck) or red (error) with problems first, and the alerts with Acknowledge. See [gateway/README.md](gateway/README.md#operator-board).
 
 Through Link, the Live tab's **Browse** also searches the network (Link runs the search on this computer) and offers **Add route**, as in the desktop app.
 
@@ -378,6 +385,10 @@ Every live session is recorded while it runs: the state variable's changes and t
 - **Save recording** (Live tab) writes the session so far to a `.kssrec.json` file (XAE and desktop: a save dialog; web: a download).
 - **Replay...** plays a recording back on the diagram as if live: the active state glows, the trail and Transition History fill, the guard values show. **Play** / **Pause**, a speed from 1x to 600x, and a slider to any moment of the recording. **Stop** ends the replay. A replay needs no PLC, so a night's recording can be looked at on any computer.
 - **State times:** while live or replaying, the Live tab's **State times** lists, per state, the stays measured, the average, 90% and longest time in it, and the total. A click shows the state on the diagram. **On the diagram** colours each measured state's border, with a badge (average and count), from quick (green) to slow (red).
+- **Compare...** puts two recordings side by side, or this session and a recording (a good cycle and a bad one): per state, the stays and the average time in each, and the change; the transitions only one of them took.
+- **Keep as a path check** keeps this session's transitions (live or replayed) as a named check for the POU type. Every edit is checked against the kept ones: a transition of a check that the diagram no longer has is a Problem (**Recorded path broken**), and the Live tab lists the checks with ✓ or ✗.
+- **CSV:** the State times table, and the gateway's trends and availability, save as CSV (Excel).
+- **Replay charts:** a recording with variables (a gateway recording with variables, or a saved session with guard values) shows a small chart of each under the slider, the position marked.
 - **Seen transitions:** the transitions the PLC took (live, not replays) are counted per POU type and kept in the app. Deleting one of them, or a state the PLC used, says so in the confirmation (how often, when last). Moving a transition's end that the PLC took shows a warning. **Save** asks first when the edit removes transitions the PLC has taken, and lists them.
 
 ## PLC symbols
