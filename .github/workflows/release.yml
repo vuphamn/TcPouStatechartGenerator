@@ -1,0 +1,159 @@
+name: Release
+
+# After the tests pass on master: each edition whose code changed since its last release gets the next version
+# (patch + 1) and a GitHub Release with its installers. An edition without code changes gets no new version.
+#   XAE      tag xae-v*      KvalStateScope.Xae.vsix
+#   Desktop  tag desktop-v*  the installer and the portable exe
+#   Web      tag web-v*      the web app (any static host), the gateway, Kval StateScope Link
+# Which files belong to which edition: scripts/release-plan.cjs. "[skip release]" in the commit message: no release.
+# Run it by hand (Actions > Release > Run workflow) to release editions even without changes.
+
+on:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Release these editions even without code changes (comma-separated: xae, desktop, web)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+# One release at a time (two quick pushes: the second waits and sees the first one's tags)
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      any: ${{ steps.plan.outputs.any }}
+      xae_changed: ${{ steps.plan.outputs.xae_changed }}
+      xae_version: ${{ steps.plan.outputs.xae_version }}
+      desktop_changed: ${{ steps.plan.outputs.desktop_changed }}
+      desktop_version: ${{ steps.plan.outputs.desktop_version }}
+      web_changed: ${{ steps.plan.outputs.web_changed }}
+      web_version: ${{ steps.plan.outputs.web_version }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: plan
+        run: node scripts/release-plan.cjs --force "${{ github.event.inputs.force }}"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      XAE: ${{ needs.plan.outputs.xae_changed }}
+      DESKTOP: ${{ needs.plan.outputs.desktop_changed }}
+      WEB: ${{ needs.plan.outputs.web_changed }}
+      XAE_VERSION: ${{ needs.plan.outputs.xae_version }}
+      DESKTOP_VERSION: ${{ needs.plan.outputs.desktop_version }}
+      WEB_VERSION: ${{ needs.plan.outputs.web_version }}
+      # Signing the desktop installer: the repository secrets CSC_LINK (the .pfx, base64) and CSC_KEY_PASSWORD (without
+      # them the builds are unsigned)
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix gateway
+
+      # Every edition's version in its files (a changed edition: its new version; the others: their last release,
+      # e.g. the XAE extension inside the desktop installer). Only in this build, not committed.
+      - name: Versions
+        run: |
+          node scripts/release-plan.cjs --stamp xae $env:XAE_VERSION
+          node scripts/release-plan.cjs --stamp desktop $env:DESKTOP_VERSION
+          node scripts/release-plan.cjs --stamp web $env:WEB_VERSION
+          New-Item -ItemType Directory -Force out | Out-Null
+
+      # The XAE extension (also inside the desktop installer). Builds the web app too.
+      - name: XAE extension (VSIX)
+        if: env.XAE == 'true' || env.DESKTOP == 'true'
+        run: ./xae-extension/build.ps1
+      - name: Web app
+        if: env.XAE != 'true' && env.DESKTOP != 'true'
+        run: npm run build
+
+      - name: XAE edition files
+        if: env.XAE == 'true'
+        run: Copy-Item xae-extension/KvalStateScope.Xae/bin/Release/KvalStateScope.Xae.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION.vsix"
+
+      - name: Web edition files
+        if: env.WEB == 'true'
+        run: |
+          node scripts/build-gateway.cjs
+          Push-Location release/gateway
+          npm install --omit=dev --no-audit --no-fund --loglevel=error
+          Pop-Location
+          node scripts/build-link.cjs
+          Compress-Archive -Path dist/* -DestinationPath "out/KvalStateScope-WebApp-$env:WEB_VERSION.zip"
+          Compress-Archive -Path release/gateway/* -DestinationPath "out/KvalStateScope-Gateway-$env:WEB_VERSION.zip"
+          Copy-Item "release/link/Kval StateScope Link.exe" "out/KvalStateScope-Link-$env:WEB_VERSION.exe"
+
+      - name: Desktop installer
+        if: env.DESKTOP == 'true'
+        run: |
+          node scripts/prepare-installer.cjs
+          npx electron-builder --win --publish never
+          Get-ChildItem release -Filter *.exe | ForEach-Object {
+            $name = if ($_.Name -match 'Setup') { "KvalStateScope-Setup-$env:DESKTOP_VERSION.exe" } else { "KvalStateScope-Portable-$env:DESKTOP_VERSION.exe" }
+            Copy-Item $_.FullName "out/$name"
+          }
+
+      - name: Releases
+        run: |
+          $sha = '${{ needs.plan.outputs.sha }}'
+          $editions = @(
+            @{ id = 'xae'; on = $env:XAE; v = $env:XAE_VERSION; title = 'XAE edition'; files = 'out/KvalStateScope.Xae-*.vsix' },
+            @{ id = 'desktop'; on = $env:DESKTOP; v = $env:DESKTOP_VERSION; title = 'Desktop edition'; files = 'out/KvalStateScope-Setup-*.exe', 'out/KvalStateScope-Portable-*.exe' },
+            @{ id = 'web'; on = $env:WEB; v = $env:WEB_VERSION; title = 'Web edition'; files = 'out/KvalStateScope-WebApp-*.zip', 'out/KvalStateScope-Gateway-*.zip', 'out/KvalStateScope-Link-*.exe' }
+          )
+          foreach ($e in $editions) {
+            if ($e.on -ne 'true') { continue }
+            $tag = "$($e.id)-v$($e.v)"
+            node scripts/release-plan.cjs --notes $e.id | Out-File -Encoding utf8 "out/$($e.id)-notes.md"
+            $assets = $e.files | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { $_.FullName }
+            if (-not $assets) { throw "No files for $($e.title)" }
+            gh release create $tag @assets --target $sha --title "$($e.title) $($e.v)" --notes-file "out/$($e.id)-notes.md"
+            if ($LASTEXITCODE -ne 0) { throw "Could not create the release $tag" }
+          }
+
+      - name: Build output (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build
+          path: |
+            out
+            release/*.exe
+          retention-days: 7

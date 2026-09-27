@@ -232,15 +232,17 @@ ipcMain.handle('tc:save-source-as', async (event, name, content, defaultDir) => 
 
 ipcMain.handle('tc:save-file', async (event, name, content) => {
   const win = BrowserWindow.fromWebContents(event.sender);
+  // A document (HTML, opened after saving) or a live recording (JSON)
+  const recording = /\.json$/i.test(String(name));
   const result = await dialog.showSaveDialog(win, {
-    title: 'Save the documentation',
+    title: recording ? 'Save the live recording' : 'Save the documentation',
     defaultPath: String(name || 'documentation.html'),
-    filters: [{ name: 'HTML document', extensions: ['html'] }],
+    filters: [recording ? { name: 'Live recording', extensions: ['json'] } : { name: 'HTML document', extensions: ['html'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   try {
     await require('fs/promises').writeFile(result.filePath, String(content), 'utf8');
-    shell.openPath(result.filePath);
+    if (!recording) shell.openPath(result.filePath);
     return { path: result.filePath };
   } catch (err) {
     return { error: String(err?.message ?? err) };
@@ -296,14 +298,72 @@ ipcMain.handle('tc:live-browse', (event, req) => {
     if (!contents.isDestroyed()) contents.send('tc:live', m);
   }, req);
 });
+// The Live tab's Browse: the TwinCAT devices on the network (UDP 48899 search; read-only). KSS_DISCOVERY_PORT and
+// KSS_DISCOVERY_BROADCAST=0 are for the tests (a simulated device on another port, no broadcast)
+ipcMain.handle('tc:discover-plcs', (_event, options) => {
+  const { discover, localNetworks } = require('../shared/tcDiscovery.cjs');
+  const addresses = (Array.isArray(options?.addresses) ? options.addresses : [])
+    .map((a) => String(a).trim())
+    .filter((a) => /^[A-Za-z0-9.-]{1,253}$/.test(a))
+    .slice(0, 64);
+  const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : localNetworks()[0]?.netId;
+  return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
+});
+// Add Route: a route on the PLC to this computer (its IP towards the PLC and the AMS NetId the live view uses), with
+// the PLC's user name and password as entered (never stored)
+ipcMain.handle('tc:add-route', (_event, options) => {
+  const { addRoute } = require('../shared/tcDiscovery.cjs');
+  const { localIpTowards, defaultLocalNetId } = require('../shared/liveSession.cjs');
+  const plcIp = String(options?.plcIp ?? '').trim().split(':')[0];
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(plcIp)) return { ok: false, message: 'The PLC\'s IP address is needed' };
+  const hostAddress = localIpTowards(plcIp);
+  const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : defaultLocalNetId(hostAddress);
+  return addRoute({
+    plcIp, localNetId, hostAddress, routeName: String(options?.routeName || require('os').hostname()).slice(0, 60),
+    user: String(options?.user ?? ''), password: String(options?.password ?? ''), port: Number(process.env.KSS_DISCOVERY_PORT) || 48899,
+  });
+});
 ipcMain.handle('tc:live-stop', (event) => {
   const contents = event.sender;
   return liveFor(contents).stop(true, (m) => {
     if (!contents.isDestroyed()) contents.send('tc:live', m);
   });
 });
+// Other PLCs in the Machine Overview: a monitor session per window and key (browse and watched values, no state
+// variable); their messages come on 'tc:side' as { key, message }
+const sideSessions = new Map(); // `${contents.id}|${key}` -> session
+const sideFor = (contents, key) => {
+  const k = `${contents.id}|${key}`;
+  if (!sideSessions.has(k)) {
+    sideSessions.set(k, createLiveSession());
+    contents.once('destroyed', () => {
+      sideSessions.get(k)?.stop(false);
+      sideSessions.delete(k);
+    });
+  }
+  return sideSessions.get(k);
+};
+const sideSend = (contents, key) => (m) => {
+  if (!contents.isDestroyed()) contents.send('tc:side', { key, message: m });
+};
+const sideKey = (key) => (typeof key === 'string' && /^[\w.:-]{1,80}$/.test(key) ? key : null);
+ipcMain.handle('tc:side-start', (event, key, options) => {
+  if (!sideKey(key)) return;
+  const o = options || {};
+  sideFor(event.sender, key).start(sideSend(event.sender, key), { netId: o.netId, ip: o.ip, port: o.port, localNetId: o.localNetId, stateVar: 'machineState', monitor: true });
+});
+ipcMain.handle('tc:side-watch', (event, key, vars) => (sideKey(key) ? sideFor(event.sender, key).watch(vars) : false));
+ipcMain.handle('tc:side-browse', (event, key, req) => (sideKey(key) ? sideFor(event.sender, key).browse(sideSend(event.sender, key), req) : undefined));
+ipcMain.handle('tc:side-stop', (event, key) => {
+  if (!sideKey(key)) return;
+  const k = `${event.sender.id}|${key}`;
+  const s = sideSessions.get(k);
+  sideSessions.delete(k);
+  return s?.stop(true, sideSend(event.sender, key));
+});
 app.on('before-quit', () => {
   for (const s of liveSessions.values()) s.stop(false);
+  for (const s of sideSessions.values()) s.stop(false);
 });
 
 // Windows groups taskbar buttons and pins by this id; it must match build.appId in package.json

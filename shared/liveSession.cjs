@@ -102,6 +102,14 @@ function createLiveSession(hooks = {}) {
       } catch (err) {
         throw new Error(`The PLC did not answer on ADS port ${adsPort}: ${ads.adsErrorText(err)}. Without a route for this computer (AMS NetId ${localNetId}, IP ${localIp}) the PLC does not answer.`);
       }
+      // Monitor (another PLC in the Machine Overview): connected for browsing and watched values, no state variable
+      if (options.monitor === true) {
+        if (id !== sessionId) throw new Error('stopped');
+        startTimers(s, send, status);
+        s.connected = true;
+        status('connected', `${host} (${netId}:${adsPort}) (PLC ${plcState})`, { target: `${netId}:${adsPort}`, plcState, instances: [], route, monitor: true });
+        return { symbol: null, netId, adsPort };
+      }
       let candidates = options.path && typeName && hooks.findInstances ? hooks.findInstances(options.path, typeName) : [];
       // Not from the project (or not found there): the PLC's own symbol and data type tables
       if (candidates.length === 0 && typeName) {
@@ -134,21 +142,7 @@ function createLiveSession(hooks = {}) {
       s.queue.push({ t: Date.now(), value: await ads.readByHandle(client, s.handle, info.size) });
       s.subscription = await ads.subscribeHandle(client, s.handle, info.size, (sample) => s.queue.push(sample));
       if (id !== sessionId) throw new Error('stopped');
-      s.vars = new VarWatcher(client, send);
-      if (s.desired) s.vars.set(s.desired);
-      s.timer = setInterval(() => {
-        if (s.queue.length) send({ type: 'liveValues', events: s.queue.splice(0) });
-        const values = s.vars?.drain();
-        if (values) send({ type: 'liveVars', values });
-      }, 50);
-      s.stateTimer = setInterval(async () => {
-        try {
-          const st = ads.ADS_STATES[(await client.readState()).adsState] ?? 'unknown';
-          if (id === sessionId) send({ type: 'liveStatus', state: 'plcState', plcState: st });
-        } catch (err) {
-          status('lost', `Connection lost: ${ads.adsErrorText(err)}`);
-        }
-      }, 2000);
+      startTimers(s, send, status);
       s.connected = true;
       status('connected', `${symbol} on ${host} (${netId}:${adsPort}) (PLC ${plcState})`, {
         target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, route,
@@ -161,6 +155,25 @@ function createLiveSession(hooks = {}) {
       if (message !== 'stopped') status('error', message, { instances: found, route });
       return null;
     }
+  }
+
+  /** The watched values, the queued samples every 50 ms, and the PLC's state every 2 s */
+  function startTimers(s, send, status) {
+    s.vars = new VarWatcher(s.client, send);
+    if (s.desired) s.vars.set(s.desired);
+    s.timer = setInterval(() => {
+      if (s.queue.length) send({ type: 'liveValues', events: s.queue.splice(0) });
+      const values = s.vars?.drain();
+      if (values) send({ type: 'liveVars', values });
+    }, 50);
+    s.stateTimer = setInterval(async () => {
+      try {
+        const st = ads.ADS_STATES[(await s.client.readState()).adsState] ?? 'unknown';
+        if (s.id === sessionId) send({ type: 'liveStatus', state: 'plcState', plcState: st });
+      } catch (err) {
+        status('lost', `Connection lost: ${ads.adsErrorText(err)}`);
+      }
+    }, 2000);
   }
 
   async function release(s) {
@@ -199,7 +212,7 @@ function createLiveSession(hooks = {}) {
   async function browse(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const symbolPath = typeof req?.path === 'string' ? req.path.trim() : '';
-    const stateVar = typeof req?.stateVar === 'string' && /^[A-Za-z_]w*$/.test(req.stateVar) ? req.stateVar : 'machineState';
+    const stateVar = typeof req?.stateVar === 'string' && /^[A-Za-z_]\w*$/.test(req.stateVar) ? req.stateVar : 'machineState';
     if (!ads.isSymbolPath(symbolPath)) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not a symbol path' });
     const s = session;
     if (!s || !s.connected) return send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: 'Not connected' });

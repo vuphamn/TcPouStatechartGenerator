@@ -160,17 +160,33 @@ import {
 } from './utils/liveGuards.ts';
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
-import { GatewayConnection, GatewayPlc, detectGatewayOrigin } from './utils/liveGateway.ts';
+import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
+import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap } from './utils/seenTransitions.ts';
+import { addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
+import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
 import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
 import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
 import { MachineOverview, overviewWatchId } from './components/MachineOverview.tsx';
+import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
+import type { SidePlc, SideVia } from './utils/sideLive.ts';
 import { formatLimit, limitFor, notifyStuck, parseDuration, requestNotifyPermission, setDefaultLimit, setNotify, setStateLimit, useDefaultLimit, useNotify, useStateLimits } from './utils/stateLimits.ts';
 
 /** Guard variables and Symbols values followed at once (a gateway allows 100 by default) */
 const MAX_WATCHED = 100;
 /** A symbol path the hosts accept (as shared/tcAds.cjs isSymbolPath) */
 const isSymbolPathText = (t: string) => t.length <= 250 && /^[A-Za-z_]\w*(\[-?\d+\]|\^)*(\.[A-Za-z_]\w*(\[-?\d+\]|\^)*)*$/.test(t);
+/** A recording played back: its span and position (PLC time), playing, and speed (1: real time) */
+interface ReplayState {
+  rec: LiveRecording;
+  file: string;
+  from: number;
+  to: number;
+  pos: number;
+  playing: boolean;
+  speed: number;
+}
+
 const DEFAULT_LIVE_SETTINGS: LiveSettings = { instance: '', netId: '', port: '', ip: '', localNetId: '', gateway: '', plc: '', via: '', linkPort: '' };
 import { IdentifiedStatesSidebarSection } from './components/IdentifiedStatesSidebarSection.tsx';
 import { StateNodeStyleInspector, InspectorPanelMode } from './components/StateNodeStyleInspector.tsx';
@@ -1342,6 +1358,28 @@ export const App: React.FC = () => {
   // ---- Live view (XAE): the POU's state variable in the running PLC, over ADS ----
   const [liveStatus, setLiveStatus] = useState<LiveStatus>({ state: 'idle', instances: [] });
   const [liveSession, setLiveSession] = useState<LiveSession>(EMPTY_LIVE_SESSION);
+  // Live recordings: the running session is recorded (Save recording); Replay plays one back as if live
+  const recorderRef = useRef(new LiveRecorder());
+  const [replay, setReplay] = useState<ReplayState | null>(null);
+  const replayingRef = useRef(false);
+  replayingRef.current = !!replay;
+  // The transitions the PLC took with this POU type (kept in the app): edits and Save that drop one say so first
+  const seenPouType = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
+  const [seen, setSeen] = useState<SeenMap>({});
+  useEffect(() => setSeen(loadSeen(seenPouType)), [seenPouType]);
+  const seenUpToRef = useRef(0);
+  useEffect(() => {
+    const fresh = liveSession.transitions.filter((t) => t.t > seenUpToRef.current);
+    if (!fresh.length) return;
+    seenUpToRef.current = Math.max(...fresh.map((t) => t.t));
+    // (a replay shows transitions already counted when they happened)
+    if (replayingRef.current) return;
+    setSeen((s) => {
+      const next = addSeen(s, fresh);
+      saveSeen(seenPouType, next);
+      return next;
+    });
+  }, [liveSession.transitions, seenPouType]);
   const liveEnumNames = useMemo(() => enumValueMap(dutContent), [dutContent]);
   const liveNamesRef = useRef(liveEnumNames);
   liveNamesRef.current = liveEnumNames;
@@ -1368,12 +1406,17 @@ export const App: React.FC = () => {
     }));
   }, []);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
+    // (a live session's samples while a replay shows: recorded, not shown)
+    recorderRef.current.addValues(events);
+    if (replayingRef.current) return;
     setLiveSession((prev) => applyLiveSamples(prev, events, liveNamesRef.current, liveEdgesRef.current));
   }, []);
   // Guard variables: where the host found each one, and their latest values (by variable, lower case)
   const [liveWatched, setLiveWatched] = useState<Record<string, WatchedVar>>({});
   const [liveVarValues, setLiveVarValues] = useState<Record<string, LiveValue>>({});
   const handleLiveWatchResult = useCallback((vars: { id: string; symbol?: string; type?: string; error?: string }[]) => {
+    recorderRef.current.addWatched(vars);
+    if (replayingRef.current) return;
     setLiveWatched((prev) => {
       const next = { ...prev };
       for (const v of vars) next[v.id] = { symbol: v.symbol, type: v.type, error: v.error };
@@ -1381,6 +1424,8 @@ export const App: React.FC = () => {
     });
   }, []);
   const handleLiveVars = useCallback((values: { id: string; t: number; v: LiveValue | null }[]) => {
+    recorderRef.current.addVars(values);
+    if (replayingRef.current) return;
     setLiveVarValues((prev) => {
       const next = { ...prev };
       for (const s of values) {
@@ -1569,8 +1614,31 @@ export const App: React.FC = () => {
    * it cannot write them). A file changed on disk since it was read is overwritten only when the user says so.
    * quiet: from an editor's Ctrl+S (no message when there is nothing to save, no download)
    */
+  /**
+   * Before a Save: transitions the saved version has, the edit no longer has, and the PLC took. When there are any,
+   * asks (Save anyway runs save) and returns true; else false (save now)
+   */
+  const confirmSeenRemovals = useCallback(
+    (savedDut: string, savedPou: string, save: () => void): boolean => {
+      const removed = removedSeenTransitions(savedDut, savedPou, dutContent, pouContent, seen);
+      if (!removed.length) return false;
+      setPromptRequest({
+        title: 'Save without transitions the PLC uses?',
+        label: `This Save removes ${removed.length} transition${removed.length === 1 ? '' : 's'} the running PLC has taken:`,
+        details: [...removed.slice(0, 12).map((r) => `${r.from} → ${r.to}: taken ${seenText(r)}`), ...(removed.length > 12 ? [`… ${removed.length - 12} more`] : [])],
+        confirmOnly: true,
+        danger: true,
+        submitLabel: 'Save anyway',
+        onSubmit: save,
+      });
+      return true;
+    },
+    [dutContent, pouContent, seen]
+  );
   const handleSaveSources = useCallback(
-    async (opts: { force?: boolean; quiet?: boolean } = {}) => {
+    async (opts: { force?: boolean; quiet?: boolean; checked?: boolean } = {}) => {
+      // Transitions the PLC took that this Save removes: asked first
+      if (!opts.force && !opts.checked && pouDirty && confirmSeenRemovals(savedSources.dut, savedSources.pou, () => void saveSourcesRef.current({ ...opts, checked: true }))) return;
       const items = [
         pouDirty ? { kind: 'pou' as const, name: defaultName('pou'), path: pouPath, relativePath: undefined as string | undefined, content: pouContent, baseline: savedSources.pou } : null,
         dutDirty ? { kind: 'dut' as const, name: defaultName('dut'), path: dutPath, relativePath: dutRelativePath, content: dutContent, baseline: savedSources.dut } : null,
@@ -1630,7 +1698,7 @@ export const App: React.FC = () => {
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast]
+    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast, confirmSeenRemovals]
   );
   const saveSourcesRef = useRef(handleSaveSources);
   saveSourcesRef.current = handleSaveSources;
@@ -1662,8 +1730,11 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
-  const handleSaveToProject = useCallback(() => {
+  const handleSaveToProject = useCallback((checked?: boolean) => {
     if (hostDirtyFiles.length === 0) return;
+    const savedPou = (pouPath && hostSavedContent[pouPath]) || '';
+    const savedDut = (dutPath && hostSavedContent[dutPath]) || dutContent;
+    if (checked !== true && savedPou && confirmSeenRemovals(savedDut, savedPou, () => handleSaveToProjectRef.current(true))) return;
     pendingHostSaveRef.current = hostDirtyFiles;
     // The saved version tells the extension what this edit was based on; a change in XAE since then is refused
     // unless the user chose to keep their edits
@@ -1675,7 +1746,7 @@ export const App: React.FC = () => {
         force: keepMineRef.current.has(f.path),
       })),
     });
-  }, [hostDirtyFiles, hostSavedContent]);
+  }, [hostDirtyFiles, hostSavedContent, pouPath, dutPath, dutContent, confirmSeenRemovals]);
   const handleSaveToProjectRef = useRef(handleSaveToProject);
   handleSaveToProjectRef.current = handleSaveToProject;
 
@@ -2059,8 +2130,10 @@ export const App: React.FC = () => {
         return;
       }
       applyTransitionEdit(end === 'end' ? retargetTransition(pouContent, e, stateId, varFor(e.from)) : moveTransitionStart(pouContent, e, stateId, varFor(e.from)));
+      const taken = seen[seenKey(e.from, e.to)];
+      if (taken) showCopyToast(`⚠ The PLC took ${e.from} → ${e.to} ${seenText(taken)}: the running machine uses it (Undo: Ctrl+Z)`, 'error', 8000);
     },
-    [pouContent, knownStates, currentEdge, applyTransitionEdit, stateVarName, showCopyToast]
+    [pouContent, knownStates, currentEdge, applyTransitionEdit, stateVarName, showCopyToast, seen]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
   const copiedStateRef = useRef<string | null>(null);
@@ -2126,9 +2199,10 @@ export const App: React.FC = () => {
         ...r.kept.map((k) => `Not deleted, change it yourself: ${k}`),
         ...r.remaining.map((k) => `Still refers to it: ${k}`),
       ];
+      const inState = stateSeen(seen, id);
       setPromptRequest({
         title: `Delete ${id}?`,
-        label: 'Deleted from the POU and the enum (Save writes them to the project):',
+        label: `${inState.n ? `⚠ The PLC went into or out of ${id} ${seenText(inState)}: the running machine uses it. ` : ''}Deleted from the POU and the enum (Save writes them to the project):`,
         details,
         confirmOnly: true,
         danger: true,
@@ -2145,7 +2219,7 @@ export const App: React.FC = () => {
         },
       });
     },
-    [pouContent, dutContent, stateVarName, handleReplaceSources, dropStateKeys, selectedStateId, showCopyToast]
+    [pouContent, dutContent, stateVarName, handleReplaceSources, dropStateKeys, selectedStateId, showCopyToast, seen]
   );
   const handleDeleteTransition = useCallback(
     (edge: EdgeInfo) => {
@@ -2157,9 +2231,10 @@ export const App: React.FC = () => {
         return;
       }
       const gone = (r.removed ?? []).map((l) => l.trim()).filter(Boolean);
+      const taken = seen[seenKey(e.from, e.to)];
       setPromptRequest({
         title: `Delete ${e.from} → ${e.to}?`,
-        label: `Its code in ${r.method}() is deleted (Save writes it to the project):`,
+        label: `${taken ? `⚠ The PLC took this transition ${seenText(taken)}: the running machine uses it. ` : ''}Its code in ${r.method}() is deleted (Save writes it to the project):`,
         details: gone.length <= 12 ? gone : [...gone.slice(0, 11), `… ${gone.length - 11} more lines`],
         confirmOnly: true,
         danger: true,
@@ -2167,7 +2242,7 @@ export const App: React.FC = () => {
         onSubmit: () => applyTransitionEdit(r),
       });
     },
-    [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast]
+    [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast, seen]
   );
 
   // The statechart palette: elements dropped on the canvas become ST (Save writes the files)
@@ -2831,7 +2906,10 @@ export const App: React.FC = () => {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(liveSettingsKey);
-      setLiveSettings(raw ? { ...DEFAULT_LIVE_SETTINGS, ...(JSON.parse(raw) as Partial<LiveSettings>) } : DEFAULT_LIVE_SETTINGS);
+      const loaded: LiveSettings = raw ? { ...DEFAULT_LIVE_SETTINGS, ...(JSON.parse(raw) as Partial<LiveSettings>) } : DEFAULT_LIVE_SETTINGS;
+      // A POU without a target starts with the last remembered PLC (XAE: empty is the project's target, kept so)
+      const last = !loaded.netId && !isXaeHost() ? loadRememberedPlcs()[0] : undefined;
+      setLiveSettings(last ? { ...loaded, netId: last.netId, ip: last.ip, port: last.port, localNetId: last.localNetId } : loaded);
     } catch {
       setLiveSettings(DEFAULT_LIVE_SETTINGS);
     }
@@ -2908,6 +2986,13 @@ export const App: React.FC = () => {
     if (liveMode === 'web') void detectGatewayOrigin().then(setGatewayOrigin);
   }, [liveMode]);
   const [gatewayToken, setGatewayToken, rememberGatewayToken, setRememberGatewayToken] = useStoredSecret('kss.gateway.token');
+  // Sign-in with company accounts on the gateway serving this page (its session cookie is this site's)
+  const [gatewaySso, setGatewaySso] = useState<GatewaySso | null>(null);
+  useEffect(() => {
+    if (liveMode === 'web' && gatewayOrigin) void fetchGatewaySso(gatewayOrigin).then(setGatewaySso);
+  }, [liveMode, gatewayOrigin]);
+  const ssoHere = !!gatewaySso?.sso && !!gatewayOrigin && (!liveSettings.gateway || gatewaySocketUrl(liveSettings.gateway) === gatewaySocketUrl(gatewayOrigin));
+  const ssoUser = ssoHere ? gatewaySso?.user ?? null : null;
   const [linkCode, setLinkCode, rememberLinkCode, setRememberLinkCode] = useStoredSecret('kss.link.code');
   // Through the gateway when this page is served by one, else through the helper on this computer
   const liveVia: 'link' | 'gateway' = liveSettings.via || (gatewayOrigin ? 'gateway' : 'link');
@@ -2932,9 +3017,40 @@ export const App: React.FC = () => {
     setLiveSession(EMPTY_LIVE_SESSION);
     setLiveStatus({ state: 'idle', instances: [] });
   }, [pouPath]);
+  // Remembered PLCs (any POU): Browse lists them, Remember adds the target, going live on one makes it the newest
+  const [rememberedPlcs, setRememberedPlcs] = useState<RememberedPlc[]>(loadRememberedPlcs);
+  const updateRememberedPlcs = useCallback((change: (list: RememberedPlc[]) => RememberedPlc[]) => {
+    setRememberedPlcs((prev) => {
+      const next = change(prev).sort((a, b) => b.used - a.used);
+      saveRememberedPlcs(next);
+      return next;
+    });
+  }, []);
+  const handleRememberPlc = useCallback(
+    (remember: boolean, name?: string) => {
+      const netId = liveSettings.netId.trim();
+      updateRememberedPlcs((list) => {
+        const rest = list.filter((p) => p.netId !== netId);
+        if (!remember) return rest;
+        const known = list.find((p) => p.netId === netId);
+        return [{ name: name || known?.name || netId, netId, ip: liveSettings.ip.trim(), port: liveSettings.port, localNetId: liveSettings.localNetId.trim(), used: Date.now() }, ...rest];
+      });
+    },
+    [liveSettings, updateRememberedPlcs]
+  );
   const handleLiveStart = useCallback(() => {
     const port = parseInt(liveSettings.port, 10);
     const stateVar = identifiedStatesResult.stateVarName || 'machineState';
+    const targetNetId = liveSettings.netId.trim();
+    // A new session: a new recording (a replay showing ends)
+    replayingRef.current = false;
+    setReplay(null);
+    recorderRef.current.reset();
+    if (!(liveMode === 'web' && liveVia === 'gateway')) {
+      updateRememberedPlcs((list) =>
+        list.map((p) => (p.netId === targetNetId ? { ...p, ip: liveSettings.ip.trim(), port: liveSettings.port, localNetId: liveSettings.localNetId.trim(), used: Date.now() } : p))
+      );
+    }
     if (liveMode === 'desktop') {
       setLiveSession(EMPTY_LIVE_SESSION);
       setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting...' }));
@@ -2984,15 +3100,15 @@ export const App: React.FC = () => {
         setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter the gateway address' }));
         return;
       }
-      if (!gatewayToken) {
-        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter your gateway access token' }));
+      if (!gatewayToken && !ssoUser) {
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: ssoHere ? 'Sign in first' : 'Enter your gateway access token' }));
         return;
       }
       setLiveSession(EMPTY_LIVE_SESSION);
       setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting to the gateway...' }));
       const connection = gatewayConnection();
       connection
-        .connect(address, gatewayToken)
+        .connect(address, gatewayToken, !!ssoUser)
         .then(({ user, plcs }: { user: string; plcs: GatewayPlc[] }) => {
           setLiveStatus((prev) => ({ ...prev, user, plcs }));
           const plc = plcs.find((p) => p.id === liveSettings.plc) ?? (plcs.length === 1 ? plcs[0] : undefined);
@@ -3017,7 +3133,7 @@ export const App: React.FC = () => {
       netId: liveSettings.netId.trim() || undefined,
       port: port > 0 ? port : undefined,
     });
-  }, [pouPath, pouTypeName, liveSettings, identifiedStatesResult.stateVarName, liveMode, gatewayOrigin, gatewayToken, linkCode, liveVia, gatewayConnection, handleLiveSettingsChange]);
+  }, [pouPath, pouTypeName, liveSettings, identifiedStatesResult.stateVarName, liveMode, gatewayOrigin, gatewayToken, linkCode, liveVia, gatewayConnection, handleLiveSettingsChange, updateRememberedPlcs, ssoUser, ssoHere]);
   // Opened to follow an instance: go live once the POU and its live settings are loaded
   useEffect(() => {
     if (!autoLivePending || !pouContent || !liveMode || liveSettingsLoadedKey !== liveSettingsKey) return;
@@ -3111,19 +3227,21 @@ export const App: React.FC = () => {
   );
   // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
   const handleWatchMachine = useCallback(
-    (node: SymbolChild) => {
+    (node: SymbolChild, on?: Partial<LiveSettings>) => {
+      // on: another PLC (the Machine Overview's other PLCs): its connection instead of this window's
+      const connection = connectionOf(on ? { ...liveSettings, ...on } : liveSettings);
       const typeName = node.type.trim().split('.').pop() ?? '';
       if (!/^[A-Za-z_]\w*$/.test(typeName)) {
         showCopyToast(`${node.type} is not a function block type`, 'error');
         return;
       }
       // This POU: another instance of it
-      if (pouTypeName && typeName.toLowerCase() === pouTypeName.toLowerCase()) {
+      if (!on && pouTypeName && typeName.toLowerCase() === pouTypeName.toLowerCase()) {
         handleOpenInstance(node.path);
         return;
       }
       if (isXaeHost()) {
-        postToHost({ type: 'openInstance', typeName, instance: node.path, connection: connectionOf(liveSettings) });
+        postToHost({ type: 'openInstance', typeName, instance: node.path, connection });
         return;
       }
       const d = (window as unknown as {
@@ -3134,11 +3252,11 @@ export const App: React.FC = () => {
       }).tcDesktop;
       const handOver = (src: PouSource) => {
         if (d?.newWindow && src.path) {
-          void d.newWindow(src.path, { instance: node.path, live: true, connection: connectionOf(liveSettings) });
+          void d.newWindow(src.path, { instance: node.path, live: true, connection });
           return;
         }
         const dut = src.dutCandidates ?? undefined;
-        const id = putHandoff({ instance: node.path, live: true, connection: connectionOf(liveSettings), pou: { name: src.name, content: src.content, path: src.path }, dutCandidates: dut });
+        const id = putHandoff({ instance: node.path, live: true, connection, pou: { name: src.name, content: src.content, path: src.path }, dutCandidates: dut });
         if (!id) {
           showCopyToast('Cannot hand the POU to another window: this browser blocks local storage', 'error');
           return;
@@ -3194,11 +3312,156 @@ export const App: React.FC = () => {
   }, [pouPath, shownInstance]);
 
   const handleLiveStop = useCallback(() => {
+    // Stop during a replay: ends the replay
+    if (replayingRef.current) {
+      setReplay(null);
+      setLiveStatus({ state: 'stopped', message: 'Replay closed', instances: [] });
+      return;
+    }
     if (isXaeHost()) postToHost({ type: 'liveStop' });
     else if (desktopLive()) void desktopLive()!.stop();
     else gatewayRef.current?.stop();
     setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: 'Not connected' }));
   }, []);
+  // ---- Recording and replay ----
+  const handleSaveRecording = useCallback(async () => {
+    const rec = recorderRef.current.toRecording({
+      pou: pouTypeName, pouFile: pouFileName, instance: liveStatus.instance ?? (liveSettings.instance || undefined), target: liveStatus.target,
+      stateVar: identifiedStatesResult.stateVarName || 'machineState',
+    });
+    const r = await saveDocument(recordingFileName(pouTypeName, rec.instance), JSON.stringify(rec));
+    if (r.error) showCopyToast(`Could not save the recording: ${r.error}`, 'error', 8000);
+    else if (!r.canceled) showCopyToast(`Recording saved${r.path ? `: ${r.path}` : ''} (${rec.values.length} samples${rec.truncated ? ', the oldest dropped' : ''})`, 'success', 6000);
+  }, [pouTypeName, pouFileName, liveStatus.instance, liveStatus.target, liveSettings.instance, identifiedStatesResult.stateVarName, showCopyToast]);
+  // What the replay has shown: up to which sample (a seek back starts again from the beginning)
+  const replayFedRef = useRef({ values: 0, vars: 0, pos: -Infinity });
+  const handleOpenRecording = useCallback(
+    async (file: File) => {
+      const rec = parseRecording(await file.text());
+      if ('error' in rec) {
+        showCopyToast(`${file.name}: ${rec.error}`, 'error', 7000);
+        return;
+      }
+      if (liveStatus.state === 'connected' || liveStatus.state === 'connecting') {
+        if (isXaeHost()) postToHost({ type: 'liveStop' });
+        else if (desktopLive()) void desktopLive()!.stop();
+        else gatewayRef.current?.stop();
+      }
+      const span = recordingSpan(rec);
+      replayFedRef.current = { values: 0, vars: 0, pos: -Infinity };
+      replayingRef.current = true;
+      setLiveSession(EMPTY_LIVE_SESSION);
+      setLiveVarValues({});
+      setLiveWatched(rec.watched);
+      setReplay({ rec, file: file.name, from: span.from, to: span.to, pos: span.from, playing: true, speed: 1 });
+      setLiveStatus({ state: 'connected', message: `Replay: ${file.name}`, instance: rec.instance, target: rec.target, plcState: 'Replay', instances: rec.instance ? [rec.instance] : [] });
+      if (rec.pou && pouTypeName && rec.pou !== pouTypeName) showCopyToast(`${file.name} was recorded with ${rec.pou}; this is ${pouTypeName}: states are shown by their values`, 'error', 8000);
+    },
+    [liveStatus.state, pouTypeName, showCopyToast]
+  );
+  // The replay's clock: 100 ms steps times the speed, until the end
+  const replayPlaying = !!replay?.playing;
+  useEffect(() => {
+    if (!replayPlaying) return;
+    const t = window.setInterval(() => {
+      setReplay((r) => {
+        if (!r || !r.playing) return r;
+        const pos = Math.min(r.to, r.pos + 100 * r.speed);
+        return { ...r, pos, playing: pos < r.to };
+      });
+    }, 100);
+    return () => window.clearInterval(t);
+  }, [replayPlaying]);
+  // Shows the recording up to the replay's position (as the live view shows samples)
+  useEffect(() => {
+    if (!replay) return;
+    const fed = replayFedRef.current;
+    const { rec, pos } = replay;
+    let reset = false;
+    if (pos < fed.pos) {
+      fed.values = 0;
+      fed.vars = 0;
+      reset = true;
+    }
+    const vEnd = upperBound(rec.values, pos);
+    const gEnd = upperBound(rec.vars, pos);
+    const samples = rec.values.slice(fed.values, vEnd);
+    const vars = rec.vars.slice(fed.vars, gEnd);
+    fed.values = vEnd;
+    fed.vars = gEnd;
+    fed.pos = pos;
+    setLiveSession((prev) => {
+      const next = applyLiveSamples(reset ? EMPTY_LIVE_SESSION : prev, samples, liveNamesRef.current, liveEdgesRef.current);
+      return { ...next, clockOffset: Date.now() - pos };
+    });
+    if (vars.length || reset) {
+      setLiveVarValues((prev) => {
+        const next = reset ? {} : { ...prev };
+        for (const s of vars) {
+          if (s.v === null || s.v === undefined) delete next[s.id];
+          else next[s.id] = s.v;
+        }
+        return next;
+      });
+    }
+  }, [replay]);
+  const replayView = useMemo(
+    () => (replay ? { file: replay.file, from: replay.from, to: replay.to, pos: replay.pos, playing: replay.playing, speed: replay.speed, samples: replay.rec.values.length } : undefined),
+    [replay]
+  );
+  // The PLC switcher while live: stop, take the remembered PLC's settings, go live again once they are in state
+  const [switchPending, setSwitchPending] = useState(false);
+  const handleSwitchPlc = useCallback(
+    (p: RememberedPlc) => {
+      handleLiveStop();
+      handleLiveSettingsChange({ ...liveSettings, netId: p.netId, ip: ipFieldFor(p.netId, p.ip), port: p.port, localNetId: p.localNetId });
+      setSwitchPending(true);
+    },
+    [handleLiveStop, handleLiveSettingsChange, liveSettings]
+  );
+  useEffect(() => {
+    if (!switchPending) return;
+    setSwitchPending(false);
+    handleLiveStart();
+  }, [switchPending, handleLiveStart]);
+  // Browse through Link (web edition): the search and Add Route run in Link, on this computer
+  const linkRequest = useCallback(
+    async <T,>(message: Record<string, unknown>, replyType: string): Promise<T> => {
+      if (!linkCode) throw new Error('Enter the pairing code shown by Kval StateScope Link first');
+      const c = gatewayConnection();
+      await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
+      return c.request<T>(message, replyType);
+    },
+    [linkCode, gatewayConnection, liveSettings.linkPort]
+  );
+  const viaLink = liveMode === 'web' && liveVia === 'link';
+  const handleScanPlcs = useMemo(() => {
+    if (viaLink) {
+      return (addresses: string[]) => linkRequest<PlcScanResult>({ type: 'discover', addresses }, 'discoverResult').catch((err: Error) => ({ devices: [], errors: [err.message] }));
+    }
+    return canScanPlcs() ? (addresses: string[]) => scanPlcs(addresses, liveSettings.localNetId.trim()) : undefined;
+  }, [viaLink, linkRequest, liveSettings.localNetId]);
+  const handleAddRoute = useMemo(() => {
+    const localNetId = liveSettings.localNetId.trim() || undefined;
+    if (viaLink) {
+      return (d: FoundPlc, user: string, password: string) =>
+        linkRequest<AddRouteResult>({ type: 'addRoute', plcIp: d.ip, user, password, localNetId }, 'addRouteResult').catch((err: Error) => ({ ok: false, message: err.message }));
+    }
+    return canScanPlcs() ? (d: FoundPlc, user: string, password: string) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId }) : undefined;
+  }, [viaLink, linkRequest, liveSettings.localNetId]);
+  // Machine Overview, other PLCs: how they are reached in this edition (XAE: not), and which can be added
+  const sideVia = useMemo<SideVia | null>(() => {
+    if (liveMode === 'desktop') return { kind: 'desktop' };
+    if (liveMode !== 'web') return null;
+    if (liveVia === 'link') return linkCode ? { kind: 'link', url: `ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, code: linkCode } : null;
+    const address = liveSettings.gateway || gatewayOrigin;
+    if (address && ssoUser) return { kind: 'gateway', url: address, token: '', sso: true };
+    return address && gatewayToken ? { kind: 'gateway', url: address, token: gatewayToken } : null;
+  }, [liveMode, liveVia, linkCode, liveSettings.linkPort, liveSettings.gateway, gatewayOrigin, gatewayToken, ssoUser]);
+  const sideCandidates = useMemo<SidePlc[]>(() => {
+    if (sideVia?.kind === 'gateway') return (liveStatus.plcs ?? []).map((p) => ({ key: `gw-${p.id}`.replace(/[^\w.:-]/g, '_'), name: p.name, plc: p.id }));
+    return rememberedPlcs.map((p) => ({ key: `plc-${p.netId}`, name: p.name, netId: p.netId, ip: p.ip, port: p.port, localNetId: p.localNetId }));
+  }, [sideVia, liveStatus.plcs, rememberedPlcs]);
   const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
   // Stuck-state alerts: this POU type's time limits (and the default); over the limit the state is "stuck"
   const stateLimits = useStateLimits(pouTypeName);
@@ -3363,6 +3626,8 @@ export const App: React.FC = () => {
   }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions]);
   const sendLiveWatch = useCallback(
     (vars: LiveWatchVar[]) => {
+      // (a replay has its recorded values)
+      if (replayingRef.current) return;
       if (liveMode === 'xae') postToHost({ type: 'liveWatch', vars });
       else if (liveMode === 'desktop') void desktopLive()?.watch?.(vars);
       else gatewayRef.current?.watch(vars);
@@ -4895,20 +5160,33 @@ export const App: React.FC = () => {
 
       {isDockTabMounted('overview') &&
         createPortal(
-          <MachineOverview
-            connected={liveStatus.state === 'connected'}
-            root={symbolRoot}
-            onRootChange={setSymbolRoot}
-            browse={liveBrowse}
-            values={liveVarValues}
-            onFollow={handleOverviewPaths}
-            stateVar={liveStateVar}
-            currentInstance={liveStatus.instance}
-            pouTypeName={pouTypeName}
-            pouStateNames={liveEnumNames}
-            onWatch={handleWatchMachine}
-            openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
-          />,
+          <div className="flex-1 min-h-0 w-full flex flex-col overflow-y-auto bg-slate-950">
+            <div className="flex-1 min-h-[20rem] flex flex-col">
+              <MachineOverview
+                connected={liveStatus.state === 'connected' && !replay}
+                root={symbolRoot}
+                onRootChange={setSymbolRoot}
+                browse={liveBrowse}
+                values={liveVarValues}
+                onFollow={handleOverviewPaths}
+                stateVar={liveStateVar}
+                currentInstance={liveStatus.instance}
+                pouTypeName={pouTypeName}
+                pouStateNames={liveEnumNames}
+                onWatch={(m) => handleWatchMachine(m)}
+                openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+              />
+            </div>
+            <OtherPlcsOverview
+              via={sideVia}
+              candidates={sideCandidates}
+              stateVar={liveStateVar}
+              pouTypeName={pouTypeName}
+              pouStateNames={liveEnumNames}
+              onWatch={(m, plc) => handleWatchMachine(m, plc.plc ? { plc: plc.plc, gateway: plc.gateway ?? liveSettings.gateway } : { netId: plc.netId ?? '', ip: plc.ip ?? '', port: plc.port ?? '', localNetId: plc.localNetId ?? '' })}
+              openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+            />
+          </div>,
           dockRegistry.nodes.overview
         )}
 
@@ -4952,13 +5230,37 @@ export const App: React.FC = () => {
             guards={liveActiveGuards}
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
-            onOpenSymbols={liveMode ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
-            onOpenOverview={liveMode ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
+            onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
+            onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
             limitMs={liveLimit}
             stateLimitMs={liveSession.current ? stateLimits[liveSession.current.state] ?? null : null}
             onStateLimitChange={pouTypeName ? (ms) => liveSession.current && handleStateLimit(liveSession.current.state, ms) : undefined}
             defaultLimitMs={defaultLimit}
             onDefaultLimitChange={setDefaultLimit}
+            rememberedPlcs={rememberedPlcs}
+            onRememberPlc={handleRememberPlc}
+            onForgetPlc={(netId) => updateRememberedPlcs((list) => list.filter((p) => p.netId !== netId))}
+            onScanPlcs={handleScanPlcs}
+            onAddRoute={handleAddRoute}
+            onRenamePlc={(netId, name) => updateRememberedPlcs((list) => list.map((p) => (p.netId === netId ? { ...p, name } : p)))}
+            onSwitchPlc={handleSwitchPlc}
+            sso={ssoHere && gatewaySso ? { provider: gatewaySso.provider, user: gatewaySso.user, name: gatewaySso.name, tokens: gatewaySso.tokens } : undefined}
+            onSignIn={() => {
+              window.location.href = `/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+            }}
+            onSignOut={() => {
+              if (!gatewayOrigin) return;
+              handleLiveStop();
+              gatewayRef.current?.close();
+              void gatewaySignOut(gatewayOrigin).then(() => fetchGatewaySso(gatewayOrigin)).then(setGatewaySso);
+            }}
+            canSaveRecording={!recorderRef.current.empty && !replay}
+            onSaveRecording={() => void handleSaveRecording()}
+            onOpenRecording={(f) => void handleOpenRecording(f)}
+            replay={replayView}
+            onReplayPlay={(playing) => setReplay((r) => (r ? { ...r, playing, pos: playing && r.pos >= r.to ? r.from : r.pos } : r))}
+            onReplaySeek={(pos) => setReplay((r) => (r ? { ...r, pos: Math.max(r.from, Math.min(r.to, pos)) } : r))}
+            onReplaySpeed={(speed) => setReplay((r) => (r ? { ...r, speed } : r))}
             notify={notifyOn}
             onNotifyChange={(on) => {
               if (on) requestNotifyPermission();

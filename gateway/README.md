@@ -15,7 +15,8 @@ For a single person on a computer that can reach the PLC, the local helper [Kval
 - **PLCs:** browsers can only choose from the PLCs in `config.json`, never an arbitrary address.
 - **Read-only:** the gateway reads variables (symbol info, handle, change notification). It writes nothing to a PLC except releasing its own variable handle.
 - **Connections:** one ADS connection per PLC. Everyone following the same state variable shares one change notification. Guard values (the variables of the active state's transitions, see the main README) are read per viewer, at most `maxWatchedVariables` each.
-- **Access tokens:** every browser needs one. Only their SHA-256 hashes are stored. Connections and "go live" requests are logged with the token's name.
+- **Access tokens:** every browser needs one, unless people sign in with their company account (see [Sign-in with company accounts](#sign-in-with-company-accounts)). Only the tokens' SHA-256 hashes are stored. Connections and "go live" requests are logged with the token's or the user's name.
+- **Alerts:** the gateway can follow machines by itself and post to a webhook when one is stuck or in error (see [Alerts](#alerts)).
 
 ## Install
 
@@ -29,7 +30,7 @@ Requires Node.js 20 or later on the gateway machine.
    node gateway.cjs init --host statescope-gw.example.local
    ```
    `init` creates `config.json` and a self-signed certificate for that host name. For browsers to trust the gateway, replace `cert.pem` / `key.pem` with a certificate from your company CA. Alternatively, set `tls.pfx` and `tls.passphrase`.
-3. **Edit `config.json`:**
+3. **Set up the PLCs:** start the gateway (step 6) and open its **setup page** on the gateway machine, `https://localhost:8443/admin` (see [Setup page](#setup-page)): search the network for the PLCs, tick them, test them, save. Or edit `config.json` by hand:
    ```json
    {
      "port": 8443,
@@ -50,22 +51,100 @@ Requires Node.js 20 or later on the gateway machine.
    - `port`: the PLC runtime's ADS port (851 for the first PLC).
    - `allowedOrigins`: only needed when the web app is served from somewhere else, e.g. `["https://statescope.example.com"]`.
 4. **Add an ADS route on each PLC** to the gateway: AMS NetId = `localNetId`, address = the gateway's IP. Use the PLC's TwinCAT router (*Router > Edit Routes*) or an XAE connected to the PLC.
-5. **Create access tokens.** Each token is shown once; give it to its user:
+5. **Create access tokens** on the setup page, or from the command line. Each token is shown once; give it to its user:
    ```powershell
    node gateway.cjs add-token alice
    node gateway.cjs remove-token alice
    ```
-   A running gateway picks up token changes within 10 s.
+   A running gateway picks up token changes within 10 s, and changes to `plcs` / `localNetId` as well (edited by hand: a PLC whose settings changed is disconnected, its viewers go live again).
 6. **Start the gateway:**
    ```powershell
    node gateway.cjs start
    ```
    To run it as a Windows service, use e.g. NSSM (`nssm install StateScopeGateway "C:\Program Files\nodejs\node.exe" "C:\gateway\gateway.cjs start"`) or your usual service wrapper.
 
+## Setup page
+
+`https://localhost:8443/admin`, **on the gateway machine only**: requests from other computers get "not found". It has:
+
+- **This gateway's AMS NetId** (`localNetId`), with suggestions from the machine's networks (each IP + `.1.1`).
+- **Find PLCs on the network:** the TwinCAT device search (UDP 48899), the one the XAE's *Add Route* dialog uses. It lists each device's name, AMS NetId, address, TwinCAT version and OS. PLCs behind a router don't get the broadcast: enter their addresses in the field next to the button. Tick the PLCs and click **Add the ticked ones**; check their ids and names. The search only asks: it changes nothing on the devices.
+- **PLCs:** edit the list (id, name, AMS NetId, address, ADS port), add one by hand, remove one. **Test** connects to the PLC and reports its TwinCAT state and the PLC runtimes it finds on ports 851 to 854. When the PLC doesn't answer, it says which ADS route to add on the PLC. **Save to config.json** writes the list. The running gateway applies it at once: viewers of a PLC whose settings changed go live again.
+- **Access tokens:** the names and creation dates; **Create token** shows the new token once, with a *Copy* button; **Revoke** stops a token at once.
+- **Alerts:** add, change and remove alert rules, **Send a test message** to a webhook, and see each rule's state (watching how many machines, the last alert).
+
+The page writes only `localNetId`, `plcs`, `tokens` and `alerts`; other settings in `config.json` stay as they are. Changes are only accepted from the page itself (its origin is checked) and under the gateway's own host names. The ADS routes themselves are added on the PLCs, as before.
+
+Settings:
+- `"admin": { "enabled": false }` turns the page off.
+- `"admin": { "allowFrom": ["192.168.1.7"] }` also allows those addresses (an admin's workstation). Anyone who can open the page can create tokens: keep this list short.
+- A host name the gateway doesn't know as its own (for a DNS alias) goes in `"admin": { "hosts": ["statescope.example.local"] }`.
+
+The search needs UDP 48899 open between the gateway and the PLCs (outgoing, and the replies back to the gateway).
+
+## Alerts
+
+The gateway follows the state machines of a PLC by itself, with no browser open, and posts to a webhook:
+- **stuck:** a machine is longer in a state than the rule's limit (**Stuck after**, or a limit per state name);
+- **error:** a machine goes into a state whose name matches the error pattern (default `ERROR|FAULT|ALARM|E_?STOP|ABORT`);
+- **recovered:** a stuck machine, or one in an error state, leaves that state (unless turned off).
+
+There is one message per machine and kind per stay; a machine that goes in and out of an error again sends at most one error message every 5 minutes. The machines are found like the Machine Overview finds them: every member under the root (`MAIN.mainStateMachine` by default) that has the state variable, with state names from the PLC's enum types. The monitor shares the PLC's ADS connection with the viewers, and connects again after a lost connection.
+
+Set the rules up on the setup page (**Alerts**), or in `config.json`:
+```json
+"alerts": [
+  {
+    "id": "line202", "name": "Line 202", "plc": "line202", "root": "MAIN.mainStateMachine", "stateVar": "machineState",
+    "stuckAfterMs": 300000, "stateLimits": { "TABLEMANAGER_HOMMING": 60000 },
+    "onError": true, "errorPattern": "ERROR|FAULT|ALARM|E_?STOP|ABORT", "notifyRecovery": true,
+    "webhook": "https://...", "format": "teams"
+  }
+]
+```
+- **Teams:** a channel's *Workflows* ("Post to a channel when a webhook request is received"), or an *Incoming Webhook* connector; `"format": "teams"` sends `{ "text": ... }`.
+- **Slack:** an incoming webhook; `"format": "slack"`.
+- **`"format": "json"`:** the event as JSON, for your own service: `event` (stuck, error, recovered), `plc`, `plcName`, `machine`, `type`, `state`, `value`, `since`, `durationMs`, `text`, `at`.
+
+The time in state counts from when the gateway first saw the machine in it (after a restart, from then).
+
+## Sign-in with company accounts
+
+Instead of access tokens (or next to them), people can sign in with their company account through OpenID Connect: Microsoft Entra ID (Microsoft 365 accounts), ADFS, Okta, Google and others. The web app served by the gateway then shows **Sign in with ...** in the Live tab.
+
+1. **Register an application** with your identity provider. For Entra ID: *App registrations > New registration*, a *Web* redirect URI `https://<gateway>:8443/auth/callback`, and a client secret (*Certificates & secrets*). For group rules, add the *groups* claim (*Token configuration*).
+2. **Configure the gateway:**
+   ```json
+   "oidc": {
+     "name": "Microsoft",
+     "issuer": "https://login.microsoftonline.com/<tenant id>/v2.0",
+     "clientId": "<application (client) id>",
+     "clientSecret": "<client secret>",
+     "allowedDomains": ["example.com"],
+     "allowedUsers": [],
+     "allowedGroups": [],
+     "tokens": true,
+     "sessionHours": 12
+   }
+   ```
+   - `issuer`: the provider's issuer. The gateway reads `<issuer>/.well-known/openid-configuration`.
+   - **Who may use the gateway:** anyone signed in when all three lists are empty. Otherwise the user's e-mail is in `allowedUsers`, or its domain is in `allowedDomains`, or one of its `groups` / `roles` claims is in `allowedGroups` (Entra ID: group object ids).
+   - `tokens`: `false` accepts only signed-in users; access tokens are then refused.
+   - `redirectUri`: only when the gateway is reached under another address than the one the browser uses (a reverse proxy).
+   - `name`: shown on the button.
+3. A running gateway picks up changes within 10 s.
+
+**How it works:**
+- The sign-in uses the authorization code flow with PKCE, a state and a nonce.
+- The ID token is checked: the signature against the provider's published keys, the issuer, the audience, the expiry and the nonce.
+- The session is an HttpOnly, SameSite=Lax cookie (Secure over HTTPS). It lasts `sessionHours` and lives in the gateway's memory: after a restart, people sign in again.
+- Sign-in works for the web app served by the gateway. A web app from another address still needs a token.
+- Sign-ins, refused users and sign-outs are logged.
+
 ## Use
 
 1. Open `https://<gateway>:8443/` and load a `.TcPOU`: *Browse*, or drop it on the file name in the header.
-2. Open the **Live** tab and enter your access token. *Remember* keeps it in this browser.
+2. Open the **Live** tab and enter your access token (*Remember* keeps it in this browser), or click **Sign in with ...** when the gateway has sign-in set up.
 3. Choose the PLC and click **Go live**.
 
 The gateway finds the POU's instances from the PLC's own symbol tables: nested members, members inherited from a base function block, and array elements (up to 16). With several instances, the others are offered in the Instance field. You can also type a path.
@@ -77,6 +156,8 @@ With `"insecure": true` and no `tls` entry, the gateway serves plain HTTP / WS a
 ## Log
 
 The log goes to the console, one line per event with a time stamp:
-- sign-ins, rejected tokens, and IP addresses blocked after 10 failures a minute;
+- sign-ins (tokens and company accounts), rejected tokens and users, sign-outs, and IP addresses blocked after 10 failures a minute;
+- alerts: the rules' machines followed, and each message sent (or a webhook that failed);
+- the setup page's actions (searches, PLC lists saved, tokens created or revoked) and refused requests to it;
 - "go live" requests, with user, PLC and variable;
 - ADS connections to the PLCs, and handles released.

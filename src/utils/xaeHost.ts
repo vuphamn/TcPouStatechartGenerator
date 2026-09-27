@@ -44,6 +44,16 @@ export type HostMessage =
   | { type: 'editorCaret'; method: string; line: number; lineCount: number }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
+  /** The Live tab's Browse: the router's routes and the devices on the network (route: XAE can go live on it) */
+  | {
+      type: 'plcList';
+      requestId: number;
+      devices?: { netId: string; ip: string; name: string; twincat?: string; os?: string; route?: boolean; source?: 'network' | 'route' | 'project' }[];
+      errors?: string[];
+      projectTarget?: string | null;
+    }
+  /** Add Route (both ways, through XAE): done, or why not */
+  | { type: 'addRouteResult'; requestId: number; ok: boolean; message: string }
   | { type: 'error'; message: string };
 
 /** A member of a browsed PLC symbol. value: a number / boolean / string shown with its value; struct / array: has
@@ -102,6 +112,10 @@ export type AppMessage =
   | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string> }
   /** Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult) */
   | { type: 'liveBrowse'; requestId: number; path: string; stateVar: string }
+  /** The Live tab's Browse: search for PLCs (answered with plcList) */
+  | { type: 'discoverPlcs'; requestId: number; addresses: string[] }
+  /** Add Route to a PLC, both ways (answered with addRouteResult); the password is only passed to XAE */
+  | { type: 'addRoute'; requestId: number; netId: string; ip: string; name: string; user: string; password: string }
   /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
   | { type: 'projectPous' }
   /** Save a document (a save dialog; answered with saveDocumentResult) */

@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause } from 'lucide-react';
+import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
+import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { formatLimit, parseDuration } from '../utils/stateLimits.ts';
@@ -87,7 +89,32 @@ interface LivePanelProps {
   onDefaultLimitChange?: (ms: number | null) => void;
   notify?: boolean;
   onNotifyChange?: (on: boolean) => void;
+  /** The PLCs remembered in this app (any POU), newest first; Remember adds the target (name: from Browse) */
+  rememberedPlcs?: RememberedPlc[];
+  onRememberPlc?: (remember: boolean, name?: string) => void;
+  onForgetPlc?: (netId: string) => void;
+  /** Browse: searches the network for PLCs (desktop, XAE) */
+  onScanPlcs?: (addresses: string[]) => Promise<PlcScanResult>;
+  /** Browse: Add Route to a found PLC (desktop, Link, XAE) */
+  onAddRoute?: (plc: FoundPlc, user: string, password: string) => Promise<AddRouteResult>;
+  onRenamePlc?: (netId: string, name: string) => void;
+  /** The PLC switcher while live: stop, then go live on that remembered PLC */
+  onSwitchPlc?: (plc: RememberedPlc) => void;
+  /** Recording: the session so far to a file; a recording played back (replay: its position, PLC time) */
+  canSaveRecording?: boolean;
+  onSaveRecording?: () => void;
+  onOpenRecording?: (file: File) => void;
+  replay?: { file: string; from: number; to: number; pos: number; playing: boolean; speed: number; samples: number };
+  onReplayPlay?: (playing: boolean) => void;
+  onReplaySeek?: (pos: number) => void;
+  onReplaySpeed?: (speed: number) => void;
+  /** Web edition, the gateway serving this page: sign-in with company accounts (who is signed in; tokens accepted too) */
+  sso?: { provider: string; user: string | null; name: string | null; tokens: boolean };
+  onSignIn?: () => void;
+  onSignOut?: () => void;
 }
+
+const REPLAY_SPEEDS = [1, 2, 5, 10, 60, 600];
 
 /** A duration field ("30", "1.5 s", "2 min"): applied on Enter or when it loses focus; empty clears it */
 const LimitField: React.FC<{ id: string; valueMs: number | null | undefined; onChange: (ms: number | null) => void; placeholder: string; title: string }> = ({ id, valueMs, onChange, placeholder, title }) => {
@@ -164,6 +191,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onDefaultLimitChange,
   notify = false,
   onNotifyChange,
+  rememberedPlcs = [],
+  onRememberPlc,
+  onForgetPlc,
+  onScanPlcs,
+  onAddRoute,
+  onRenamePlc,
+  onSwitchPlc,
+  canSaveRecording = false,
+  onSaveRecording,
+  onOpenRecording,
+  replay,
+  onReplayPlay,
+  onReplaySeek,
+  onReplaySpeed,
+  sso,
+  onSignIn,
+  onSignOut,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   // The instance this window follows (or will), and the others the PLC has
@@ -173,13 +217,31 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const viaGateway = mode === 'web' && via === 'gateway';
   // ADS from this computer: the desktop app, or the web edition through the local helper
   const direct = mode === 'desktop' || (mode === 'web' && via === 'link');
+  // Browse: the list of PLCs, and the name of the one picked from it (for Remember)
+  const [browsing, setBrowsing] = useState(false);
+  const [pickedName, setPickedName] = useState<{ netId: string; name: string } | null>(null);
+  const netIdNow = settings.netId.trim();
+  const remembered = rememberedPlcs.some((p) => p.netId === netIdNow);
+  const canBrowse = !viaGateway && (!!onScanPlcs || rememberedPlcs.length > 0);
+  const pickPlc = (p: PickedPlc) => {
+    onSettingsChange({
+      ...settings,
+      netId: p.netId,
+      ip: mode === 'xae' ? settings.ip : ipFieldFor(p.netId, p.ip),
+      port: p.port ?? settings.port,
+      localNetId: p.localNetId ?? settings.localNetId,
+    });
+    setPickedName({ netId: p.netId, name: p.name });
+    setBrowsing(false);
+  };
   // Time in the current state ticks while connected
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (status.state !== 'connected') return;
+    // (a paused replay: the time in state stands still)
+    if (status.state !== 'connected' || (replay && !replay.playing)) return;
     const id = window.setInterval(() => setNow(Date.now()), 200);
     return () => window.clearInterval(id);
-  }, [status.state]);
+  }, [status.state, replay?.playing, !!replay]);
 
   if (!mode) {
     return (
@@ -233,6 +295,28 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {status.state === 'connected' && <span className="live-dot shrink-0" />}
             <span className="truncate">{status.message || 'Not connected'}</span>
           </span>
+          {/* One click to another remembered PLC (while live: stops and goes live on it) */}
+          {!viaGateway && rememberedPlcs.length > 1 && (
+            <select
+              id="live-plc-quick"
+              value={remembered ? netIdNow : ''}
+              onChange={(e) => {
+                const p = rememberedPlcs.find((x) => x.netId === e.target.value);
+                if (!p) return;
+                if (running && onSwitchPlc) onSwitchPlc(p);
+                else pickPlc({ name: p.name, netId: p.netId, ip: p.ip, port: p.port, localNetId: p.localNetId });
+              }}
+              title={running ? 'Switch to another remembered PLC (goes live on it)' : 'Use another remembered PLC'}
+              className="shrink-0 max-w-[10rem] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200"
+            >
+              {!remembered && <option value="">PLC...</option>}
+              {rememberedPlcs.map((p) => (
+                <option key={p.netId} value={p.netId}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
           {onOpenOverview && status.state === 'connected' && (
             <button
               id="live-overview-btn"
@@ -254,6 +338,89 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             </button>
           )}
         </div>
+        {/* Recording: save the session so far; play a recording back */}
+        {(canSaveRecording || (onOpenRecording && !running)) && !replay && (
+          <div className="flex items-center gap-2">
+            {canSaveRecording && onSaveRecording && (
+              <button
+                id="live-save-recording"
+                onClick={onSaveRecording}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+                title="Save this session's recording (state changes and guard values, with PLC time) to a file"
+              >
+                <Download className="w-3 h-3" /> Save recording
+              </button>
+            )}
+            {onOpenRecording && !running && (
+              <label
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800 cursor-pointer"
+                title="Play a saved recording back on the diagram, as if live"
+              >
+                <FolderOpen className="w-3 h-3" /> Replay...
+                <input
+                  id="live-open-recording"
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) onOpenRecording(f);
+                  }}
+                />
+              </label>
+            )}
+          </div>
+        )}
+        {replay && (
+          <div id="live-replay-bar" className="rounded border border-violet-800 bg-violet-950/40 px-2 py-1.5 space-y-1">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                id="live-replay-play"
+                onClick={() => onReplayPlay?.(!replay.playing)}
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded bg-violet-700 hover:bg-violet-600 text-white text-[11px]"
+                title={replay.playing ? 'Pause' : 'Play'}
+              >
+                {replay.playing ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />} {replay.playing ? 'Pause' : 'Play'}
+              </button>
+              <select
+                id="live-replay-speed"
+                value={replay.speed}
+                onChange={(e) => onReplaySpeed?.(Number(e.target.value))}
+                className="shrink-0 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200"
+                title="Replay speed"
+              >
+                {REPLAY_SPEEDS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}x
+                  </option>
+                ))}
+              </select>
+              <span id="live-replay-time" className="font-mono text-[11px] text-violet-200 whitespace-nowrap">
+                {formatClock(replay.pos)}
+              </span>
+              <span className="truncate text-[11px] text-slate-400" title={replay.file}>
+                {replay.file}
+              </span>
+            </div>
+            <input
+              id="live-replay-seek"
+              type="range"
+              min={replay.from}
+              max={Math.max(replay.to, replay.from + 1)}
+              step={Math.max(1, Math.round((replay.to - replay.from) / 2000))}
+              value={replay.pos}
+              onChange={(e) => onReplaySeek?.(Number(e.target.value))}
+              className="w-full accent-violet-400"
+              title="Go to a moment of the recording"
+            />
+            <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+              <span>{formatClock(replay.from)}</span>
+              <span>{formatDuration(replay.to - replay.from)}, {replay.samples} samples</span>
+              <span>{formatClock(replay.to)}</span>
+            </div>
+          </div>
+        )}
         {/* Settings apply on Go live: hidden while running, so the trail has the room */}
         {!running && (
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 items-center">
@@ -309,6 +476,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   <input id="live-token-remember" type="checkbox" checked={rememberToken} onChange={(e) => onRememberTokenChange?.(e.target.checked)} />
                   Remember
                 </label>
+                <a
+                  id="live-link-page"
+                  href={`http://127.0.0.1:${settings.linkPort || '48960'}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-sky-400 hover:text-sky-300 underline"
+                  title="Link's page: the pairing code (to copy) and the pages paired with it"
+                >
+                  Open Link
+                </a>
               </div>
             </>
           )}
@@ -343,8 +520,31 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 title="The Kval StateScope gateway on the PLC network"
                 className="min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
               />
+              {sso && (
+                <>
+                  <span className="text-slate-400">Account</span>
+                  <div id="live-sso" className="flex items-center gap-2 min-w-0">
+                    {sso.user ? (
+                      <>
+                        <span id="live-sso-user" className="truncate text-emerald-300" title={sso.user}>
+                          Signed in as {sso.name || sso.user}
+                        </span>
+                        <button id="live-sso-signout" onClick={onSignOut} className="shrink-0 px-1.5 rounded border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800">
+                          Sign out
+                        </button>
+                      </>
+                    ) : (
+                      <button id="live-sso-signin" onClick={onSignIn} className="shrink-0 px-2 py-0.5 rounded bg-sky-800 hover:bg-sky-700 text-[11px] text-white" title="Sign in on this gateway with your company account">
+                        Sign in with {sso.provider}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+              {(!sso || (sso.tokens && !sso.user)) && (
+              <>
               <label htmlFor="live-token-input" className="text-slate-400">
-                Token
+                {sso ? 'or Token' : 'Token'}
               </label>
               <div className="flex items-center gap-2 min-w-0">
                 <input
@@ -361,6 +561,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   Remember
                 </label>
               </div>
+              </>
+              )}
               <label htmlFor="live-plc-select" className="text-slate-400">
                 PLC
               </label>
@@ -387,14 +589,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           </label>
           )}
           {!viaGateway && (
-          <div className="flex gap-1 min-w-0">
+          <div className="flex flex-wrap gap-1 min-w-0">
             <input
               id="live-netid-input"
               value={settings.netId}
               onChange={(e) => onSettingsChange({ ...settings, netId: e.target.value })}
               placeholder={direct ? "PLC's AMS NetId (e.g. 192.168.1.20.1.1)" : "XAE's target (AMS NetId)"}
               title="AMS NetId of the PLC's TwinCAT system"
-              className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
+              className="flex-1 min-w-[8.5rem] bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
             />
             <input
               id="live-port-input"
@@ -404,6 +606,29 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               title="ADS port of the PLC runtime (empty: from the project, usually 851)"
               className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
             />
+            {canBrowse && (
+              <button
+                id="live-plc-browse"
+                onClick={() => setBrowsing((b) => !b)}
+                aria-expanded={browsing}
+                className={`shrink-0 flex items-center gap-1 px-1.5 rounded border text-[11px] ${browsing ? 'bg-sky-900/60 border-sky-600 text-sky-200' : 'border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800'}`}
+                title={onScanPlcs ? 'Find the PLCs on the network, or pick a remembered one' : 'Pick a remembered PLC'}
+              >
+                <Search className="w-3 h-3" /> Browse
+              </button>
+            )}
+            {onRememberPlc && (
+              <label className="shrink-0 flex items-center gap-1 text-slate-400 cursor-pointer" title="Remember this PLC in this app: Browse lists it, and new POUs start with it">
+                <input
+                  id="live-plc-remember"
+                  type="checkbox"
+                  checked={remembered}
+                  disabled={!/^[0-9]+([.][0-9]+){5}$/.test(netIdNow)}
+                  onChange={(e) => onRememberPlc(e.target.checked, pickedName?.netId === netIdNow ? pickedName.name : undefined)}
+                />
+                Remember
+              </label>
+            )}
           </div>
           )}
           {direct && (
@@ -433,6 +658,19 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             </>
           )}
         </div>
+        )}
+        {browsing && !running && canBrowse && (
+          <PlcBrowser
+            mode={mode}
+            remembered={rememberedPlcs}
+            currentNetId={netIdNow}
+            onPick={pickPlc}
+            onForget={(netId) => onForgetPlc?.(netId)}
+            onClose={() => setBrowsing(false)}
+            scan={onScanPlcs}
+            addRoute={onAddRoute}
+            onRename={onRenamePlc}
+          />
         )}
         {direct && !running && (
           <div id="live-route-hint" className="text-[11px] leading-snug text-slate-500">

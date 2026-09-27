@@ -87,6 +87,32 @@ namespace KvalStateScope.Xae
             catch (Exception ex) when (ex is COMException || ex is RuntimeBinderException) { return null; }
         }
 
+        /// <summary>
+        /// Adds a route to a PLC, both ways, as XAE's Add Route dialog does: in this computer's router and, with the
+        /// PLC's user name and password, on the PLC. Through the route settings item (TIRR) of the file's TwinCAT
+        /// project. Returns null when done, else why not.
+        /// </summary>
+        public static string AddRoute(IServiceProvider services, string filePath, string name, string netId, string ip, string user, string password)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (FindTreeItem(services, filePath, out var sysManager) == null || sysManager == null) return "The POU is not in a TwinCAT project open in XAE";
+            string X(string s) => System.Security.SecurityElement.Escape(s ?? "");
+            var xml = "<TreeItem><RoutePrj><AddRoute>"
+                + $"<RemoteName>{X(name)}</RemoteName><RemoteNetId>{X(netId)}</RemoteNetId><RemoteIpAddr>{X(ip)}</RemoteIpAddr>"
+                + $"<UserName>{X(user)}</UserName><Password>{X(password)}</Password><NoEncryption></NoEncryption><LocalName>{X(Environment.MachineName)}</LocalName>"
+                + "</AddRoute></RoutePrj></TreeItem>";
+            try
+            {
+                var routes = ((dynamic)sysManager).LookupTreeItem("TIRR");
+                routes.ConsumeXml(xml);
+                return null;
+            }
+            catch (Exception ex) when (ex is COMException || ex is RuntimeBinderException || ex is ArgumentException)
+            {
+                return ex.Message;
+            }
+        }
+
         /// <summary>The object as XAE has it (same format as the file)</summary>
         public static string ReadXml(object treeItem)
         {

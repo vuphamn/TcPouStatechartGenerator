@@ -35,4 +35,6 @@ jobs:
         with:
           name: test-output
           path: tests/.output
+          # (a folder starting with a dot: skipped unless asked for)
+          include-hidden-files: true
           retention-days: 7

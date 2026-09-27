@@ -39,6 +39,23 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     watch: (vars) => ipcRenderer.invoke('tc:live-watch', vars),
     /** Symbol browser: { requestId, path, stateVar } (answered with liveBrowseResult) */
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
+    /** The Live tab's Browse: the TwinCAT devices on the network, { devices, errors } */
+    discoverPlcs: (options) => ipcRenderer.invoke('tc:discover-plcs', options),
+    /** Add Route on a PLC to this computer: { plcIp, user, password, routeName?, localNetId? } -> { ok, message } */
+    addRoute: (options) => ipcRenderer.invoke('tc:add-route', options),
+    /** Other PLCs in the Machine Overview: monitor sessions by key (browse, watched values; no state variable) */
+    side: {
+      start: (key, options) => ipcRenderer.invoke('tc:side-start', key, options),
+      stop: (key) => ipcRenderer.invoke('tc:side-stop', key),
+      watch: (key, vars) => ipcRenderer.invoke('tc:side-watch', key, vars),
+      browse: (key, req) => ipcRenderer.invoke('tc:side-browse', key, req),
+      /** { key, message } for every session's liveStatus / liveVars / liveBrowseResult; returns the unsubscribe function */
+      onMessage: (handler) => {
+        const listener = (_event, m) => handler(m);
+        ipcRenderer.on('tc:side', listener);
+        return () => ipcRenderer.removeListener('tc:side', listener);
+      },
+    },
     /** Subscribes to liveStatus / liveValues / liveWatchResult / liveVars messages; returns the unsubscribe function */
     onMessage: (handler) => {
       const listener = (_event, message) => handler(message);

@@ -24,6 +24,8 @@ export interface GatewayStartOptions {
   ip?: string;
   port?: number;
   localNetId?: string;
+  /** Another PLC in the Machine Overview: connected for browsing and watched values only */
+  monitor?: boolean;
 }
 
 type GatewayEvent =
@@ -56,30 +58,70 @@ export async function detectGatewayOrigin(): Promise<string | null> {
   }
 }
 
+/** Sign-in with company accounts on the gateway that serves this page: set up?, and who is signed in */
+export interface GatewaySso {
+  sso: boolean;
+  provider: string;
+  user: string | null;
+  name: string | null;
+  /** Access tokens are accepted too */
+  tokens: boolean;
+}
+
+export async function fetchGatewaySso(origin: string): Promise<GatewaySso | null> {
+  try {
+    const res = await fetch(`${origin.replace(/\/+$/, '')}/auth/me`, { cache: 'no-store', credentials: 'same-origin' });
+    if (!res.ok) return null;
+    const info = (await res.json()) as GatewaySso;
+    return info && typeof info.sso === 'boolean' ? info : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function gatewaySignOut(origin: string): Promise<void> {
+  await fetch(`${origin.replace(/\/+$/, '')}/auth/logout`, { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
+}
+
 export class GatewayConnection {
   private ws: WebSocket | null = null;
   private welcomed: Promise<{ user: string; plcs: GatewayPlc[] }> | null = null;
   private url = '';
+  private sso = false;
+  // Requests answered by a message with the same requestId (Link's discover / addRoute)
+  private pending = new Map<number, { type: string; resolve: (m: unknown) => void }>();
+  private nextRequest = 1;
 
   constructor(private readonly onEvent: (event: GatewayEvent) => void) {}
 
-  /** Opens the connection and signs in (reuses an open one to the same gateway) */
-  connect(address: string, token: string): Promise<{ user: string; plcs: GatewayPlc[] }> {
+  /**
+   * Opens the connection and signs in (reuses an open one to the same gateway). sso: signed in with the company
+   * account on the gateway (its session cookie goes with the connection), no token
+   */
+  connect(address: string, token: string, sso = false): Promise<{ user: string; plcs: GatewayPlc[] }> {
     const url = gatewaySocketUrl(address);
-    if (this.ws && this.welcomed && this.url === url && this.ws.readyState <= WebSocket.OPEN) return this.welcomed;
+    if (this.ws && this.welcomed && this.url === url && this.sso === sso && this.ws.readyState <= WebSocket.OPEN) return this.welcomed;
     this.close();
     this.url = url;
+    this.sso = sso;
     const ws = new WebSocket(url);
     this.ws = ws;
     this.welcomed = new Promise((resolve, reject) => {
       let settled = false;
       let signedIn = false;
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', token }));
+      ws.onopen = () => ws.send(JSON.stringify(sso ? { type: 'hello', sso: true } : { type: 'hello', token }));
       ws.onmessage = (e) => {
         let m: GatewayEvent;
         try {
           m = JSON.parse(String(e.data)) as GatewayEvent;
         } catch {
+          return;
+        }
+        const id = (m as { requestId?: number }).requestId;
+        const waiting = typeof id === 'number' ? this.pending.get(id) : undefined;
+        if (waiting && waiting.type === m.type) {
+          this.pending.delete(id!);
+          waiting.resolve(m);
           return;
         }
         if (m.type === 'welcome' && !settled) {
@@ -130,6 +172,27 @@ export class GatewayConnection {
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
     this.ws.send(JSON.stringify({ type: 'liveBrowse', ...req }));
     return true;
+  }
+
+  /** A request answered with replyType (same requestId); rejects when not connected or after timeoutMs */
+  request<T>(message: Record<string, unknown>, replyType: string, timeoutMs = 15000): Promise<T> {
+    const ws = this.ws;
+    if (ws?.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Not connected'));
+    const requestId = this.nextRequest++;
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error('No answer'));
+      }, timeoutMs);
+      this.pending.set(requestId, {
+        type: replyType,
+        resolve: (m) => {
+          window.clearTimeout(timer);
+          resolve(m as T);
+        },
+      });
+      ws.send(JSON.stringify({ ...message, requestId }));
+    });
   }
 
   stop(): void {

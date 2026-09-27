@@ -73,7 +73,12 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 
 **Live view** (the **Live** tab) follows the POU's state variable (the `CASE` variable of `doState()`, e.g. `machineState`) in the running PLC.
 - **Go live:** the extension connects over ADS with TwinCAT's own `TcAdsDll.dll`, through the local AMS router.
-  - **Target:** the target system selected in XAE for the project. Enter an AMS NetId to use another.
+  - **Target:** the target system selected in XAE for the project. Enter an AMS NetId to use another, or click **Browse** and pick one:
+    - the project's target, the routes of this computer's TwinCAT router (`StaticRoutes.xml`), and the TwinCAT devices found on the network (the UDP 48899 search of XAE's *Add Route* dialog; enter an address for a PLC behind a router);
+    - each is marked **route** or **no route**: XAE goes live through its own router, so a PLC needs a route from this computer first (the target selector's *Choose Target > Search (Ethernet) > Add Route*);
+    - the PLCs ticked **Remember** (they are kept in the app, for every POU). With an empty target the project's target is used, as before;
+    - **Add route** on a device without a route: with the PLC's user and password, the route is added both ways through XAE's Automation Interface (the route settings item `TIRR`, `<AddRoute>`), as XAE's own Add Route dialog does. The password is passed to XAE only.
+  - **Recording and replay:** **Save recording** writes the session (a save dialog), **Replay...** plays one back on the diagram; see the main README.
   - **Port:** the PLC's ADS port from the project's `.xti` (usually 851). Enter a port to use another.
 - **Instance:** the extension finds where the function block is instantiated from the declarations in the PLC project, e.g. `MAIN.mainStateMachine.smTableManager`. It follows the first instance the PLC actually has. With several, the others are offered in the Instance field. You can also type a path.
 - **Change notification:** the PLC sends every new value with its PLC time stamp, checked every task cycle (at most every 1 ms). A state that lasts one cycle is not missed, which polling would not guarantee.
@@ -135,6 +140,8 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
     - Changes against *committed (git)*;
     - opening `SM_KAxis` from a guard's reference, and Back;
     - Document all state machines through the save dialog.
+  - **Browse (PLC search):** `PlcSearch.cs`, compiled into a small test program, found the two devices of a simulated TwinCAT search (`tests/fakes/fake-discovery.cjs`) with their names, NetIds, TwinCAT and OS versions. The routes file and the whole Browse inside XAE have not been run here (this PC has no TwinCAT routes).
+  - **Add route:** the app side ran with a stand-in bridge (`tests/web/plc-browse-xae.test.cjs`). The extension's `TwinCATProject.AddRoute` (the Automation Interface) compiles but has not been run against a real PLC.
   - **Guard values (0.7.0):** the app side ran in a browser, with a stand-in for the XAE bridge answering `liveWatch`. The same watching code in the desktop app, Link and the gateway ran against a simulated PLC. The extension's own ADS part (`LiveMonitor.SetVars`) compiles but was not run: this PC's TwinCAT system is not started (see Live view above).
   - **One tab per PLC instance (0.8.0), same copy:** the app's `openInstance` message (sent through WebView2's debugging port, as there is no running TwinCAT system to list instances) opened **StateScope: SM_TableManager (MAIN.fbLine2.smTableManager)**, which asked to go live on that instance. Sending it again, with other letter case, brought that tab forward. Another POU's path or a malformed instance was ignored. The desktop app and the web edition (through Link) were tested against a simulated PLC with three instances.
   - **One tab per POU (0.8.0), on the same copy in VS 2022:** SM_TableManager then SM_KAxis gave two tabs; opening SM_TableManager again brought its tab forward, with no third tab and no reload.
@@ -160,6 +167,7 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 | `TwinCATProject.cs` | Automation Interface: finds a file's PLC tree item, reads / writes it (changed parts only) |
 | `LiveMonitor.cs` | Live view: ADS through `TcAdsDll.dll` (P/Invoke), symbol lookup, change notification |
 | `LiveTargets.cs` | Live view: instance paths of a function block from the project's declarations; the PLC's ADS port |
+| `PlcSearch.cs` | The Live tab's Browse: the router's routes (`StaticRoutes.xml`) and the TwinCAT devices on the network (UDP 48899) |
 | `CodeNavigation.cs` | Show in TwinCAT editor: opens a method's editor from the PLC tree and places the caret |
 | `PriorityCommandTarget.cs` | Answers for the context-menu command in menus owned by other windows (TwinCAT's PLC tree) |
 | `VSPackage.resx` | Carries the compiled command table (IDE loads menus from `VSPackage.resources`) |

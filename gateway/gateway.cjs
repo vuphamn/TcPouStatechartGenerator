@@ -5,7 +5,7 @@
 //   node gateway.cjs init [--host <name>]   create config.json and a self-signed certificate
 //   node gateway.cjs add-token <name>       create an access token (shown once; only its hash is stored)
 //   node gateway.cjs remove-token <name>
-//   node gateway.cjs [start]                run the gateway
+//   node gateway.cjs [start]                run the gateway; its setup page: https://localhost:<port>/admin
 // Options: --config <file> (default: config.json next to this file)
 const fs = require('fs');
 const path = require('path');
@@ -19,6 +19,10 @@ const { Client } = require('ads-client');
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
+const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
+const { createAdmin } = require('./admin.cjs');
+const { createAlerts, checkRule, postWebhook } = require('./alerts.cjs');
+const { createAuth } = require('./auth.cjs');
 
 const VERSION = '1.0.0';
 const args = process.argv.slice(2);
@@ -82,7 +86,8 @@ async function init() {
   saveConfig(config);
   console.log(`Created ${configPath} and a self-signed certificate for ${host} / ${ip}.`);
   console.log('Next:');
-  console.log(' 1. Edit config.json: the PLCs (id, name, netId, ip, port). Replace cert.pem / key.pem with a certificate');
+  console.log(' 1. The PLCs: start the gateway and open https://localhost:8443/admin on this computer (it searches the');
+  console.log('    network for them), or edit config.json (id, name, netId, ip, port). Replace cert.pem / key.pem with a certificate');
   console.log('    from your CA if you have one (browsers warn about a self-signed one).');
   console.log(` 2. On each PLC, add an ADS route to this computer: AMS NetId ${config.localNetId}, address ${ip}.`);
   console.log(' 3. node gateway.cjs add-token <name>   (one token per person or team)');
@@ -304,35 +309,148 @@ function serveStatic(config, req, res) {
 
 function start() {
   let config = loadConfig();
-  // Token changes (add-token / remove-token) are picked up without a restart
-  setInterval(() => {
-    try {
-      config.tokens = JSON.parse(fs.readFileSync(configPath, 'utf8')).tokens ?? [];
-    } catch {
-      // keep the previous tokens
-    }
-  }, 10000).unref();
-
-  let server;
-  if (config.tls?.pfx || config.tls?.cert) {
-    const tls = config.tls.pfx
-      ? { pfx: fs.readFileSync(path.resolve(baseDir, config.tls.pfx)), passphrase: config.tls.passphrase }
-      : { cert: fs.readFileSync(path.resolve(baseDir, config.tls.cert)), key: fs.readFileSync(path.resolve(baseDir, config.tls.key)) };
-    server = https.createServer(tls, (req, res) => serveStatic(config, req, res));
-  } else if (config.insecure === true) {
-    log('WARNING: running WITHOUT TLS ("insecure": true). Tokens and PLC data travel in clear text: only for tests.');
-    server = http.createServer((req, res) => serveStatic(config, req, res));
-  } else {
-    console.error('No TLS certificate in config.json (tls.cert/tls.key or tls.pfx). Run "node gateway.cjs init" or add one.');
-    process.exit(1);
-  }
-
   const plcs = new Map((config.plcs ?? []).map((p) => [p.id, p]));
   const connections = new Map(); // plc id -> PlcConnection
   const connectionFor = (plc) => {
     if (!connections.has(plc.id)) connections.set(plc.id, new PlcConnection(plc, config.localNetId));
     return connections.get(plc.id);
   };
+
+  // Tokens and PLCs from config.json (the setup page, add-token / remove-token, an edit): a PLC whose settings changed
+  // is disconnected, its viewers go live again
+  const mtime = () => {
+    try {
+      return fs.statSync(configPath).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  let configMtime = mtime();
+  const applyConfig = (next) => {
+    config.tokens = next.tokens ?? [];
+    const netIdChanged = (next.localNetId ?? '') !== (config.localNetId ?? '');
+    const nextPlcs = new Map((next.plcs ?? []).map((p) => [p.id, p]));
+    for (const [id, conn] of connections) {
+      const p = nextPlcs.get(id);
+      if (p && !netIdChanged && JSON.stringify(p) === JSON.stringify(conn.plc)) continue;
+      for (const v of conn.viewers) v.lost(`The gateway's settings for ${conn.plc.name} changed: go live again`);
+      connections.delete(id);
+      conn.close().catch(() => {});
+    }
+    config.localNetId = next.localNetId;
+    config.plcs = next.plcs ?? [];
+    plcs.clear();
+    for (const [id, p] of nextPlcs) plcs.set(id, p);
+    config.alerts = next.alerts ?? [];
+    alerts?.apply(config.alerts);
+    config.oidc = next.oidc;
+    configMtime = mtime();
+  };
+  // Alerts: the machines of the rules' PLCs followed by the gateway itself (webhooks when stuck / in error)
+  let alerts = null;
+  setInterval(() => {
+    if (mtime() === configMtime) return;
+    try {
+      applyConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+      log(`config: reloaded (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
+    } catch {
+      // keep the previous settings (a file being written)
+    }
+  }, 10000).unref();
+
+  // Setup page: a PLC's connection tested. With a live connection to that PLC its client is used: a second connection
+  // from the same AMS NetId could take the PLC's route from it
+  const testPlc = async (plc) => {
+    const localNetId = plc.localNetId || config.localNetId;
+    const [host, tcp] = plc.ip.split(':');
+    const net = discovery.localNetworks().find((n) => {
+      const a = n.address.split('.').map(Number);
+      const m = n.netmask.split('.').map(Number);
+      const h = host.split('.').map(Number);
+      return h.length === 4 && a.every((x, i) => (x & m[i]) === (h[i] & m[i]));
+    });
+    const route = `Does the PLC have an ADS route to the gateway: AMS NetId ${localNetId}, address ${net?.address ?? 'this computer\'s IP address'}?`;
+    let client = [...connections.values()].find((c) => c.client && c.plc.netId === plc.netId)?.client;
+    let own = null;
+    if (!client) {
+      own = new Client({
+        targetAmsNetId: plc.netId, targetAdsPort: 10000, routerAddress: host, routerTcpPort: Number(tcp) || 48898,
+        localAmsNetId: localNetId, localAdsPort: 32906, rawClient: true, autoReconnect: false, timeoutDelay: 2000, hideConsoleWarnings: true,
+      });
+      try {
+        await own.connect();
+      } catch (err) {
+        return { ok: false, message: `No TwinCAT router at ${host}:${Number(tcp) || 48898} (${ads.adsErrorText(err)}): is the address right, the PLC on, TCP 48898 open?` };
+      }
+      client = own;
+    }
+    try {
+      let system;
+      try {
+        system = ads.ADS_STATES[(await client.readState({ amsNetId: plc.netId, adsPort: 10000 })).adsState] ?? 'unknown';
+      } catch (err) {
+        return { ok: false, message: `${host} did not answer as ${plc.netId} (${ads.adsErrorText(err)}). ${route}` };
+      }
+      let device = '';
+      try {
+        const d = await client.readDeviceInfo({ amsNetId: plc.netId, adsPort: 10000 });
+        device = ` (${String(d.deviceName ?? '').trim() || 'TwinCAT'} ${d.majorVersion}.${d.minorVersion}.${d.versionBuild})`;
+      } catch {
+        // the version is only for the message
+      }
+      const runtimes = [];
+      for (const port of [...new Set([plc.port, 851, 852, 853, 854])]) {
+        try {
+          runtimes.push({ port, state: ads.ADS_STATES[(await client.readState({ amsNetId: plc.netId, adsPort: port })).adsState] ?? 'unknown' });
+        } catch {
+          // no runtime on that port
+        }
+      }
+      const mine = runtimes.find((r) => r.port === plc.port);
+      const others = runtimes.filter((r) => r.port !== plc.port).map((r) => `${r.port}: ${r.state}`).join(', ');
+      if (!mine) return { ok: false, system, runtimes, message: `TwinCAT ${system}${device}, but no PLC runtime on port ${plc.port}${others ? ` (found ${others})` : ''}` };
+      return { ok: true, system, runtimes, message: `OK: PLC on port ${plc.port} ${mine.state}, TwinCAT ${system}${device}${others ? `; also ${others}` : ''}` };
+    } finally {
+      if (own) await own.disconnect(true).catch(() => {});
+    }
+  };
+  alerts = createAlerts({ connectionFor, plcOf: (id) => plcs.get(id), log, retryMs: config.alertRetryMs ?? 30000 });
+  alerts.apply(config.alerts ?? []);
+  const admin = createAdmin({
+    configPath,
+    getConfig: () => config,
+    applyConfig,
+    plcStatus: (id) => {
+      const c = connections.get(id);
+      return c?.client ? { connected: true, viewers: c.viewers.size, plcState: c.plcState } : { connected: false };
+    },
+    testPlc,
+    discover: discovery.discover,
+    localNetworks: discovery.localNetworks,
+    sha256,
+    version: VERSION,
+    log,
+    alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval StateScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
+  });
+  const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
+  const handleRequest = async (req, res) => {
+    if (await auth.handle(req, res)) return;
+    if (!admin(req, res)) serveStatic(config, req, res);
+  };
+
+  let server;
+  if (config.tls?.pfx || config.tls?.cert) {
+    const tls = config.tls.pfx
+      ? { pfx: fs.readFileSync(path.resolve(baseDir, config.tls.pfx)), passphrase: config.tls.passphrase }
+      : { cert: fs.readFileSync(path.resolve(baseDir, config.tls.cert)), key: fs.readFileSync(path.resolve(baseDir, config.tls.key)) };
+    server = https.createServer(tls, handleRequest);
+  } else if (config.insecure === true) {
+    log('WARNING: running WITHOUT TLS ("insecure": true). Tokens and PLC data travel in clear text: only for tests.');
+    server = http.createServer(handleRequest);
+  } else {
+    console.error('No TLS certificate in config.json (tls.cert/tls.key or tls.pfx). Run "node gateway.cjs init" or add one.');
+    process.exit(1);
+  }
   const failures = new Map(); // ip -> [times]
   let viewerCount = 0;
 
@@ -352,6 +470,7 @@ function start() {
 
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
+    const ssoUser = auth.userOf(req);
     let user = null;
     let session = null; // { conn, entry, vars }
     // Guard variables asked for before the session was connected
@@ -399,7 +518,22 @@ function start() {
         return;
       }
       if (!user) {
-        if (m.type !== 'hello' || typeof m.token !== 'string') return ws.close(4401, 'hello expected');
+        if (m.type !== 'hello' || (typeof m.token !== 'string' && m.sso !== true)) return ws.close(4401, 'hello expected');
+        // Signed in with the company account (the page's session cookie came with the connection)
+        if (m.sso === true) {
+          if (!ssoUser) {
+            send({ type: 'denied', message: 'Sign in first (your session may have ended)' });
+            return ws.close(4401, 'denied');
+          }
+          user = ssoUser;
+          clearTimeout(helloTimer);
+          log(`auth: ${user} connected from ${ip} (signed in)`);
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
+        }
+        if (!auth.tokensAllowed()) {
+          send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
+          return ws.close(4401, 'denied');
+        }
         const recent = (failures.get(ip) ?? []).filter((t) => Date.now() - t < 60000);
         if (recent.length >= 10) {
           log(`auth: ${ip} blocked (too many failed attempts)`);
@@ -463,6 +597,28 @@ function start() {
       if (viewerCount >= (config.maxViewers ?? 50)) return send({ type: 'liveStatus', state: 'error', message: 'The gateway has reached its maximum number of viewers' });
       const conn = connectionFor(plc);
       send({ type: 'liveStatus', state: 'connecting', message: `Connecting to ${plc.name} through the gateway...` });
+      // Monitor (another PLC in the Machine Overview): the connection for browsing and watched values, no state variable
+      if (m.monitor === true) {
+        try {
+          await conn.connect();
+          if (seq !== startSeq) return;
+          conn.viewers.add(viewer);
+          clearTimeout(conn.idleTimer);
+          session = { conn, entry: null, vars: new VarWatcher(conn.client, send) };
+          if (desiredVars) session.vars.set(desiredVars);
+          viewerCount++;
+          flushTimer = setInterval(() => {
+            const values = session?.vars.drain();
+            if (values) send({ type: 'liveVars', values });
+          }, 50);
+          log(`live: ${user} watches ${plc.id} (overview)`);
+          send({ type: 'liveStatus', state: 'connected', message: `${plc.name} (PLC ${conn.plcState})`, target: plc.name, plcState: conn.plcState, instances: [], monitor: true });
+        } catch (err) {
+          if (seq !== startSeq) return;
+          send({ type: 'liveStatus', state: 'error', message: err instanceof Error ? err.message : String(err), instances: [] });
+        }
+        return;
+      }
       const found = [];
       try {
         await conn.connect();
@@ -522,7 +678,9 @@ function start() {
   });
 
   server.listen(config.port ?? 8443, () => {
-    log(`Kval StateScope gateway ${VERSION} on ${config.insecure && !config.tls ? 'http' : 'https'}://${os.hostname()}:${config.port ?? 8443}/ (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
+    const scheme = config.insecure && !config.tls ? 'http' : 'https';
+    log(`Kval StateScope gateway ${VERSION} on ${scheme}://${os.hostname()}:${config.port ?? 8443}/ (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
+    if (config.admin?.enabled !== false) log(`Setup page (PLCs, tokens), on this computer: ${scheme}://localhost:${config.port ?? 8443}/admin`);
   });
   // A malformed reply from a device can throw inside the ADS client's socket handling: drop the PLC connections
   // (viewers go live again) instead of stopping the gateway for everyone
@@ -535,6 +693,7 @@ function start() {
   });
   const shutdown = async () => {
     log('stopping');
+    alerts.stop();
     for (const c of connections.values()) await c.close();
     process.exit(0);
   };

@@ -59,6 +59,7 @@
     <Compile Include="CodeNavigation.cs" />
     <Compile Include="LiveMonitor.cs" />
     <Compile Include="LiveTargets.cs" />
+    <Compile Include="PlcSearch.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

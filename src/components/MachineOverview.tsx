@@ -48,6 +48,10 @@ interface MachineOverviewProps {
   pouStateNames?: Map<number, string>;
   onWatch: (machine: SymbolChild) => void;
   openTarget: 'tab' | 'window';
+  /** Appended to the element ids (another PLC's overview: "-<key>") */
+  idSuffix?: string;
+  /** Another PLC's overview: its name in the title, and no outer frame of its own */
+  plcName?: string;
 }
 
 interface Track {
@@ -75,6 +79,8 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
   pouStateNames,
   onWatch,
   openTarget,
+  idSuffix = '',
+  plcName,
 }) => {
   const [machines, setMachines] = useState<OverviewMachine[]>([]);
   const [scan, setScan] = useState<{ state: 'idle' | 'scanning' | 'done' | 'error'; read: number; message?: string; truncated?: boolean }>({ state: 'idle', read: 0 });
@@ -241,10 +247,10 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
   const relative = (p: string) => (p.toLowerCase().startsWith(root.toLowerCase() + '.') ? p.slice(root.length + 1) : p.toLowerCase() === root.toLowerCase() ? '(root)' : p);
 
   return (
-    <div id="machine-overview" className="flex-1 min-h-0 w-full flex flex-col bg-slate-950 text-xs">
+    <div id={`machine-overview${idSuffix}`} className="flex-1 min-h-0 w-full flex flex-col bg-slate-950 text-xs">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-slate-800 shrink-0">
         <LayoutGrid className="w-4 h-4 text-sky-400" />
-        <span className="font-semibold tracking-wide text-slate-300">MACHINE OVERVIEW</span>
+        <span className="font-semibold tracking-wide text-slate-300">{plcName ? plcName : 'MACHINE OVERVIEW'}</span>
         <form
           className="flex items-center gap-1.5"
           onSubmit={(e) => {
@@ -255,33 +261,33 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
           }}
         >
           <input
-            id="overview-root"
+            id={`overview-root${idSuffix}`}
             value={rootDraft}
             onChange={(e) => setRootDraft(e.target.value)}
             spellCheck={false}
             className="w-64 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200"
             title="Where the machines are looked for"
           />
-          <button id="overview-rescan" type="submit" disabled={!connected || scan.state === 'scanning'} className="flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="Look for the machines again (after a download)">
+          <button id={`overview-rescan${idSuffix}`} type="submit" disabled={!connected || scan.state === 'scanning'} className="flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="Look for the machines again (after a download)">
             <RefreshCw className={`w-3 h-3 ${scan.state === 'scanning' ? 'animate-spin' : ''}`} /> Rescan
           </button>
         </form>
         <div className="relative flex items-center">
           <Search className="w-3 h-3 text-slate-500 absolute left-1.5 pointer-events-none" />
-          <input id="overview-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter machines, types, states" className="w-52 bg-slate-900 border border-slate-700 rounded pl-6 pr-1.5 py-0.5 text-[11px] text-slate-200 placeholder:text-slate-500" />
+          <input id={`overview-filter${idSuffix}`} value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter machines, types, states" className="w-52 bg-slate-900 border border-slate-700 rounded pl-6 pr-1.5 py-0.5 text-[11px] text-slate-200 placeholder:text-slate-500" />
         </div>
         <label className="flex items-center gap-1 text-slate-400 cursor-pointer">
-          <input id="overview-errors-only" type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> Problems only
+          <input id={`overview-errors-only${idSuffix}`} type="checkbox" checked={errorsOnly} onChange={(e) => setErrorsOnly(e.target.checked)} /> Problems only
         </label>
         <label className="flex items-center gap-1 text-slate-400">
           Sort
-          <select id="overview-sort" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200">
+          <select id={`overview-sort${idSuffix}`} value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200">
             <option value="path">by machine</option>
             <option value="state">problems first, by state</option>
             <option value="time">longest in state first</option>
           </select>
         </label>
-        <span id="overview-summary" className="ml-auto text-slate-400">
+        <span id={`overview-summary${idSuffix}`} className="ml-auto text-slate-400">
           {machines.length} machine{machines.length === 1 ? '' : 's'}
           {errorCount > 0 && (
             <span className="ml-2 inline-flex items-center gap-1 px-1.5 rounded-full bg-rose-950 border border-rose-800 text-rose-300">
@@ -289,7 +295,7 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
             </span>
           )}
           {stuckCount > 0 && (
-            <span id="overview-stuck-count" className="ml-2 inline-flex items-center gap-1 px-1.5 rounded-full bg-amber-950 border border-amber-700 text-amber-300">
+            <span id={`overview-stuck-count${idSuffix}`} className="ml-2 inline-flex items-center gap-1 px-1.5 rounded-full bg-amber-950 border border-amber-700 text-amber-300">
               <Timer className="w-3 h-3" /> {stuckCount} stuck
             </span>
           )}
@@ -305,7 +311,7 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
       ) : (
         <>
           {(scan.state === 'scanning' || scan.state === 'error' || scan.truncated || machines.length > MAX_OVERVIEW_MACHINES) && (
-            <div id="overview-scan" className={`px-3 py-1 text-[11px] border-b shrink-0 ${scan.state === 'error' ? 'text-rose-300 border-rose-900 bg-rose-950/40' : 'text-slate-400 border-slate-800'}`}>
+            <div id={`overview-scan${idSuffix}`} className={`px-3 py-1 text-[11px] border-b shrink-0 ${scan.state === 'error' ? 'text-rose-300 border-rose-900 bg-rose-950/40' : 'text-slate-400 border-slate-800'}`}>
               {scan.state === 'scanning' && (
                 <span className="flex items-center gap-1.5">
                   <Loader2 className="w-3 h-3 animate-spin" /> Looking for machines under {root}: {scan.read} symbols read, {machines.length} found...

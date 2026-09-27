@@ -251,6 +251,24 @@ npm run build
 npm run preview
 ```
 
+### Releases (GitHub Actions)
+After the **Tests** workflow passes on `master`, the **Release** workflow (`.github/workflows/release.yml`) releases each edition whose code changed since its last release. An edition with no code changes gets no new version.
+
+| Edition | Tag | Files in the GitHub Release | Changes that count |
+|---|---|---|---|
+| XAE | `xae-v0.8.1` | `KvalStateScope.Xae-<version>.vsix` | the web app (`src/`, `public/`, build config, `package.json`), `xae-extension/` |
+| Desktop | `desktop-v1.0.1` | `KvalStateScope-Setup-<version>.exe`, `KvalStateScope-Portable-<version>.exe` | the web app, `electron/`, `shared/`, `build/`, the installer script |
+| Web | `web-v1.0.1` | `KvalStateScope-WebApp-<version>.zip` (for any web server), `KvalStateScope-Gateway-<version>.zip` (with its dependencies), `KvalStateScope-Link-<version>.exe` | the web app, `gateway/`, `link/`, `shared/`, their build scripts |
+
+- **Version numbers:** the patch number goes up by one from the edition's last release. To raise major or minor, set it in the edition's files: `source.extension.vsixmanifest` for XAE, `package.json` for Desktop, `gateway/package.json` for Web. The next release then uses it. The workflow writes the version into the files it builds, but doesn't commit them back.
+- **Not counted:** Markdown files and tests.
+- **Every release:** its notes list the commits that changed that edition.
+- **The desktop installer:** it carries the current XAE extension, Link and gateway, but only a desktop change makes a new desktop release.
+- **`[skip release]`** in a commit message: tests only, no release.
+- **By hand:** *Actions > Release > Run workflow*, with *force* (for example `xae,web`) to release editions even without changes.
+- **The plan locally:** `node scripts/release-plan.cjs` shows what the next release would contain.
+- **Signing:** the builds are unsigned. For a signed desktop installer, add the repository secrets `CSC_LINK` (the .pfx, base64) and `CSC_KEY_PASSWORD`.
+
 ---
 
 ## Build Windows 11 Desktop Application (.exe)
@@ -296,7 +314,13 @@ The desktop app's **Live** tab follows a state machine in a PLC on another compu
 
 **Going live:**
 1. Open the POU from the PLC project with *Browse*. Instance paths and the ADS port are found from the project files, the same way the XAE extension does it.
-2. In the Live tab, enter the PLC's **AMS NetId**. The PLC IP defaults to the first four numbers of the NetId; enter it when it differs, or `host:port` for a forwarded port.
+2. In the Live tab, enter the PLC's **AMS NetId**, or click **Browse** next to it and pick the PLC from the list:
+   - **On the network:** the TwinCAT devices that answer the search XAE's *Add Route* dialog uses (UDP 48899), with name, AMS NetId, IP and TwinCAT version. For a PLC behind a router, which the search's broadcast doesn't reach, enter its address in the list's field. The search changes nothing on the devices.
+   - **Remembered:** the PLCs you ticked **Remember** for. Remember keeps the PLC (NetId, IP, port, this PC's NetId) in the app for every POU: a POU without a target of its own starts with the last one used. The pencil renames one, *×* forgets it.
+   - **Add route:** next to a PLC found on the network. Enter the PLC's user and password (often *Administrator*); the app asks the PLC for an ADS route to this computer, with this PC's AMS NetId and its IP on the PLC's network, as XAE's *Add Route* dialog does for the PLC's side. The password is only sent to the PLC, never kept.
+   - **Switching PLCs:** with two or more remembered PLCs, a list next to **Go live** switches to another in one click. While live, it stops and goes live on the other PLC.
+
+   The PLC IP defaults to the first four numbers of the NetId; enter it when it differs, or `host:port` for a forwarded port.
 3. Click **Go live**. Without a route the PLC closes the connection, and the tab says which route to add.
 
 Only reads happen, plus the release of the variable handle when the session stops. PLCs that enforce Secure ADS (TLS) are not supported yet.
@@ -307,7 +331,7 @@ When the POU is not from the project (a sample, a dropped file), its instances a
 
 A browser can't talk ADS itself, so the web edition goes live through a helper. In the Live tab, **Via** chooses which:
 
-- **This computer:** *Kval StateScope Link* (`link/`), a small program on the same computer. It talks ADS straight to the PLC, like the desktop app. Build it with `npm run build:link`, start `Kval StateScope Link.exe`, and enter the pairing code it shows. The PLC needs an ADS route for the computer. See [link/README.md](link/README.md).
+- **This computer:** *Kval StateScope Link* (`link/`), a small program on the same computer. It talks ADS straight to the PLC, like the desktop app. Build it with `npm run build:link` and start `Kval StateScope Link.exe`. It opens its page, `http://127.0.0.1:48960/`, with the pairing code to enter in the Live tab and the pages paired with it (**Open Link** in the Live tab opens it again). The PLC needs an ADS route for the computer. See [link/README.md](link/README.md).
 - **Gateway:** a shared service on the PLC network, for teams that shouldn't install anything (below).
 
 ### Gateway
@@ -316,9 +340,15 @@ The **Kval StateScope gateway** (`gateway/`) is a small Node.js service on a mac
 
 - **Access:** access tokens (only their hashes are stored), connections limited to the configured PLCs, and a log of who follows what.
 - **Read-only:** one ADS connection per PLC and one change notification per variable, shared by every viewer.
+- **Setup page:** `https://localhost:8443/admin` on the gateway machine searches the network for PLCs (the TwinCAT search, as in the XAE's Add Route dialog), puts them in `config.json`, tests their connections, and creates and revokes access tokens.
 - **Setup:** `npm run build:gateway` assembles `release/gateway`. The rest (certificate, PLC list, ADS routes, tokens, running it as a service) is in [gateway/README.md](gateway/README.md).
 
-In the Live tab, enter your access token, choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
+In the Live tab, enter your access token (or **Sign in** with your company account, when the gateway has it set up), choose the PLC and click **Go live**. The gateway finds the POU's instances in the PLC's symbol tables.
+
+- **Sign-in with company accounts:** OpenID Connect (Microsoft Entra ID / Microsoft 365, ADFS, Okta, Google). The gateway checks who may use it (users, e-mail domains, groups) and logs the user's name. Tokens can stay or be turned off.
+- **Alerts:** the gateway follows the machines under a root by itself, with no browser open, and posts to a Teams, Slack or JSON webhook when one is stuck or in an error state, and when it recovers. Set them up on the setup page.
+
+Through Link, the Live tab's **Browse** also searches the network (Link runs the search on this computer) and offers **Add route**, as in the desktop app.
 
 ## Machine Overview
 
@@ -330,6 +360,7 @@ While live, the **Machine Overview** tab lists every state machine of the PLC wi
 - **Filter** by machine, type or state. **Sort** by machine, errors first, or longest in state.
 - **Watch** (or a double-click) opens that machine's diagram in its own tab or window, live on it, as in Symbols.
 - **Limit:** the first 80 machines are followed. Use the filter or a deeper root for the others.
+- **Other PLCs:** below the POU's own PLC, **Other PLCs** adds more PLCs (the remembered ones, or the gateway's), each with its own connection and overview: several lines on one screen, even when this window is not live. Watch opens a machine live on its PLC. The chosen PLCs are kept and connect again when the tab opens. Desktop app and web edition (Link, gateway); not in XAE.
 
 ## Stuck-state alerts
 
@@ -337,6 +368,13 @@ A state can have a **time limit**: how long a machine may stay in it before it c
 - **Setting one:** right-click a state on the canvas and choose **Time limit…**, for example `30 s` or `2 min`. While live, the Live tab also has a **Limit** field for the current state and a **Default** for every state that has none. Limits are kept per POU type, such as `SM_TableManager`, so they apply to all its instances, in every window and in the Machine Overview. They are stored per viewer.
 - **Over the limit:** the Live tab shows **STUCK** and the time in red (with the limit, e.g. `6.01 s / 2 s`), and the state's node on the canvas pulses red. The Machine Overview marks the machine in amber with **STUCK** and counts it in the header, and **Problems only** shows stuck and error machines. A state already named as an error is not also counted as stuck.
 - **Notify:** a notification each time a machine goes over, once per stay in the state (a Windows notification in the desktop app; in the web edition, after the browser asks for permission). It covers this window's machine and the Machine Overview's.
+
+## Recording and replay
+
+Every live session is recorded while it runs: the state variable's changes and the guard values, with the PLC's time stamps.
+- **Save recording** (Live tab) writes the session so far to a `.kssrec.json` file (XAE and desktop: a save dialog; web: a download).
+- **Replay...** plays a recording back on the diagram as if live: the active state glows, the trail and Transition History fill, the guard values show. **Play** / **Pause**, a speed from 1x to 600x, and a slider to any moment of the recording. **Stop** ends the replay. A replay needs no PLC, so a night's recording can be looked at on any computer.
+- **Seen transitions:** the transitions the PLC took (live, not replays) are counted per POU type and kept in the app. Deleting one of them, or a state the PLC used, says so in the confirmation (how often, when last). Moving a transition's end that the PLC took shows a warning. **Save** asks first when the edit removes transitions the PLC has taken, and lists them.
 
 ## PLC symbols
 

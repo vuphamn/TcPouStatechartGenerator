@@ -18,8 +18,8 @@ namespace KvalStateScope.Xae
 {
     /// <summary>
     /// Hosts the Kval StateScope web app in WebView2 and answers its requests (messages as JSON objects):
-    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch
-    ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars
+    ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch, discoverPlcs
+    ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars, plcList
     /// </summary>
     internal sealed class StateScopeControl : UserControl
     {
@@ -327,6 +327,12 @@ namespace KvalStateScope.Xae
                     case "liveBrowse":
                         HandleLiveBrowse(msg);
                         break;
+                    case "discoverPlcs":
+                        HandleDiscoverPlcs(msg);
+                        break;
+                    case "addRoute":
+                        HandleAddRoute(msg);
+                        break;
                     case "gitShow":
                         HandleGitShow(msg);
                         break;
@@ -602,12 +608,14 @@ namespace KvalStateScope.Xae
                 Post(new { type = "saveDocumentResult", error = "Nothing to save" });
                 return;
             }
+            // A document (HTML, opened after saving) or a live recording (JSON)
+            var recording = (name ?? "").EndsWith(".json", StringComparison.OrdinalIgnoreCase);
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                Title = "Save the documentation",
+                Title = recording ? "Save the live recording" : "Save the documentation",
                 FileName = string.IsNullOrEmpty(name) ? "documentation.html" : Path.GetFileName(name),
-                Filter = "HTML document (*.html)|*.html",
+                Filter = recording ? "Live recording (*.json)|*.json" : "HTML document (*.html)|*.html",
                 InitialDirectory = plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null,
             };
             if (dialog.ShowDialog() != true)
@@ -619,8 +627,11 @@ namespace KvalStateScope.Xae
             {
                 File.WriteAllText(dialog.FileName, content, new System.Text.UTF8Encoding(false));
                 Log.Write("docs: saved " + dialog.FileName);
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true }); }
-                catch (System.ComponentModel.Win32Exception) { }
+                if (!recording)
+                {
+                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dialog.FileName) { UseShellExecute = true }); }
+                    catch (System.ComponentModel.Win32Exception) { }
+                }
                 Post(new { type = "saveDocumentResult", path = dialog.FileName });
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
@@ -787,6 +798,56 @@ namespace KvalStateScope.Xae
                 {
                     type = "liveBrowseResult", requestId, result.path, result.symbolType, result.kind, result.stateMachine, result.stateType, result.stateNames, result.truncated, result.children, result.error,
                 });
+            });
+        }
+
+        /// <summary>Add Route from the Live tab's Browse, both ways through XAE (the password is not kept or logged)</summary>
+        private void HandleAddRoute(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            string Text(string key) => msg.TryGetValue(key, out var v) ? (v as string ?? "").Trim() : "";
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var netId = Text("netId");
+            var ip = Text("ip").Split(':')[0];
+            var name = Text("name");
+            if (!System.Text.RegularExpressions.Regex.IsMatch(netId, @"^\d{1,3}(\.\d{1,3}){5}$") || !System.Text.RegularExpressions.Regex.IsMatch(ip, @"^[A-Za-z0-9.-]{1,253}$"))
+            {
+                Post(new { type = "addRouteResult", requestId, ok = false, message = "The PLC's AMS NetId and IP address are needed" });
+                return;
+            }
+            if (_pouPath == null)
+            {
+                Post(new { type = "addRouteResult", requestId, ok = false, message = "Open a POU of the TwinCAT project first" });
+                return;
+            }
+            if (name.Length == 0 || name.Length > 60 || !System.Text.RegularExpressions.Regex.IsMatch(name, @"^[\w .-]+$")) name = ip;
+            var error = TwinCATProject.AddRoute(_pane, _pouPath, name, netId, ip, Text("user"), msg.TryGetValue("password", out var pw) ? pw as string ?? "" : "");
+            Log.Write($"route: add {name} ({netId}, {ip}): {error ?? "done"}");
+            Post(new { type = "addRouteResult", requestId, ok = error == null, message = error == null ? $"Route added to {name} ({netId}), both ways" : $"Not added: {error}" });
+        }
+
+        /// <summary>The Live tab's Browse: the project's target, the router's routes and the devices on the network</summary>
+        private void HandleDiscoverPlcs(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var addresses = (msg.TryGetValue("addresses", out var a) && a is System.Collections.ArrayList list ? list.OfType<string>() : Enumerable.Empty<string>())
+                .Select(x => x.Trim()).Where(x => x.Length > 0 && x.Length < 254 && System.Text.RegularExpressions.Regex.IsMatch(x, @"^[A-Za-z0-9.-]+$")).Take(64).ToList();
+            var projectTarget = _pouPath != null ? TwinCATProject.TargetNetId(_pane, _pouPath) : null;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var errors = new List<string>();
+                List<PlcSearch.Found> devices;
+                try { devices = PlcSearch.Browse(addresses, errors); }
+                catch (Exception ex) when (ex is System.Net.Sockets.SocketException || ex is IOException || ex is InvalidOperationException)
+                {
+                    devices = new List<PlcSearch.Found>();
+                    errors.Add(ex.Message);
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"plc search: {devices.Count} device(s)");
+                Post(new { type = "plcList", requestId, devices, errors, projectTarget });
             });
         }
 
