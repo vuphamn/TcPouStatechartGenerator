@@ -323,3 +323,49 @@ export function renameWordInFile(xml: string, oldName: string, newName: string, 
   }
   return { xml: out, changes };
 }
+
+/** Why a method / property cannot get the new name, or null */
+export function checkMethodRename(pouXml: string, oldName: string, newName: string): string | null {
+  if (!/^[A-Za-z_]\w*$/.test(newName)) return 'A name is letters, digits and _ (not starting with a digit)';
+  if (KEYWORDS.has(newName.toUpperCase())) return `${newName} is a keyword`;
+  if (newName === oldName) return 'Enter a new name';
+  const taken = new RegExp(`<(Method|Property|Action)\\b[^>]*\\bName="${newName}"`, 'i').test(pouXml);
+  if (taken && newName.toLowerCase() !== oldName.toLowerCase()) return `${newName} is already a method, property or action of the POU`;
+  const decl = sections(pouXml).find((s) => s.kind === 'Declaration' && s.unit === '');
+  if (decl && declares(pouXml.slice(decl.start, decl.end), newName)) return `${newName} is a variable of the POU`;
+  return null;
+}
+
+/**
+ * A method (or property) of the POU renamed: its element's name, its METHOD / PROPERTY line, every call in the POU
+ * (x(, THIS^.x(, its result x := inside it)
+ */
+export function renameMethod(pouXml: string, oldName: string, newName: string): { pou: string; changes: RenameChange[]; kind: 'method' | 'property'; isPrivate: boolean } | { error: string } {
+  const err = checkMethodRename(pouXml, oldName, newName);
+  if (err) return { error: err };
+  const el = pouXml.match(new RegExp(`<(Method|Property)\\b[^>]*\\bName="(${oldName})"[^>]*>`, 'i'));
+  if (!el) return { error: `${oldName} is no method or property of the POU` };
+  const kind = el[1].toLowerCase() === 'method' ? 'method' : 'property';
+  const old = el[2];
+  // Every use in the POU (its header line included: METHOD PUBLIC old : BOOL)
+  const changes: RenameChange[] = [];
+  let out = pouXml;
+  let isPrivate = false;
+  for (const s of sections(pouXml).sort((a, b) => b.start - a.start)) {
+    const text = pouXml.slice(s.start, s.end);
+    if (s.kind === 'Declaration' && s.unit.toLowerCase() === old.toLowerCase()) isPrivate = /^\s*(METHOD|PROPERTY)\b[^\n]*\bPRIVATE\b/im.test(text);
+    const r = renameInText(text, old, newName);
+    if (!r.count) continue;
+    const before = text.split(/\r?\n/);
+    const after = r.text.split(/\r?\n/);
+    const here: RenameChange[] = [];
+    before.forEach((l, i) => {
+      if (l !== after[i]) here.push({ where: s.where, line: i + 1, before: l.trim(), after: after[i].trim() });
+    });
+    changes.unshift(...here);
+    out = out.slice(0, s.start) + r.text + out.slice(s.end);
+  }
+  // The element's name
+  out = out.replace(new RegExp(`(<${el[1]}\\b[^>]*\\bName=")${old}(")`, 'i'), `$1${newName}$2`);
+  return { pou: out, changes, kind, isPrivate };
+}

@@ -148,7 +148,7 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.mouse.move(np.x, np.y);
   await h.sleep(250);
   const title = await p.$eval('#state-actions-hover', (e) => e.innerText).catch(() => '');
-  expect(/^S_IDLE\ndo \/\n {2}nCycles := nCycles \+ 1;$/.test(title.trim()) && !(await p.$('#mermaid-diagram-svg-container g.node title.state-actions-title')), `S_IDLE's actions on hover, at once (no browser tooltip): ${JSON.stringify(title)}`);
+  expect(/^S_IDLE\nnCycles := nCycles \+ 1;\nIF cmd_bStart THEN\n\s+machineState := E_S\.S_RUN;\nEND_IF$/.test(title.trim()) && !(await p.$('#mermaid-diagram-svg-container g.node title.state-actions-title')), `S_IDLE's code on hover, whole and as written, at once (no browser tooltip): ${JSON.stringify(title)}`);
   await p.mouse.move(5, 5);
   await h.sleep(150);
 

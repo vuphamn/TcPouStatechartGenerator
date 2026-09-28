@@ -38,8 +38,10 @@ const netParens = (l: string) => count(l, /\(/g) - count(l, /\)/g);
 function statements(code: string[], a: number, b: number, state: string, stateVar: string): Stmt[] {
   const out: Stmt[] = [];
   const assign = new RegExp(`\\b${escapeRx(stateVar)}\\s*:=\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)*([A-Za-z_]\\w*)`, 'g');
-  const entryRx = /^\s*IF\s+\(?\s*bFirstPass\s*\)?\s+THEN\b/i;
-  const exitRx = new RegExp(`^\\s*IF\\s+\\(?\\s*${escapeRx(stateVar)}\\s*<>\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)?${escapeRx(state)}\\s*\\)?\\s+THEN\\b`, 'i');
+  // (with or without spaces around the brackets: IF (bFirstPass) THEN, IF(bFirstPass)THEN)
+  const entryRx = /^\s*IF(?:\s*\(\s*bFirstPass\s*\)\s*|\s+bFirstPass\s+)THEN\b/i;
+  const exitCmp = `${escapeRx(stateVar)}\\s*<>\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)?${escapeRx(state)}`;
+  const exitRx = new RegExp(`^\\s*IF(?:\\s*\\(\\s*${exitCmp}\\s*\\)\\s*|\\s+${exitCmp}\\s+)THEN\\b`, 'i');
   let i = a;
   let pending = -1;
   while (i < b) {
@@ -214,4 +216,31 @@ export function allStateActions(pouXml: string, stateVarGiven?: string): Map<str
   const out = new Map<string, { entry?: string; do?: string; exit?: string }>();
   for (const [s, a] of actionSummaries(pouXml, states, stateVar)) out.set(s, { entry: a.entry, do: a.do, exit: a.exit });
   return out;
+}
+
+/** A state's whole code (its CASE branch's body in doState(), as written, without its indentation) */
+export function readStateCode(pouXml: string, state: string): string[] | { error: string } {
+  const b = branchOf(pouXml, state, 'machineState');
+  if ('error' in b) return b;
+  return trimBlank(dedent(b.lines.slice(b.bodyStart, b.bodyEnd)));
+}
+
+/** The POU with a state's whole code (its CASE branch's body) replaced, indented as the branch's body was */
+export function writeStateCode(pouXml: string, state: string, code: string): { pou: string; message: string } | { error: string } {
+  const b = branchOf(pouXml, state, 'machineState');
+  if ('error' in b) return b;
+  if (code.includes(']]>')) return { error: 'The code cannot hold ]]>' };
+  const lines = [...b.lines];
+  const label = lines[b.label];
+  const bodyIndent = (() => {
+    // (the smallest indentation of its lines: what reading it took off)
+    const ind = lines.slice(b.bodyStart, b.bodyEnd).filter((x) => x.trim()).map((x) => x.match(/^[ \t]*/)![0]);
+    return ind.length ? ind.reduce((m, x) => (x.length < m.length ? x : m)) : `${label.match(/^[ \t]*/)![0]}\t`;
+  })();
+  const content = trimBlank(code.replace(/\r\n/g, '\n').split('\n'));
+  lines.splice(b.bodyStart, b.bodyEnd - b.bodyStart, ...content.map((l) => (l.trim() ? `${bodyIndent}${l}` : '')));
+  const u = updateMethodCodeInPou(pouXml, 'doState', lines.join(b.eol));
+  if (!u.success) return { error: u.error || 'Could not write doState()' };
+  const n = content.filter((l) => l.trim()).length;
+  return { pou: u.updatedPou, message: `${state}: its code set (${n} line${n === 1 ? '' : 's'})` };
 }

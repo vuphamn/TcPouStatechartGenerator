@@ -152,6 +152,31 @@ const STRUCT = `<TcPlcObject><DUT Name="ST_Pos" Id="{3}"><Declaration>${cdata('T
   expect(/nSpare : INT \(VAR\) is not used/.test(await p.$eval('#pou-declaration-editor', (e) => e.title)), 'hover: the message');
   await p.screenshot({ path: h.out('editor-intel.png') });
 
+  // A state on hover: its actions as highlighted ST (not wrapped), the problems of its code listed
+  await p.click('#dock-tab-diagram');
+  await h.sleep(600);
+  const sp = await p.evaluate(() => { const r = document.querySelector('#mermaid-diagram-svg-container g.node[data-state-id="S_IDLE"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await p.mouse.move(sp.x + 2, sp.y);
+  await p.mouse.move(sp.x, sp.y);
+  await h.sleep(300);
+  const preview = await p.evaluate(() => {
+    const box = document.querySelector('#state-actions-hover, #state-actions-in-heatmap');
+    if (!box) return null;
+    const line = box.querySelector('.prism-code .whitespace-pre');
+    return { tokens: box.querySelectorAll('.prism-code .token').length, noWrap: line ? getComputedStyle(line).whiteSpace === 'pre' : false, problems: box.querySelector('.state-actions-problems')?.textContent ?? '' };
+  });
+  expect(!!preview && preview.tokens > 0 && preview.noWrap && /bTypo is not declared/.test(preview.problems), `S_IDLE on hover: highlighted (${preview?.tokens} tokens), not wrapped, its problems: ${preview?.problems}`);
+  const placed = await p.evaluate(() => {
+    const b = document.querySelector('#state-actions-hover, #heatmap-state-hover-tooltip')?.getBoundingClientRect();
+    const g = document.querySelector('#mermaid-diagram-svg-container g.node[data-state-id="S_IDLE"]');
+    const n = (g.querySelector('rect, polygon, circle, path') || g).getBoundingClientRect();
+    return !!b && !(b.left < n.right && b.right > n.left && b.top < n.bottom && b.bottom > n.top);
+  });
+  expect(placed, 'S_IDLE on hover: the box beside the state, not over it');
+  const hb = await p.$eval('#state-actions-hover', (e) => { const r = e.getBoundingClientRect(); return { x: r.x - 4, y: r.y - 4, width: r.width + 8, height: r.height + 8 }; }).catch(() => null);
+  if (hb) await p.screenshot({ path: h.out('state-actions-hover.png'), clip: hb });
+  await p.mouse.move(5, 5);
+
   // 4. The Problems tab's fixes: Declare… bTypo (in doState()), Remove nSpare
   await p.evaluate(() => document.getElementById('dock-tab-problems')?.click());
   await h.sleep(600);

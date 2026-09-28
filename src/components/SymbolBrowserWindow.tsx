@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Binary, ChevronDown, ChevronRight, Eye, ListTree, Loader2, RefreshCw, Search } from 'lucide-react';
+import { Binary, ChevronDown, ChevronRight, Eye, ExternalLink, Filter, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import type { LiveBrowseResult, SymbolChild } from '../utils/xaeHost.ts';
 import type { LiveValue, WatchedVar } from '../utils/liveGuards.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
@@ -8,11 +8,19 @@ import { sameInstance } from '../utils/instanceLaunch.ts';
  * PLC Symbols tab (Live, while connected): the PLC's symbols from a root (default MAIN.mainStateMachine), one level at
  * a time, with the values of numbers, booleans and strings. A member that holds the state variable is a state
  * machine: Watch follows it in its own tab / window, live, recording its transitions.
+ * The type filter (at first the loaded POU's type): the instances of that type found under the root, searched
+ * level by level, in one list; cleared, the whole tree. An instance of another type opens in a new StateScope.
  */
 
 export const DEFAULT_SYMBOL_ROOT = 'MAIN.mainStateMachine';
 /** Most values followed at once for this window (the host also follows the guard variables) */
 export const MAX_SYMBOL_VALUES = 60;
+/** The type search: how deep under the root, and how many symbols it reads at most */
+export const TYPE_SEARCH_DEPTH = 8;
+export const TYPE_SEARCH_MAX_READS = 600;
+
+/** A symbol's type without its namespace (Lib.SM_X -> SM_X) */
+export const bareType = (type: string) => type.trim().split('.').pop() ?? '';
 
 interface SymbolBrowserWindowProps {
   connected: boolean;
@@ -30,6 +38,8 @@ interface SymbolBrowserWindowProps {
   stateVar: string;
   onWatch: (node: SymbolChild) => void;
   openTarget: 'tab' | 'window';
+  /** The loaded POU's type (SM_TableManager): the type filter starts with it */
+  loadedType?: string;
 }
 
 export const symbolWatchId = (path: string) => `sym:${path.toLowerCase()}`;
@@ -56,11 +66,24 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   stateVar,
   onWatch,
   openTarget,
+  loadedType,
 }) => {
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState('');
   const [rootDraft, setRootDraft] = useState(root);
+  // The type filter: the loaded POU's type until changed here
+  const [typeFilter, setTypeFilter] = useState(loadedType ?? '');
+  const typeTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!typeTouchedRef.current) setTypeFilter(loadedType ?? '');
+  }, [loadedType]);
+  const typeNeedle = typeFilter.trim().toLowerCase();
+  const [search, setSearch] = useState<{ matches: SymbolChild[]; reads: number; done: boolean; capped: boolean; errors: number }>({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
+  const searchGenRef = useRef(0);
+  // (the search reads through the latest browse: a new function each render must not start it again)
+  const browseRef = useRef(browse);
+  browseRef.current = browse;
   const boxRef = useRef<HTMLDivElement>(null);
   // Latest load per path (a reload replaces an answer still on its way)
   const seqRef = useRef(new Map<string, number>());
@@ -99,7 +122,63 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   };
   const refresh = () => {
     for (const p of expanded) load(p);
+    if (typeNeedle) setSearchNonce((n) => n + 1);
   };
+
+  // The type search: level by level from the root (a few reads at a time), every member whose type matches
+  const [searchNonce, setSearchNonce] = useState(0);
+  useEffect(() => {
+    const gen = ++searchGenRef.current;
+    if (!connected || !root || !typeNeedle) {
+      setSearch({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
+      return;
+    }
+    // (typing: waits for a pause; shown as searching from now on, not "0 found")
+    setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
+    const timer = window.setTimeout(() => {
+      const matches: SymbolChild[] = [];
+      let reads = 0;
+      let errors = 0;
+      let capped = false;
+      const alive = () => searchGenRef.current === gen;
+      // (an array of them is not one: its elements are)
+      const matchesType = (c: SymbolChild) => c.kind !== 'array' && bareType(c.type).toLowerCase().includes(typeNeedle);
+      setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
+      void (async () => {
+        let level = [root];
+        for (let depth = 0; depth < TYPE_SEARCH_DEPTH && level.length && alive(); depth++) {
+          const next: string[] = [];
+          for (let i = 0; i < level.length && alive(); i += 4) {
+            if (reads >= TYPE_SEARCH_MAX_READS) {
+              capped = true;
+              break;
+            }
+            const batch = level.slice(i, Math.min(i + 4, i + TYPE_SEARCH_MAX_READS - reads));
+            reads += batch.length;
+            const results = await Promise.all(batch.map((p) => browseRef.current(p).catch((e: unknown) => ({ requestId: 0, path: p, error: String(e) }) as LiveBrowseResult)));
+            if (!alive()) return;
+            for (const r of results) {
+              if (r.error) {
+                errors++;
+                continue;
+              }
+              for (const c of r.children ?? []) {
+                if (matchesType(c)) matches.push(c);
+                // (into FBs, structs and arrays: an instance can be in any of them)
+                if (c.kind === 'struct' || c.kind === 'array') next.push(c.path);
+              }
+            }
+            setSearch({ matches: [...matches], reads, done: false, capped: false, errors });
+          }
+          if (capped) break;
+          level = next;
+        }
+        if (alive()) setSearch({ matches: [...matches].sort((a, b) => a.path.localeCompare(b.path)), reads, done: true, capped, errors });
+      })();
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [connected, root, typeNeedle, searchNonce]);
+  const sameAsLoaded = (c: SymbolChild) => !!loadedType && bareType(c.type).toLowerCase() === loadedType.toLowerCase();
 
   // What is on show, in tree order (filtered: matches and the members leading to them)
   const needle = filter.trim().toLowerCase();
@@ -192,6 +271,47 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
           </button>
         </form>
         <div className="flex items-center gap-1.5">
+          <Filter className="w-3 h-3 text-slate-500 shrink-0" />
+          <input
+            id="symbol-browser-type-filter"
+            value={typeFilter}
+            onChange={(e) => {
+              typeTouchedRef.current = true;
+              setTypeFilter(e.target.value);
+            }}
+            placeholder="Instances of a type (empty: the whole tree)"
+            spellCheck={false}
+            title={`Only the instances of this type under ${root} (at first the loaded POU's type). Clear it for the whole tree`}
+            className={`flex-1 min-w-0 bg-slate-950 border rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600 placeholder:font-sans ${typeNeedle ? 'border-sky-700' : 'border-slate-700'}`}
+          />
+          {typeFilter && (
+            <button
+              id="symbol-browser-type-clear"
+              onClick={() => {
+                typeTouchedRef.current = true;
+                setTypeFilter('');
+              }}
+              className="p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              title="Clear: the whole tree, every type"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+          {loadedType && typeFilter.trim().toLowerCase() !== loadedType.toLowerCase() && (
+            <button
+              id="symbol-browser-type-loaded"
+              onClick={() => {
+                typeTouchedRef.current = false;
+                setTypeFilter(loadedType);
+              }}
+              className="px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 shrink-0"
+              title={`Only the instances of ${loadedType} (the loaded POU)`}
+            >
+              {loadedType}
+            </button>
+          )}
+        </div>
+        <div className={`flex items-center gap-1.5 ${typeNeedle ? 'hidden' : ''}`}>
           <Search className="w-3 h-3 text-slate-500 shrink-0" />
           <input
             id="symbol-browser-filter"
@@ -217,6 +337,65 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
         ) : rootLoad.state === 'error' ? (
           <div id="symbol-browser-error" className="p-4 text-center text-rose-300 font-sans">
             {rootLoad.error}
+          </div>
+        ) : typeNeedle ? (
+          // The instances of the type, in one list
+          <div id="symbol-browser-instances">
+            <div id="symbol-browser-search-status" className="flex items-center gap-1.5 px-2 py-0.5 font-sans text-slate-400">
+              {!search.done && <Loader2 className="w-3 h-3 animate-spin" />}
+              <span>
+                {search.done
+                  ? `${search.matches.length} instance${search.matches.length === 1 ? '' : 's'} of ${typeFilter.trim()} under ${root}`
+                  : `Searching ${root} for ${typeFilter.trim()}… (${search.reads} read, ${search.matches.length} found)`}
+                {search.done && search.capped && ` (stopped after ${search.reads} symbols: a narrower root finds the rest)`}
+                {search.done && search.errors > 0 && ` (${search.errors} could not be read)`}
+              </span>
+            </div>
+            {search.done && search.matches.length === 0 && (
+              <div className="px-6 py-2 text-slate-500 font-sans">
+                None found. Clear the filter for the whole tree, or change the Root.
+              </div>
+            )}
+            {search.matches.map((c) => {
+              const here = sameInstance(c.path, currentInstance);
+              const other = !sameAsLoaded(c);
+              const open = () => {
+                if (!here) onWatch(c);
+              };
+              return (
+                <div
+                  key={c.path}
+                  className={`symbol-row symbol-instance-row group flex items-center gap-1.5 px-2 py-[2px] hover:bg-slate-800/60 ${here ? '' : 'cursor-pointer'}`}
+                  data-path={c.path}
+                  data-kind={c.kind}
+                  data-other-type={other ? 'true' : undefined}
+                  onDoubleClick={open}
+                  title={here ? `${c.path}: this ${openTarget} follows it` : other ? `${c.path} is a ${bareType(c.type)}: double-click or Open for a new StateScope on it, live` : `${c.path}: double-click or Watch to follow it in a new ${openTarget}`}
+                >
+                  <span className={`truncate ${c.stateMachine ? 'text-sky-200 font-semibold' : 'text-slate-200'}`}>{c.path}</span>
+                  <span className="text-slate-500 truncate min-w-0 flex-1">{c.type}</span>
+                  {here ? (
+                    <span className="shrink-0 font-sans text-[10px] text-emerald-300">this {openTarget}</span>
+                  ) : other ? (
+                    <button
+                      onClick={open}
+                      className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
+                      title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                    >
+                      <ExternalLink className="w-3 h-3" /> Open
+                    </button>
+                  ) : (
+                    <button
+                      onClick={open}
+                      className="symbol-watch shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-sky-300 hover:bg-slate-700"
+                      title={`Follow ${c.path} (${c.type}) in a new ${openTarget}: its diagram, live, with its transitions recorded`}
+                    >
+                      <Eye className="w-3 h-3" /> Watch
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <>
@@ -267,6 +446,14 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                     {c.stateMachine &&
                       (here ? (
                         <span className="shrink-0 font-sans text-[10px] text-emerald-300">this {openTarget}</span>
+                      ) : loadedType && !sameAsLoaded(c) ? (
+                        <button
+                          onClick={() => onWatch(c)}
+                          className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
+                          title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                        >
+                          <ExternalLink className="w-3 h-3" /> Open
+                        </button>
                       ) : (
                         <button
                           onClick={() => onWatch(c)}
@@ -304,6 +491,12 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
           ? `Values of the first ${MAX_SYMBOL_VALUES} of ${valueCount} shown (close members to see others). `
           : ''}
         State machines (with {stateVar}) have <span className="text-sky-300">Watch</span>: their diagram in a new {openTarget}, live.
+        {loadedType && (
+          <>
+            {' '}
+            Another type's have <span className="text-amber-200">Open</span>: a new StateScope for that type, live on it.
+          </>
+        )}
       </div>
     </div>
   );

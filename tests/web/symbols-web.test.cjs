@@ -46,6 +46,25 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
   await a.click('#live-start-btn');
   await a.waitForSelector('#live-symbols-btn', { timeout: 20000 }).catch(() => {});
   await a.click('#live-symbols-btn');
+  // The type filter: at first the loaded POU's type, the instances of it found under the root in one list
+  await a.waitForSelector('#symbol-browser-type-filter', { timeout: 10000 }).catch(() => {});
+  const instances = async () => {
+    for (let i = 0; i < 50; i++) {
+      await sleep(200);
+      const s = await a.$eval('#symbol-browser-search-status', (e) => e.textContent).catch(() => '');
+      if (/^\d+ instances? of/.test(s)) break;
+    }
+    return a.$$eval('.symbol-instance-row', (r) => r.map((x) => `${x.getAttribute('data-path').split('.').pop()}${x.querySelector('.symbol-open-other') ? ':open' : x.querySelector('.symbol-watch') ? ':watch' : ':here'}`));
+  };
+  const typeValue = await a.$eval('#symbol-browser-type-filter', (e) => e.value).catch(() => '');
+  const mine = await instances();
+  expect(typeValue === 'SM_TableManager' && mine.join() === 'smTable1:here,smTable2:watch', `type filter "${typeValue}": ${mine.join(', ')} (${await a.$eval('#symbol-browser-search-status', (e) => e.textContent).catch(() => '-')})`);
+  await set(a, 'symbol-browser-type-filter', 'SM_DoorDasher');
+  const doors = await instances();
+  expect(doors.join() === 'aDoors[1]:open,aDoors[2]:open', `another type: ${doors.join(', ')} (Open: a new StateScope)`);
+  await a.click('#symbol-browser-type-clear');
+  await sleep(300);
+  expect(!(await a.$('#symbol-browser-instances')) && !!(await a.$('#symbol-browser-tree .symbol-row')), 'cleared: the whole tree');
   const n = await waitRow(a, `${R}.nCount`, (r) => /^4[23]$/.test(r.value));
   const t2 = await row(a, `${R}.smTable2`);
   expect(/^4[23]$/.test(n?.value ?? '') && t2?.watch, `through Link: nCount=${n?.value}, smTable2 has Watch`);

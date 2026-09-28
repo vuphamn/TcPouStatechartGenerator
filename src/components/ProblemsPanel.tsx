@@ -36,6 +36,8 @@ const FIX_LABEL: Record<NonNullable<LintFinding['fix']>['kind'], string> = {
   'add-case-branch': 'Add CASE branch',
   'declare-variable': 'Declare…',
   'remove-variable': 'Remove',
+  'insert-call': 'Insert call',
+  'remove-lines': 'Remove the lines',
 };
 
 export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({

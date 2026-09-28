@@ -140,7 +140,7 @@ export function declareVariables(pouXml: string, vars: NewVariable[]): { pou: st
 export function undeclaredNames(condition: string, known: PouVariable[], states: Iterable<string> = []): string[] {
   const names = new Set(known.map((k) => k.name.toLowerCase()));
   for (const s of states) names.add(s.toLowerCase());
-  const text = condition.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ').replace(/\(\*[\s\S]*?\*\)/g, ' ').replace(/\/\/.*$/g, ' ');
+  const text = condition.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ').replace(/\(\*[\s\S]*?\*\)/g, ' ').replace(/\/\/.*$/gm, ' ');
   const out: string[] = [];
   const rx = /[A-Za-z_][\w]*(?:#[\w.:]+)?/g;
   let m: RegExpExecArray | null;

@@ -8,7 +8,7 @@ import { getMethodCodeFromPou } from './pouStateEditor.ts';
 import { declarationVariables } from './pouVariables.ts';
 import { ProjectSymbols, symbolScope } from './projectSymbols.ts';
 import { renameInText, useOffsets } from './renameVariable.ts';
-import { CALLED_FBS } from './stdSignatures.ts';
+import { CALLED_FBS, STANDARD_FBS } from './stdSignatures.ts';
 import { baseTypeName } from './projectSymbols.ts';
 
 const KEYWORDS = new Set(
@@ -146,7 +146,7 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
       if (next === undefined) return;
       if (/^\s*(END_IF|ELSE|ELSIF|END_CASE|END_FOR|END_WHILE|UNTIL|END_REPEAT)\b/i.test(next)) return;
       if (/^\s*(?:[A-Za-z_][\w.]*|\d+)(?:\s*(?:,|\.\.)\s*(?:[A-Za-z_][\w.]*|\d+))*\s*:(?!=)/.test(next)) return;
-      add({ key: `unreachable:${u.method ?? 'body'}:${j + 1}`, rule: 'unreachable-code', method: u.method ?? undefined, line: u.method ? j + 1 : undefined, text: u.lines[j]?.trim(), message: `Line ${j + 1}${u.method ? ` of ${u.method}()` : ' of the body'} comes right after a RETURN: it never runs`, mark: { line: j + 1, declaration: false, name: (next.match(/[A-Za-z_]\w*/) ?? [''])[0] } });
+      add({ key: `unreachable:${u.method ?? 'body'}:${j + 1}`, rule: 'unreachable-code', method: u.method ?? undefined, line: u.method ? j + 1 : undefined, text: u.lines[j]?.trim(), message: `Line ${j + 1}${u.method ? ` of ${u.method}()` : ' of the body'} comes right after a RETURN: it never runs`, mark: { line: j + 1, declaration: false, name: (next.match(/[A-Za-z_]\w*/) ?? [''])[0] }, fix: u.method ? { kind: 'remove-lines', name: `line ${j + 1}`, method: u.method, line: j + 1 } : undefined });
     });
   }
 
@@ -156,7 +156,7 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
     if (!CALLED_FBS.has(baseTypeName(v.type).toUpperCase())) continue;
     const used = new RegExp(`\\b${v.name}\\s*\\.`, 'i').test(bodyCode);
     const called = new RegExp(`\\b${v.name}\\s*(\\[[^\\]]*\\])?\\s*\\(`, 'i').test(bodyCode);
-    if (used && !called) add({ key: `fb-not-called:${v.name.toLowerCase()}`, rule: 'fb-not-called', message: `${v.name} : ${v.type} is read but never called (${v.name}(...)): its outputs never change`, mark: v.line ? { line: v.line, declaration: true, name: v.name } : undefined });
+    if (used && !called) add({ key: `fb-not-called:${v.name.toLowerCase()}`, rule: 'fb-not-called', message: `${v.name} : ${v.type} is read but never called (${v.name}(...)): its outputs never change`, mark: v.line ? { line: v.line, declaration: true, name: v.name } : undefined, fix: { kind: 'insert-call', name: v.name, type: baseTypeName(v.type).toUpperCase() } });
   }
 
   // Not declared (the project known, the base class too)
@@ -214,4 +214,41 @@ export function markersFor(findings: LintFinding[], code: string, where: { metho
     out.push({ line, start: col, end: col + f.mark.name.length, message: f.message, severity: f.severity });
   }
   return out;
+}
+
+/** A neutral value for a standard FB's input (the call's placeholder: the user sets the real one) */
+const NEUTRAL: Record<string, string> = { BOOL: 'FALSE', TIME: 'T#0S', LTIME: 'LTIME#0S', WORD: '0', INT: '0' };
+
+/** Where a never-called FB's call goes: before its first use (a method and a line), and the call */
+export function plannedCall(pouXml: string, name: string, type: string): { method: string; line: number; text: string } | null {
+  const inputs = (STANDARD_FBS[type] ?? []).filter((p) => p.scope === 'VAR_INPUT');
+  for (const u of codeUnits(pouXml)) {
+    if (!u.method) continue;
+    const i = u.code.findIndex((l) => new RegExp(`\\b${name}\\s*\\.`, 'i').test(masked(l)));
+    if (i < 0) continue;
+    const indent = (u.lines[i].match(/^[ \t]*/) ?? [''])[0];
+    return { method: u.method, line: i + 1, text: `${indent}${name}(${inputs.map((p) => `${p.name} := ${NEUTRAL[p.type] ?? '0'}`).join(', ')});` };
+  }
+  return null;
+}
+
+/** The lines that never run, from a line after a RETURN to the end of its block (1-based, inclusive) */
+export function deadLines(code: string, from: number): { start: number; end: number } {
+  const lines = code.split(/\r?\n/).map((l) => masked(l.replace(/\/\/.*$/, '')));
+  let depth = 0;
+  let end = from;
+  for (let i = from - 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (depth === 0 && i > from - 1 && (/^\s*(END_IF|ELSE|ELSIF|END_CASE|END_FOR|END_WHILE|UNTIL|END_REPEAT)\b/i.test(l) || /^\s*(?:[A-Za-z_][\w.]*|\d+)(?:\s*,\s*(?:[A-Za-z_][\w.]*|\d+))*\s*:(?!=)/.test(l))) break;
+    if (depth === 0 && i === from - 1 && /^\s*(END_IF|ELSE|ELSIF|END_CASE|END_FOR|END_WHILE|UNTIL|END_REPEAT)\b/i.test(l)) break;
+    depth += (l.match(/\b(IF|CASE|FOR|WHILE|REPEAT)\b/gi) ?? []).length - (l.match(/\bEND_(IF|CASE|FOR|WHILE|REPEAT)\b/gi) ?? []).length;
+    end = i + 1;
+    if (depth < 0) {
+      end = i;
+      break;
+    }
+  }
+  // (trailing blank lines stay)
+  while (end > from && !lines[end - 1].trim()) end--;
+  return { start: from, end };
 }

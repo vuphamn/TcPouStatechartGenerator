@@ -111,6 +111,8 @@ export interface StructuredTextCodeEditorProps {
   completionScope?: () => SymbolScope | null;
   /** Problems in the code: wavy underlines, the message on hover */
   markers?: CodeMarker[];
+  /** Live: variables' values (by name or path, lower case), shown at the end of the lines that use them */
+  inlineValues?: Record<string, string> | null;
 }
 
 export const StructuredTextCodeEditor = forwardRef<
@@ -140,6 +142,7 @@ export const StructuredTextCodeEditor = forwardRef<
       bookmarkLines,
       completionScope,
       markers,
+      inlineValues,
     },
     ref
   ) => {
@@ -811,6 +814,45 @@ export const StructuredTextCodeEditor = forwardRef<
             />
           )}
 
+          {/* Live: the values of the variables a line uses, after it (the lines in view) */}
+          {inlineValues && Object.keys(inlineValues).length > 0 && (
+            <div id={id ? `${id}-inline-values` : undefined} className="absolute inset-0 pointer-events-none overflow-hidden z-[5]">
+              {(() => {
+                const lines = value.split('\n');
+                const h = containerRef.current?.clientHeight ?? 800;
+                const first = Math.max(0, Math.floor((scrollTop - 8) / lineH));
+                const last = Math.min(lineEntries.length - 1, Math.ceil((scrollTop + h) / lineH));
+                const rows: React.ReactNode[] = [];
+                for (let vi = first; vi <= last; vi++) {
+                  const ln = lineEntries[vi]?.originalLineNumber;
+                  if (!ln) continue;
+                  const text = lines[ln - 1] ?? '';
+                  const code = text.replace(/\/\/.*$/, '').replace(/\(\*.*?\*\)/g, ' ').replace(/'[^']*'/g, ' ');
+                  const seen = new Set<string>();
+                  const parts: string[] = [];
+                  for (const m of code.matchAll(/(?<![\w.#])[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*/g)) {
+                    const name = m[0].replace(/\s+/g, '');
+                    const k = name.toLowerCase();
+                    if (seen.has(k) || inlineValues[k] === undefined) continue;
+                    seen.add(k);
+                    parts.push(`${name} = ${inlineValues[k]}`);
+                  }
+                  if (!parts.length) continue;
+                  rows.push(
+                    <div
+                      key={vi}
+                      className="st-inline-values absolute whitespace-nowrap font-mono italic text-emerald-300/80"
+                      data-line={ln}
+                      style={{ left: `${8 + (visualColumn(text, text.length) + 3) * charW - scrollLeft}px`, top: `${vi * lineH + 8 - scrollTop}px`, height: `${lineH}px`, lineHeight: `${lineH}px`, fontSize: `${fontPx * 0.9}px` }}
+                    >
+                      {parts.slice(0, 6).join('  ·  ')}
+                    </div>
+                  );
+                }
+                return rows;
+              })()}
+            </div>
+          )}
           {/* Problems: wavy underlines */}
           {markers && markers.length > 0 && (
             <div id={id ? `${id}-markers` : undefined} className="absolute inset-0 pointer-events-none overflow-hidden z-[5]">

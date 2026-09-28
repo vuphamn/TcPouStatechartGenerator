@@ -547,7 +547,7 @@ namespace KvalStateScope.Xae
             var line = msg.TryGetValue("line", out var ln) && ln is int li ? li : 1;
             var text = msg.TryGetValue("text", out var tx) ? tx as string : null;
             if (method != null && !System.Text.RegularExpressions.Regex.IsMatch(method, @"^[A-Za-z_]\w*$")) method = null;
-            var path = FindInProject(typeName, ".TcPOU", ".TcDUT", ".TcIO");
+            var path = FindInProject(typeName, ".TcPOU", ".TcDUT", ".TcIO", ".TcGVL");
             if (path == null)
             {
                 Post(new { type = "error", message = $"{typeName} was not found in the PLC project (a library type?)" });

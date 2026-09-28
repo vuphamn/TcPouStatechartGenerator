@@ -86,3 +86,44 @@ export function snippetsFromText(text: string): Snippet[] | string {
   for (const s of out) s.body = s.body.replace(/\n+$/, '');
   return out;
 }
+
+/** Your snippets as a file to share (JSON) */
+export function snippetsToFile(list: Snippet[]): string {
+  return JSON.stringify({ kind: 'kss-snippets', version: 1, snippets: list.map((x) => ({ key: x.key, body: x.body, description: x.description })) }, null, 2);
+}
+
+/** The snippets of such a file; or what is wrong with it */
+export function snippetsFromFile(text: string): Snippet[] | string {
+  let v: unknown;
+  try {
+    v = JSON.parse(text.replace(/^\ufeff/, ''));
+  } catch {
+    return 'not a snippets file (JSON)';
+  }
+  const list = Array.isArray(v) ? v : (v as { snippets?: unknown })?.snippets;
+  if (!Array.isArray(list)) return 'no snippets in it';
+  const out: Snippet[] = [];
+  for (const x of list) {
+    if (!x || typeof x.key !== 'string' || typeof x.body !== 'string' || !/^[A-Za-z_]\w*$/.test(x.key)) return `a snippet without a key (letters, digits, _) or code: ${JSON.stringify(x).slice(0, 60)}`;
+    out.push({ key: x.key, body: x.body.replace(/\r\n/g, '\n'), description: typeof x.description === 'string' && x.description ? x.description : 'your snippet' });
+  }
+  return out;
+}
+
+/** Yours with the ones of a file: a key in both, the file's; the others kept. How many were new / replaced */
+export function mergeSnippets(mine: Snippet[], theirs: Snippet[]): { list: Snippet[]; added: number; replaced: number } {
+  const list = [...mine];
+  let added = 0;
+  let replaced = 0;
+  for (const t of theirs) {
+    const i = list.findIndex((m) => m.key.toLowerCase() === t.key.toLowerCase());
+    if (i >= 0) {
+      list[i] = t;
+      replaced++;
+    } else {
+      list.push(t);
+      added++;
+    }
+  }
+  return { list, added, replaced };
+}

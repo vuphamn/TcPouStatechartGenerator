@@ -35,7 +35,7 @@ const cfg = writeSymbolsPlc();
   const set = (p, id, v) => p.evaluate((id, v) => { const el = document.getElementById(id); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, id, v);
   const row = (p, pth) => p.evaluate((pth) => {
     const r = document.querySelector(`.symbol-row[data-path="${pth}"]`);
-    return r ? { kind: r.getAttribute('data-kind'), text: r.textContent, value: r.querySelector('.symbol-value')?.textContent ?? null, watch: !!r.querySelector('.symbol-watch') } : null;
+    return r ? { kind: r.getAttribute('data-kind'), text: r.textContent, value: r.querySelector('.symbol-value')?.textContent ?? null, watch: !!r.querySelector('.symbol-watch, .symbol-open-other') } : null;
   }, pth);
   const waitRow = async (p, pth, test = () => true) => { let r = null; for (let i = 0; i < 50 && !(r && test(r)); i++) { await sleep(200); r = await row(p, pth); } return r; };
 
@@ -61,6 +61,9 @@ const cfg = writeSymbolsPlc();
   await w1.waitForSelector('#live-symbols-btn', { timeout: 20000 }).catch(() => {});
   expect(!!(await w1.$('#live-symbols-btn')), 'Symbols button once connected');
   await w1.click('#live-symbols-btn');
+  // (the whole tree: the type filter cleared)
+  await w1.waitForSelector('#symbol-browser-type-clear', { timeout: 10000 }).catch(() => {});
+  await w1.click('#symbol-browser-type-clear').catch(() => {});
   await w1.waitForSelector('#symbol-browser-window', { timeout: 5000 }).catch(() => {});
   const rootField = await w1.$eval('#symbol-browser-root', (e) => e.value).catch(() => '');
   expect(rootField === R, `the window opens on ${rootField}`);
@@ -107,7 +110,7 @@ const cfg = writeSymbolsPlc();
   expect(/SM_TableManager \(MAIN\.mainStateMachine\.smTable2\)/.test(t2title), `Watch smTable2: a window "${t2title}"`);
   // Watch aDoors[1] (another POU, found in the project): its diagram, live on it
   await w1.bringToFront();
-  await w1.evaluate((p) => document.querySelector(`.symbol-row[data-path="${p}"] .symbol-watch`).click(), `${R}.aDoors[1]`);
+  await w1.evaluate((p) => document.querySelector(`.symbol-row[data-path="${p}"] .symbol-open-other`).click(), `${R}.aDoors[1]`);
   pages = await waitPages(3);
   const w3 = pages.find((p) => p !== w1 && p !== w2);
   let t3 = '';

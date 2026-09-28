@@ -2,6 +2,7 @@
 // hints, snippets, Format Document, the command palette, the shortcuts list, several states selected (Ctrl+click,
 // Shift+drag) and their menu, F2 through the bookmarked states, a state's actions in the heat-map's box, and a state
 // renamed in the other POU too
+const fs = require('fs');
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -125,6 +126,34 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await h.sleep(150);
   expect(/Go to S_RUN/.test(await p.$eval('#command-palette .command-palette-item', (e) => e.textContent).catch(() => '')), 'the states are commands');
   await p.keyboard.press('Escape');
+  // Nothing typed: the one run last first, "recently used"
+  const palette = async (text) => {
+    await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyP'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
+    await p.waitForSelector('#command-palette', { timeout: 3000 }).catch(() => {});
+    if (text) await p.keyboard.type(text, { delay: 5 });
+    await h.sleep(150);
+  };
+  await palette('');
+  const top = await p.$eval('#command-palette .command-palette-item', (e) => e.textContent.trim()).catch(() => '');
+  expect(/(Show|Hide) entry \/ do \/ exit actions.*recently used/.test(top), `the palette again: the last one first, "recently used" (${top})`);
+  await p.keyboard.press('Escape');
+  // Snippets to a file (the save dialog: XAE's) and from one (merged: a key in both, the file's)
+  await p.evaluate(() => localStorage.setItem('kss.snippets', JSON.stringify([{ key: 'mine', body: 'a := 1;', description: 'my one' }, { key: 'both', body: 'old;' }])));
+  await palette('export snippets');
+  await p.keyboard.press('Enter');
+  await h.sleep(400);
+  const saved = sent.find((m) => m.type === 'saveDocument' && /snippets/.test(m.name));
+  const savedList = saved ? JSON.parse(saved.content).snippets.map((s) => s.key).join() : '';
+  expect(savedList === 'mine,both', `Export snippets: ${saved?.name} with ${savedList}`);
+  const file = h.out('shared.kss-snippets.json');
+  fs.writeFileSync(file, JSON.stringify({ kind: 'kss-snippets', version: 1, snippets: [{ key: 'both', body: 'new;' }, { key: 'theirs', body: 'b := 2;' }] }));
+  await palette('import snippets');
+  const [chooser] = await Promise.all([p.waitForFileChooser({ timeout: 3000 }), p.keyboard.press('Enter')]);
+  await chooser.accept([file]);
+  await h.sleep(500);
+  const now = await p.evaluate(() => JSON.parse(localStorage.getItem('kss.snippets')).map((s) => `${s.key}=${s.body}`).join(' '));
+  expect(now === 'mine=a := 1; both=new; theirs=b := 2;', `Import snippets: merged (${now})`);
+  await p.evaluate(() => localStorage.removeItem('kss.snippets'));
 
   // 5. The shortcuts list (?)
   await p.evaluate(() => document.activeElement?.blur());
@@ -190,14 +219,65 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.keyboard.press('h');
   await h.sleep(800);
   const idle2 = await nodeAt('S_IDLE');
+  // (where the box is in each frame from the hover on: it shows in its place, it does not glide there)
+  await p.evaluate(() => { window.__boxAt = []; const t0 = performance.now(); const f = () => { const b = document.querySelector('#heatmap-state-hover-tooltip, #state-actions-hover'); if (b && getComputedStyle(b).visibility === 'visible') { const r = b.getBoundingClientRect(); window.__boxAt.push(Math.round(r.left) + ',' + Math.round(r.top)); } if (performance.now() - t0 < 700) requestAnimationFrame(f); }; requestAnimationFrame(f); });
   await p.mouse.move(idle2.x + 3, idle2.y);
   await p.mouse.move(idle2.x, idle2.y);
   await h.sleep(300);
+  await h.sleep(500);
+  const boxAt = [...new Set(await p.evaluate(() => window.__boxAt))];
+  expect(boxAt.length === 1, `the box shows in its place at once (no glide): ${boxAt.join(' → ')}`);
   const heat = await p.$('#heatmap-state-hover-tooltip');
   const inHeat = await p.$eval('#state-actions-in-heatmap', (e) => e.textContent).catch(() => '');
-  expect(!!heat ? /do \/\s+nCycles := nCycles \+ 1;/.test(inHeat) && !(await p.$('#state-actions-hover')) : !!(await p.$('#state-actions-hover')), `heat-map on: the actions ${heat ? 'in its box' : 'in their own box'} (${inHeat.replace(/\s+/g, ' ').slice(0, 60)})`);
+  expect(!!heat ? /nCycles := nCycles \+ 1;[\s\S]*IF cmd_bStart THEN[\s\S]*END_IF/.test(inHeat) && !(await p.$('#state-actions-hover')) : !!(await p.$('#state-actions-hover')), `heat-map on: the state's whole code ${heat ? 'in its box' : 'in its own box'} (${inHeat.replace(/\s+/g, ' ').slice(0, 80)})`);
+  // ... beside the state (below or above it), not over it
+  const over = await p.evaluate(() => {
+    const b = document.querySelector('#heatmap-state-hover-tooltip, #state-actions-hover')?.getBoundingClientRect();
+    const g = document.querySelector('#mermaid-diagram-svg-container g.node[data-state-id="S_IDLE"]');
+    const n = (g.querySelector('rect, polygon, circle, path') || g).getBoundingClientRect();
+    return b ? { overlap: b.left < n.right && b.right > n.left && b.top < n.bottom && b.bottom > n.top, b: [b.top, b.bottom].map(Math.round), n: [n.top, n.bottom].map(Math.round) } : null;
+  });
+  expect(!!over && !over.overlap, `the box beside S_IDLE, not over it: box ${over?.b}, state ${over?.n}`);
   await p.keyboard.press('h');
   await p.mouse.move(5, 5);
+
+  // 9. Several states lined up, and moved together
+  await h.sleep(600);
+  const idleC = await nodeAt('S_IDLE');
+  const runC = await nodeAt('S_RUN');
+  await p.keyboard.down('Control');
+  await p.mouse.click(idleC.x, idleC.y);
+  await h.sleep(200);
+  // (S_RUN, the state F2 selected, is in it already)
+  if (!(await marked()).includes('S_RUN')) await p.mouse.click(runC.x, runC.y);
+  await p.keyboard.up('Control');
+  await h.sleep(300);
+  expect((await marked()).join() === 'S_IDLE,S_RUN', `Ctrl+click both again: ${await marked()}`);
+  // Their menu: Align top edges (side by side) or left edges (one above the other)
+  const sideBySide = Math.abs(idleC.x - runC.x) > Math.abs(idleC.y - runC.y);
+  const shapeEdge = (id) => p.evaluate(([id, top]) => { const g = document.querySelector(`#mermaid-diagram-svg-container g.node[data-state-id="${id}"]`); const r = (g.querySelector('rect, polygon, circle, path') || g).getBoundingClientRect(); return top ? r.top : r.left; }, [id, sideBySide]);
+  const idleB = await nodeAt('S_IDLE');
+  await p.mouse.click(idleB.x, idleB.y, { button: 'right' });
+  await h.sleep(400);
+  const hasArrange = !!(await p.$('#context-menu-multi-align-left-btn')) && !!(await p.$('#context-menu-multi-align-top-btn'));
+  await p.click(sideBySide ? '#context-menu-multi-align-top-btn' : '#context-menu-multi-align-left-btn');
+  await h.sleep(600);
+  const [ti, tr] = [await shapeEdge('S_IDLE'), await shapeEdge('S_RUN')];
+  expect(hasArrange && Math.abs(ti - tr) < 2, `Align ${sideBySide ? 'top' : 'left'} edges: S_IDLE ${ti.toFixed(1)}, S_RUN ${tr.toFixed(1)}`);
+  // Drag one: the other moves with it
+  const a0 = await nodeAt('S_IDLE');
+  const b0 = await nodeAt('S_RUN');
+  await p.mouse.move(a0.x, a0.y);
+  await p.mouse.down();
+  await p.mouse.move(a0.x + 30, a0.y + 60, { steps: 6 });
+  await p.mouse.up();
+  await h.sleep(500);
+  const a1 = await nodeAt('S_IDLE');
+  const b1 = await nodeAt('S_RUN');
+  const da = { x: a1.x - a0.x, y: a1.y - a0.y };
+  const db = { x: b1.x - b0.x, y: b1.y - b0.y };
+  expect(Math.abs(da.y) > 20 && Math.abs(da.x - db.x) < 3 && Math.abs(da.y - db.y) < 3, `drag S_IDLE: S_RUN moves with it (${da.x.toFixed(0)},${da.y.toFixed(0)} / ${db.x.toFixed(0)},${db.y.toFixed(0)})`);
+  await p.keyboard.press('Escape');
 
   // 9. A state renamed here and in the other POU
   const run2 = await nodeAt('S_RUN');

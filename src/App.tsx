@@ -65,8 +65,15 @@ import {
   SquareStack,
   ListTree,
   FlaskConical,
-  Zap,
   Pencil,
+  AlignStartVertical,
+  AlignCenterVertical,
+  AlignEndVertical,
+  AlignStartHorizontal,
+  AlignCenterHorizontal,
+  AlignEndHorizontal,
+  AlignHorizontalSpaceAround,
+  AlignVerticalSpaceAround,
 } from 'lucide-react';
 import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
 import {
@@ -108,12 +115,15 @@ import { declareInDeclaration, declareVariables, declarationVariables, guessType
 import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
 import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols, onProjectSymbols, setProjectSymbols, symbolScope, type ProjectFile } from './utils/projectSymbols.ts';
 import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
-import { allStateActions, readStateActions, writeStateAction, type ActionKind } from './utils/stateActions.ts';
-import { checkRename, findReferences, renameMemberInFile, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
+import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
+import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
-import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS } from './utils/stSnippets.ts';
+import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
-import { lintVariables } from './utils/variableLint.ts';
+import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
+import { checkExtract, extractMethod, planExtract } from './utils/extractMethod.ts';
+import { blankComments } from './utils/stateMachineLint.ts';
+import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
 import { BODY, clearBookmarks, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
@@ -1489,6 +1499,10 @@ export const App: React.FC = () => {
   // Guard variables: where the host found each one, and their latest values (by variable, lower case)
   const [liveWatched, setLiveWatched] = useState<Record<string, WatchedVar>>({});
   const [liveVarValues, setLiveVarValues] = useState<Record<string, LiveValue>>({});
+  // The variables the shown code uses, and the ones watched from the code (per POU): followed while live too
+  const [editorWatch, setEditorWatch] = useState<string[]>([]);
+  const [userWatch, setUserWatch] = useState<string[]>([]);
+  const liveValuesRef = useRef<{ active: boolean; values: Record<string, LiveValue> }>({ active: false, values: {} });
   const handleLiveWatchResult = useCallback((vars: { id: string; symbol?: string; type?: string; error?: string }[]) => {
     recorderRef.current.addWatched(vars);
     if (replayingRef.current) return;
@@ -1869,23 +1883,48 @@ export const App: React.FC = () => {
   const stateTooltips = useMemo(() => {
     const out: Record<string, string> = {};
     if (!pouContent) return out;
-    // (the parallel regions' own state variables; regionOf is computed further down)
-    const regions = regionVariables(pouContent, dutContent, identifiedStatesResult.stateVarName || 'machineState');
+    // The state's whole CASE branch in doState(), as written (its first 60 lines), indentation kept relative
+    const MAX = 60;
+    const doCode = getMethodCodeFromPou(pouContent, 'doState');
+    const doLines = doCode.methodFound ? doCode.code.replace(/\r\n/g, '\n').split('\n') : [];
+    const doBlank = blankComments(doLines.join('\n')).split('\n');
     for (const st of identifiedStatesResult.states) {
-      const a = readStateActions(pouContent, st.id, regions.get(st.id)?.variable ?? identifiedStatesResult.stateVarName ?? 'machineState');
-      if ('error' in a) continue;
-      const part = (kind: 'entry' | 'do' | 'exit') => {
-        const lines = a[kind].filter((l) => l.trim());
-        if (!lines.length) return '';
-        return `${kind} /\n${lines.slice(0, 12).map((l) => `  ${l.replace(/\t/g, '  ')}`).join('\n')}${lines.length > 12 ? `\n  … ${lines.length - 12} more lines` : ''}`;
-      };
-      const text = [part('entry'), part('do'), part('exit')].filter(Boolean).join('\n');
-      if (text) out[st.id] = `${st.id}\n${text}`;
+      // (its lines from the CASE range, the label line left out: to the next label / ELSE / END_CASE)
+      const range = doLines.length ? caseBranchRange(doBlank, st.id) : null;
+      if (!range) continue;
+      const lines = doLines.slice(range.start + 1, range.end);
+      while (lines.length && !lines[0].trim()) lines.shift();
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      if (!lines.length) continue;
+      const common = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0].replace(/\t/g, '    ').length));
+      const shown = lines.slice(0, MAX).map((l) => `  ${l.replace(/\t/g, '    ').slice(common)}`);
+      if (lines.length > MAX) shown.push(`… ${lines.length - MAX} more lines (Method Editor)`);
+      out[st.id] = `${st.id}\n${shown.join('\n')}`;
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pouContent, dutContent, identifiedStatesResult]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  // The watched variables, kept per POU
+  const userWatchRef = useRef<string[]>([]);
+  userWatchRef.current = userWatch;
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(`kss.live.watch.${pouFileName.replace(/\.TcPOU$/i, '')}`) || '[]');
+      setUserWatch(Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []);
+    } catch {
+      setUserWatch([]);
+    }
+  }, [pouFileName]);
+  const saveUserWatch = (list: string[]) => {
+    try {
+      localStorage.setItem(`kss.live.watch.${pouFileName.replace(/\.TcPOU$/i, '')}`, JSON.stringify(list));
+    } catch {
+      // (not kept)
+    }
+  };
+  const userWatchKey = userWatch.join('|');
+  useEffect(() => saveUserWatch(userWatch), [userWatchKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // (read by the canvas's keys, set up further down)
   const bookmarksRef = useRef<string[]>([]);
   const identifiedStatesRef = useRef<string[]>([]);
@@ -1915,13 +1954,17 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [multiSelected.length]);
-  // The command palette (Ctrl+Shift+P)
+  // The command palette (Ctrl+Shift+P), Go to Symbol (Ctrl+T in XAE / the desktop app; Ctrl+Shift+O everywhere)
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         setPaletteOpen(true);
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && ((e.shiftKey && e.key.toLowerCase() === 'o') || (!e.shiftKey && e.key.toLowerCase() === 't'))) {
+        e.preventDefault();
+        setSymbolSearchOpen(true);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1972,6 +2015,19 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, dutContent, availableEdges, pathCheckResults, symbolsVersion, identifiedStatesResult]
   );
+  const stateProblems = useMemo(() => {
+    const out: Record<string, { messages: string[]; names: string[] }> = {};
+    if (!pouContent) return out;
+    const m = getMethodCodeFromPou(pouContent, 'doState');
+    const code = m.methodFound ? blankComments(m.code).split(/\r?\n/) : [];
+    for (const st of identifiedStatesResult.states) {
+      const range = code.length ? caseBranchRange(code, st.id) : null;
+      const inBranch = (f: LintFinding) => !!range && f.method === 'doState' && !!f.line && f.line > range.start + 1 && f.line <= range.end;
+      const found = lintFindings.filter((f) => f.stateId === st.id || inBranch(f));
+      if (found.length) out[st.id] = { messages: found.map((f) => f.message), names: found.map((f) => f.mark?.name ?? '').filter(Boolean) };
+    }
+    return out;
+  }, [pouContent, identifiedStatesResult, lintFindings]);
   const lintFindingsRef = useRef<LintFinding[]>([]);
   lintFindingsRef.current = lintFindings;
   const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;
@@ -2568,30 +2624,23 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, currentEdge, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult]
   );
-  const ACTION_TEXT: Record<ActionKind, string> = {
-    entry: 'runs once, the first cycle in the state: IF bFirstPass THEN … END_IF at the start of its branch',
-    do: "runs every cycle in the state: its branch's code that is no transition",
-    exit: 'runs once, the cycle the state is left: IF <state> <> STATE THEN … END_IF at the end of its branch',
-  };
-  const handleEditAction = useCallback(
-    (state: string, kind: ActionKind) => {
+  // A state's whole code (its CASE branch), as written
+  const handleEditStateCode = useCallback(
+    (state: string) => {
       if (!pouContent) return;
-      const sv = varFor(state);
-      const a = readStateActions(pouContent, state, sv);
-      if ('error' in a) return showCopyToast(a.error, 'error', 6000);
-      if (kind === 'do' && !a.doEditable) return showCopyToast(`${state}'s do code is between its transitions: change it in the Method Editor`, 'error', 6000);
-      const doCode = getMethodCodeFromPou(pouContent, 'doState').code ?? '';
+      const whole = readStateCode(pouContent, state);
+      if (!Array.isArray(whole)) return showCopyToast(whole.error, 'error', 6000);
       setPromptRequest({
-        title: `${kind[0].toUpperCase()}${kind.slice(1)} action of ${state}`,
-        label: `The ${kind} action ${ACTION_TEXT[kind].replace('<state>', sv)}. Empty: none.`,
-        initial: a[kind].join('\n'),
+        title: `Code of ${state}`,
+        label: `${state}'s code in doState() (its CASE branch), as written: its actions, its transitions, all of it.`,
+        initial: whole.join('\n'),
         monospace: true,
         multiline: true,
-        submitLabel: 'Set action',
+        submitLabel: 'Set code',
         scope: codeScope('doState'),
         hint: 'Structured Text statements',
         onSubmit: (code, declarations) => {
-          const r = writeStateAction(pouContent, state, sv, kind, code, stateQualifier(doCode, sv));
+          const r = writeStateCode(pouContent, state, code);
           if ('error' in r) return showCopyToast(r.error, 'error', 6000);
           const pou = withDeclarations(r.pou, declarations);
           if (!pou) return;
@@ -2601,8 +2650,11 @@ export const App: React.FC = () => {
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouContent, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult]
+    [pouContent, showCopyToast, handleReplaceSources]
   );
+
+  const handleEditStateCodeRef = useRef(handleEditStateCode);
+  handleEditStateCodeRef.current = handleEditStateCode;
 
   // The statechart palette: elements dropped on the canvas become ST (Save writes the files)
   const [choiceRequest, setChoiceRequest] = useState<ChoiceRequest | null>(null);
@@ -3278,6 +3330,109 @@ export const App: React.FC = () => {
     },
     [pouContent, pouFileName, pouPath, handleReplaceSources, showCopyToast, fetchProjectUses, writeOtherPous]
   );
+  // Rename a method / property: in the POU, and (not PRIVATE) where other POUs of the project call it
+  const handleRenameMethod = useCallback(
+    (name: string) => {
+      if (!pouContent) return;
+      const pouName = pouFileName.replace(/\.TcPOU$/i, '');
+      const probe = renameMethod(pouContent, name, `${name}_`);
+      if ('error' in probe) return showCopyToast(probe.error, 'error');
+      const desktop = (window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop;
+      const canProject = !probe.isPrivate && (isXaeHost() || Boolean(desktop?.projectUses && pouPath));
+      let files: { name: string; path: string; content: string }[] | null = null;
+      let lookupError: string | undefined;
+      const otherChanges = (n: string) => {
+        if (!files) return null;
+        const instances = new Set<string>();
+        for (const tp of getProjectSymbols()?.types.values() ?? []) for (const m of tp.members) if (baseTypeName(m.type).toLowerCase() === pouName.toLowerCase()) instances.add(m.name.toLowerCase());
+        return files
+          .map((file) => {
+            const local = new Set(instances);
+            for (const d of file.content.matchAll(/<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>/gi)) for (const x of declarationVariables(d[1])) if (baseTypeName(x.type).toLowerCase() === pouName.toLowerCase()) local.add(x.name.toLowerCase());
+            if (!local.size) return null;
+            const r = renameMemberInFile(file.content, local, name, n);
+            return r.changes.length ? { name: file.name, path: file.path, baseline: file.content, content: r.xml, changes: r.changes } : null;
+          })
+          .filter((x): x is NonNullable<typeof x> => !!x);
+      };
+      setPromptRequest({
+        title: `Rename ${probe.kind} ${name}`,
+        label: `The new name of ${name}${probe.kind === 'method' ? '()' : ''}: its declaration and every call in the POU${canProject ? ', and where other POUs of the project call it' : probe.isPrivate ? ' (PRIVATE: only this POU calls it)' : ''}:`,
+        initial: name,
+        monospace: true,
+        submitLabel: 'Rename',
+        validate: (n) => checkMethodRename(pouContent, name, n),
+        preview: (n) => {
+          const r = renameMethod(pouContent, name, n);
+          if ('error' in r) return [];
+          const rows = r.changes.slice(0, 40).map((c) => `${c.where} ${c.line}:  ${c.before}\n    →  ${c.after}`);
+          if (canProject) {
+            const others = otherChanges(n);
+            if (others === null) rows.push(lookupError ? `⚠ Calls in other POUs not found (${lookupError})` : 'Looking for calls in the other POUs of the project…');
+            else if (!others.length) rows.push('No other POU of the project calls it.');
+            else for (const o of others) {
+              rows.push(`${o.name} (written at once):`);
+              o.changes.slice(0, 12).forEach((c) => rows.push(`  ${c.where} ${c.line}:  ${c.before}\n      →  ${c.after}`));
+            }
+          } else if (!probe.isPrivate) rows.push(`⚠ Other POUs that call it (instance.${name}()) keep the old name`);
+          return [`${r.changes.length} line${r.changes.length === 1 ? '' : 's'} change:`, ...rows];
+        },
+        onSubmit: async (n) => {
+          const r = renameMethod(pouContent, name, n);
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          const others = canProject ? otherChanges(n) ?? [] : [];
+          if (others.length) {
+            const err = await writeOtherPous(others.map((o) => ({ path: o.path, content: o.content, baseline: o.baseline })));
+            if (err) return showCopyToast(`Not renamed: ${err}`, 'error', 8000);
+          }
+          handleReplaceSources(r.pou, null);
+          showCopyToast(`Renamed ${name} → ${n}: ${r.changes.length} line${r.changes.length === 1 ? '' : 's'}${others.length ? `, and in ${others.map((o) => o.name).join(', ')} (written)` : ''}`, 'success', 7000);
+        },
+      });
+      if (canProject) {
+        void fetchProjectUses(name).then((res) => {
+          files = res.error ? null : res.files ?? [];
+          lookupError = res.error;
+          setPromptRequest((cur) => (cur && cur.title.startsWith(`Rename ${probe.kind} ${name}`) ? { ...cur } : cur));
+        });
+      }
+    },
+    [pouContent, pouFileName, pouPath, handleReplaceSources, showCopyToast, fetchProjectUses, writeOtherPous]
+  );
+  // Extract Method: the lines into a new method (its name asked, what it takes previewed)
+  const handleExtractMethod = useCallback(
+    (method: string, start: number, end: number) => {
+      if (!pouContent) return;
+      const first = checkExtract(pouContent, method, start, end, 'NewMethod_');
+      if (first && !/already a method/.test(first)) return showCopyToast(first, 'error', 6000);
+      setPromptRequest({
+        title: `Extract Method from ${method}() (lines ${start}–${end})`,
+        label: 'The new method\'s name (PRIVATE; the lines go into it, a call takes their place):',
+        initial: 'NewMethod',
+        monospace: true,
+        submitLabel: 'Extract',
+        validate: (n) => checkExtract(pouContent, method, start, end, n),
+        preview: (n) => {
+          const p = planExtract(pouContent, method, start, end, n);
+          return [
+            `In ${method}(), lines ${start}–${end} become:`,
+            `  ${p.call.trim()}`,
+            `${n}() takes: ${p.inputs.length ? `VAR_INPUT ${p.inputs.map((x) => `${x.name} : ${x.type}`).join(', ')}` : 'no inputs'}${p.inOuts.length ? `; VAR_IN_OUT ${p.inOuts.map((x) => `${x.name} : ${x.type}`).join(', ')} (written by the lines)` : ''}`,
+            `Its body (${p.body.filter((l) => l.trim()).length} lines):`,
+            ...p.body.slice(0, 12).map((l) => `  ${l}`),
+            ...(p.body.length > 12 ? [`  … ${p.body.length - 12} more`] : []),
+          ];
+        },
+        onSubmit: (n) => {
+          const r = extractMethod(pouContent, method, start, end, n);
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          handleReplaceSources(r.pou, null);
+          showCopyToast(`Extracted ${end - start + 1} line${end === start ? '' : 's'} of ${method}() into ${n}()`, 'success', 6000);
+        },
+      });
+    },
+    [pouContent, handleReplaceSources, showCopyToast]
+  );
   const handleDeclareInPou = useCallback(
     (vars: NewVariable[]) => {
       const r = declareVariables(pouContent, vars);
@@ -3299,13 +3454,19 @@ export const App: React.FC = () => {
       current: pouFileName.replace(/\.TcPOU$/i, ''),
       scope: (method) => symbolScope(pouContent, getProjectSymbols(), { method: method ?? '__body__', states: identifiedStatesResult.states.map((s) => s.id) }),
       rename: handleRenameVariable,
+      renameMethod: handleRenameMethod,
+      extractMethod: handleExtractMethod,
       declare: handleDeclareInPou,
       findReferences: handleFindReferences,
       problems: () => lintFindingsRef.current,
+      liveValues: () => liveValuesRef.current,
+      setEditorWatch: (names) => setEditorWatch((cur) => (cur.join('|') === names.join('|') ? cur : names)),
+      watchVariable: (name) => setUserWatch((cur) => (cur.some((n) => n.toLowerCase() === name.toLowerCase()) ? cur.filter((n) => n.toLowerCase() !== name.toLowerCase()) : [...cur, name])),
+      isWatched: (name) => userWatchRef.current.some((n) => n.toLowerCase() === name.toLowerCase()),
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -3369,6 +3530,17 @@ export const App: React.FC = () => {
             });
           },
         });
+        const arrange = (mode: Parameters<MermaidViewerHandle['arrangeStates']>[1]) => () => mermaidViewerRef.current?.arrangeStates(many, mode);
+        items.push({ id: 'multi-align-left-btn', label: 'Align left edges', icon: <AlignStartVertical className="w-3.5 h-3.5" />, onSelect: arrange('left') });
+        items.push({ id: 'multi-align-center-btn', label: 'Align centers (vertical line)', icon: <AlignCenterVertical className="w-3.5 h-3.5" />, onSelect: arrange('center') });
+        items.push({ id: 'multi-align-right-btn', label: 'Align right edges', icon: <AlignEndVertical className="w-3.5 h-3.5" />, onSelect: arrange('right') });
+        items.push({ id: 'multi-align-top-btn', label: 'Align top edges', icon: <AlignStartHorizontal className="w-3.5 h-3.5" />, onSelect: arrange('top') });
+        items.push({ id: 'multi-align-middle-btn', label: 'Align middles (horizontal line)', icon: <AlignCenterHorizontal className="w-3.5 h-3.5" />, onSelect: arrange('middle') });
+        items.push({ id: 'multi-align-bottom-btn', label: 'Align bottom edges', icon: <AlignEndHorizontal className="w-3.5 h-3.5" />, onSelect: arrange('bottom') });
+        if (n > 2) {
+          items.push({ id: 'multi-distribute-h-btn', label: 'Distribute horizontally', icon: <AlignHorizontalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-h') });
+          items.push({ id: 'multi-distribute-v-btn', label: 'Distribute vertically', icon: <AlignVerticalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-v') });
+        }
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
       }
       // A free note (from the palette): only the viewer's note items
@@ -3436,22 +3608,12 @@ export const App: React.FC = () => {
       }
       if ((target.type === 'node' || target.type === 'canvas') && bookmarks.states.length + bookmarks.lines.length > 0)
         items.push({ id: 'bookmarks-list-btn', label: `All bookmarks (${bookmarks.states.length + bookmarks.lines.length})…`, icon: <Bookmark className="w-3.5 h-3.5" />, onSelect: () => setBookmarksOpen(true) });
-      // A state's entry / do / exit actions
+      // A state's code (its CASE branch, as written)
       if (target.type === 'node' && pouContent && target.id !== '[*]' && knownStates.has(target.id)) {
-        const a = readStateActions(pouContent, target.id, varFor(target.id));
-        if (!('error' in a)) {
-          for (const kind of ['entry', 'do', 'exit'] as ActionKind[]) {
-            // (its first line of code: comments left out)
-            const first = a[kind].map((l) => l.replace(/\/\/.*$/, '').replace(/\(\*.*?\*\)/g, '').trim()).find((l) => l && !l.startsWith('(*'));
-            const n = a[kind].filter((l) => l.trim()).length;
-            items.push({
-              id: `action-${kind}-btn`,
-              label: `${kind[0].toUpperCase()}${kind.slice(1)} action${first ? `: ${first.length > 28 ? `${first.slice(0, 27)}…` : first}${n > 1 ? ` (+${n - 1})` : ''}` : '…'}`,
-              icon: <Zap className="w-3.5 h-3.5" />,
-              title: kind === 'do' && !a.doEditable ? 'Its do code is between its transitions: change it in the Method Editor' : `The ${kind} action ${ACTION_TEXT[kind].replace('<state>', varFor(target.id))}`,
-              onSelect: () => handleEditAction(target.id, kind),
-            });
-          }
+        const whole = readStateCode(pouContent, target.id);
+        if (Array.isArray(whole)) {
+          const n = whole.filter((l) => l.trim()).length;
+          items.push({ id: 'edit-state-code-btn', label: `Edit the state's code…${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}`, icon: <Code2 className="w-3.5 h-3.5" />, title: "Its CASE branch in doState(), as written: actions and transitions", onSelect: () => handleEditStateCode(target.id) });
         }
       }
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
@@ -3532,8 +3694,34 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, handleEditAction, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
+    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
   );
+  // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
+  const symbolCommands = (): PaletteCommand[] => {
+    const cmds: PaletteCommand[] = [];
+    const current = pouFileName.replace(/\.TcPOU$/i, '').toLowerCase();
+    const kindName: Record<string, string> = { FUNCTION_BLOCK: 'FB', PROGRAM: 'Program', FUNCTION: 'Function', INTERFACE: 'Interface', STRUCT: 'Struct', UNION: 'Union', ENUM: 'Enum', ALIAS: 'Alias', GVL: 'GVL' };
+    for (const st of identifiedStatesResult.states) cmds.push({ id: `sym-state:${st.id}`, group: 'State', label: st.id, hint: st.label && st.label !== st.id ? st.label : undefined, run: () => handleJumpToState(st.id) });
+    for (const m of pouContent ? getAllMethodsFromPou(pouContent) : []) cmds.push({ id: `sym-method:${m}`, group: 'Method', label: `${m}()`, run: () => handleOpenInspectorPanel('method', { method: `${m}()` }) });
+    for (const v of pouContent ? declarationVariables(extractPouDeclaration(pouContent)) : [])
+      cmds.push({ id: `sym-member:${v.name}`, group: 'Member', label: v.name, hint: `${v.type} · ${v.scope}`, run: () => { setDockLayout((l) => activateDockTab(l, 'pou')); setPouReveal({ symbol: v.name, nonce: Date.now() }); } });
+    for (const tp of getProjectSymbols()?.types.values() ?? []) {
+      if (tp.name.toLowerCase() === current) continue;
+      const kind = kindName[tp.kind] ?? tp.kind;
+      const pou = ['FUNCTION_BLOCK', 'PROGRAM', 'FUNCTION'].includes(tp.kind);
+      cmds.push({
+        id: `sym-type:${tp.name}`,
+        group: kind,
+        label: tp.name,
+        hint: pou ? 'open in StateScope' : isXaeHost() ? 'open in the TwinCAT editor' : undefined,
+        run: () => (pou ? void handleOpenType(tp.name, 'statescope') : isXaeHost() ? void handleOpenType(tp.name, 'xae') : showCopyToast(`${tp.name} is a ${kind}: StateScope opens POUs`, 'error')),
+      });
+      if (tp.kind === 'GVL')
+        for (const m of tp.members)
+          cmds.push({ id: `sym-gvl:${tp.name}.${m.name}`, group: 'Global', label: `${tp.name}.${m.name}`, hint: m.type, run: () => (isXaeHost() ? postToHost({ type: 'openInXae', typeName: tp.name, ...(m.line ? { line: m.line, text: m.text } : {}) }) : showCopyToast(`${tp.name}.${m.name} : ${m.type}${m.comment ? ` (${m.comment})` : ''}`, 'success', 5000)) });
+    }
+    return cmds;
+  };
   // The command palette's commands: tabs, states, methods, the selected state's and the canvas's menus, options
   const paletteCommands = (): PaletteCommand[] => {
     const cmds: PaletteCommand[] = [];
@@ -3557,6 +3745,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    cmds.push({ id: 'app:symbol', group: 'Go', label: 'Go to symbol…', hint: 'Ctrl+Shift+O', run: () => setSymbolSearchOpen(true) });
     cmds.push({
       id: 'app:snippets',
       group: 'Edit',
@@ -3580,6 +3769,46 @@ export const App: React.FC = () => {
             showCopyToast(`${r.length} snippet${r.length === 1 ? '' : 's'} kept`, 'success');
           },
         }),
+    });
+    cmds.push({
+      id: 'app:snippets-export',
+      group: 'Edit',
+      label: 'Export snippets to a file…',
+      run: () => {
+        const mine = userSnippets();
+        if (!mine.length) {
+          showCopyToast('No snippets of yours to export (Edit snippets… makes them)', 'error');
+          return;
+        }
+        void saveDocument('snippets.kss-snippets.json', snippetsToFile(mine));
+      },
+    });
+    cmds.push({
+      id: 'app:snippets-import',
+      group: 'Edit',
+      label: 'Import snippets from a file…',
+      run: () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.id = 'snippets-import-input';
+        input.style.display = 'none';
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          input.remove();
+          if (!file) return;
+          const r = snippetsFromFile(await file.text());
+          if (typeof r === 'string') {
+            showCopyToast(`${file.name}: ${r}`, 'error');
+            return;
+          }
+          const m = mergeSnippets(userSnippets(), r);
+          setUserSnippets(m.list);
+          showCopyToast(`${file.name}: ${m.added} snippet${m.added === 1 ? '' : 's'} added${m.replaced ? `, ${m.replaced} replaced` : ''}`, 'success');
+        };
+        document.body.appendChild(input);
+        input.click();
+      },
     });
     return cmds;
   };
@@ -3606,6 +3835,50 @@ export const App: React.FC = () => {
       if (!fix) return;
       if (fix.kind === 'declare-variable') {
         setDeclareFix({ name: fix.name, method: fix.method });
+        return;
+      }
+      if (fix.kind === 'insert-call') {
+        const c = plannedCall(pouContent, fix.name, fix.type);
+        if (!c) return showCopyToast(`No use of ${fix.name} found in a method`, 'error');
+        const m = getMethodCodeFromPou(pouContent, c.method);
+        setPromptRequest({
+          title: `Call ${fix.name}?`,
+          label: `This call goes into ${c.method}() before line ${c.line}, its first use. Set its inputs (IN, PT, ...) to what they should be:`,
+          details: [c.text.trim()],
+          confirmOnly: true,
+          submitLabel: 'Insert call',
+          onSubmit: () => {
+            const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+            const lines = m.code.split(/\r?\n/);
+            lines.splice(c.line - 1, 0, c.text);
+            const res = handleSaveMethodCode(c.method, lines.join(eol));
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`Inserted ${fix.name}(...) in ${c.method}() line ${c.line}: set its inputs`, 'success', 6000);
+            setCodeJump({ method: c.method, line: c.line, nonce: Date.now() });
+          },
+        });
+        return;
+      }
+      if (fix.kind === 'remove-lines' && fix.method) {
+        const m = getMethodCodeFromPou(pouContent, fix.method);
+        const range = deadLines(m.code, fix.line);
+        const lines = m.code.split(/\r?\n/);
+        const gone = lines.slice(range.start - 1, range.end);
+        setPromptRequest({
+          title: `Remove ${gone.length} line${gone.length === 1 ? '' : 's'} that never run?`,
+          label: `In ${fix.method}(), lines ${range.start}–${range.end} (after a RETURN, to the end of their block):`,
+          details: gone.map((l) => l.trim()).filter(Boolean),
+          confirmOnly: true,
+          danger: true,
+          submitLabel: 'Remove',
+          onSubmit: () => {
+            const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+            lines.splice(range.start - 1, range.end - range.start + 1);
+            const res = handleSaveMethodCode(fix.method!, lines.join(eol));
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`Removed ${gone.length} line${gone.length === 1 ? '' : 's'} of ${fix.method}()`, 'success');
+          },
+        });
         return;
       }
       if (fix.kind === 'remove-variable') {
@@ -4532,9 +4805,10 @@ export const App: React.FC = () => {
   const liveWatchKey = useMemo(() => {
     if (liveStatus.state !== 'connected' || !liveStatus.instance) return '';
     const guards = liveGuardEdges && liveGuardInputs ? variablesToWatch(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all') : [];
-    // (and the current state's regions' variables)
-    return [...new Set([...guards, ...liveRegions.map((r) => r.variable)])].sort().join('\n');
-  }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions]);
+    // (and the current state's regions' variables, the shown code's, the watched ones)
+    return [...new Set([...guards, ...liveRegions.map((r) => r.variable), ...userWatch, ...editorWatch])].sort().join('\n');
+  }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions, editorWatch, userWatch]);
+  liveValuesRef.current = { active: liveStatus.state === 'connected', values: liveVarValues };
   const sendLiveWatch = useCallback(
     (vars: LiveWatchVar[]) => {
       // (a replay has its recorded values)
@@ -5959,6 +6233,7 @@ export const App: React.FC = () => {
                   problemMarkers={lintProblemMarkers}
                   bookmarkedStates={bookmarks.states}
                   stateTooltips={stateTooltips}
+                  stateProblems={stateProblems}
                   multiSelection={multiSelected}
                   onMultiSelectionChange={setMultiSelected}
                   liveHighlight={liveHighlight ?? simHighlight}
@@ -6141,6 +6416,8 @@ export const App: React.FC = () => {
       {isDockTabMounted('live') &&
         createPortal(
           <LivePanel
+            watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()] }))}
+            onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}
             gatewayOrigin={gatewayOrigin}
             defaultVia={gatewayOrigin ? 'gateway' : 'link'}
@@ -6236,6 +6513,7 @@ export const App: React.FC = () => {
           stateVar={liveStateVar}
           onWatch={handleWatchMachine}
           openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
+          loadedType={pouTypeName}
         />,
           dockRegistry.nodes.symbols
         )}
@@ -6394,6 +6672,7 @@ export const App: React.FC = () => {
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}
+      {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
       {bookmarksOpen && (
         <BookmarksDialog
           entries={bookmarkEntries}

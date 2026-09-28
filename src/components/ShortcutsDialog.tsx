@@ -7,6 +7,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     area: 'Everywhere',
     keys: [
       ['Ctrl+Shift+P', 'Command palette: every command, with a filter'],
+      ['Ctrl+Shift+O (Ctrl+T in XAE / desktop)', 'Go to symbol: a type, a GVL variable, a method, a member, a state'],
       ['?', 'This list (not while typing)'],
       ['Ctrl+S', 'Save to the project'],
       ['Ctrl+Z / Ctrl+Y', 'Undo / redo the last edit'],

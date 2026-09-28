@@ -75,6 +75,8 @@ import { ExportModal } from './ExportModal.tsx';
 import { TransitionGuardInspector } from './TransitionGuardInspector.tsx';
 import { PreProcessStructuredTextEditor } from './PreProcessStructuredTextEditor.tsx';
 import { MethodStructuredTextEditor } from './MethodStructuredTextEditor.tsx';
+import { StateActionsPreview } from './StateActionsPreview.tsx';
+import { NodeHoverBox, type ScreenRect } from './NodeHoverBox.tsx';
 import { DutEnumEditor } from './DutEnumEditor.tsx';
 import { createInteractiveMermaidCode, parseConditionClauses } from '../utils/interactiveDiagram.ts';
 import {
@@ -156,6 +158,8 @@ export interface MermaidViewerHandle {
   exportWithSettings: (settings: PresetExportSettings) => Promise<void>;
   printVisiblePdf: () => Promise<void>;
   getActiveSvgElement: () => SVGSVGElement | null;
+  /** Several states lined up (their left / centre / right / top / middle / bottom edge) or spread evenly */
+  arrangeStates: (ids: string[], mode: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'distribute-h' | 'distribute-v') => void;
 }
 
 export interface MermaidViewerProps {
@@ -187,6 +191,8 @@ export interface MermaidViewerProps {
   bookmarkedStates?: string[];
   /** A state's tooltip (its entry / do / exit actions), by state */
   stateTooltips?: Record<string, string>;
+  /** The Problems tab's findings in a state's code (their messages, the names they flag), by state */
+  stateProblems?: Record<string, { messages: string[]; names: string[] }>;
   /** Several states selected (Ctrl+click, Shift+drag a box): marked; the app's menu acts on all of them */
   multiSelection?: string[];
   onMultiSelectionChange?: (ids: string[]) => void;
@@ -1543,6 +1549,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     problemMarkers,
     bookmarkedStates,
     stateTooltips,
+    stateProblems,
     multiSelection,
     onMultiSelectionChange,
     liveHighlight,
@@ -3518,7 +3525,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // A state's entry / do / exit actions on hover: at once, in the app's own box (in the heat-map's, when that
   // one shows); no browser tooltip, which came late and covered it
-  const [hoveredActions, setHoveredActions] = useState<{ id: string; text: string; x: number; y: number } | null>(null);
+  const [hoveredActions, setHoveredActions] = useState<{ id: string; text: string; x: number; y: number; rect: ScreenRect } | null>(null);
 
   // Bookmarks: a ribbon at the top-left corner of each bookmarked state
   const bookmarkKey = (bookmarkedStates ?? []).join('|');
@@ -3778,6 +3785,72 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     (s) => s.fill || s.color || s.stroke || s.strokeWidth
   ).length;
 
+  // A state's shape on screen (a hover box goes beside it)
+  const stateScreenRect = (id: string): ScreenRect | null => {
+    const svg = getDiagramSvg();
+    if (!svg) return null;
+    const want = id.toLowerCase();
+    const el = [...svg.querySelectorAll('g.node[data-state-id]')].find((g) => g.getAttribute('data-state-id')!.toLowerCase() === want) as SVGGElement | undefined;
+    if (!el) return null;
+    const r = nodeShapeOf(el).getBoundingClientRect();
+    return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+  };
+
+  // The other selected states' offsets when one of them is dragged (they move with it)
+  const groupInitialRef = useRef<Record<string, { x: number; y: number }> | null>(null);
+  // Several states lined up / spread evenly: their offsets changed, the diagram re-drawn, the positions kept
+  const arrangeRef = useRef<(ids: string[], mode: string) => void>(() => {});
+  arrangeRef.current = (ids, mode) => {
+    const svg = getDiagramSvg();
+    if (!svg || ids.length < 2) return;
+    const items = ids
+      .map((id) => {
+        const el = svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`) as SVGGElement | null;
+        if (!el) return null;
+        const g = getNodeGeometry(el, svg);
+        const off = currentNodeOffsetsRef.current[id] || { x: 0, y: 0 };
+        return { id, cx: g.origCenterX + off.x, cy: g.origCenterY + off.y, hw: g.halfWidth, hh: g.halfHeight, off };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    if (items.length < 2) return;
+    const target: Record<string, { cx: number; cy: number }> = {};
+    const minL = Math.min(...items.map((i) => i.cx - i.hw));
+    const maxR = Math.max(...items.map((i) => i.cx + i.hw));
+    const minT = Math.min(...items.map((i) => i.cy - i.hh));
+    const maxB = Math.max(...items.map((i) => i.cy + i.hh));
+    const midX = items.reduce((s, i) => s + i.cx, 0) / items.length;
+    const midY = items.reduce((s, i) => s + i.cy, 0) / items.length;
+    for (const i of items) {
+      if (mode === 'left') target[i.id] = { cx: minL + i.hw, cy: i.cy };
+      else if (mode === 'right') target[i.id] = { cx: maxR - i.hw, cy: i.cy };
+      else if (mode === 'center') target[i.id] = { cx: midX, cy: i.cy };
+      else if (mode === 'top') target[i.id] = { cx: i.cx, cy: minT + i.hh };
+      else if (mode === 'bottom') target[i.id] = { cx: i.cx, cy: maxB - i.hh };
+      else if (mode === 'middle') target[i.id] = { cx: i.cx, cy: midY };
+    }
+    if (mode === 'distribute-h' || mode === 'distribute-v') {
+      const h = mode === 'distribute-h';
+      const sorted = [...items].sort((a, b) => (h ? a.cx - b.cx : a.cy - b.cy));
+      const a = h ? sorted[0].cx : sorted[0].cy;
+      const z = h ? sorted[sorted.length - 1].cx : sorted[sorted.length - 1].cy;
+      sorted.forEach((i, k) => {
+        const v = a + ((z - a) * k) / (sorted.length - 1);
+        target[i.id] = h ? { cx: v, cy: i.cy } : { cx: i.cx, cy: v };
+      });
+    }
+    const next = { ...currentNodeOffsetsRef.current };
+    for (const i of items) {
+      const tg = target[i.id];
+      if (tg) next[i.id] = { x: Math.round(i.off.x + tg.cx - i.cx), y: Math.round(i.off.y + tg.cy - i.cy) };
+    }
+    setNodeOffsets(next);
+    applyDiagramOffsetsToSvg(svg, next, currentEdgeOffsetsRef.current, null, selectedEdge?.id, layoutEngine, flowchartCurve);
+    const positions = extractCanvasNodePositions(svg, next);
+    setCanvasNodePositions(positions);
+    for (const i of items) if (positions[i.id]) lockedNodePositionsRef.current[i.id] = { centerX: positions[i.id].centerX, centerY: positions[i.id].centerY };
+    onCanvasPositionsChange?.(positions);
+  };
+
   // Several states: Ctrl+click adds / removes one, Shift+drag on the canvas selects the ones in the box
   const multiGestureRef = useRef(false);
   const [selectBand, setSelectBand] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
@@ -3959,6 +4032,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         nodeMovedRef.current = false;
         const currentOffset = effectiveNodeOffsets[stateId] || { x: 0, y: 0 };
         nodeInitialOffsetRef.current = { ...currentOffset };
+        // (one of several selected states: the others move with it)
+        groupInitialRef.current =
+          multiSelection && multiSelection.length > 1 && multiSelection.includes(stateId)
+            ? Object.fromEntries(multiSelection.filter((id) => id !== stateId).map((id) => [id, { ...(effectiveNodeOffsets[id] || { x: 0, y: 0 }) }]))
+            : null;
 
         const svgEl = getDiagramSvg();
         const geom = getNodeGeometry(nodeEl, svgEl);
@@ -4413,6 +4491,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           ...currentNodeOffsetsRef.current,
           [stateId]: newOffset,
         };
+        const group = groupInitialRef.current;
+        if (group) {
+          const dx = newOffset.x - nodeInitialOffsetRef.current.x;
+          const dy = newOffset.y - nodeInitialOffsetRef.current.y;
+          for (const [id, o] of Object.entries(group)) currentNodeOffsetsRef.current[id] = { x: o.x + dx, y: o.y + dy };
+        }
 
         if (containerRef.current) {
           const svg = getDiagramSvg();
@@ -4425,7 +4509,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               selectedEdge?.id,
               layoutEngine,
               flowchartCurve,
-              { onlyNodeId: stateId }
+              group ? undefined : { onlyNodeId: stateId }
             );
           }
         }
@@ -4553,7 +4637,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const sId = nodeEl?.getAttribute('data-state-id') || '';
       const tip = sId ? stateTooltips[sId] : undefined;
       if (tip) {
-        if (hoveredActions?.id !== sId) setHoveredActions({ id: sId, text: tip.split('\n').slice(1).join('\n'), x: e.clientX, y: e.clientY });
+        if (hoveredActions?.id !== sId) {
+          // (its box goes beside the state: the state's own shape, not its badges)
+          const r = nodeShapeOf(nodeEl!).getBoundingClientRect();
+          setHoveredActions({ id: sId, text: tip.split('\n').slice(1).join('\n'), x: e.clientX, y: e.clientY, rect: { l: r.left, t: r.top, r: r.right, b: r.bottom } });
+        }
       } else if (hoveredActions) setHoveredActions(null);
     }
   };
@@ -5354,6 +5442,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       exportWithSettings: (settings: PresetExportSettings) => handleExportWithSettings(settings),
       printVisiblePdf: () => handlePrintVisiblePdf(),
       getActiveSvgElement: () => getActiveSvgElement(),
+      arrangeStates: (ids, mode) => arrangeRef.current(ids, mode),
     }),
     [
       panToState,
@@ -6667,30 +6756,25 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
         {/* Complexity Heat-map / Refactor Badge Hover Tooltip */}
         {hoveredActions && !((isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric) && (
-          <div
+          <NodeHoverBox
+            anchor={() => stateScreenRect(hoveredActions.id) ?? hoveredActions.rect}
             id="state-actions-hover"
-            className="fixed z-50 pointer-events-none max-w-[420px] rounded-lg bg-slate-950/95 border border-slate-700 shadow-2xl px-2.5 py-1.5"
-            style={{ left: Math.min(hoveredActions.x + 16, window.innerWidth - 440), top: Math.min(hoveredActions.y + 16, window.innerHeight - 220) }}
+            className="z-50 pointer-events-none max-w-[720px] rounded-lg bg-slate-950/95 border border-slate-700 shadow-2xl px-2.5 py-1.5"
           >
             <div className="text-[10px] font-semibold text-slate-400 mb-0.5">{hoveredActions.id}</div>
-            <pre className="font-mono text-[10px] text-slate-300 whitespace-pre-wrap max-h-48 overflow-hidden">{hoveredActions.text}</pre>
-          </div>
+            <StateActionsPreview text={hoveredActions.text} problems={stateProblems?.[hoveredActions.id]} />
+          </NodeHoverBox>
         )}
         {(isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric && (
-          <div
+          <NodeHoverBox
+            anchor={() => stateScreenRect(hoveredComplexityMetric.metric.stateId) ?? { l: hoveredComplexityMetric.anchorX + 16, t: hoveredComplexityMetric.anchorY - 8, r: hoveredComplexityMetric.anchorX + 16, b: hoveredComplexityMetric.anchorY + 16 }}
             id="heatmap-state-hover-tooltip"
-            style={{
-              position: 'fixed',
-              left: `${Math.min(window.innerWidth - 280, hoveredComplexityMetric.anchorX + 16)}px`,
-              top: `${Math.min(window.innerHeight - 200, hoveredComplexityMetric.anchorY + 16)}px`,
-              zIndex: 60,
-            }}
-            className="pointer-events-none w-64 p-3 bg-slate-950/95 border border-amber-500/50 rounded-xl shadow-2xl backdrop-blur-md text-xs animate-in fade-in zoom-in-95 duration-150"
+            className="pointer-events-none z-[60] w-max min-w-64 max-w-[min(94vw,760px)] p-3 bg-slate-950/95 border border-amber-500/50 rounded-xl shadow-2xl backdrop-blur-md text-xs"
           >
             <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
               <div className="font-bold text-slate-100 truncate flex items-center gap-1.5">
                 <Flame className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="truncate">{hoveredComplexityMetric.metric.stateLabel}</span>
+                <span className="truncate">{hoveredComplexityMetric.metric.stateLabel.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '')}</span>
               </div>
               <span
                 className="font-mono font-extrabold text-[11px] px-1.5 py-0.5 rounded text-white shadow-xs"
@@ -6741,10 +6825,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 </div>
               )}
               {hoveredActions && hoveredActions.id.toLowerCase() === hoveredComplexityMetric.metric.stateId.toLowerCase() && (
-                <pre id="state-actions-in-heatmap" className="mt-1 pt-1 border-t border-slate-700/70 font-mono text-[10px] text-slate-300 whitespace-pre-wrap max-h-48 overflow-hidden">{hoveredActions.text}</pre>
+                <div id="state-actions-in-heatmap" className="mt-1 pt-1 border-t border-slate-700/70">
+                  <StateActionsPreview text={hoveredActions.text} problems={stateProblems?.[hoveredActions.id]} />
+                </div>
               )}
             </div>
-          </div>
+          </NodeHoverBox>
         )}
 
         {/* Visual Badge for Edge Label Guard Condition Expression */}

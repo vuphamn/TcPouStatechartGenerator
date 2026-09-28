@@ -164,7 +164,9 @@ function client() {
   expect(only.json?.events.length === 1 && only.json.events[0].action === 'maintenance.set', 'audit search: by text');
 
   // In a browser: the board (kiosk rotation, escalated, planned, report); the setup page's new sections
-  const built = fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('board-kiosk'));
+  // (no dist/ at all on a fresh checkout, as on CI: the browser part skipped too)
+  const assets = path.join(h.REPO, 'dist', 'assets');
+  const built = fs.existsSync(assets) && fs.readdirSync(assets).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('board-kiosk'));
   if (!built) console.log('skip the browser part: dist/ is an older build (npm run build)');
   else {
     const browser = await h.launchBrowser({ defaultViewport: { width: 1600, height: 1000 } });

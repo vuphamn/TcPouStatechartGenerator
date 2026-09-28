@@ -42,7 +42,11 @@ export type LintFix =
   /** Declare a name the code uses (in its method, or the POU) */
   | { kind: 'declare-variable'; name: string; method?: string }
   /** Delete an unused variable's declaration */
-  | { kind: 'remove-variable'; name: string; method?: string };
+  | { kind: 'remove-variable'; name: string; method?: string }
+  /** A timer / trigger / counter never called: its call put in before its first use */
+  | { kind: 'insert-call'; name: string; type: string }
+  /** Code that never runs (after a RETURN): removed, to the end of its block */
+  | { kind: 'remove-lines'; name: string; method?: string; line: number };
 
 export interface LintFinding {
   /** Stable across edits (no line numbers): used to ignore a finding */

@@ -28,6 +28,7 @@ import {
   FileCode2,
   PanelRightClose,
   PanelRightOpen,
+  ListTree,
 } from 'lucide-react';
 import {
   getAllMethodsFromPou,
@@ -69,6 +70,7 @@ import { NewVariable, declarationVariables, declareInDeclaration, guessType, und
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { bookmarkedLines, clearBookmarks, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
+import { getProjectSymbols } from '../utils/projectSymbols.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
 
@@ -255,6 +257,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     sourceScope: 'implementation' | 'declaration';
     /** The caret's line in the code (implementation: folded blocks counted in full) */
     line?: number;
+    /** The selected lines (implementation), when text is selected */
+    selection?: { start: number; end: number };
   } | null>(null);
 
   const [highlightedCaseLine, setHighlightedCaseLine] = useState<number | null>(null);
@@ -825,6 +829,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     // (the text as shown: the caret position is in it, folded or not)
     const resolved = resolveSymbolFromText(textarea.value, textarea.selectionStart, textarea.selectionEnd);
     const viewLine = textarea.value.slice(0, textarea.selectionStart).split('\n').length;
+    // (a selection: its lines, for Extract Method; a selection ending at a line's start leaves that line out)
+    const endPos = textarea.selectionEnd > textarea.selectionStart && textarea.value[textarea.selectionEnd - 1] === '\n' ? textarea.selectionEnd - 1 : textarea.selectionEnd;
+    const selection = textarea.selectionEnd > textarea.selectionStart ? { start: toCodeLine(viewLine), end: toCodeLine(textarea.value.slice(0, endPos).split('\n').length) } : undefined;
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -832,6 +839,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       memberOf: resolved?.memberOf,
       sourceScope: 'implementation',
       line: toCodeLine(viewLine),
+      selection,
     });
   };
 
@@ -861,9 +869,28 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const scope = editorServices()?.scope?.(cleanMethodName);
     return undeclaredNames(sym, scope?.top ?? [], scope?.knownNames ?? []).length > 0;
   };
-  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration') => {
+  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }) => {
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declEditorRef : implEditorRef).current?.formatDocument()) };
-    if (!sym) return [format];
+    // Extract Method: the selected lines into a new method
+    const extract =
+      selection && editorServices()?.extractMethod
+        ? [
+            {
+              id: 'editor-menu-extract',
+              label: `Extract Method… (lines ${selection.start}–${selection.end})`,
+              title: 'The selected lines into a new PRIVATE method, a call in their place',
+              onSelect: () => {
+                if (isDirty) {
+                  setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): Extract Method works on the saved POU' });
+                  setTimeout(() => setDefinitionNotification(null), 3500);
+                  return;
+                }
+                editorServices()!.extractMethod!(cleanMethodName, selection.start, selection.end);
+              },
+            },
+          ]
+        : [];
+    if (!sym) return [...extract, format];
     const services = editorServices();
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
     if (isUndeclared(sym, memberOf)) {
@@ -889,7 +916,28 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       });
     }
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
-    items.push(format);
+    // A method / property of the POU: Rename method…
+    const asMethod = !memberOf && availableMethods.find((m) => m.replace(/\(\)$/, '').toLowerCase() === sym.toLowerCase());
+    if (asMethod && services?.renameMethod)
+      items.push({
+        id: 'editor-menu-rename-method',
+        label: `Rename method ${asMethod.replace(/\(\)$/, '')}…`,
+        title: 'Its declaration and every call (a preview first)',
+        onSelect: () => {
+          if (isDirty) {
+            setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): the rename works on the saved POU' });
+            setTimeout(() => setDefinitionNotification(null), 3500);
+            return;
+          }
+          services.renameMethod!(asMethod.replace(/\(\)$/, ''));
+        },
+      });
+    if (services?.watchVariable) {
+      const path = memberOf ? `${memberOf}.${sym}` : sym;
+      const on = services.isWatched?.(path);
+      items.push({ id: 'editor-menu-watch', label: on ? `Stop watching ${path}` : `Watch ${path} in Live`, title: 'Its value, listed in the Live tab while live', onSelect: () => services.watchVariable!(path) });
+    }
+    items.push(...extract, format);
     return items;
   };
   const finishDeclare = (v: NewVariable) => {
@@ -902,6 +950,120 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
     setTimeout(() => setDefinitionNotification(null), 4000);
     setDeclaring(null);
+  };
+
+  // Live: the POU's members / globals this method's code uses (the app follows them while live), their values
+  const liveNow = editorServices()?.liveValues?.();
+  const codeNames = useMemo(() => {
+    const scope = editorServices()?.scope?.(cleanMethodName);
+    if (!scope) return [];
+    const readable = new Set(scope.top.filter((v) => v.scope !== cleanMethodName).map((v) => v.name.toLowerCase()));
+    const masked = code.replace(/\(\*[\s\S]*?\*\)/g, ' ').replace(/\/\/[^\n]*/g, ' ').replace(/'[^']*'/g, ' ');
+    const out = new Map<string, string>();
+    for (const m of masked.matchAll(/(?<![\w.#])[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*/g)) {
+      const name = m[0].replace(/\s+/g, '');
+      const first = name.split('.')[0].toLowerCase();
+      if (!readable.has(first) || /\(/.test(masked[m.index! + m[0].length] ?? '')) continue;
+      out.set(name.toLowerCase(), name);
+      if (out.size >= 60) break;
+    }
+    return [...out.values()];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, cleanMethodName, liveNow?.active]);
+  const codeNamesKey = codeNames.join('|');
+  useEffect(() => {
+    if (!liveNow?.active) return;
+    editorServices()?.setEditorWatch?.(codeNames);
+    return () => editorServices()?.setEditorWatch?.([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeNamesKey, liveNow?.active]);
+  const inlineValues = useMemo(() => {
+    if (!liveNow?.active) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(liveNow.values)) out[k] = typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : typeof v === 'number' ? String(Number.isInteger(v) ? v : +v.toFixed(4)) : `'${v}'`;
+    return out;
+  }, [liveNow?.active, liveNow?.values]);
+
+  // The outline: the method's blocks and calls, the one around the caret marked; a click goes there
+  const [outlineOpen, setOutlineOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.method.outline') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('kss.method.outline', outlineOpen ? '1' : '0');
+    } catch {
+      // (not kept)
+    }
+  }, [outlineOpen]);
+  const [caretCodeLine, setCaretCodeLine] = useState(0);
+  useEffect(() => {
+    if (!outlineOpen) return;
+    const onSel = () => {
+      const ta = implEditorRef.current?.getTextarea();
+      if (!ta || document.activeElement !== ta) return;
+      setCaretCodeLine(toCodeLine(ta.value.slice(0, ta.selectionStart).split('\n').length));
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlineOpen, foldedBlockIds]);
+  const outlineItems = useMemo(() => {
+    if (!outlineOpen) return [];
+    const blocks = foldableBlocks
+      .filter((b) => b.type !== 'comment' && b.type !== 'region')
+      .map((b) => ({ key: b.id, line: b.startLine, end: b.endLine, depth: b.nestingLevel, kind: b.type, text: b.label.trim().replace(/\s+/g, ' ') }));
+    // Calls of methods / FB instances (not inside a call's arguments)
+    const scope = editorServices()?.scope?.(cleanMethodName);
+    const callable = new Set((scope?.top ?? []).filter((v) => v.scope.startsWith('METHOD') || /^(TON|TOF|TP|R_TRIG|F_TRIG|CTU|CTD|CTUD|RS|SR|FB_|SM_)/i.test(v.type) || (getProjectSymbols()?.types.get(v.type.toLowerCase())?.kind === 'FUNCTION_BLOCK')).map((v) => v.name.toLowerCase()));
+    const calls: typeof blocks = [];
+    code.split('\n').forEach((raw, i) => {
+      const l = raw.replace(/\/\/.*$/, '').replace(/\(\*.*?\*\)/g, ' ');
+      for (const m of l.matchAll(/(?<![\w.])((?:THIS\^\.)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\s*\(/g)) {
+        const name = m[1].replace(/^THIS\^\./i, '');
+        if (!callable.has(name.split('.')[0].toLowerCase())) continue;
+        const depth = blocks.filter((b) => b.line <= i + 1 && i + 1 <= b.end).length;
+        calls.push({ key: `call-${i}-${m.index}`, line: i + 1, end: i + 1, depth, kind: 'call' as never, text: `${name}()` });
+      }
+    });
+    return [...blocks, ...calls].sort((a, b) => a.line - b.line || a.depth - b.depth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlineOpen, foldableBlocks, code, cleanMethodName]);
+  const outlineActive = useMemo(() => {
+    const around = outlineItems.filter((it) => it.line <= caretCodeLine && caretCodeLine <= it.end);
+    return around.sort((a, b) => a.end - a.line - (b.end - b.line))[0]?.key;
+  }, [outlineItems, caretCodeLine]);
+  const goToOutline = (line: number) => {
+    const around = foldableBlocks.filter((b) => b.startLine < line && line <= b.endLine && foldedBlockIds.has(b.id));
+    if (around.length) {
+      setFoldedBlockIds((prev) => {
+        const next = new Set(prev);
+        around.forEach((b) => next.delete(b.id));
+        return next;
+      });
+    }
+    setScrollToLine(null);
+    requestAnimationFrame(() => {
+      setScrollToLine(line);
+      setHighlightedCaseLine(line);
+    });
+    setTimeout(() => setHighlightedCaseLine(null), 2000);
+    setCaretCodeLine(line);
+    // The caret there too, at the line's code (after the blocks around it opened: the field shows all the lines)
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const ta = implEditorRef.current?.getTextarea();
+        if (!ta || ta.value !== code) return;
+        const lines = ta.value.split('\n');
+        if (line < 1 || line > lines.length) return;
+        const at = lines.slice(0, line - 1).reduce((n, l) => n + l.length + 1, 0) + (lines[line - 1].match(/^[ \t]*/)?.[0].length ?? 0);
+        ta.focus({ preventScroll: true });
+        ta.setSelectionRange(at, at);
+      })
+    );
   };
 
   // PLC Bookmarks: the method's bookmarked lines (its own, and the label lines of bookmarked states)
@@ -1777,35 +1939,73 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                   <UnfoldVertical className="w-3 h-3 text-emerald-400" />
                   <span className="hidden lg:inline">Unfold All</span>
                 </button>
+                <button
+                  type="button"
+                  id="method-outline-btn"
+                  onClick={() => setOutlineOpen((o) => !o)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${outlineOpen ? 'bg-sky-900/60 text-sky-200' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                  title="The method's blocks and calls, beside the code (the one at the caret marked; a click goes there)"
+                >
+                  <ListTree className="w-3 h-3 text-violet-400" />
+                  <span className="hidden lg:inline">Outline</span>
+                </button>
               </div>
             </div>
           </div>
 
-          {/* Syntax-Highlighted Implementation Editor Area with Code Folding & Find Highlighting */}
-          <StructuredTextCodeEditor
-            ref={implEditorRef}
-            id="method-implementation-editor"
-            value={code}
-            onChange={setCode}
-            onKeyDown={handleEditorKeyDown}
-            onContextMenu={handleImplContextMenu}
-            bookmarkLines={bookmarkLines}
-            completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}
-            markers={markersFor(editorServices()?.problems?.() ?? [], code, { method: cleanMethodName, declaration: false })}
-            highlightedLine={highlightedCaseLine}
-            liveLine={liveCaseLine}
-            scrollToLine={scrollToLine}
-            placeholder={`// Structured Text implementation for ${cleanMethodName}()\n`}
-            ariaLabel={`${cleanMethodName} Implementation Structured Text`}
-            enableCodeFolding={true}
-            foldedBlockIds={foldedBlockIds}
-            onToggleFold={handleToggleFold}
-            foldableBlocks={foldableBlocks}
-            findQuery={findScope !== 'declaration' ? findQuery : ''}
-            findOptions={findOptions}
-            activeFindMatchIndex={activeImplMatchIndex}
-            className="flex-1"
-          />
+          <div className="flex-1 min-h-0 flex">
+            {/* Syntax-Highlighted Implementation Editor Area with Code Folding & Find Highlighting */}
+            <StructuredTextCodeEditor
+              ref={implEditorRef}
+              id="method-implementation-editor"
+              value={code}
+              onChange={setCode}
+              onKeyDown={handleEditorKeyDown}
+              onContextMenu={handleImplContextMenu}
+              bookmarkLines={bookmarkLines}
+              inlineValues={inlineValues}
+              completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}
+              markers={markersFor(editorServices()?.problems?.() ?? [], code, { method: cleanMethodName, declaration: false })}
+              highlightedLine={highlightedCaseLine}
+              liveLine={liveCaseLine}
+              scrollToLine={scrollToLine}
+              placeholder={`// Structured Text implementation for ${cleanMethodName}()\n`}
+              ariaLabel={`${cleanMethodName} Implementation Structured Text`}
+              enableCodeFolding={true}
+              foldedBlockIds={foldedBlockIds}
+              onToggleFold={handleToggleFold}
+              foldableBlocks={foldableBlocks}
+              findQuery={findScope !== 'declaration' ? findQuery : ''}
+              findOptions={findOptions}
+              activeFindMatchIndex={activeImplMatchIndex}
+              className="flex-1"
+            />
+            {outlineOpen && (
+              <div id="method-outline" className="w-60 shrink-0 border-l border-slate-800 bg-slate-950/80 overflow-y-auto py-1 text-[11px]">
+                <div className="px-2 pb-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Outline</div>
+                {outlineItems.length === 0 && <div className="px-2 text-slate-500">No blocks or calls</div>}
+                {outlineItems.map((it) => (
+                  <button
+                    key={it.key}
+                    type="button"
+                    data-line={it.line}
+                    data-kind={it.kind}
+                    data-active={it.key === outlineActive ? 'true' : undefined}
+                    onClick={() => goToOutline(it.line)}
+                    className={`method-outline-item w-full flex items-center gap-1.5 pr-2 py-0.5 text-left font-mono truncate ${it.key === outlineActive ? 'bg-sky-800/40 text-white' : 'text-slate-300 hover:bg-slate-800'}`}
+                    style={{ paddingLeft: `${8 + it.depth * 10}px` }}
+                    title={`Line ${it.line}: ${it.text}`}
+                  >
+                    <span className={`text-[9px] shrink-0 ${String(it.kind) === 'call' ? 'text-emerald-400' : String(it.kind) === 'case-branch' ? 'text-amber-300' : 'text-sky-400'}`}>
+                      {String(it.kind) === 'call' ? '→' : String(it.kind) === 'case-branch' ? '◆' : String(it.kind).startsWith('case') ? 'CASE' : String(it.kind).startsWith('if') ? 'IF' : String(it.kind).split('-')[0].toUpperCase()}
+                    </span>
+                    <span className="truncate">{it.text}</span>
+                    <span className="ml-auto text-[9px] text-slate-600 shrink-0">{it.line}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* "Jumped to case" toast for jumps made in the editor; floats over the code so nothing shifts */}
           {scrollNotification && (
@@ -1892,7 +2092,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           targetSymbol={contextMenu.symbol}
           targetMemberOf={contextMenu.memberOf}
           typeTarget={contextMenu.symbol ? findTypeTarget([declaration, pouDeclaration], contextMenu.symbol, contextMenu.memberOf) : null}
-          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope)}
+          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope, contextMenu.selection)}
           bookmarks={
             contextMenu.sourceScope === 'implementation' && contextMenu.line
               ? {

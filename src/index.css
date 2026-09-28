@@ -1167,3 +1167,10 @@ g.node.multi-selected > .label-container {
   stroke-width: 3px !important;
   stroke-dasharray: 6 3 !important;
 }
+
+/* A name the Problems tab flags, in a state's actions on hover */
+.st-lint-name {
+  text-decoration: underline wavy #f59e0b;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 2px;
+}

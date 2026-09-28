@@ -41,6 +41,9 @@ export interface LiveSettings {
 }
 
 interface LivePanelProps {
+  /** The variables watched from the code (right-click > Watch in Live), with their values */
+  watchList?: { name: string; value?: boolean | number | string }[];
+  onUnwatch?: (name: string) => void;
   /**
    * xae: TwinCAT XAE with a POU from an open TwinCAT project; desktop: the desktop app (ADS straight to the PLC);
    * web: the web edition, through the local helper (Kval StateScope Link) or a gateway (settings.via)
@@ -209,6 +212,8 @@ const GUARD_BADGE = {
 const MAX_SHOWN = 200;
 
 export const LivePanel: React.FC<LivePanelProps> = ({
+  watchList,
+  onUnwatch,
   mode,
   defaultVia = 'link',
   gatewayOrigin,
@@ -966,6 +971,24 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* The variables watched from the code */}
+      {watchList && watchList.length > 0 && (
+        <div id="live-watch-list" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5">
+          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">Watched</div>
+          {watchList.map((w) => (
+            <div key={w.name} className="live-watch-row flex items-center gap-2 font-mono text-[11px]" data-name={w.name}>
+              <span className="text-slate-300 truncate">{w.name}</span>
+              <span className="live-watch-value ml-auto text-emerald-300">{w.value === undefined ? '…' : typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : String(w.value)}</span>
+              {onUnwatch && (
+                <button type="button" onClick={() => onUnwatch(w.name)} className="text-slate-500 hover:text-white" title="Stop watching it">
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

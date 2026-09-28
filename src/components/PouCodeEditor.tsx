@@ -288,6 +288,14 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     if (r) items.push(r);
     const services = editorServices();
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
+    const asMethod = !memberOf && methods.find((m) => m.toLowerCase() === sym.toLowerCase());
+    if (asMethod && services?.renameMethod)
+      items.push({ id: 'editor-menu-rename-method', label: `Rename method ${asMethod}…`, title: 'Its declaration and every call (a preview first)', onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.renameMethod!(asMethod)) });
+    if (services?.watchVariable) {
+      const path = memberOf ? `${memberOf}.${sym}` : sym;
+      const on = services.isWatched?.(path);
+      items.push({ id: 'editor-menu-watch', label: on ? `Stop watching ${path}` : `Watch ${path} in Live`, title: 'Its value, listed in the Live tab while live', onSelect: () => services.watchVariable!(path) });
+    }
     items.push(format);
     return items;
   };

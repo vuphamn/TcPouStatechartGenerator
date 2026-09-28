@@ -170,32 +170,39 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   code = await doState();
   expect(code.includes('IF cmd_bHome THEN') && !(await p.$('#guard-inspector-edit-condition-btn')), 'from the Guard window: changed (the window closed)');
 
-  // 5. Actions: exit of CLAMPED from its menu (several lines, Ctrl+Enter), shown on the state
+  // 5. The state's code (its whole CASE branch, as written) from its menu: highlighted, written back
   await goTo(S('CLAMPED'));
   pt = await nodePoint(S('CLAMPED'));
   await p.mouse.click(pt.x, pt.y, { button: 'right' });
   await h.sleep(400);
-  const menuItems = await p.$$eval('[id^="context-menu-action-"]', (b) => b.map((x) => x.textContent.trim()));
-  expect(menuItems.length === 3 && /^Entry action/.test(menuItems[0]) && /^Do action/.test(menuItems[1]) && /^Exit action…$/.test(menuItems[2]), `the state's menu: ${menuItems.join(' | ')}`);
-  await p.click('#context-menu-action-exit-btn');
+  const actionItems = await p.$$eval('[id^="context-menu-action-"]', (b) => b.length);
+  const codeItem = await p.$eval('#context-menu-edit-state-code-btn', (e) => e.textContent.trim()).catch(() => '');
+  expect(actionItems === 0 && /^Edit the state's code… \(\d+ lines\)$/.test(codeItem), `the state's menu: ${codeItem} (no Entry / Do / Exit action items)`);
+  await p.click('#context-menu-edit-state-code-btn');
   await p.waitForSelector('textarea#text-prompt-input', { timeout: 4000 });
-  await p.keyboard.type('status_bBusy := FALSE;', { delay: 10 });
-  await p.keyboard.press('Enter');
-  await p.keyboard.type('cmd_bUnclamp := FALSE;', { delay: 10 });
-  await h.sleep(100);
+  const whole = await p.$eval('#text-prompt-input', (e) => e.value);
+  const hl = await p.evaluate(() => {
+    const t = document.getElementById('text-prompt-input');
+    const pre = document.getElementById('text-prompt-highlight');
+    const a = t.getBoundingClientRect();
+    const b = pre?.getBoundingClientRect();
+    return { tokens: pre ? pre.querySelectorAll('.token').length : 0, same: !!b && Math.abs(a.left - b.left) < 1 && Math.abs(a.top - b.top) < 1 && Math.abs(a.width - b.width) < 1, clear: getComputedStyle(t).color, text: pre?.textContent === t.value + '\n' };
+  });
+  expect(/machineState :=/.test(whole) && !/^\s/.test(whole) && (await p.$$eval('#text-prompt-dialog textarea', (x) => x.length)) === 1, `all of it, as written, in one box (${whole.split('\n').length} lines)`);
+  expect(hl.tokens > 5 && hl.same && hl.text && /rgba\(0, 0, 0, 0\)|transparent/.test(hl.clear), `highlighted behind the field, lined up (${hl.tokens} tokens, ${hl.clear})`);
+  await p.screenshot({ path: h.out('edit-state-code.png') });
+  // An exit block typed at the end (several lines: Enter adds a line, Ctrl+Enter sets it)
+  await p.keyboard.down('Control'); await p.keyboard.press('End'); await p.keyboard.up('Control');
+  for (const line of ['', 'IF machineState <> TABLEMANAGER_CLAMPED THEN', '\tstatus_bBusy := FALSE;', 'END_IF']) {
+    await p.keyboard.press('Enter');
+    await p.keyboard.type(line, { delay: 3 });
+  }
   expect(!!(await p.$('#text-prompt-dialog')), 'Enter adds a line (the dialog stays)');
   await p.keyboard.down('Control'); await p.keyboard.press('Enter'); await p.keyboard.up('Control');
   await h.sleep(1200);
   code = await doState();
   const branch = code.split(`\t${S('CLAMPED')}:`)[1]?.split(/\n\t[A-Z_]+:/)[0] ?? '';
-  expect(/IF machineState <> (E_TableManager_States\.)?TABLEMANAGER_CLAMPED THEN\r?\n\s+status_bBusy := FALSE;\r?\n\s+cmd_bUnclamp := FALSE;\r?\n\s+END_IF\s*$/.test(branch), `the exit block at the end of CLAMPED's branch:\n${branch.split('\n').slice(-6).join('\n')}`);
-  // Entry: read from the branch's bFirstPass block
-  await p.mouse.click(pt.x, pt.y, { button: 'right' });
-  await h.sleep(400);
-  const entryLabel = await p.$eval('#context-menu-action-entry-btn', (e) => e.textContent.trim()).catch(() => '');
-  const exitLabel = await p.$eval('#context-menu-action-exit-btn', (e) => e.textContent.trim()).catch(() => '');
-  expect(/^Exit action: status_bBusy := FALSE; \(\+1\)$/.test(exitLabel), `the menu shows it: ${exitLabel} / ${entryLabel}`);
-  await p.keyboard.press('Escape');
+  expect(/END_IF\r?\n\r?\n\t\tIF machineState <> TABLEMANAGER_CLAMPED THEN\r?\n\t\t\tstatus_bBusy := FALSE;\r?\n\t\tEND_IF\s*$/.test(branch), `written back at the end of CLAMPED's branch, at its indentation:\n${branch.split('\n').slice(-5).join('\n')}`);
   // Shown on the state
   await p.evaluate(() => { const c = document.getElementById('state-actions-checkbox'); if (c && !c.checked) c.click(); });
   await h.sleep(2000);

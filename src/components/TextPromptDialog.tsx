@@ -4,6 +4,7 @@ import { NewVariable, PouVariable, guessType, undeclaredNames } from '../utils/p
 import { SymbolScope, completionAt } from '../utils/projectSymbols.ts';
 import { checkConditionSyntax } from '../utils/conditionSyntax.ts';
 import { DEFAULT_SCOPES, DeclareVariableForm } from './DeclareVariableForm.tsx';
+import { highlightStructuredText } from '../utils/stSyntaxHighlighter.ts';
 
 export interface TextPromptRequest {
   title: string;
@@ -61,6 +62,7 @@ type Field = HTMLInputElement | HTMLTextAreaElement;
 export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: () => void }> = ({ request, onClose }) => {
   const [value, setValue] = useState(request.initial ?? '');
   const inputRef = useRef<Field | null>(null);
+  const highlightRef = useRef<HTMLPreElement | null>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -223,7 +225,7 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
         aria-label={request.title}
         style={request.anchor ? { position: 'fixed', left: placed?.left ?? -9999, top: placed?.top ?? -9999 } : undefined}
         data-inline={request.inline ? 'true' : undefined}
-        className={`${request.inline ? 'w-[440px] rounded-lg ring-2 ring-sky-500/70' : picker ? (request.multiline ? 'w-[680px]' : 'w-[580px]') : 'w-[480px]'} max-w-[92vw] rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-xs`}
+        className={`${request.inline ? 'w-[440px] rounded-lg ring-2 ring-sky-500/70' : picker ? (request.multiline ? (request.monospace ? 'w-[860px]' : 'w-[680px]') : 'w-[580px]') : 'w-[480px]'} max-w-[92vw] rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-xs`}
         onKeyDown={(e) => {
           if (!request.confirmOnly) return;
           if (e.key === 'Escape') onClose();
@@ -253,14 +255,43 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
             <div className="relative flex gap-1.5 items-start">
               <div className="flex-1 min-w-0">
                 {request.multiline ? (
-                  <textarea
-                    {...fieldProps}
-                    ref={(el) => {
-                      inputRef.current = el;
-                    }}
-                    rows={8}
-                    className={`${fieldClass} resize-y leading-5`}
-                  />
+                  request.monospace ? (
+                    // Code: highlighted behind the field (its text transparent over it, the caret shown), one line on one line
+                    <div className="relative rounded bg-slate-950">
+                      <pre
+                        ref={highlightRef}
+                        id="text-prompt-highlight"
+                        aria-hidden
+                        className="prism-code absolute inset-0 m-0 overflow-hidden pointer-events-none rounded border border-transparent px-2 py-1.5 font-mono leading-5 whitespace-pre [tab-size:4] text-slate-100"
+                        dangerouslySetInnerHTML={{ __html: `${highlightStructuredText(value)}\n` }}
+                      />
+                      <textarea
+                        {...fieldProps}
+                        ref={(el) => {
+                          inputRef.current = el;
+                        }}
+                        rows={Math.min(24, Math.max(8, (request.initial ?? '').split('\n').length + 1))}
+                        wrap="off"
+                        onScroll={(e) => {
+                          const h = highlightRef.current;
+                          if (h) {
+                            h.scrollTop = e.currentTarget.scrollTop;
+                            h.scrollLeft = e.currentTarget.scrollLeft;
+                          }
+                        }}
+                        className={`relative block w-full bg-transparent text-transparent caret-slate-100 selection:bg-sky-700/50 border rounded px-2 py-1.5 font-mono leading-5 whitespace-pre [tab-size:4] resize-y ${error && value ? 'border-rose-600' : 'border-slate-700'}`}
+                      />
+                    </div>
+                  ) : (
+                    <textarea
+                      {...fieldProps}
+                      ref={(el) => {
+                        inputRef.current = el;
+                      }}
+                      rows={8}
+                      className={`${fieldClass} resize-y leading-5`}
+                    />
+                  )
                 ) : (
                   <input
                     {...fieldProps}

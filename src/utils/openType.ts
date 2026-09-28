@@ -20,10 +20,21 @@ export interface OpenTypeHandler {
   scope?: (method?: string) => SymbolScope;
   /** Rename a variable of the POU everywhere (method: a method's own, in it only): asks for the name, previews */
   rename?: (name: string, method?: string) => void;
+  /** Extract Method: lines of a method (1-based, the saved POU's) into a new method; asks for its name */
+  extractMethod?: (method: string, startLine: number, endLine: number) => void;
+  /** Rename a method / property of the POU (and where other POUs call it): asks for the name, previews */
+  renameMethod?: (name: string) => void;
   /** Declare variables in the POU's declaration (written at once); false: not done (the reason was shown) */
   declare?: (vars: NewVariable[]) => boolean;
   /** Find All References: every use of a name in the POU, listed (a click opens it) */
   findReferences?: (name: string) => void;
+  /** Live: whether connected, the values (by path, lower case) */
+  liveValues?: () => { active: boolean; values: Record<string, boolean | number | string> };
+  /** Live: the variables the shown code uses (followed while live, for the values in the code) */
+  setEditorWatch?: (names: string[]) => void;
+  /** Live: a variable added to (or taken off) the watched ones, listed in the Live tab */
+  watchVariable?: (name: string) => void;
+  isWatched?: (name: string) => boolean;
   /** The list of the POU's bookmarks */
   showBookmarks?: () => void;
   /** The Problems tab's findings (the editors underline theirs) */
