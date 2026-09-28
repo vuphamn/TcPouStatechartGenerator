@@ -16,7 +16,7 @@ for (const s of SAMPLES as any[]) {
   const f = run(s.pouContent, s.dutContent || '');
   // the qualified-enum samples have real findings (ADD_CHILDREN set by the base class; ERROR left by reset)
   const known: Record<string, string> = {
-    'k-servo-supply-manager': 'unreachable:ADD_CHILDREN, dead-end:NO_CHILDREN, dead-end:ENABLED, dead-end:ERROR, no-else',
+    'k-servo-supply-manager': 'unreachable:ADD_CHILDREN, dead-end:NO_CHILDREN, dead-end:ENABLED, dead-end:ERROR, no-else, no-description:NO_CHILDREN',
     'k-power-supply-ax86x0': 'dead-end:ERROR, no-else',
   };
   const keys = f.map((x) => x.key).join(', ');

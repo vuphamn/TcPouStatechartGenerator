@@ -106,3 +106,16 @@ export function formatDuration(ms: number): string {
   if (m < 60) return `${m} min ${String(Math.floor(s % 60)).padStart(2, '0')} s`;
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
 }
+
+/** The session's transitions checked against the diagram again (a diagram learned live: they are in it now) */
+export function recheckInModel(session: LiveSession, edges: EdgeInfo[]): LiveSession {
+  let changed = false;
+  const transitions = session.transitions.map((t) => {
+    const inModel = edges.some((e) => e.from === t.from && e.to === t.to);
+    if (inModel === t.inModel) return t;
+    changed = true;
+    return { ...t, inModel };
+  });
+  if (!changed) return session;
+  return { ...session, transitions, unexpected: transitions.filter((t) => !t.inModel).length };
+}

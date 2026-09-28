@@ -74,6 +74,7 @@ import {
   AlignEndHorizontal,
   AlignHorizontalSpaceAround,
   AlignVerticalSpaceAround,
+  Grid3x3,
 } from 'lucide-react';
 import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
 import {
@@ -119,13 +120,14 @@ import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols
 import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
 import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
 import { lineDiff } from './utils/lineDiff.ts';
-import { savePendingEditors } from './utils/pendingSaves.ts';
+import { isLearnedPou, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
+import { pendingEditors, savePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
-import { checkExtract, checkExtractProperty, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
+import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
 import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
@@ -143,7 +145,7 @@ import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
 import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
-import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou } from './utils/pouStateEditor.ts';
+import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -179,7 +181,7 @@ import { ForkJoinDialog, ForkJoinRequest } from './components/ForkJoinDialog.tsx
 import { SimulationPanel, SimTransition } from './components/SimulationPanel.tsx';
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
-import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap } from './utils/liveView.ts';
+import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap, recheckInModel } from './utils/liveView.ts';
 import {
   buildEnumTables,
   buildGuardEdges,
@@ -728,9 +730,27 @@ export const App: React.FC = () => {
   ]);
 
   // Apply custom node styles for live diagram canvas display
+  // How big a choice diamond is drawn (its label's class: index.css .kss-choice-*), kept per viewer
+  const [choiceSize, setChoiceSizeState] = useState<'small' | 'medium' | 'large'>(() => {
+    try {
+      const v = localStorage.getItem('kss.choiceSize');
+      return v === 'small' || v === 'large' ? v : 'medium';
+    } catch {
+      return 'medium';
+    }
+  });
+  const setChoiceSize = useCallback((v: 'small' | 'medium' | 'large') => {
+    setChoiceSizeState(v);
+    try {
+      localStorage.setItem('kss.choiceSize', v);
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
   const styledMarkdown = useMemo(() => {
-    return applyCustomStylesToMermaid(rawMarkdown, customNodeStyles);
-  }, [rawMarkdown, customNodeStyles]);
+    const styled = applyCustomStylesToMermaid(rawMarkdown, customNodeStyles);
+    return choiceSize === 'medium' ? styled : styled.split("class='kss-choice-pad'").join(`class='kss-choice-pad kss-choice-${choiceSize}'`);
+  }, [rawMarkdown, customNodeStyles, choiceSize]);
 
   // Apply diagram notes and canvas positions metadata to Mermaid markdown
   const outputMarkdown = useMemo(() => {
@@ -1655,6 +1675,21 @@ export const App: React.FC = () => {
   const localDirtyRef = useRef(false);
   localDirtyRef.current = localDirtyCount > 0;
   const markSaved = (kind: 'pou' | 'dut', content: string) => setSavedSources((b) => (kind === 'pou' ? { ...b, pou: content } : { ...b, dut: content }));
+  // A diagram learned live: drawn again with each transition seen (not an edit: nothing to save)
+  const learnedPou = useMemo(() => isLearnedPou(pouContent), [pouContent]);
+  useEffect(() => {
+    if (!learnedPou) return;
+    const input = learnedInputOf(pouContent, dutContent);
+    const next = input ? learnedSources({ ...input, seen }) : null;
+    if (!next || next.pou === pouContent) return;
+    setPouContent(next.pou);
+    markSaved('pou', next.pou);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [learnedPou, seen]);
+  // (its transitions are in it once drawn: the Live tab stops counting them as not in the diagram)
+  useEffect(() => {
+    if (learnedPou) setLiveSession((s) => recheckInModel(s, availableEdges));
+  }, [learnedPou, availableEdges]);
   type DesktopSave = {
     saveSources?: (files: unknown[]) => Promise<{ saved: string[]; conflicts: { path: string }[]; errors: { path: string; error: string }[] }>;
     saveSourceAs?: (name: string, content: string, dir?: string | null) => Promise<{ path?: string; canceled?: boolean; error?: string }>;
@@ -1844,12 +1879,53 @@ export const App: React.FC = () => {
   handleSaveToProjectRef.current = handleSaveToProject;
   // The header's Save / Save All: the editor used last (or every editor) puts its edits into the POU, then the files
   // are written (once the POU has them)
-  const handleHeaderSave = useCallback((which: 'active' | 'all') => {
+  // What this window has to save (its editors' edits, its edited files): Save All in another window asks
+  // (the editors counted when asked: their edits do not draw the app again)
+  const dirtyFilesRef = useRef(0);
+  dirtyFilesRef.current = isXaeHost() ? hostDirtyFiles.length : localDirtyCount;
+  const saveAllChannelRef = useRef<BroadcastChannel | null>(null);
+  const handleHeaderSave = useCallback((which: 'active' | 'all', fromOtherWindow = false) => {
+    const had = pendingEditors().length + dirtyFilesRef.current;
     const n = savePendingEditors(which);
     window.setTimeout(() => {
       if (isXaeHost()) handleSaveToProjectRef.current();
       else void saveSourcesRef.current(n ? { quiet: false } : undefined);
     }, n ? 120 : 0);
+    // Save All: the app's other windows (desktop) and tabs (XAE, web) save theirs too, and say what they saved
+    const ch = saveAllChannelRef.current;
+    if (which !== 'all' || fromOtherWindow || !ch) return had;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const saved: string[] = [];
+    const onDone = (e: MessageEvent) => {
+      const m = e.data as { type?: string; id?: string; name?: string; count?: number } | null;
+      if (m?.type === 'saveAllDone' && m.id === id && (m.count ?? 0) > 0) saved.push(m.name || 'another window');
+    };
+    ch.addEventListener('message', onDone);
+    ch.postMessage({ type: 'saveAll', id });
+    window.setTimeout(() => {
+      ch.removeEventListener('message', onDone);
+      if (saved.length) showCopyToast(`Save All: also saved in ${saved.length} other window${saved.length === 1 ? '' : 's'} (${saved.join(', ')})`, 'success', 5000);
+    }, 900);
+    return had;
+  }, [showCopyToast]);
+  const pouFileNameRef = useRef(pouFileName);
+  pouFileNameRef.current = pouFileName;
+  const handleHeaderSaveRef = useRef(handleHeaderSave);
+  handleHeaderSaveRef.current = handleHeaderSave;
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const ch = new BroadcastChannel('kss-save-all');
+    saveAllChannelRef.current = ch;
+    ch.onmessage = (e: MessageEvent) => {
+      const m = e.data as { type?: string; id?: string } | null;
+      if (m?.type !== 'saveAll') return;
+      const count = handleHeaderSaveRef.current('all', true);
+      ch.postMessage({ type: 'saveAllDone', id: m.id, name: pouFileNameRef.current, count });
+    };
+    return () => {
+      ch.close();
+      saveAllChannelRef.current = null;
+    };
   }, []);
 
   /** Opens TwinCAT's editor at a state's CASE branch or a transition's assignment (POU loaded from the project) */
@@ -1958,6 +2034,22 @@ export const App: React.FC = () => {
   }, []);
   // Several states selected on the canvas (Ctrl+click, Shift+drag)
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
+  // Several states moved together, snapping on: each of them on the grid (kept per viewer)
+  const [groupSnapEach, setGroupSnapEachState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.groupSnapEach') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setGroupSnapEach = useCallback((on: boolean) => {
+    setGroupSnapEachState(on);
+    try {
+      localStorage.setItem('kss.groupSnapEach', on ? '1' : '0');
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
   useEffect(() => setMultiSelected([]), [pouFileName]);
   useEffect(() => {
     if (!multiSelected.length) return;
@@ -2542,6 +2634,46 @@ export const App: React.FC = () => {
     handleRenameState(name);
   }, [pendingRename, knownStates, handleJumpToState, handleRenameState]);
 
+  // A state that goes (Ctrl+Z of a paste, a delete, code that no longer has it): its style and place on the canvas set
+  // aside; back again (Ctrl+Y, Ctrl+Z of the delete): given back. Another file: nothing kept
+  const stashRef = useRef<{ file: string; styles: CustomNodeStylesMap; offsets: NodeOffsetsMap }>({ file: '', styles: {}, offsets: {} });
+  const prevStatesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const file = `${pouPath ?? ''}|${pouFileName}`;
+    const stash = stashRef.current;
+    const prev = prevStatesRef.current;
+    prevStatesRef.current = knownStates;
+    if (stash.file !== file) {
+      stashRef.current = { file, styles: {}, offsets: {} };
+      return;
+    }
+    // (no states at all: the code being loaded or broken for a moment, not states that went)
+    if (!knownStates.size || !prev.size) return;
+    const gone = [...prev].filter((s) => !knownStates.has(s));
+    const back = [...knownStates].filter((s) => !prev.has(s) && (s in stash.styles || s in stash.offsets));
+    if (!gone.length && !back.length) return;
+    // (what comes back taken from the stash first: an updater may run twice, and must give the same result)
+    const styles = Object.fromEntries(back.filter((s) => stash.styles[s]).map((s) => [s, stash.styles[s]]));
+    const offsets = Object.fromEntries(back.filter((s) => stash.offsets[s]).map((s) => [s, stash.offsets[s]]));
+    for (const s of back) {
+      delete stash.styles[s];
+      delete stash.offsets[s];
+    }
+    setCustomNodeStyles((m) => {
+      const next = { ...m };
+      for (const s of gone) if (next[s]) { stash.styles[s] = next[s]; delete next[s]; }
+      for (const [s, v] of Object.entries(styles)) if (!next[s]) next[s] = v;
+      return next;
+    });
+    setNodeOffsets((m) => {
+      const next = { ...m };
+      for (const s of gone) if (next[s]) { stash.offsets[s] = next[s]; delete next[s]; }
+      for (const [s, v] of Object.entries(offsets)) if (!next[s]) next[s] = v;
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [knownStates]);
+
   const dropStateKeys = useCallback((id: string) => {
     const drop = <T,>(m: Record<string, T> | undefined) => {
       if (!m || !(id in m)) return m;
@@ -2549,8 +2681,15 @@ export const App: React.FC = () => {
       delete next[id];
       return next;
     };
-    setCustomNodeStyles((m) => drop(m) ?? m);
-    setNodeOffsets((m) => drop(m) ?? m);
+    // (its style and place set aside: Ctrl+Z of the delete gives them back)
+    setCustomNodeStyles((m) => {
+      if (m[id]) stashRef.current.styles[id] = m[id];
+      return drop(m) ?? m;
+    });
+    setNodeOffsets((m) => {
+      if (m[id]) stashRef.current.offsets[id] = m[id];
+      return drop(m) ?? m;
+    });
     setCanvasPositions((m) => drop(m) ?? m);
     setDiagramNotes((n) => ({ ...n, nodes: drop(n.nodes) ?? n.nodes, positions: drop(n.positions), styles: drop(n.styles) }));
   }, []);
@@ -3558,7 +3697,7 @@ export const App: React.FC = () => {
             `In ${method}(), lines ${start}–${end} become:`,
             ...p.call.split('\n').map((l) => `  ${l.trim()}`),
             ...(p.returns ? [`(the lines RETURN: ${n}() returns TRUE when they did, and ${method}() RETURNs after it)`] : []),
-            `${n}() takes: ${p.inputs.length ? `VAR_INPUT ${p.inputs.map((x) => `${x.name} : ${x.type}`).join(', ')}` : 'no inputs'}${p.inOuts.length ? `; VAR_IN_OUT ${p.inOuts.map((x) => `${x.name} : ${x.type}`).join(', ')} (written by the lines)` : ''}`,
+            `${n}() takes: ${p.inputs.length ? `VAR_INPUT ${p.inputs.map((x) => `${x.name} : ${x.type}`).join(', ')}` : 'no inputs'}${p.outputs.length ? `; VAR_OUTPUT ${p.outputs.map((x) => `${x.name} : ${x.type}`).join(', ')} (set by the lines, given back)` : ''}${p.inOuts.length ? `; VAR_IN_OUT ${p.inOuts.map((x) => `${x.name} : ${x.type}`).join(', ')} (read and written by the lines)` : ''}`,
             `Its body (${p.body.filter((l) => l.trim()).length} lines):`,
             ...p.body.slice(0, 12).map((l) => `  ${l}`),
             ...(p.body.length > 12 ? [`  … ${p.body.length - 12} more`] : []),
@@ -3569,6 +3708,32 @@ export const App: React.FC = () => {
           if ('error' in r) return showCopyToast(r.error, 'error', 6000);
           handleReplaceSources(r.pou, null);
           showCopyToast(`Extracted ${end - start + 1} line${end === start ? '' : 's'} of ${method}() into ${n}()`, 'success', 6000);
+        },
+      });
+    },
+    [pouContent, handleReplaceSources, showCopyToast]
+  );
+  // Extract Action: the lines (only the POU's members) into a new Action, its call in their place
+  const handleExtractAction = useCallback(
+    (method: string, start: number, end: number) => {
+      if (!pouContent) return;
+      const first = checkExtractAction(pouContent, method, start, end, 'NewAction_');
+      if (first && !/already a method/.test(first)) return showCopyToast(first, 'error', 7000);
+      const m = getMethodCodeFromPou(pouContent, method);
+      const sel = (m.code ?? '').split(/\r?\n/).slice(start - 1, end).filter((l) => l.trim());
+      setPromptRequest({
+        title: `Extract Action from ${method}() (lines ${start}–${end})`,
+        label: 'The new Action\'s name (the lines go into it, a call takes their place):',
+        initial: 'NewAction',
+        monospace: true,
+        submitLabel: 'Extract',
+        validate: (n) => checkExtractAction(pouContent, method, start, end, n),
+        preview: (n) => [`In ${method}(), lines ${start}–${end} become:`, `  ${n}();`, `The Action ${n} (${sel.length} lines):`, ...sel.slice(0, 12).map((l) => `  ${l.trim()}`), ...(sel.length > 12 ? [`  … ${sel.length - 12} more`] : [])],
+        onSubmit: (n) => {
+          const r = extractAction(pouContent, method, start, end, n);
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          handleReplaceSources(r.pou, null);
+          showCopyToast(`Extracted ${end - start + 1} line${end === start ? '' : 's'} of ${method}() into the Action ${n}`, 'success', 6000);
         },
       });
     },
@@ -3637,6 +3802,7 @@ export const App: React.FC = () => {
       renameMethod: handleRenameMethod,
       extractMethod: handleExtractMethod,
       extractProperty: handleExtractProperty,
+      extractAction: handleExtractAction,
       declare: handleDeclareInPou,
       findReferences: handleFindReferences,
       problems: () => lintFindingsRef.current,
@@ -3647,7 +3813,7 @@ export const App: React.FC = () => {
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -3722,6 +3888,7 @@ export const App: React.FC = () => {
           items.push({ id: 'multi-distribute-h-btn', label: 'Distribute horizontally', icon: <AlignHorizontalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-h') });
           items.push({ id: 'multi-distribute-v-btn', label: 'Distribute vertically', icon: <AlignVerticalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-v') });
         }
+        items.push({ id: 'multi-snap-each-btn', label: `${groupSnapEach ? '✓ ' : ''}Snap each to the grid when moved`, icon: <Grid3x3 className="w-3.5 h-3.5" />, title: 'With snapping on: each of the selected states on the grid when they are moved together (else they keep their places to the one dragged)', onSelect: () => setGroupSnapEach(!groupSnapEach) });
         if (pouContent) items.push({ id: 'multi-copy-btn', label: `Copy the ${n} states`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+C; then Ctrl+V pastes copies of them, the transitions between them going to the copies', onSelect: () => handleCopyState(many) });
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
       }
@@ -3882,7 +4049,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
+    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
   );
   // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
   const symbolCommands = (): PaletteCommand[] => {
@@ -3891,6 +4058,8 @@ export const App: React.FC = () => {
     const kindName: Record<string, string> = { FUNCTION_BLOCK: 'FB', PROGRAM: 'Program', FUNCTION: 'Function', INTERFACE: 'Interface', STRUCT: 'Struct', UNION: 'Union', ENUM: 'Enum', ALIAS: 'Alias', GVL: 'GVL' };
     for (const st of identifiedStatesResult.states) cmds.push({ id: `sym-state:${st.id}`, group: 'State', label: st.id, hint: st.label && st.label !== st.id ? st.label : undefined, run: () => handleJumpToState(st.id) });
     for (const m of pouContent ? getAllMethodsFromPou(pouContent) : []) cmds.push({ id: `sym-method:${m}`, group: 'Method', label: `${m}()`, run: () => handleOpenInspectorPanel('method', { method: `${m}()` }) });
+    // (a property: its Get / Set, opened in the Method Editor)
+    for (const p of pouContent ? getPropertyAccessorsFromPou(pouContent) : []) cmds.push({ id: `sym-property:${p.name}`, group: 'Property', label: p.name, hint: p.type || undefined, run: () => handleOpenInspectorPanel('method', { method: `${p.name}()` }) });
     for (const v of pouContent ? declarationVariables(extractPouDeclaration(pouContent)) : [])
       cmds.push({ id: `sym-member:${v.name}`, group: 'Member', label: v.name, hint: `${v.type} · ${v.scope}`, run: () => { setDockLayout((l) => activateDockTab(l, 'pou')); setPouReveal({ symbol: v.name, nonce: Date.now() }); } });
     for (const tp of getProjectSymbols()?.types.values() ?? []) {
@@ -4093,6 +4262,63 @@ export const App: React.FC = () => {
         });
         return;
       }
+      if (fix.kind === 'add-pt') {
+        const m = getMethodCodeFromPou(pouContent, fix.method);
+        const lines = m.code.split(/\r?\n/);
+        const i = fix.line - 1;
+        const rx = new RegExp(`(\\b${fix.name}\\s*\\()(\\s*\\))?`, 'i');
+        if (!rx.test(lines[i] ?? '')) return showCopyToast(`${fix.name}'s call was not found where it was: check the Problems again`, 'error');
+        const changed = (lines[i] ?? '').replace(rx, (_all, open: string, empty?: string) => (empty ? `${open}PT := T#1S)` : `${open}PT := T#1S, `));
+        setPromptRequest({
+          title: `Give ${fix.name} its time?`,
+          label: `In ${fix.method}(), line ${fix.line}: PT := T#1S (change it to the time it should run):`,
+          details: [changed.trim()],
+          confirmOnly: true,
+          submitLabel: 'Add PT',
+          onSubmit: () => {
+            const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+            lines[i] = changed;
+            const res = handleSaveMethodCode(fix.method, lines.join(eol));
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`${fix.name} is given PT := T#1S in ${fix.method}()`, 'success');
+            setCodeJump({ method: fix.method, line: fix.line, nonce: Date.now() });
+          },
+        });
+        return;
+      }
+      if (fix.kind === 'add-description') {
+        const m = getMethodCodeFromPou(pouContent, 'getStateDescription');
+        if (!m.methodFound) return showCopyToast('The POU has no getStateDescription()', 'error');
+        const lines = m.code.split(/\r?\n/);
+        // (like the other lines: their indentation and qualifier; the text from the state's name)
+        const sample = lines.find((l) => /^\s*[A-Za-z_][\w.]*\s*:(?!=)\s*getStateDescription\s*:=/i.test(l)) ?? lines.find((l) => /^\s*[A-Za-z_][\w.]*\s*:(?!=)/.test(l)) ?? '\t';
+        const indent = sample.match(/^[ \t]*/)![0];
+        const qualifier = sample.trim().match(/^([A-Za-z_]\w*\.)/)?.[1] ?? '';
+        const names = [...knownStates];
+        let prefix = names.length > 1 ? names.reduce((p, n) => { let k = 0; while (k < p.length && p[k] === n[k]) k++; return p.slice(0, k); }) : '';
+        prefix = prefix.slice(0, prefix.lastIndexOf('_') + 1);
+        const text = fix.name.slice(prefix.length).split('_').filter(Boolean).map((w) => w[0] + w.slice(1).toLowerCase()).join(' ') || fix.name;
+        const added = `${indent}${qualifier}${fix.name}: getStateDescription := '${text}';`;
+        // Before the CASE's ELSE, else its END_CASE
+        let at = lines.findIndex((l) => /^\s*ELSE\b/i.test(l));
+        if (at < 0) at = lines.findIndex((l) => /^\s*END_CASE\b/i.test(l));
+        if (at < 0) return showCopyToast('getStateDescription() has no CASE to add it to', 'error');
+        setPromptRequest({
+          title: `Describe ${fix.name}?`,
+          label: 'In getStateDescription() (change the text as you like):',
+          details: [added.trim()],
+          confirmOnly: true,
+          submitLabel: 'Add description',
+          onSubmit: () => {
+            const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+            lines.splice(at, 0, added);
+            const res = handleSaveMethodCode('getStateDescription', lines.join(eol));
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`${fix.name}: described as '${text}'`, 'success');
+          },
+        });
+        return;
+      }
       if (fix.kind === 'delete-state') {
         handleDeleteState(fix.name);
         return;
@@ -4185,7 +4411,7 @@ export const App: React.FC = () => {
         showCopyToast(`Added a CASE branch for ${fix.name} to doState()`, 'success');
       }
     },
-    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast, handleReplaceSources, handleDeleteState]
+    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast, handleReplaceSources, handleDeleteState, knownStates]
   );
 
   // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
@@ -4587,7 +4813,7 @@ export const App: React.FC = () => {
         window.open(url.toString(), '_blank', 'noopener');
       };
       // Pick the .TcPOU (web edition, or no PLC project to find it in)
-      const pick = () => {
+      const choose = () => {
         showCopyToast(`Choose ${typeName}.TcPOU to watch ${node.path}`, 'success', 5000);
         browseForPou()
           .then((src) => {
@@ -4600,6 +4826,25 @@ export const App: React.FC = () => {
           })
           .catch((e: unknown) => showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error'));
       };
+      // No source at hand: its .TcPOU chosen, or its diagram learned live (the PLC's states, the transitions it takes)
+      const pick = () => {
+        const enumType = node.stateType?.trim().split('.').pop() ?? '';
+        const learned = node.stateNames && enumType ? learnedSources({ typeName, stateVar: liveStateVar, enumType, names: node.stateNames, seen: loadSeen(typeName) }) : null;
+        if (!learned) return choose();
+        setPromptRequest({
+          title: `Open ${node.path} (${typeName})`,
+          label: `${typeName}'s source is not at hand. Choose its .TcPOU, or learn its diagram live: its ${Object.keys(node.stateNames ?? {}).length} states from the PLC, and each transition the PLC takes added as it happens (their conditions are not known). Nothing is written to a project.`,
+          confirmOnly: true,
+          submitLabel: `Choose ${typeName}.TcPOU…`,
+          onSubmit: choose,
+          altAction: {
+            id: 'text-prompt-learn-btn',
+            label: 'Learn it live',
+            title: 'A diagram of its states, its transitions added as the PLC takes them (live on this instance)',
+            run: () => handOver({ name: `${typeName}.TcPOU`, content: learned.pou, dutCandidates: [{ name: `${enumType}.TcDUT`, relativePath: `${enumType}.TcDUT`, content: learned.dut }] }),
+          },
+        });
+      };
       if (d?.openPouInProject && pouPath) {
         void d.openPouInProject(pouPath, typeName).then((src) => {
           if ('error' in src) pick();
@@ -4609,7 +4854,7 @@ export const App: React.FC = () => {
       }
       pick();
     },
-    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings]
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar]
   );
   // Stop following the window's values when it closes or the connection ends
   useEffect(() => {
@@ -6244,6 +6489,19 @@ export const App: React.FC = () => {
                 />
                 <span className="text-slate-300">Choices</span>
               </label>
+              {choiceNodes && (
+                <select
+                  id="choice-size-select"
+                  value={choiceSize}
+                  onChange={(e) => setChoiceSize(e.target.value as 'small' | 'medium' | 'large')}
+                  title="How big the choice diamonds are drawn"
+                  className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300"
+                >
+                  <option value="small">small</option>
+                  <option value="medium">medium</option>
+                  <option value="large">large</option>
+                </select>
+              )}
 
               {/* Include state description */}
               <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -6511,6 +6769,8 @@ export const App: React.FC = () => {
                   bookmarkedStates={bookmarks.states}
                   stateTooltips={stateTooltips}
                   stateProblems={stateProblems}
+                  groupSnapEach={groupSnapEach}
+                  canvasBanner={learnedPou ? `Learned live: no source. ${availableEdges.length} transition${availableEdges.length === 1 ? '' : 's'} seen so far; each one the PLC takes is added (their conditions are not known)` : undefined}
                   multiSelection={multiSelected}
                   onMultiSelectionChange={setMultiSelected}
                   liveHighlight={liveHighlight ?? simHighlight}

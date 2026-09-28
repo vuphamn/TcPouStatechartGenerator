@@ -42,6 +42,8 @@ const FIX_LABEL: Record<NonNullable<LintFinding['fix']>['kind'], string> = {
   'remove-method': 'Remove method',
   'delete-state': 'Delete state…',
   'remove-enum-member': 'Remove from enum',
+  'add-pt': 'Add PT',
+  'add-description': 'Add description',
 };
 
 export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({

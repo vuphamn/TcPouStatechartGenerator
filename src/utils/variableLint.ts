@@ -159,6 +159,29 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
     if (used && !called) add({ key: `fb-not-called:${v.name.toLowerCase()}`, rule: 'fb-not-called', message: `${v.name} : ${v.type} is read but never called (${v.name}(...)): its outputs never change`, mark: v.line ? { line: v.line, declaration: true, name: v.name } : undefined, fix: { kind: 'insert-call', name: v.name, type: baseTypeName(v.type).toUpperCase() } });
   }
 
+  // A timer called without its time (no PT in any call, none assigned): it runs out at once
+  for (const v of pouVars) {
+    if (!['TON', 'TOF', 'TP'].includes(baseTypeName(v.type).toUpperCase())) continue;
+    const calls = new RegExp(`\\b${v.name}\\s*\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)`, 'gi');
+    let anyCall = false;
+    let hasPt = new RegExp(`\\b${v.name}\\s*\\.\\s*PT\\s*:=`, 'i').test(bodyCode);
+    for (const m of bodyCode.matchAll(calls)) {
+      anyCall = true;
+      const args = m[1].split(',');
+      // (by name, or the second of positional arguments)
+      if (args.some((a) => /^\s*PT\s*:=/i.test(a)) || (args.length >= 2 && !args.some((a) => /:=|=>/.test(a)))) hasPt = true;
+    }
+    if (!anyCall || hasPt) continue;
+    // (the fix: in the first call, in a method)
+    let at: { method: string; line: number } | null = null;
+    for (const u of units) {
+      if (!u.method || at) continue;
+      const i = u.code.findIndex((l) => new RegExp(`\\b${v.name}\\s*\\(`, 'i').test(masked(l)));
+      if (i >= 0) at = { method: u.method, line: i + 1 };
+    }
+    add({ key: `timer-no-pt:${v.name.toLowerCase()}`, rule: 'timer-no-pt', method: at?.method, line: at?.line, message: `${v.name} : ${v.type} is called without PT (its time): it runs out at once`, mark: v.line ? { line: v.line, declaration: true, name: v.name } : undefined, fix: at ? { kind: 'add-pt', name: v.name, method: at.method, line: at.line } : undefined });
+  }
+
   // Not declared (the project known, the base class too)
   if (fromProject && project) {
     for (const u of units) {

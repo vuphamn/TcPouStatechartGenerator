@@ -1187,3 +1187,12 @@ g.node.multi-selected > .label-container {
   width: 10px;
   height: 10px;
 }
+/* (the Choices size: small, large) */
+.kss-choice-pad.kss-choice-small {
+  width: 2px;
+  height: 2px;
+}
+.kss-choice-pad.kss-choice-large {
+  width: 22px;
+  height: 22px;
+}

@@ -2,7 +2,7 @@
 
 ```
 test.cmd                 # Windows: all four suites (test.cmd unit web, test.cmd web --filter pou, …)
-npm test                 # unit + web + live (what CI runs; CI runs desktop too, in its own job)
+npm test                 # unit + web + live (what CI runs; CI runs desktop too, in its own job, and lists the failed checks on the run's page: scripts/test-summary.cjs)
 npm run test:unit        # one suite: unit | web | live | desktop
 npm run test:all         # all four
 node tests/run.cjs web --filter pou     # only the tests whose file name contains "pou"

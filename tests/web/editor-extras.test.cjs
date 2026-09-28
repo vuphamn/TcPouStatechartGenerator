@@ -264,6 +264,37 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await h.sleep(600);
   const [ti, tr] = [await shapeEdge('S_IDLE'), await shapeEdge('S_RUN')];
   expect(hasArrange && Math.abs(ti - tr) < 2, `Align ${sideBySide ? 'top' : 'left'} edges: S_IDLE ${ti.toFixed(1)}, S_RUN ${tr.toFixed(1)}`);
+  // Snap each to the grid (the selection's menu), snapping on (20): each of them on the grid when moved; then undone
+  const gridOff = () => p.evaluate(() => ['S_IDLE', 'S_RUN'].map((id) => {
+    const n = document.querySelector(`#mermaid-diagram-svg-container g.node[data-state-id="${id}"]`);
+    const tr = (s) => { const m = /translate\(\s*([-\d.]+)[ ,]+([-\d.]+)/.exec(s || ''); return m ? [+m[1], +m[2]] : [0, 0]; };
+    const [nx, ny] = tr(n.getAttribute('transform')); const [ox, oy] = tr(n.getAttribute('data-orig-transform'));
+    const cx = +n.getAttribute('data-orig-cx') + nx - ox; const cy = +n.getAttribute('data-orig-cy') + ny - oy;
+    const off = (v) => Math.min(((v % 20) + 20) % 20, 20 - (((v % 20) + 20) % 20));
+    return [id, off(cx), off(cy)];
+  }));
+  const a2 = await nodeAt('S_RUN');
+  const snapEach = async () => {
+    await p.mouse.click(a2.x, a2.y, { button: 'right' });
+    await h.sleep(400);
+    const label = await p.$eval('#context-menu-multi-snap-each-btn', (e) => e.textContent.trim()).catch(() => '');
+    await p.click('#context-menu-multi-snap-each-btn').catch(() => {});
+    await h.sleep(300);
+    return label;
+  };
+  const snapLabel = await snapEach();
+  await p.mouse.move(a2.x, a2.y);
+  await p.mouse.down();
+  await p.mouse.move(a2.x - 23, a2.y - 17, { steps: 6 });
+  await p.mouse.up();
+  await h.sleep(500);
+  const runOff = (await gridOff()).find((g) => g[0] === 'S_IDLE');
+  expect(snapLabel === 'Snap each to the grid when moved' && runOff[1] < 1 && runOff[2] < 1, `${snapLabel}: S_IDLE (not dragged) on the grid too after the drag (${runOff[1].toFixed(1)}, ${runOff[2].toFixed(1)} off it)`);
+  await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+  await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control');
+  await h.sleep(500);
+  const offLabel = await snapEach();
+  expect(offLabel === '✓ Snap each to the grid when moved' && (await p.evaluate(() => localStorage.getItem('kss.groupSnapEach'))) === '0', `the switch shown on, then off again (${offLabel})`);
   // Drag one: the other moves with it
   const a0 = await nodeAt('S_IDLE');
   const b0 = await nodeAt('S_RUN');

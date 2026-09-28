@@ -193,6 +193,10 @@ export interface MermaidViewerProps {
   stateTooltips?: Record<string, string>;
   /** The Problems tab's findings in a state's code (their messages, the names they flag), by state */
   stateProblems?: Record<string, { messages: string[]; names: string[] }>;
+  /** A line on top of the canvas about the chart (a diagram learned live) */
+  canvasBanner?: string;
+  /** Several states moved together, snapping on: each of them on the grid (else they keep their places to the one dragged) */
+  groupSnapEach?: boolean;
   /** Several states selected (Ctrl+click, Shift+drag a box): marked; the app's menu acts on all of them */
   multiSelection?: string[];
   onMultiSelectionChange?: (ids: string[]) => void;
@@ -1550,6 +1554,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     bookmarkedStates,
     stateTooltips,
     stateProblems,
+    canvasBanner,
+    groupSnapEach,
     multiSelection,
     onMultiSelectionChange,
     liveHighlight,
@@ -1604,6 +1610,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onOpenInspectorPanel,
   } = props;
   const containerRef = useRef<HTMLDivElement>(null);
+  // The window the canvas is in (the main one, or a window of its own: Move to New Window): its frames and its mouse
+  const hostWin = (): Window => containerRef.current?.ownerDocument?.defaultView ?? window;
+  const ownerWin = containerRef.current?.ownerDocument?.defaultView ?? window;
   const searchInputRef = useRef<HTMLInputElement>(null);
   const codeMenuRef = useRef<HTMLDivElement>(null);
   const codeButtonRef = useRef<HTMLButtonElement>(null);
@@ -1968,7 +1977,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const applyEdgeDragFrameRef = useRef<(() => void) | null>(null);
   const flushLabelDrag = () => {
     if (labelDragFrameRef.current !== null) {
-      cancelAnimationFrame(labelDragFrameRef.current);
+      hostWin().cancelAnimationFrame(labelDragFrameRef.current);
       labelDragFrameRef.current = null;
     }
     const dragged = draggedLabelRef.current;
@@ -2206,7 +2215,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   useEffect(() => {
     return () => {
       if (activePanAnimationRef.current) {
-        cancelAnimationFrame(activePanAnimationRef.current);
+        hostWin().cancelAnimationFrame(activePanAnimationRef.current);
         activePanAnimationRef.current = null;
       }
     };
@@ -2371,7 +2380,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
       // Stop any existing animation
       if (activePanAnimationRef.current) {
-        cancelAnimationFrame(activePanAnimationRef.current);
+        hostWin().cancelAnimationFrame(activePanAnimationRef.current);
         activePanAnimationRef.current = null;
       }
 
@@ -2445,7 +2454,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
 
         if (progress < 1) {
-          activePanAnimationRef.current = requestAnimationFrame(animateStep);
+          activePanAnimationRef.current = hostWin().requestAnimationFrame(animateStep);
         } else {
           activePanAnimationRef.current = null;
           setPan({ x: targetX, y: targetY });
@@ -2457,7 +2466,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
       };
 
-      activePanAnimationRef.current = requestAnimationFrame(animateStep);
+      activePanAnimationRef.current = hostWin().requestAnimationFrame(animateStep);
     },
     []
   );
@@ -3279,9 +3288,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const r = node?.getBoundingClientRect();
       if (r) setConnectLine({ x1: r.x + r.width / 2, y1: r.y + r.height / 2, x2: e.clientX, y2: e.clientY });
     };
-    window.addEventListener('mousemove', onMove);
+    const w = hostWin();
+    w.addEventListener('mousemove', onMove);
     return () => {
-      window.removeEventListener('mousemove', onMove);
+      w.removeEventListener('mousemove', onMove);
       svg?.classList.remove('diagram-connect-mode');
     };
   }, [connectFrom, renderedSvg]);
@@ -3596,7 +3606,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     // Cancel any previous pending jump attempts
     if (jumpAttemptTimerRef.current) {
-      cancelAnimationFrame(jumpAttemptTimerRef.current);
+      hostWin().cancelAnimationFrame(jumpAttemptTimerRef.current);
       jumpAttemptTimerRef.current = null;
     }
 
@@ -3606,14 +3616,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const attempt = () => {
       if (!containerRef.current) {
         if (performance.now() - startTime < maxWaitMs) {
-          jumpAttemptTimerRef.current = requestAnimationFrame(attempt);
+          jumpAttemptTimerRef.current = hostWin().requestAnimationFrame(attempt);
         }
         return;
       }
       const svg = getDiagramSvg();
       if (!svg) {
         if (performance.now() - startTime < maxWaitMs) {
-          jumpAttemptTimerRef.current = requestAnimationFrame(attempt);
+          jumpAttemptTimerRef.current = hostWin().requestAnimationFrame(attempt);
         }
         return;
       }
@@ -3623,7 +3633,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
       if (!nodeEl) {
         if (performance.now() - startTime < maxWaitMs) {
-          jumpAttemptTimerRef.current = requestAnimationFrame(attempt);
+          jumpAttemptTimerRef.current = hostWin().requestAnimationFrame(attempt);
         }
         return;
       }
@@ -3632,7 +3642,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const rect = nodeEl.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) {
         if (performance.now() - startTime < maxWaitMs) {
-          jumpAttemptTimerRef.current = requestAnimationFrame(attempt);
+          jumpAttemptTimerRef.current = hostWin().requestAnimationFrame(attempt);
         }
         return;
       }
@@ -3717,7 +3727,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   useEffect(() => {
     return () => {
-      if (jumpAttemptTimerRef.current) cancelAnimationFrame(jumpAttemptTimerRef.current);
+      if (jumpAttemptTimerRef.current) hostWin().cancelAnimationFrame(jumpAttemptTimerRef.current);
       if (jumpHighlightTimerRef.current) clearTimeout(jumpHighlightTimerRef.current);
       if (jumpTransitionTimerRef.current) clearTimeout(jumpTransitionTimerRef.current);
     };
@@ -3798,6 +3808,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // The other selected states' offsets when one of them is dragged (they move with it)
   const groupInitialRef = useRef<Record<string, { x: number; y: number }> | null>(null);
+  // (Snap each to the grid, the selection's menu: each of them snapped when moved, not only the one dragged)
+  const groupSnapEachRef = useRef(false);
+  groupSnapEachRef.current = !!groupSnapEach;
   // Several states lined up / spread evenly: their offsets changed, the diagram re-drawn, the positions kept
   const arrangeRef = useRef<(ids: string[], mode: string) => void>(() => {});
   arrangeRef.current = (ids, mode) => {
@@ -3900,8 +3913,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setSelectBand({ x0, y0, x1: x0, y1: y0 });
       const move = (ev: MouseEvent) => setSelectBand({ x0, y0, x1: ev.clientX, y1: ev.clientY });
       const up = (ev: MouseEvent) => {
-        window.removeEventListener('mousemove', move);
-        window.removeEventListener('mouseup', up, true);
+        hostWin().removeEventListener('mousemove', move);
+        hostWin().removeEventListener('mouseup', up, true);
         setSelectBand(null);
         const l = Math.min(x0, ev.clientX);
         const r = Math.max(x0, ev.clientX);
@@ -3918,8 +3931,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           .filter((x) => x && x !== '[*]');
         onMultiSelectionChange([...new Set(ids)]);
       };
-      window.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', up, true);
+      hostWin().addEventListener('mousemove', move);
+      hostWin().addEventListener('mouseup', up, true);
       return true;
     }
     // A plain click elsewhere ends the selection
@@ -3952,7 +3965,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     // Cancel any active smooth scroll animation immediately on mouse interaction
     if (activePanAnimationRef.current) {
-      cancelAnimationFrame(activePanAnimationRef.current);
+      hostWin().cancelAnimationFrame(activePanAnimationRef.current);
       activePanAnimationRef.current = null;
       setPan({ x: Math.round(currentPanRef.current.x), y: Math.round(currentPanRef.current.y) });
     }
@@ -4403,8 +4416,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           // The edge itself does not change: move just the label element, at most once per frame
           const tx = draggedLabel.x + (nextOffset.labelDx || 0) - (initial.labelDx || 0);
           const ty = draggedLabel.y + (nextOffset.labelDy || 0) - (initial.labelDy || 0);
-          if (labelDragFrameRef.current !== null) cancelAnimationFrame(labelDragFrameRef.current);
-          labelDragFrameRef.current = requestAnimationFrame(() => {
+          if (labelDragFrameRef.current !== null) hostWin().cancelAnimationFrame(labelDragFrameRef.current);
+          labelDragFrameRef.current = hostWin().requestAnimationFrame(() => {
             labelDragFrameRef.current = null;
             draggedLabel.el.setAttribute('transform', `translate(${tx}, ${ty})`);
           });
@@ -4427,7 +4440,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             );
           };
           if (edgeDragFrameRef.current === null) {
-            edgeDragFrameRef.current = requestAnimationFrame(() => {
+            edgeDragFrameRef.current = hostWin().requestAnimationFrame(() => {
               edgeDragFrameRef.current = null;
               applyEdgeDragFrameRef.current?.();
             });
@@ -4443,7 +4456,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       pendingNodeDragPointRef.current = { x: e.clientX, y: e.clientY };
       applyNodeDragFrameRef.current = () => applyNodeDragAt(pendingNodeDragPointRef.current);
       if (nodeDragFrameRef.current === null) {
-        nodeDragFrameRef.current = requestAnimationFrame(() => {
+        nodeDragFrameRef.current = hostWin().requestAnimationFrame(() => {
           nodeDragFrameRef.current = null;
           applyNodeDragFrameRef.current?.();
         });
@@ -4516,7 +4529,17 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         if (group) {
           const dx = newOffset.x - nodeInitialOffsetRef.current.x;
           const dy = newOffset.y - nodeInitialOffsetRef.current.y;
-          for (const [id, o] of Object.entries(group)) currentNodeOffsetsRef.current[id] = { x: o.x + dx, y: o.y + dy };
+          // (snapping on and Snap each to the grid: each of them on the grid too, not only the one dragged; else they keep their places to it)
+          const g = snapConfig.enabled && snapConfig.gridSize > 0 && groupSnapEachRef.current ? snapConfig.gridSize : 0;
+          const groupSvg = g ? getDiagramSvg() : null;
+          for (const [id, o] of Object.entries(group)) {
+            let next = { x: o.x + dx, y: o.y + dy };
+            const el = groupSvg?.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`);
+            const ocx = parseFloat(el?.getAttribute('data-orig-cx') ?? 'NaN');
+            const ocy = parseFloat(el?.getAttribute('data-orig-cy') ?? 'NaN');
+            if (g && Number.isFinite(ocx) && Number.isFinite(ocy)) next = { x: Math.round((ocx + next.x) / g) * g - ocx, y: Math.round((ocy + next.y) / g) * g - ocy };
+            currentNodeOffsetsRef.current[id] = next;
+          }
         }
 
         if (containerRef.current) {
@@ -4672,14 +4695,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (multiGestureRef.current) return;
     // Apply the latest pending node-drag position before finishing the drag
     if (nodeDragFrameRef.current !== null) {
-      cancelAnimationFrame(nodeDragFrameRef.current);
+      hostWin().cancelAnimationFrame(nodeDragFrameRef.current);
       nodeDragFrameRef.current = null;
       applyNodeDragFrameRef.current?.();
     }
     flushLabelDrag();
     // The edge drag's last frame, if it has not run yet
     if (edgeDragFrameRef.current !== null) {
-      cancelAnimationFrame(edgeDragFrameRef.current);
+      hostWin().cancelAnimationFrame(edgeDragFrameRef.current);
       edgeDragFrameRef.current = null;
       applyEdgeDragFrameRef.current?.();
     }
@@ -5148,11 +5171,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setIsDragging(false);
     };
 
-    window.addEventListener('mouseup', handleWindowMouseUp);
+    ownerWin.addEventListener('mouseup', handleWindowMouseUp);
     return () => {
-      window.removeEventListener('mouseup', handleWindowMouseUp);
+      ownerWin.removeEventListener('mouseup', handleWindowMouseUp);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerWin]);
 
   // Close Snap to Grid configuration menu on outside click
   useEffect(() => {
@@ -5163,9 +5187,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         setIsSnapMenuOpen(false);
       }
     };
-    window.addEventListener('mousedown', handleCloseSnapMenu);
-    return () => window.removeEventListener('mousedown', handleCloseSnapMenu);
-  }, [isSnapMenuOpen]);
+    ownerWin.addEventListener('mousedown', handleCloseSnapMenu);
+    return () => ownerWin.removeEventListener('mousedown', handleCloseSnapMenu);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSnapMenuOpen, ownerWin]);
 
   // Auto-dismiss Snap to Grid status toast
   useEffect(() => {
@@ -5198,7 +5223,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   const handleWheel = (e: React.WheelEvent) => {
     if (activePanAnimationRef.current) {
-      cancelAnimationFrame(activePanAnimationRef.current);
+      hostWin().cancelAnimationFrame(activePanAnimationRef.current);
       activePanAnimationRef.current = null;
       setPan({ x: Math.round(currentPanRef.current.x), y: Math.round(currentPanRef.current.y) });
     }
@@ -6492,6 +6517,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           className="fixed z-40 pointer-events-none border border-sky-400 bg-sky-400/10 rounded-sm"
           style={{ left: Math.min(selectBand.x0, selectBand.x1), top: Math.min(selectBand.y0, selectBand.y1), width: Math.abs(selectBand.x1 - selectBand.x0), height: Math.abs(selectBand.y1 - selectBand.y0) }}
         />
+      )}
+      {canvasBanner && (
+        <div id="canvas-learned-banner" className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[80%] px-3 py-1 rounded-full bg-amber-950/90 border border-amber-600/80 text-[11px] text-amber-100 shadow-lg truncate" style={{ top: canvasTop + 8 + ((multiSelection?.length ?? 0) > 1 ? 30 : 0) }} title={canvasBanner}>
+          {canvasBanner}
+        </div>
       )}
       {(multiSelection?.length ?? 0) > 1 && (
         <div id="canvas-multi-selection" className="absolute left-1/2 -translate-x-1/2 z-30 px-3 py-1 rounded-full bg-sky-900/90 border border-sky-600 text-[11px] text-sky-100 shadow-lg" style={{ top: canvasTop + 8 }}>

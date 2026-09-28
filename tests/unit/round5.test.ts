@@ -3,7 +3,7 @@
 // state's code, Extract Method with a RETURN, Extract Property (and its type guessed), the new fixes attached
 import { copyName, copyStates } from '../../src/utils/stateCopyDelete.ts';
 import { lineDiff } from '../../src/utils/lineDiff.ts';
-import { checkExtract, checkExtractProperty, extractMethod, extractProperty, guessExpressionType, planExtract } from '../../src/utils/extractMethod.ts';
+import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract } from '../../src/utils/extractMethod.ts';
 import { getMethodCodeFromPou } from '../../src/utils/pouStateEditor.ts';
 import { lintVariables } from '../../src/utils/variableLint.ts';
 import { lintStateMachine } from '../../src/utils/stateMachineLint.ts';
@@ -33,8 +33,10 @@ const DO_STATE = [
   'END_CASE',
 ].join('\n');
 const DECL = ['FUNCTION_BLOCK SM_X', 'VAR', '\tmachineState : E_S;', '\tbGo : BOOL;', '\tbBack : BOOL;', '\tbOut : BOOL;', '\tbStop : BOOL;', '\tnCount : INT;', '\tfSum : LREAL;', '\tfStep : LREAL;', 'END_VAR'].join('\n');
+const CALC_DECL = 'METHOD calc : BOOL\nVAR\n\tnTmp : INT;\n\tnAcc : INT;\n\tnIn : INT;\nEND_VAR';
+const CALC = ['nTmp := nIn * 2;', 'nAcc := nAcc + nTmp;', 'fSum := fSum + nTmp;', 'calc := nTmp > 0;'].join('\n');
 const method = (name: string, decl: string, code: string) => `    <Method Name="${name}" Id="{${name}}">\n      <Declaration>${cdata(decl)}</Declaration>\n      <Implementation>\n        <ST>${cdata(code)}</ST>\n      </Implementation>\n    </Method>`;
-const POU = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <POU Name="SM_X" Id="{1}" SpecialFunc="None">\n    <Declaration>${cdata(DECL)}</Declaration>\n    <Implementation>\n      <ST>${cdata('doState();')}</ST>\n    </Implementation>\n${method('doState', 'METHOD doState : BOOL', DO_STATE)}\n${method('unusedOne', 'METHOD PRIVATE unusedOne', 'nCount := 0;')}\n  </POU>\n</TcPlcObject>`;
+const POU = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <POU Name="SM_X" Id="{1}" SpecialFunc="None">\n    <Declaration>${cdata(DECL)}</Declaration>\n    <Implementation>\n      <ST>${cdata('doState();')}</ST>\n    </Implementation>\n${method('doState', 'METHOD doState : BOOL', DO_STATE)}\n${method('unusedOne', 'METHOD PRIVATE unusedOne', 'nCount := 0;')}\n${method('calc', CALC_DECL, CALC)}\n  </POU>\n</TcPlcObject>`;
 const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <DUT Name="E_S" Id="{2}">\n    <Declaration>${cdata("{attribute 'qualified_only'}\nTYPE E_S :\n(\n\tS_A := 0,\n\tS_B,\n\tS_C\n);\nEND_TYPE")}</Declaration>\n  </DUT>\n</TcPlcObject>`;
 const doState = (pou: string) => getMethodCodeFromPou(pou, 'doState').code ?? '';
 
@@ -104,6 +106,42 @@ const doState = (pou: string) => getMethodCodeFromPou(pou, 'doState').code ?? ''
   const unreachable = l2.find((f) => f.rule === 'unreachable' && f.stateId === 'S_D');
   const unusedEnum = l2.find((f) => f.rule === 'unused-enum' && f.stateId === 'S_E');
   expect(unreachable?.fix?.kind === 'delete-state' && unusedEnum?.fix?.kind === 'remove-enum-member', `S_D: ${unreachable?.fix?.kind}; S_E: ${unusedEnum?.fix?.kind}`);
+}
+
+// 6. Extract Method: a variable only set by the lines (its first use an assignment) comes back as VAR_OUTPUT
+{
+  const p = planExtract(POU, 'calc', 1, 3, 'Accumulate');
+  const names = (l: { name: string }[]) => l.map((x) => x.name).join();
+  expect(names(p.outputs) === 'nTmp' && names(p.inOuts) === 'nAcc' && names(p.inputs) === 'nIn', `outputs ${names(p.outputs)}, in-outs ${names(p.inOuts)}, inputs ${names(p.inputs)}`);
+  expect(/VAR_OUTPUT\n\tnTmp : INT;/.test(p.declaration) && p.call.trim() === 'Accumulate(nIn := nIn, nAcc := nAcc, nTmp => nTmp);', `the call: ${p.call.trim()}`);
+}
+
+// 7. Extract Action: lines that use only the POU's members; not the method's own variables, not a RETURN
+{
+  expect(checkExtractAction(POU, 'doState', 3, 5, 'GoOn') === null, 'S_A\'s IF block (the POU\'s members): can be an Action');
+  expect(/calc\(\)'s own nTmp/.test(checkExtractAction(POU, 'calc', 1, 3, 'X') ?? ''), 'lines with the method\'s own variables: refused (Extract Method takes them)');
+  expect(/RETURN/.test(checkExtractAction(POU, 'doState', 13, 16, 'X') ?? ''), 'lines with a RETURN: refused');
+  const r = extractAction(POU, 'doState', 3, 5, 'GoOn');
+  if ('error' in r) expect(false, r.error);
+  else {
+    expect(doState(r.pou).split('\n')[2] === '\t\tGoOn();', `the call in their place: ${JSON.stringify(doState(r.pou).split('\n')[2])}`);
+    expect(/<Action Name="GoOn" Id="\{[0-9a-f-]{36}\}">\s*<Implementation>\s*<ST><!\[CDATA\[IF bGo THEN\n\tmachineState := E_S\.S_B;\nEND_IF\]\]><\/ST>[\s\S]*<\/Action>\s*<\/POU>/.test(r.pou), 'the Action, before </POU>');
+  }
+}
+
+// 8. A timer called without PT; a state that getStateDescription() does not describe
+{
+  const decl = DECL.replace('END_VAR', '\tfbT : TON;\n\tfbOk : TON;\nEND_VAR');
+  const code = DO_STATE.replace('\tS_A:\n', '\tS_A:\n\t\tfbT(IN := bGo);\n\t\tfbOk(IN := bGo, PT := T#2S);\n');
+  const desc = ['CASE machineState OF', '\tE_S.S_A: getStateDescription := \'A\';', '\tE_S.S_B: getStateDescription := \'B\';', 'END_CASE'].join('\n');
+  const pou = POU.replace(cdata(DECL), cdata(decl)).replace(cdata(DO_STATE), cdata(code)).replace('  </POU>', `${method('getStateDescription', 'METHOD getStateDescription : STRING', desc)}\n  </POU>`);
+  const v = lintVariables(pou, null, false, ['S_A', 'S_B', 'S_C']);
+  const noPt = v.filter((x) => x.rule === 'timer-no-pt');
+  expect(noPt.length === 1 && /fbT : TON is called without PT/.test(noPt[0].message) && noPt[0].fix?.kind === 'add-pt' && noPt[0].fix.method === 'doState' && noPt[0].fix.line === 3, `timer without PT: ${noPt.map((x) => `${x.message} (${x.fix?.kind} ${x.fix && 'line' in x.fix ? x.fix.line : ''})`).join('; ')} (fbOk has its PT: not flagged)`);
+  const l = lintStateMachine(pou, DUT);
+  const nd = l.filter((x) => x.rule === 'no-description').map((x) => x.stateId);
+  expect(nd.join() === 'S_C' && l.find((x) => x.rule === 'no-description')?.fix?.kind === 'add-description', `no description: ${nd.join(', ')}`);
+  expect(!lintStateMachine(POU, DUT).some((x) => x.rule === 'no-description'), 'no getStateDescription(): not checked');
 }
 
 console.log(`${fails} failures`);

@@ -275,6 +275,11 @@ function isDiamondNode(el: Element | null): boolean {
  * line when it is well outside the diamond on that side; else a short step just outside the corner is added.
  * gap: how far outside the corner it stops.
  */
+type DiamondCorner = 'top' | 'bottom' | 'left' | 'right';
+/** The corners taken on each diamond in this drawing (reset when the diagram's offsets are applied again) */
+const diamondCorners = new Map<string, Set<DiamondCorner>>();
+export const resetDiamondCorners = () => diamondCorners.clear();
+
 function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: number): Point[] {
   if (route.length < 2) return route;
   // (the diamond's end last)
@@ -301,9 +306,19 @@ function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: numb
     vertical = false;
   }
   const STUB = 14;
+  // The corner: the one it heads for, else (taken by another transition of this diamond) the next one on its side
+  const want: DiamondCorner = vertical ? (F.y < box.cy ? 'top' : 'bottom') : F.x < box.cx ? 'left' : 'right';
+  const others: DiamondCorner[] = vertical
+    ? F.x < box.cx ? ['left', 'right'] : ['right', 'left']
+    : F.y < box.cy ? ['top', 'bottom'] : ['bottom', 'top'];
+  const key = `${Math.round(box.cx)},${Math.round(box.cy)}`;
+  const used = diamondCorners.get(key) ?? new Set<DiamondCorner>();
+  const corner = [want, ...others].find((c) => !used.has(c)) ?? want;
+  used.add(corner);
+  diamondCorners.set(key, used);
   let tail: Point[];
-  if (vertical) {
-    const side = F.y < box.cy ? -1 : 1;
+  if (corner === 'top' || corner === 'bottom') {
+    const side = corner === 'top' ? -1 : 1;
     const end = { x: box.cx, y: box.cy + side * (box.hh + gap) };
     if (side * (F.y - end.y) >= STUB) tail = [F, { x: box.cx, y: F.y }, end];
     else {
@@ -311,7 +326,7 @@ function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: numb
       tail = [F, { x: F.x, y: stubY }, { x: box.cx, y: stubY }, end];
     }
   } else {
-    const side = F.x < box.cx ? -1 : 1;
+    const side = corner === 'left' ? -1 : 1;
     const end = { x: box.cx + side * (box.hw + gap), y: box.cy };
     if (side * (F.x - end.x) >= STUB) tail = [F, { x: F.x, y: box.cy }, end];
     else {
@@ -1795,6 +1810,8 @@ export function applyDiagramOffsetsToSvg(
     onlyEdgeId?: string | null;
   } = {}
 ): void {
+  // (the diamonds' corners are handed out again: each transition's end on one of its own)
+  resetDiamondCorners();
   const onlyNodeId = options.onlyNodeId ?? null;
   const onlyEdgeId = options.onlyEdgeId ?? null;
   const onlyEdgeBase = onlyEdgeId ? onlyEdgeId.replace(/#\d+$/, '') : null;

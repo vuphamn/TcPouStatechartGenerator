@@ -34,7 +34,9 @@ export type LintRuleId =
   | 'input-written'
   | 'unused-method'
   | 'unreachable-code'
-  | 'fb-not-called';
+  | 'fb-not-called'
+  | 'timer-no-pt'
+  | 'no-description';
 
 export type LintFix =
   | { kind: 'add-enum-member'; name: string }
@@ -54,7 +56,11 @@ export type LintFix =
   /** A state no transition leads to: deleted (Delete state…: what goes is shown first) */
   | { kind: 'delete-state'; name: string }
   /** An enum member nothing uses: taken out of the enum */
-  | { kind: 'remove-enum-member'; name: string };
+  | { kind: 'remove-enum-member'; name: string }
+  /** A timer called without its time: PT put into its first call */
+  | { kind: 'add-pt'; name: string; method: string; line: number }
+  /** A state without its line in getStateDescription(): one put in */
+  | { kind: 'add-description'; name: string };
 
 export interface LintFinding {
   /** Stable across edits (no line numbers): used to ignore a finding */
@@ -171,6 +177,16 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'warning',
     title: 'Never runs',
     description: 'Code right after a RETURN in the same block: it is never reached.',
+  },
+  'timer-no-pt': {
+    severity: 'warning',
+    title: 'Timer without time',
+    description: 'A TON, TOF or TP that is called, but never given its time (PT): its time is T#0S, so it runs out at once.',
+  },
+  'no-description': {
+    severity: 'info',
+    title: 'State without description',
+    description: 'A state of doState() that getStateDescription() has no line for: its description (on the diagram, in reports) is empty.',
   },
   'fb-not-called': {
     severity: 'warning',
@@ -559,6 +575,17 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
         if (!entered.has(st))
           add({ key: `region-unreachable:${st}`, rule: 'region-unreachable', stateId: st, message: `${st} (region ${r.variable} of ${r.parent}) is never entered` });
     }
+  }
+
+  // States getStateDescription() has no line for (when it describes some of them)
+  const desc = getMethodCodeFromPou(pouXml, 'getStateDescription');
+  if (desc.methodFound && desc.code) {
+    const described = new Set<string>();
+    for (const line of desc.code.replace(/\(\*[\s\S]*?\*\)/g, '').split(/\r?\n/)) for (const n of labelNames(line.replace(/\/\/.*$/, ''))) described.add(n.split('.').pop()!.toUpperCase());
+    if (described.size)
+      for (const state of labelled.keys())
+        if (!described.has(state.toUpperCase()))
+          add({ key: `no-description:${state}`, rule: 'no-description', stateId: state, message: `${state} has no line in getStateDescription()`, fix: { kind: 'add-description', name: state } });
   }
 
   if (mainCase.elseLine === null && mainCase.endCaseLine !== null) {

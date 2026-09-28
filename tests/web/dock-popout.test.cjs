@@ -98,6 +98,26 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     await h.sleep(600);
     const after = await minimap();
     expect(before !== after, `M pressed in that window toggles the minimap (${before} → ${after})`);
+    // A state moved in that window, then Ctrl+Z there: back where it was (the same Undo as in the main window)
+    // (a state in view: the one whose middle is not under the toolbar or a panel)
+    const pickId = await wd.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id]')].map((n) => { const r = n.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e?.closest('g.node') === n && r.width > 20 ? n.getAttribute('data-state-id') : null; }).find(Boolean));
+    const at = () => wd.evaluate((id) => { const n = [...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id]')].find((x) => x.getAttribute('data-state-id') === id); const r = n?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, pickId);
+    const n0 = pickId ? await at() : null;
+    let undone = null;
+    if (n0) {
+      await wd.mouse.move(n0.x, n0.y);
+      await wd.mouse.down();
+      await wd.mouse.move(n0.x + 60, n0.y + 40, { steps: 6 });
+      await wd.mouse.up();
+      await h.sleep(500);
+      const n1 = await at();
+      await wd.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+      await wd.keyboard.down('Control'); await wd.keyboard.press('z'); await wd.keyboard.up('Control');
+      await h.sleep(600);
+      const n2 = await at();
+      undone = { moved: Math.hypot(n1.x - n0.x, n1.y - n0.y), back: Math.hypot(n2.x - n0.x, n2.y - n0.y) };
+    }
+    expect(!!undone && undone.moved > 20 && undone.back < 3, `moved in that window (${undone?.moved.toFixed(0)} px), Ctrl+Z there: back (${undone?.back.toFixed(1)} px off)`);
     // The app reloads: the window goes, the tab floats with "Reopen in its own window"
     await p.reload({ waitUntil: 'load' });
     await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });

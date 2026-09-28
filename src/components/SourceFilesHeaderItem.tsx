@@ -44,7 +44,9 @@ const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => voi
   const files = fileCount > 0 ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
   const btn = (on: boolean) => `p-1 rounded-md ${on ? 'text-sky-300 hover:text-white hover:bg-slate-800' : 'text-slate-600 cursor-default'}`;
   const canSave = !!active || fileCount > 0;
-  const canAll = editors.length > 0 || fileCount > 0;
+  // (always: the app's other windows may have edits to save)
+  const canAll = true;
+  const hereToSave = editors.length > 0 || fileCount > 0;
   return (
     <>
       <button
@@ -63,7 +65,7 @@ const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => voi
         disabled={!canAll}
         onClick={() => onSaveEditor('all')}
         className={`relative ${btn(canAll)}`}
-        title={canAll ? `Save All: ${editors.length ? `the edits of ${editors.map((e) => e.label).join(', ')} into the POU, ` : ''}then the files written` : 'Save All: nothing to save'}
+        title={`Save All: ${hereToSave ? `${editors.length ? `the edits of ${editors.map((e) => e.label).join(', ')} into the POU, ` : ''}the files written, ` : 'nothing to save here; '}and the app's other windows save theirs`}
       >
         <SaveAll className="w-3.5 h-3.5" />
         {editors.length > 0 && <span id="header-save-all-count" className="absolute -top-0.5 -right-0.5 min-w-[12px] h-3 px-0.5 rounded-full bg-amber-500 text-[8px] leading-3 font-bold text-slate-950 text-center">{editors.length}</span>}

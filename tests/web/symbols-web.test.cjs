@@ -10,7 +10,10 @@ const APP = h.REPO;
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 const R = 'MAIN.mainStateMachine';
-const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
+// (aDoors[1] then goes round its states every 2.5 s: DISABLED -> ENABLING -> ERROR -> DISABLED ...: a learned diagram sees them)
+const cycle = [];
+for (let i = 0; i < 80; i++) cycle.push({ hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 7 } }, { hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 0 } }, { hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 1 } });
+const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.json', cycle);
 
 (async () => {
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48960', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-sym-web.txt'), 'w'), 'ignore'] });
@@ -85,6 +88,45 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
   }
   const title = b ? await b.title() : '';
   expect(/SM_TableManager \(MAIN\.mainStateMachine\.smTable2\)/.test(title) && /TABLEMANAGER_HOMMING$/.test(s2), `a new tab: "${title}", live ${s2}`);
+
+  // SM_DoorDasher (its source not at hand): Open offers to learn its diagram live; a new tab with the PLC's states,
+  // live on aDoors[1], its transitions added as the PLC takes them
+  await a.bringToFront();
+  await set(a, 'symbol-browser-type-filter', 'SM_DoorDasher');
+  for (let i = 0; i < 40 && !(await a.$(`.symbol-instance-row[data-path="${R}.aDoors[1]"] .symbol-open-other`)); i++) await sleep(250);
+  await a.click(`.symbol-instance-row[data-path="${R}.aDoors[1]"] .symbol-open-other`);
+  await a.waitForSelector('#text-prompt-learn-btn', { timeout: 5000 }).catch(() => {});
+  const offer = await a.$eval('#text-prompt-dialog', (e) => e.innerText).catch(() => '');
+  expect(/Learn it live/.test(offer) && /Choose SM_DoorDasher\.TcPOU/.test(offer) && /3 states from the PLC/.test(offer), `Open SM_DoorDasher (no source): choose its .TcPOU or learn it live (${offer.replace(/\s+/g, ' ').slice(0, 90)})`);
+  const before = (await pages()).length;
+  await a.click('#text-prompt-learn-btn');
+  let c;
+  for (let i = 0; i < 40 && !c; i++) { await sleep(300); const all = await pages(); if (all.length > before) c = all[all.length - 1]; }
+  let learned = { banner: '', states: [], edges: 0, live: '' };
+  if (c) {
+    c.on('pageerror', (e) => errors.push(e.message));
+    await c.bringToFront();
+    await c.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
+    // (a few rounds of the PLC's states: each transition seen is added)
+    for (let i = 0; i < 60; i++) {
+      await sleep(500);
+      learned = await c.evaluate(() => ({
+        banner: document.getElementById('canvas-learned-banner')?.textContent ?? '',
+        states: [...new Set([...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id]')].map((n) => n.getAttribute('data-state-id')).filter((s) => /^DOOR_DASHER_/.test(s)))].sort(),
+        edges: document.querySelectorAll('#mermaid-canvas-area path[data-source-id^="DOOR_DASHER_"]').length,
+        live: document.getElementById('live-current-state')?.textContent ?? '',
+      }));
+      if (/[2-9]\d* transitions seen/.test(learned.banner)) break;
+    }
+  }
+  expect(!!c && learned.states.join() === 'DOOR_DASHER_DISABLED,DOOR_DASHER_ENABLING,DOOR_DASHER_ERROR', `a new tab with the PLC's states: ${learned.states.join(', ')}`);
+  expect(/^Learned live: no source\. ([2-9]|\d\d+) transitions seen so far/.test(learned.banner) && learned.edges >= 2, `live on it, the transitions it takes added: "${learned.banner.slice(0, 60)}" (${learned.edges} drawn)`);
+  if (c) await c.screenshot({ path: h.out('learned-live.png') });
+  const dirty = c ? await c.evaluate(() => /unsaved|Save \(\d/.test(document.getElementById('save-sources-btn')?.textContent ?? '')) : true;
+  expect(!dirty, 'drawn again as they come: not an edit (nothing to save)');
+  const notIn = c ? await c.evaluate(() => { document.getElementById('dock-tab-live')?.click(); return new Promise((r) => setTimeout(() => r(/d+ not in diagram/.test(document.body.innerText)), 600)); }) : true;
+  expect(!notIn, 'the Live tab: its transitions are in the diagram (none "not in diagram")');
+  await set(a, 'symbol-browser-type-filter', '');
 
   // Closing the window stops following its values; a bad root is reported
   await a.bringToFront();

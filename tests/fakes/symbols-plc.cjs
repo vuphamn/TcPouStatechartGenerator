@@ -54,10 +54,10 @@ const config = ({
   script: [{ hold: 3000, set: { [`${R}.aDoors[1].machineState`]: 1 } }, { hold: 2000, set: { [`${R}.nCount`]: 43, [`${R}.bEnable`]: 0 } }],
 });
 
-/** Writes the config for fake-ams2.cjs; returns its path */
-function writeSymbolsPlc(name = 'fake-ams2-sym.json') {
+/** Writes the config for fake-ams2.cjs (more steps after its own script: extra); returns its path */
+function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = []) {
   const file = path.join(h.OUT, name);
-  fs.writeFileSync(file, JSON.stringify(config));
+  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra] }));
   return file;
 }
 

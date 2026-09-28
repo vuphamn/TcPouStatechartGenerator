@@ -22,9 +22,11 @@ const DO_STATE = [
 ].join('\n');
 const HELPER = ['RETURN;', 'nCycles := 5;', 'nCycles := 6;'].join('\n');
 const SPARE = 'nCycles := 0;';
-const DECL = ['FUNCTION_BLOCK SM_X', 'VAR_INPUT', '\tcmd_bStart : BOOL;', 'END_VAR', 'VAR', '\tmachineState : E_S;', '\tnCycles : INT;', '\tfbWait : TON;', 'END_VAR'].join('\n');
+const TIMERS = 'fbNoTime(IN := cmd_bStart);';
+const DESC = ['CASE machineState OF', '\tE_S.S_IDLE: getStateDescription := \'Idle\';', 'END_CASE'].join('\n');
+const DECL = ['FUNCTION_BLOCK SM_X', 'VAR_INPUT', '\tcmd_bStart : BOOL;', 'END_VAR', 'VAR', '\tmachineState : E_S;', '\tnCycles : INT;', '\tfbWait : TON;', '\tfbNoTime : TON;', 'END_VAR'].join('\n');
 const method = (name, decl, code) => `    <Method Name="${name}" Id="{${name}}">\n      <Declaration>${cdata(decl)}</Declaration>\n      <Implementation>\n        <ST>${cdata(code)}</ST>\n      </Implementation>\n    </Method>`;
-const POU = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <POU Name="SM_X" Id="{1}" SpecialFunc="None">\n    <Declaration>${cdata(DECL)}</Declaration>\n    <Implementation>\n      <ST>${cdata('doState();')}</ST>\n    </Implementation>\n${method('doState', 'METHOD doState : BOOL', DO_STATE)}\n${method('helper', 'METHOD helper : BOOL', HELPER)}\n${method('spare', 'METHOD PRIVATE spare', SPARE)}\n  </POU>\n</TcPlcObject>`;
+const POU = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <POU Name="SM_X" Id="{1}" SpecialFunc="None">\n    <Declaration>${cdata(DECL)}</Declaration>\n    <Implementation>\n      <ST>${cdata('doState();')}</ST>\n    </Implementation>\n${method('doState', 'METHOD doState : BOOL', DO_STATE)}\n${method('helper', 'METHOD helper : BOOL', HELPER)}\n${method('spare', 'METHOD PRIVATE spare', SPARE)}\n${method('timers', 'METHOD timers', TIMERS)}\n${method('getStateDescription', 'METHOD getStateDescription : STRING', DESC)}\n  </POU>\n</TcPlcObject>`;
 const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <DUT Name="E_S" Id="{2}">\n    <Declaration>${cdata("{attribute 'qualified_only'}\nTYPE E_S :\n(\n\tS_IDLE := 0,\n\tS_RUN\n);\nEND_TYPE")}</Declaration>\n  </DUT>\n</TcPlcObject>`;
 
 (async () => {
@@ -168,6 +170,38 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   expect(count === '1' && /helper\(\)/.test(allTitle) && !!save && save.files.some((x) => /saved from the header/.test(x.content)), `the header: Save All (${count}: ${allTitle.slice(0, 60)}); Save: the Method Editor's edit in the POU, the POU written (${save ? save.files.map((x) => x.path.split(/[\\\\/]/).pop()).join(', ') : 'no save'})`);
   expect(!(await p.$('#header-save-all-count')), 'nothing left to put in');
   expect(!!save && save.files.some((x) => /<Property Name="bNewProperty"[\s\S]*PROPERTY PRIVATE bNewProperty : BOOL[\s\S]*bNewProperty := fbWait\.Q;/.test(x.content)), 'the property written with the POU (its Get: bNewProperty := fbWait.Q;)');
+
+  // 7. Go to Symbol lists the property: its Get opens in the Method Editor, edited and saved like a method
+  const propFirst = await goToSymbol('bnewproperty');
+  const getCode = await code();
+  expect(/Property\s*bNewProperty\.Get/.test(propFirst) && getCode.trim() === 'bNewProperty := fbWait.Q;', `Ctrl+T "bnewproperty": ${propFirst} → the Method Editor on its Get (${JSON.stringify(getCode.trim())})`);
+  await p.evaluate((id) => { const ta = document.getElementById(id); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, ID);
+  await p.keyboard.type(' // its value', { delay: 3 });
+  await p.keyboard.down('Control'); await p.keyboard.press('s'); await p.keyboard.up('Control');
+  await h.sleep(500);
+  // (XAE: the editor's Ctrl+S puts it into the POU; Save writes the project)
+  await p.click('#header-save-btn').catch(() => {});
+  await h.sleep(900);
+  const saved2 = sent.filter((m) => m.type === 'save').pop();
+  expect(!!saved2 && saved2.files.some((x) => /<Get Name="Get"[\s\S]*bNewProperty := fbWait\.Q; \/\/ its value/.test(x.content)), 'its Get changed and saved (in the property, not as a method)');
+
+  // 8. A timer without PT: Add PT; S_RUN without a description: Add description
+  await p.evaluate(() => document.getElementById('dock-tab-problems')?.click());
+  await h.sleep(700);
+  expect(/Add PT/.test(await clickFix('fbNoTime : TON is called without PT')), 'fbNoTime without PT: Add PT');
+  await p.waitForSelector('#text-prompt-submit', { timeout: 3000 }).catch(() => {});
+  await p.click('#text-prompt-submit').catch(() => {});
+  await h.sleep(1000);
+  await goToSymbol('timers');
+  expect((await code()).trim() === 'fbNoTime(PT := T#1S, IN := cmd_bStart);', `its call given PT := T#1S (${JSON.stringify((await code()).trim())})`);
+  await p.evaluate(() => document.getElementById('dock-tab-problems')?.click());
+  await h.sleep(700);
+  expect(/Add description/.test(await clickFix('S_RUN has no line in getStateDescription()')), 'S_RUN without description: Add description');
+  await p.waitForSelector('#text-prompt-submit', { timeout: 3000 }).catch(() => {});
+  await p.click('#text-prompt-submit').catch(() => {});
+  await h.sleep(1000);
+  await goToSymbol('getstatedescription');
+  expect(/\tE_S\.S_IDLE: getStateDescription := 'Idle';\n\tE_S\.S_RUN: getStateDescription := 'Run';\nEND_CASE/.test(await code()), `a line for S_RUN, like the others (${JSON.stringify((await code()).split('\n').slice(1, 3).join(' | '))})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

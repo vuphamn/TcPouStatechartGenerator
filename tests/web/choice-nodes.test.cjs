@@ -87,6 +87,16 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(800);
   const after = await edgesOf(clamped.id);
   const draggedGaps = await choiceGaps();
+  const ends = await p.evaluate((id) => {
+    const n = document.getElementById(id);
+    const sid = n.getAttribute('data-state-id');
+    const svg = n.ownerSVGElement;
+    return [...svg.querySelectorAll('path[data-edge-id]')].filter((e) => e.id && (e.getAttribute('data-source-id') === sid || e.getAttribute('data-target-id') === sid)).map((e) => {
+      const L = e.getTotalLength(); const q = e.getPointAtLength(e.getAttribute('data-target-id') === sid ? L : 0);
+      return `${Math.round(q.x / 4)},${Math.round(q.y / 4)}`;
+    });
+  }, clamped.id);
+  expect(ends.length >= 3 && new Set(ends).size === ends.length, `the dragged choice's ${ends.length} transitions each on its own corner (${ends.join(' ')})`);
   expect(draggedGaps[0][2] <= 6, `... and after the drag (worst: ${draggedGaps[0]?.[0]}, ${draggedGaps[0]?.[2]} units off)`);
   const moved = await p.evaluate((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, clamped.id);
   expect(Math.hypot(moved.x - box.x - 70, moved.y - box.y - 45) < 12, `the choice moved with the mouse (${(moved.x - box.x).toFixed(0)},${(moved.y - box.y).toFixed(0)} of 70,45)`);
@@ -171,6 +181,14 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(400);
   const ib3 = await p.evaluate((id) => { const r = [...document.querySelectorAll('#mermaid-canvas-area g.node')].find((n) => n.id.endsWith(id.replace(/^.*?(choice_)/, '$1'))).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width }; }, idleChoice.id);
   await p.screenshot({ path: h.out('choice-sideways.png'), clip: { x: Math.max(0, ib3.x - 220), y: Math.max(0, ib3.y - 220), width: 440, height: 440 } });
+  const sizeNow = async () => (await choices()).find((c) => /choice_TABLEMANAGER_CLAMPED_/.test(c.id))?.size ?? 0;
+  const sizes = {};
+  for (const v of ['small', 'large', 'medium']) {
+    await p.select('#choice-size-select', v);
+    await h.sleep(2500);
+    sizes[v] = await sizeNow();
+  }
+  expect(sizes.small < sizes.medium && sizes.medium < sizes.large && (await p.evaluate(() => localStorage.getItem('kss.choiceSize'))) === 'medium', `the Choices size: small ${sizes.small}, medium ${sizes.medium}, large ${sizes.large} (kept)`);
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   expect((await choices()).length === 0, 'off again: gone');

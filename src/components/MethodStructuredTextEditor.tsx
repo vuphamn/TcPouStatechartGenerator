@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import {
   getAllMethodsFromPou,
+  getPropertyAccessorsFromPou,
   getMethodCodeFromPou,
   parseTransitionsFromStateCode,
   ExtractedMethodCode,
@@ -139,7 +140,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   const effectiveToggleDock = isModal ? modalToggleDock : onToggleDock;
   // 1. Extract and sort all methods from the input .TcPOU file in ascending order
   const availableMethods = useMemo<string[]>(() => {
-    const rawMethods = getAllMethodsFromPou(tcPouContent);
+    // (and the properties' Get / Set: "bReady.Get()", edited like methods)
+    const rawMethods = [...getAllMethodsFromPou(tcPouContent), ...getPropertyAccessorsFromPou(tcPouContent).map((a) => a.name)];
     // Ensure unique and sorted in ascending alphabetical order
     const sorted = Array.from(new Set(rawMethods)).sort((a, b) =>
       a.localeCompare(b, undefined, { sensitivity: 'base' })
@@ -900,6 +902,21 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             },
           ]
         : [];
+    // Extract Action: the selected lines into a new Action (they use only the POU's members)
+    if (selection && editorServices()?.extractAction)
+      extract.push({
+        id: 'editor-menu-extract-action',
+        label: `Extract Action… (lines ${selection.start}–${selection.end})`,
+        title: 'The selected lines into a new Action of the POU, a call in their place (for lines that use only the POU\'s members)',
+        onSelect: () => {
+          if (isDirty) {
+            setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): Extract Action works on the saved POU' });
+            setTimeout(() => setDefinitionNotification(null), 3500);
+            return;
+          }
+          editorServices()!.extractAction!(cleanMethodName, selection.start, selection.end);
+        },
+      });
     // Extract Property: the selected expression into a new property
     if (expression && editorServices()?.extractProperty)
       extract.push({

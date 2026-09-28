@@ -470,7 +470,11 @@ export function getMethodCodeFromPou(pouXml: string, methodName: string): Extrac
 
   // Escape special regex characters in cleanName
   const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const methodRx = new RegExp(`<Method[^>]*\\bName=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/Method>`, 'i');
+  // (a property's accessor, "bReady.Get" / "bReady.Set": its Get / Set element inside the property, edited like a method)
+  const accessor = cleanName.match(/^([A-Za-z_]\w*)\.(Get|Set)$/);
+  const methodRx = accessor
+    ? new RegExp(`<Property[^>]*\\bName=["']${accessor[1]}["'][^>]*>[\\s\\S]*?<${accessor[2]}\\b[^>]*>([\\s\\S]*?)<\\/${accessor[2]}>`, 'i')
+    : new RegExp(`<Method[^>]*\\bName=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/Method>`, 'i');
   const methodMatch = pouXml.match(methodRx);
 
   if (!methodMatch) {
@@ -554,8 +558,12 @@ export function updateMethodCodeInPou(
   }
 
   const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const methodRx = new RegExp(`(<Method[^>]*\\bName=["']${escapedName}["'][^>]*>)([\\s\\S]*?)(<\\/Method>)`, 'i');
+  const accessor = cleanName.match(/^([A-Za-z_]\w*)\.(Get|Set)$/);
+  const methodRx = accessor
+    ? new RegExp(`(<Property[^>]*\\bName=["']${accessor[1]}["'][^>]*>[\\s\\S]*?<${accessor[2]}\\b[^>]*>)([\\s\\S]*?)(<\\/${accessor[2]}>)`, 'i')
+    : new RegExp(`(<Method[^>]*\\bName=["']${escapedName}["'][^>]*>)([\\s\\S]*?)(<\\/Method>)`, 'i');
   const methodMatch = pouXml.match(methodRx);
+  if (accessor && !methodMatch) return { success: false, methodName: cleanName, updatedPou: pouXml, error: `The POU has no ${cleanName}` };
 
   // If method doesn't exist, insert before </POU> or before doState
   if (!methodMatch || methodMatch.index === undefined) {
@@ -669,4 +677,14 @@ export function updatePreProcessCodeInPou(
   newDeclaration?: string
 ): UpdatePreProcessCodeResult {
   return updateMethodCodeInPou(pouXml, 'preProcess', newCode, newDeclaration);
+}
+
+/** The properties' accessors ("bReady.Get", "bReady.Set"), edited in the Method Editor like methods; with the type */
+export function getPropertyAccessorsFromPou(pouXml: string): { name: string; property: string; type: string }[] {
+  const out: { name: string; property: string; type: string }[] = [];
+  for (const m of (pouXml || '').matchAll(/<Property\b[^>]*\bName="([^"]+)"[^>]*>([\s\S]*?)<\/Property>/gi)) {
+    const type = m[2].match(/PROPERTY\s+(?:(?:PUBLIC|PRIVATE|PROTECTED|INTERNAL|FINAL|ABSTRACT)\s+)*[A-Za-z_]\w*\s*:\s*([^\r\n\]]+)/i)?.[1]?.trim().replace(/;$/, '') ?? '';
+    for (const acc of ['Get', 'Set']) if (new RegExp(`<${acc}\\b`).test(m[2])) out.push({ name: `${m[1]}.${acc}`, property: m[1], type });
+  }
+  return out;
 }

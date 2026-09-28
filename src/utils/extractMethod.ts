@@ -16,6 +16,8 @@ const blank = (text: string) => text.replace(/\(\*[\s\S]*?\*\)/g, (c) => c.repla
 export interface ExtractPlan {
   inputs: { name: string; type: string }[];
   inOuts: { name: string; type: string }[];
+  /** Set by the lines before they read it: the new method gives them back (VAR_OUTPUT, name => name) */
+  outputs: { name: string; type: string }[];
   call: string;
   body: string[];
   declaration: string;
@@ -52,10 +54,19 @@ export function planExtract(pouXml: string, method: string, start: number, end: 
   const masked = blank(text);
   const inputs: ExtractPlan['inputs'] = [];
   const inOuts: ExtractPlan['inOuts'] = [];
+  const outputs: ExtractPlan['outputs'] = [];
+  const flat = masked.replace(/\([^()]*\)/g, (c) => ' '.repeat(c.length));
   for (const v of declarationVariables(m.declaration || '')) {
-    if (!useOffsets(text, v.name).length) continue;
-    const written = new RegExp(`(^|[^\\w.])${v.name}\\s*:=`, 'i').test(masked.replace(/\([^()]*\)/g, (c) => ' '.repeat(c.length)));
-    (written ? inOuts : inputs).push({ name: v.name, type: v.type });
+    const uses = useOffsets(text, v.name);
+    if (!uses.length) continue;
+    const written = new RegExp(`(^|[^\\w.])${v.name}\\s*:=`, 'i').test(flat);
+    // (its first use an assignment to it: only set here, its value before not needed)
+    const firstIsWrite = written && /^\s*:=/.test(flat.slice(Math.min(...uses) + v.name.length));
+    // (x := x + 1: read in its own first assignment, so its value before is needed)
+    const readInOwnFirst = written && new RegExp(`^[^;]*\\b${v.name}\\b`, 'i').test(flat.slice(Math.min(...uses) + v.name.length).replace(/^\s*:=/, ''));
+    if (!written) inputs.push({ name: v.name, type: v.type });
+    else if (firstIsWrite && !readInOwnFirst) outputs.push({ name: v.name, type: v.type });
+    else inOuts.push({ name: v.name, type: v.type });
   }
   const indent = (sel.find((l) => l.trim()) ?? '').match(/^[ \t]*/)![0];
   const common = Math.min(...sel.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0].length));
@@ -68,11 +79,11 @@ export function planExtract(pouXml: string, method: string, start: number, end: 
     const at = m.search(/\bRETURN\b/i);
     return at < 0 ? line : `${line.slice(0, at)}${newName} := TRUE; ${line.slice(at)}`;
   });
-  const args = [...inputs, ...inOuts].map((p) => `${p.name} := ${p.name}`).join(', ');
+  const args = [...[...inputs, ...inOuts].map((p) => `${p.name} := ${p.name}`), ...outputs.map((p) => `${p.name} => ${p.name}`)].join(', ');
   const block = (kw: string, list: { name: string; type: string }[]) => (list.length ? [kw, ...list.map((p) => `\t${p.name} : ${p.type};`), 'END_VAR'] : []);
-  const declaration = [`METHOD PRIVATE ${newName}${returns ? ' : BOOL' : ''}`, ...block('VAR_INPUT', inputs), ...block('VAR_IN_OUT', inOuts)].join('\n');
+  const declaration = [`METHOD PRIVATE ${newName}${returns ? ' : BOOL' : ''}`, ...block('VAR_INPUT', inputs), ...block('VAR_OUTPUT', outputs), ...block('VAR_IN_OUT', inOuts)].join('\n');
   const call = returns ? `${indent}IF ${newName}(${args}) THEN\n${indent}\tRETURN;\n${indent}END_IF` : `${indent}${newName}(${args});`;
-  return { inputs, inOuts, call, body, declaration, returns };
+  return { inputs, inOuts, outputs, call, body, declaration, returns };
 }
 
 /** The POU with the lines extracted */
@@ -185,4 +196,40 @@ export function extractProperty(pouXml: string, method: string, line: number, fr
   if (end < 0) return { error: 'The POU has no </POU>' };
   const pEol = u.updatedPou.includes('\r\n') ? '\r\n' : '\n';
   return { pou: `${u.updatedPou.slice(0, end)}${plan.xml}${pEol}  ${u.updatedPou.slice(end)}`.replace(/\n {2}\s*<\/POU>/, `${pEol}  </POU>`), plan };
+}
+
+// ---- Extract Action ----
+
+/** Why the lines cannot become an Action (they are checked as for a method first), or null */
+export function checkExtractAction(pouXml: string, method: string, start: number, end: number, name: string): string | null {
+  const err = checkExtract(pouXml, method, start, end, name);
+  if (err) return err;
+  const m = getMethodCodeFromPou(pouXml, method);
+  const text = m.code.split(/\r?\n/).slice(start - 1, end).join('\n');
+  if (/\bRETURN\b/i.test(blank(text))) return 'The lines have a RETURN: an Action cannot tell the method to leave (Extract Method can)';
+  // (an Action has no variables of its own nor parameters: it sees only the POU's members)
+  const own = declarationVariables(m.declaration || '').filter((v) => useOffsets(text, v.name).length).map((v) => v.name);
+  if (own.length) return `The lines use ${method}()'s own ${own.join(', ')}: an Action sees only the POU's members (Extract Method takes them as parameters)`;
+  return null;
+}
+
+/** The POU with the lines moved into a new Action (before </POU>), `Name();` in their place */
+export function extractAction(pouXml: string, method: string, start: number, end: number, name: string): { pou: string; body: string[] } | { error: string } {
+  const err = checkExtractAction(pouXml, method, start, end, name);
+  if (err) return { error: err };
+  const m = getMethodCodeFromPou(pouXml, method);
+  const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+  const lines = m.code.split(/\r?\n/);
+  const sel = lines.slice(start - 1, end);
+  const indent = (sel.find((l) => l.trim()) ?? '').match(/^[ \t]*/)![0];
+  const common = Math.min(...sel.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0].length));
+  const body = sel.map((l) => (l.trim() ? l.slice(common) : ''));
+  lines.splice(start - 1, end - start + 1, `${indent}${name}();`);
+  const u = updateMethodCodeInPou(pouXml, method, lines.join(eol));
+  if (!u.success) return { error: u.error || `Could not change ${method}()` };
+  const pEol = u.updatedPou.includes('\r\n') ? '\r\n' : '\n';
+  const xml = [`    <Action Name="${name}" Id="{${guid()}}">`, '      <Implementation>', `        <ST><![CDATA[${body.join(pEol)}]]></ST>`, '      </Implementation>', '    </Action>'].join(pEol);
+  const at = u.updatedPou.search(/<\/POU>/i);
+  if (at < 0) return { error: 'The POU has no </POU>' };
+  return { pou: `${u.updatedPou.slice(0, at)}${xml}${pEol}  ${u.updatedPou.slice(at)}`.replace(/\n {2}\s*<\/POU>/, `${pEol}  </POU>`), body };
 }
