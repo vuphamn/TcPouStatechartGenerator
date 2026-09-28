@@ -7,6 +7,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
+const { readPlcSources } = require('./tcSources.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
@@ -74,20 +75,23 @@ function createLiveSession(hooks = {}) {
     const adsPort = options.port || (options.path && hooks.plcPort ? hooks.plcPort(options.path) : 851);
     status('connecting', `Connecting to ${host} (${netId}, port ${adsPort})...`, { route });
 
+    // A PLC on this computer (127.0.0.1 / localhost, no local NetId given): through this computer's own TwinCAT router,
+    // which gives the connection its address and port (as any local ADS program); else straight to the PLC's router,
+    // with this computer's NetId (its route on the PLC)
+    const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !(options.localNetId || '').trim();
     const client = new Client({
       targetAmsNetId: netId,
       targetAdsPort: adsPort,
       routerAddress: host,
       routerTcpPort: tcpPort,
-      localAmsNetId: localNetId,
-      localAdsPort: LOCAL_ADS_PORT,
+      ...(viaLocalRouter ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
       rawClient: true,
       autoReconnect: false,
       timeoutDelay: 3000,
       hideConsoleWarnings: true,
     });
     // desired: guard variables asked for before the connection was made (liveWatch)
-    const s = { id, client, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false };
+    const s = { id, client, adsPort, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false, sources: null };
     session = s;
     const found = [];
     try {
@@ -224,6 +228,25 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /**
+   * The PLC project's sources as the PLC keeps them (plcSources): answered with plcSourcesResult { project, files }
+   * or { error }. Read once per connection (a few MB). Only while connected; req: { requestId }
+   */
+  async function sources(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
+    try {
+      s.sources ??= readPlcSources(s.client, s.adsPort ?? 851);
+      const r = await s.sources;
+      if (r.error) s.sources = null;
+      if (session === s) send({ type: 'plcSourcesResult', requestId, ...r });
+    } catch (err) {
+      s.sources = null;
+      if (session === s) send({ type: 'plcSourcesResult', requestId, error: ads.adsErrorText(err) });
+    }
+  }
+
   async function stop(notify, send) {
     sessionId++;
     const s = session;
@@ -232,7 +255,7 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
-  return { start, stop, watch, browse };
+  return { start, stop, watch, browse, sources };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId };

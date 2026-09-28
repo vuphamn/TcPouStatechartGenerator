@@ -121,6 +121,7 @@ import { setTransitionCondition, transitionCondition } from './utils/transitionE
 import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
+import { plcPous, plcPouSource, type PlcSources } from './utils/plcSources.ts';
 import { pendingEditors, savePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -4767,6 +4768,51 @@ export const App: React.FC = () => {
     liveRestartRef.current = null;
     handleLiveStartRef.current();
   }, [liveSettings.instance, liveStatus.state]);
+  // The PLC project's sources as the PLC keeps them: read once per connection (a few MB), through the live connection
+  const plcSourcesRef = useRef<{ key: string; p: Promise<PlcSources> } | null>(null);
+  const fetchPlcSources = useCallback((): Promise<PlcSources> => {
+    const key = `${liveMode}|${liveStatus.target ?? ''}`;
+    if (plcSourcesRef.current?.key === key) return plcSourcesRef.current.p;
+    let p: Promise<PlcSources>;
+    if (isXaeHost()) p = Promise.resolve({ error: 'XAE opens the project from the target itself' });
+    else if (liveMode === 'desktop') p = desktopLive()?.sources?.({ requestId: Date.now() % 1e9 }) ?? Promise.resolve({ error: 'Update the desktop app: it cannot read the PLC\'s sources' });
+    else p = gatewayRef.current ? gatewayRef.current.request<PlcSources>({ type: 'plcSources' }, 'plcSourcesResult', 120000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
+    p = p.then((r) => {
+      if (r.error && plcSourcesRef.current?.key === key) plcSourcesRef.current = null;
+      return r;
+    });
+    plcSourcesRef.current = { key, p };
+    return p;
+  }, [liveMode, liveStatus.target]);
+  // Open from the PLC (the Live tab): its POUs listed, one opened in this window
+  const [plcPicker, setPlcPicker] = useState<PlcSources | null>(null);
+  const handleOpenFromPlc = useCallback(() => {
+    showCopyToast('Reading the PLC\'s sources…', 'success', 3000);
+    void fetchPlcSources().then((r) => {
+      if (r.error || !r.files) return showCopyToast(r.error ?? 'The PLC keeps no sources', 'error', 8000);
+      setPlcPicker(r);
+    });
+  }, [fetchPlcSources, showCopyToast]);
+  const openPlcPouHere = useCallback(
+    (sources: PlcSources, typeName: string) => {
+      const src = sources.files ? plcPouSource(sources.files, typeName) : null;
+      if (!src) return showCopyToast(`${typeName}.TcPOU is not in the PLC's sources`, 'error');
+      confirmDiscard(() => {
+        // Live: stopped, then live again on an instance of this type (the PLC's first; the Live tab lists the others),
+        // not on the previous type's instance
+        const wasLive = liveStatus.state === 'connected' || liveStatus.state === 'connecting';
+        if (wasLive) {
+          handleLiveStopRef.current();
+          handleLiveSettingsChange({ ...liveSettings, instance: '' });
+        }
+        // (the connection comes along: the live settings are kept per POU)
+        applyLoadedPou(src, wasLive ? { live: true, connection: connectionOf(liveSettings) } : undefined);
+        showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer`, 'success', 7000);
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showCopyToast, applyLoadedPou, liveStatus.state, liveSettings, handleLiveSettingsChange]
+  );
   // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
   const handleWatchMachine = useCallback(
     (node: SymbolChild, on?: Partial<LiveSettings>) => {
@@ -4826,23 +4872,37 @@ export const App: React.FC = () => {
           })
           .catch((e: unknown) => showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error'));
       };
-      // No source at hand: its .TcPOU chosen, or its diagram learned live (the PLC's states, the transitions it takes)
+      // No source at hand: from the PLC's own sources when it keeps them; else its .TcPOU chosen, or its diagram learned
+      // live (the PLC's states, the transitions it takes)
       const pick = () => {
+        if (liveStatus.state !== 'connected' || isXaeHost()) return offer();
+        showCopyToast(`Looking for ${typeName} in the PLC's sources…`, 'success', 3000);
+        void fetchPlcSources().then((r) => {
+          const src = r.files ? plcPouSource(r.files, typeName) : null;
+          if (!src) return offer(r.error ?? (r.files ? `${typeName} is not in the PLC's sources (${r.project})` : undefined));
+          showCopyToast(`${typeName} from the PLC's sources (${r.project}), live on ${node.path}`, 'success', 6000);
+          handOver(src);
+        });
+      };
+      const offer = (why?: string) => {
         const enumType = node.stateType?.trim().split('.').pop() ?? '';
         const learned = node.stateNames && enumType ? learnedSources({ typeName, stateVar: liveStateVar, enumType, names: node.stateNames, seen: loadSeen(typeName) }) : null;
-        if (!learned) return choose();
+        // (nothing to say and nothing to learn: straight to choosing its .TcPOU)
+        if (!learned && !why) return choose();
         setPromptRequest({
           title: `Open ${node.path} (${typeName})`,
-          label: `${typeName}'s source is not at hand. Choose its .TcPOU, or learn its diagram live: its ${Object.keys(node.stateNames ?? {}).length} states from the PLC, and each transition the PLC takes added as it happens (their conditions are not known). Nothing is written to a project.`,
+          label: learned
+            ? `${typeName}'s source is not at hand${why ? ` (${why})` : ''}. Choose its .TcPOU, or learn its diagram live: its ${Object.keys(node.stateNames ?? {}).length} states from the PLC, and each transition the PLC takes added as it happens (their conditions are not known). Nothing is written to a project.`
+            : `${typeName}'s source is not at hand (${why}): choose its .TcPOU (a library's POU: from the library's project).`,
           confirmOnly: true,
           submitLabel: `Choose ${typeName}.TcPOU…`,
           onSubmit: choose,
-          altAction: {
+          altAction: learned ? {
             id: 'text-prompt-learn-btn',
             label: 'Learn it live',
             title: 'A diagram of its states, its transitions added as the PLC takes them (live on this instance)',
             run: () => handOver({ name: `${typeName}.TcPOU`, content: learned.pou, dutCandidates: [{ name: `${enumType}.TcDUT`, relativePath: `${enumType}.TcDUT`, content: learned.dut }] }),
-          },
+          } : undefined,
         });
       };
       if (d?.openPouInProject && pouPath) {
@@ -4854,7 +4914,7 @@ export const App: React.FC = () => {
       }
       pick();
     },
-    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar]
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources]
   );
   // Stop following the window's values when it closes or the connection ends
   useEffect(() => {
@@ -6991,6 +7051,7 @@ export const App: React.FC = () => {
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
+            onOpenFromPlc={liveMode && !replay && !isXaeHost() ? handleOpenFromPlc : undefined}
             onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
             limitMs={liveLimit}
             stateLimitMs={liveSession.current ? stateLimits[liveSession.current.state] ?? null : null}
@@ -7210,6 +7271,15 @@ export const App: React.FC = () => {
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}
+      {plcPicker?.files && (
+        <CommandPalette
+          id="plc-pou-picker"
+          label="Open from the PLC"
+          placeholder={`A POU of ${plcPicker.project ?? 'the PLC'}'s sources (${plcPous(plcPicker.files).length}), opened here…`}
+          commands={plcPous(plcPicker.files).map((p) => ({ id: `plc-pou:${p.path}`, group: 'POU', label: p.name, hint: p.folder, run: () => openPlcPouHere(plcPicker, p.name) }))}
+          onClose={() => setPlcPicker(null)}
+        />
+      )}
       {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
       {bookmarksOpen && (
         <BookmarksDialog

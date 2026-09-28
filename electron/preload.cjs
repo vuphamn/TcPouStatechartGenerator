@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     watch: (vars) => ipcRenderer.invoke('tc:live-watch', vars),
     /** Symbol browser: { requestId, path, stateVar } (answered with liveBrowseResult) */
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
+    /** The PLC project's sources as the PLC keeps them: { project, plcProject, files: [{ path, content }] } or { error } */
+    sources: (req) => ipcRenderer.invoke('tc:live-sources', req),
     /** The Live tab's Browse: the TwinCAT devices on the network, { devices, errors } */
     discoverPlcs: (options) => ipcRenderer.invoke('tc:discover-plcs', options),
     /** Add Route on a PLC to this computer: { plcIp, user, password, routeName?, localNetId? } -> { ok, message } */

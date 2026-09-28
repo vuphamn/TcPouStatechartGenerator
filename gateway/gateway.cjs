@@ -18,6 +18,7 @@ const { Client } = require('ads-client');
 // shared/ sits next to the gateway when installed, one level up in the repository
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
+const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -700,6 +701,24 @@ function start() {
           send({ type: 'liveBrowseResult', requestId, ...(await ads.browseSymbol(session.conn.client, symbolPath, { stateVar, cache: session.conn.dtCache })) });
         } catch (err) {
           send({ type: 'liveBrowseResult', requestId, path: symbolPath, error: ads.adsErrorText(err) });
+        }
+        return;
+      }
+      // The PLC project's sources as the PLC keeps them (read-only: its boot folder), read once per PLC connection;
+      // off with symbol browsing (config.allowBrowse: false) or on its own (config.allowSources: false)
+      if (m.type === 'plcSources') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });
+        if (!session?.conn.client) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
+        const conn = session.conn;
+        try {
+          conn.sources ??= readPlcSources(conn.client, Number(conn.plc?.port) || 851);
+          const r = await conn.sources;
+          if (r.error) conn.sources = null;
+          send({ type: 'plcSourcesResult', requestId, ...r });
+        } catch (err) {
+          conn.sources = null;
+          send({ type: 'plcSourcesResult', requestId, error: ads.adsErrorText(err) });
         }
         return;
       }

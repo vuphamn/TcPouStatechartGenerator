@@ -1,6 +1,7 @@
 const h = require('../lib/harness.cjs');
-const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc();
-// Gateway: liveBrowse (protocol level) against fake-ams2.cjs with data types; allowBrowse: false turns it off
+const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym-gw.json', [], { sources: true });
+// Gateway: liveBrowse and plcSources (the PLC project's sources from its boot folder) (protocol level) against
+// fake-ams2.cjs with data types and the project downloaded with its sources; allowBrowse: false turns them off
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -37,10 +38,11 @@ async function run(allowBrowse, port) {
   ws.send(JSON.stringify({ type: 'liveBrowse', requestId: 2, path: R, stateVar: 'machineState' }));
   ws.send(JSON.stringify({ type: 'liveBrowse', requestId: 3, path: `${R}.aDoors`, stateVar: 'machineState' }));
   ws.send(JSON.stringify({ type: 'liveBrowse', requestId: 4, path: 'MAIN.x; DROP', stateVar: 'machineState' }));
+  ws.send(JSON.stringify({ type: 'plcSources', requestId: 5 }));
   await sleep(1500);
   ws.close();
   gw.kill();
-  return (id) => got.find((m) => m.type === 'liveBrowseResult' && m.requestId === id);
+  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult') && m.requestId === id);
 }
 
 (async () => {
@@ -52,8 +54,10 @@ async function run(allowBrowse, port) {
   expect(root?.symbolType === 'FB_MainStateMachine' && names.includes('nCount:value') && names.includes('smTable2:struct*') && names.includes('pTarget:other'), `root: ${root?.symbolType}: ${names.join(' ')}`);
   expect((r(3)?.children ?? []).map((c) => c.path).join() === `${R}.aDoors[1],${R}.aDoors[2]`, `array: ${(r(3)?.children ?? []).map((c) => c.name).join(' ')}`);
   expect(r(4)?.error === 'Not a symbol path', `malformed path refused: "${r(4)?.error}"`);
+  const src = r(5);
+  expect(src?.project === 'Plant' && (src.files ?? []).map((x) => x.path).sort().join() === 'POUs/Conveyor/E_Conveyor_States.TcDUT,POUs/Conveyor/SM_Conveyor.TcPOU,POUs/MAIN.TcPOU', `plcSources: ${src?.error ?? `${src?.project}: ${(src?.files ?? []).map((x) => x.path).join(', ')}`}`);
   r = await run(false, 8457);
-  expect(/turned off/.test(r(2)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}"`);
+  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}"`);
   plc.kill();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

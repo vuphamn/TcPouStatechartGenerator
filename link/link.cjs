@@ -159,6 +159,7 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'liveWatch') return void session.watch(m.vars);
     // Symbol browser: a symbol's members in the connected PLC
     if (m.type === 'liveBrowse') return void session.browse(send, m);
+    if (m.type === 'plcSources') return void session.sources(send, m);
     // The Live tab's Browse: the TwinCAT devices on the network; Add Route on one of them (with its credentials)
     const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
     const hostRx = /^[A-Za-z0-9.-]{1,253}$/;

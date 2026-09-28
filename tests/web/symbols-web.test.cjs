@@ -13,7 +13,7 @@ const R = 'MAIN.mainStateMachine';
 // (aDoors[1] then goes round its states every 2.5 s: DISABLED -> ENABLING -> ERROR -> DISABLED ...: a learned diagram sees them)
 const cycle = [];
 for (let i = 0; i < 80; i++) cycle.push({ hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 7 } }, { hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 0 } }, { hold: 2500, set: { [`${R}.aDoors[1].machineState`]: 1 } });
-const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.json', cycle);
+const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.json', cycle, { sources: true });
 
 (async () => {
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48960', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-sym-web.txt'), 'w'), 'ignore'] });
@@ -97,7 +97,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   await a.click(`.symbol-instance-row[data-path="${R}.aDoors[1]"] .symbol-open-other`);
   await a.waitForSelector('#text-prompt-learn-btn', { timeout: 5000 }).catch(() => {});
   const offer = await a.$eval('#text-prompt-dialog', (e) => e.innerText).catch(() => '');
-  expect(/Learn it live/.test(offer) && /Choose SM_DoorDasher\.TcPOU/.test(offer) && /3 states from the PLC/.test(offer), `Open SM_DoorDasher (no source): choose its .TcPOU or learn it live (${offer.replace(/\s+/g, ' ').slice(0, 90)})`);
+  expect(/Learn it live/.test(offer) && /Choose SM_DoorDasher\.TcPOU/.test(offer) && /3 states from the PLC/.test(offer) && /SM_DoorDasher is not in the PLC's sources \(Plant\)/.test(offer), `Open SM_DoorDasher (no source): choose its .TcPOU or learn it live (${offer.replace(/\s+/g, ' ').slice(0, 90)})`);
   const before = (await pages()).length;
   await a.click('#text-prompt-learn-btn');
   let c;
@@ -140,6 +140,22 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   await a.click('#symbol-browser-root');
   await a.keyboard.press('Enter');
   await waitRow(a, `${R}.nCount`);
+
+  // From PLC (the Live tab): the PLC project's POUs, from its boot folder; one opened here
+  await a.evaluate(() => document.getElementById('dock-tab-live')?.click());
+  await sleep(400);
+  await a.click('#live-open-from-plc-btn');
+  await a.waitForSelector('#plc-pou-picker', { timeout: 20000 }).catch(() => {});
+  const pous = await a.$$eval('#plc-pou-picker .command-palette-item', (r) => r.map((x) => x.textContent.trim())).catch(() => []);
+  expect(pous.length === 2 && /MAIN/.test(pous[0]) && /SM_Conveyor.*POUs\/Conveyor/.test(pous[1]), `From PLC: ${pous.join(' | ')}`);
+  await a.type('#plc-pou-picker-input', 'conveyor', { delay: 5 });
+  await sleep(200);
+  await a.keyboard.press('Enter');
+  await a.waitForSelector('#mermaid-canvas-area g.node[data-state-id="CONVEYOR_RUNNING"]', { timeout: 20000 }).catch(() => {});
+  const conv = await a.evaluate(() => ({ states: [...new Set([...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id^="CONVEYOR_"]')].map((n) => n.getAttribute('data-state-id')))].sort().join(), file: document.body.innerText.match(/SM_Conveyor\.TcPOU/)?.[0] ?? '' }));
+  expect(conv.states === 'CONVEYOR_RUNNING,CONVEYOR_STOPPED' && !!conv.file, `SM_Conveyor opened from the PLC's sources, with its enum: ${conv.states}`);
+  await a.screenshot({ path: h.out('from-plc.png') });
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
 
   await browser.close().catch(() => {});

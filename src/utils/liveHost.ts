@@ -30,6 +30,8 @@ interface DesktopLiveApi {
   watch?: (vars: LiveWatchVar[]) => Promise<boolean>;
   /** Symbol browser: a symbol's members (answered with liveBrowseResult) */
   browse?: (req: { requestId: number; path: string; stateVar: string }) => Promise<void>;
+  /** The PLC project's sources as the PLC keeps them (read-only, its boot folder) */
+  sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }
 

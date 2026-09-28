@@ -45,7 +45,8 @@ Requires Node.js 20 or later on the gateway machine.
    }
    ```
    - `maxWatchedVariables`: the most guard variables one viewer may follow (a larger request is ignored). The Symbols window's values count too; the app asks for at most 100 in all.
-   - `allowBrowse` (default `true`): `false` turns off the Symbols window, which lists the members of any symbol of the viewer's PLC.
+   - `allowBrowse` (default `true`): `false` turns off the Symbols window, which lists the members of any symbol of the viewer's PLC, and reading the PLC's sources.
+   - `allowSources` (default `true`): `false` turns off only reading the PLC project's sources from the PLC (From PLC, and Open in the Symbols window: the files of its boot folder, read-only).
    - `localNetId`: the AMS NetId the gateway uses (its IP + `.1.1` by default). A PLC entry can override it.
    - `ip`: defaults to the first four numbers of `netId`. Use `host:port` for a forwarded ADS port.
    - `port`: the PLC runtime's ADS port (851 for the first PLC).

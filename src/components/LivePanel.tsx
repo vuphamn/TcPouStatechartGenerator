@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
@@ -97,6 +97,8 @@ interface LivePanelProps {
   openTarget?: 'tab' | 'window';
   /** Opens the Symbols window (the PLC's symbols and values) */
   onOpenSymbols?: () => void;
+  /** A POU of the PLC's own sources (the project downloaded with its sources) opened here */
+  onOpenFromPlc?: () => void;
   /** Opens the Machine Overview tab */
   onOpenOverview?: () => void;
   /** Stuck-state alert: the current state's time limit (ms; its own or the default), and whether it is over it */
@@ -250,6 +252,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onOpenInstance,
   openTarget = 'window',
   onOpenSymbols,
+  onOpenFromPlc,
   onOpenOverview,
   limitMs,
   stateLimitMs,
@@ -408,6 +411,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               title="Browse the PLC's symbols and their values; watch another state machine"
             >
               <ListTree className="w-3 h-3" /> Symbols
+            </button>
+          )}
+          {onOpenFromPlc && status.state === 'connected' && (
+            <button
+              id="live-open-from-plc-btn"
+              onClick={onOpenFromPlc}
+              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+              title="Open a POU of the PLC's own sources (the project downloaded with its sources, as XAE's Open from Target reads them)"
+            >
+              <FolderDown className="w-3 h-3" /> From PLC
             </button>
           )}
         </div>

@@ -15,6 +15,9 @@ let nextNotification = 1;
 let scriptStarted = false;
 const handlesGiven = new Set();
 const released = [];
+// The boot folder's files opened (system service): handle -> { data, at }
+const files = new Map();
+let nextFile = 1;
 
 function encode(s) {
   const b = Buffer.alloc(s.size);
@@ -114,6 +117,31 @@ function handle(sock, f) {
     case 9: {
       const ig = d.readUInt32LE(0);
       const writeLen = d.readUInt32LE(12);
+      // The system service (port 10000): the boot folder's files, read only (config.bootFiles: { relPath: base64 })
+      if (target.port === 10000 && (ig === 120 || ig === 121 || ig === 122)) {
+        const io = d.readUInt32LE(4);
+        if (ig === 120) {
+          const file = d.toString('latin1', 16, 16 + writeLen).replace(/\0+$/, '').replace(/\\/g, '/');
+          const body = (config.bootFiles || {})[file];
+          // (only the boot path, E_OpenPath 4, and only reading)
+          if (io >> 16 !== 4 || (io & 0x3) !== 1 || body === undefined) return result(0x70c);
+          const h = nextFile++;
+          files.set(h, { data: Buffer.from(body, 'base64'), at: 0 });
+          const b = Buffer.alloc(4);
+          b.writeUInt32LE(h);
+          return result(0, withLength(b));
+        }
+        const f = files.get(io);
+        if (!f) return result(0x70c);
+        if (ig === 121) {
+          files.delete(io);
+          return result(0, withLength(Buffer.alloc(0)));
+        }
+        const want = d.readUInt32LE(8);
+        const chunk = f.data.subarray(f.at, f.at + want);
+        f.at += chunk.length;
+        return result(0, withLength(chunk));
+      }
       const name = d.toString('latin1', 16, 16 + writeLen).replace(/\0+$/, '');
       // Data type info by name (symbol browser): config.types = { name: { size, dataType, type, bounds, subItems } }
       if (ig === 0xf011) {
