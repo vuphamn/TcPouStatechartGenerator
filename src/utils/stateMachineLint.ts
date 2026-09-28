@@ -46,7 +46,15 @@ export type LintFix =
   /** A timer / trigger / counter never called: its call put in before its first use */
   | { kind: 'insert-call'; name: string; type: string }
   /** Code that never runs (after a RETURN): removed, to the end of its block */
-  | { kind: 'remove-lines'; name: string; method?: string; line: number };
+  | { kind: 'remove-lines'; name: string; method?: string; line: number }
+  /** The state machine's CASE without ELSE: an ELSE branch put in before END_CASE */
+  | { kind: 'add-else'; name: string; method: string; line: number }
+  /** A PRIVATE method nothing calls: removed */
+  | { kind: 'remove-method'; name: string }
+  /** A state no transition leads to: deleted (Delete state…: what goes is shown first) */
+  | { kind: 'delete-state'; name: string }
+  /** An enum member nothing uses: taken out of the enum */
+  | { kind: 'remove-enum-member'; name: string };
 
 export interface LintFinding {
   /** Stable across edits (no line numbers): used to ignore a finding */
@@ -467,7 +475,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     const incoming = (targets.get(state) ?? []).filter((a) => !(a.method === doState.method && branchOf(a.line) === b));
     if (!lifecycle.has(state) && state !== initial && incoming.length === 0 && !edges.some((e) => e.to === state && e.from !== state)) {
       add({ key: `unreachable:${state}`, rule: 'unreachable', stateId: state, ...at(doState, b.line),
-        message: `No transition in this POU leads to ${state}` });
+        message: `No transition in this POU leads to ${state}`, fix: { kind: 'delete-state', name: state } });
     }
     // (a final state, "(* final *)" on its label, has no way out on purpose)
     if (!lifecycle.has(state) && exitsOf(state).size === 0 && !FINAL_LABEL.test(rawDoState[b.line] ?? '') && !markedFinal(state)) {
@@ -511,7 +519,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     for (const name of enumItems) {
       if (labelled.has(name) || targets.has(name) || name === initial) continue;
       if (new RegExp(`\\b${escapeRx(name)}\\b`).test(code)) continue;
-      add({ key: `unused-enum:${name}`, rule: 'unused-enum', stateId: name, message: `${name} is never used in this POU` });
+      add({ key: `unused-enum:${name}`, rule: 'unused-enum', stateId: name, message: `${name} is never used in this POU`, fix: { kind: 'remove-enum-member', name } });
     }
   }
 
@@ -554,7 +562,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   }
 
   if (mainCase.elseLine === null && mainCase.endCaseLine !== null) {
-    add({ key: 'no-else', rule: 'no-else', ...at(doState, mainCase.endCaseLine), message: `CASE ${variable} OF has no ELSE branch` });
+    add({ key: 'no-else', rule: 'no-else', ...at(doState, mainCase.endCaseLine), message: `CASE ${variable} OF has no ELSE branch`, ...(doState.method ? { fix: { kind: 'add-else' as const, name: variable, method: doState.method, line: mainCase.endCaseLine + 1 } } : {}) });
   }
 
   const order: Record<LintSeverity, number> = { error: 0, warning: 1, info: 2 };

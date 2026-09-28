@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
+import { usePendingSave } from '../utils/pendingSaves.ts';
 import { createPortal } from 'react-dom';
 import {
   Code2,
@@ -259,6 +260,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     line?: number;
     /** The selected lines (implementation), when text is selected */
     selection?: { start: number; end: number };
+    /** The selected part of one line (implementation): an expression for Extract Property */
+    expression?: { line: number; from: number; to: number; text: string };
   } | null>(null);
 
   const [highlightedCaseLine, setHighlightedCaseLine] = useState<number | null>(null);
@@ -832,6 +835,12 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     // (a selection: its lines, for Extract Method; a selection ending at a line's start leaves that line out)
     const endPos = textarea.selectionEnd > textarea.selectionStart && textarea.value[textarea.selectionEnd - 1] === '\n' ? textarea.selectionEnd - 1 : textarea.selectionEnd;
     const selection = textarea.selectionEnd > textarea.selectionStart ? { start: toCodeLine(viewLine), end: toCodeLine(textarea.value.slice(0, endPos).split('\n').length) } : undefined;
+    // (part of one line selected: an expression)
+    const picked = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+    const lineStart = textarea.value.lastIndexOf('\n', textarea.selectionStart - 1) + 1;
+    const lineEnd = textarea.value.indexOf('\n', textarea.selectionStart);
+    const lineText = textarea.value.slice(lineStart, lineEnd < 0 ? undefined : lineEnd);
+    const expression = picked.trim() && !picked.includes('\n') && picked.trim() !== lineText.trim() ? { line: toCodeLine(viewLine), from: textarea.selectionStart - lineStart, to: textarea.selectionEnd - lineStart, text: picked.trim() } : undefined;
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
@@ -839,7 +848,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       memberOf: resolved?.memberOf,
       sourceScope: 'implementation',
       line: toCodeLine(viewLine),
-      selection,
+      selection: expression ? undefined : selection,
+      expression,
     });
   };
 
@@ -869,7 +879,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const scope = editorServices()?.scope?.(cleanMethodName);
     return undeclaredNames(sym, scope?.top ?? [], scope?.knownNames ?? []).length > 0;
   };
-  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }) => {
+  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }, expression?: { line: number; from: number; to: number; text: string }) => {
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declEditorRef : implEditorRef).current?.formatDocument()) };
     // Extract Method: the selected lines into a new method
     const extract =
@@ -890,6 +900,21 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             },
           ]
         : [];
+    // Extract Property: the selected expression into a new property
+    if (expression && editorServices()?.extractProperty)
+      extract.push({
+        id: 'editor-menu-extract-property',
+        label: `Extract Property… (${expression.text.length > 24 ? `${expression.text.slice(0, 23)}…` : expression.text})`,
+        title: 'The selected expression into a new PRIVATE property (its Get), its name in its place',
+        onSelect: () => {
+          if (isDirty) {
+            setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): Extract Property works on the saved POU' });
+            setTimeout(() => setDefinitionNotification(null), 3500);
+            return;
+          }
+          editorServices()!.extractProperty!(cleanMethodName, expression.line, expression.from, expression.to);
+        },
+      });
     if (!sym) return [...extract, format];
     const services = editorServices();
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
@@ -1134,6 +1159,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
   };
 
+  // (the header's Save / Save All put these edits into the POU too)
+  const saveScope = `method${useId()}`;
+  usePendingSave(saveScope, `${cleanMethodName}()`, isDirty, () => handleSave());
   const handleSave = () => {
     if (!onSaveMethodCode && !onSavePreProcessCode) {
       setSaveStatus({
@@ -2092,7 +2120,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           targetSymbol={contextMenu.symbol}
           targetMemberOf={contextMenu.memberOf}
           typeTarget={contextMenu.symbol ? findTypeTarget([declaration, pouDeclaration], contextMenu.symbol, contextMenu.memberOf) : null}
-          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope, contextMenu.selection)}
+          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope, contextMenu.selection, contextMenu.expression)}
           bookmarks={
             contextMenu.sourceScope === 'implementation' && contextMenu.line
               ? {
@@ -2186,6 +2214,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   return (
     <div
       id="method-editor-panel"
+      data-save-scope={saveScope}
       onWheel={(e) => e.stopPropagation()}
       className="w-full flex-1 min-h-0 flex flex-col bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden"
     >

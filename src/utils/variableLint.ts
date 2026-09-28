@@ -133,7 +133,7 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
     const head = m[2].split(/\r?\n/).find((l) => /^\s*METHOD\b/i.test(l)) ?? '';
     if (!/\bPRIVATE\b/i.test(head)) continue;
     const called = units.filter((u) => u.method?.toLowerCase() !== m[1].toLowerCase()).some((u) => useOffsets(u.lines.join('\n'), m[1]).length > 0);
-    if (!called) add({ key: `unused-method:${m[1].toLowerCase()}`, rule: 'unused-method', method: m[1], message: `${m[1]}() is PRIVATE and nothing in the POU calls it` });
+    if (!called) add({ key: `unused-method:${m[1].toLowerCase()}`, rule: 'unused-method', method: m[1], message: `${m[1]}() is PRIVATE and nothing in the POU calls it`, fix: { kind: 'remove-method', name: m[1] } });
   }
 
   // Code after a RETURN, in the same block

@@ -797,12 +797,21 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .priority-badge text {
   cursor: pointer !important;
   pointer-events: all !important;
-  transition: all 0.15s ease;
+  /* (centred always: growing and shrinking back about its own middle, not the drawing's corner) */
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 0.15s ease, fill 0.15s ease, stroke 0.15s ease;
 }
 
+/* (the badge itself keeps its transform attribute: where it was moved to with its state; a CSS transform on it would
+   replace that, the badge jumping back to where it was and the hover flickering. Its circle and number grow instead) */
 .tc-priority-badge:hover,
 .priority-badge:hover {
   filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9)) !important;
+}
+.tc-priority-badge:hover :is(circle, text),
+.priority-badge:hover :is(circle, text),
+.tc-priority-badge.tc-priority-badge-active :is(circle, text) {
   transform: scale(1.2);
 }
 
@@ -822,9 +831,6 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .tc-priority-badge-active,
 .tc-priority-badge.tc-priority-badge-active {
   filter: drop-shadow(0 0 10px rgba(16, 185, 129, 0.9)) !important;
-  transform: scale(1.25);
-  transform-box: fill-box;
-  transform-origin: center;
 }
 
 .tc-priority-badge-active circle {
@@ -1173,4 +1179,11 @@ g.node.multi-selected > .label-container {
   text-decoration: underline wavy #f59e0b;
   text-decoration-skip-ink: none;
   text-underline-offset: 2px;
+}
+
+/* A choice diamond's label: an empty box that gives the diamond its size (the generator's CHOICE_LABEL) */
+.kss-choice-pad {
+  display: block;
+  width: 10px;
+  height: 10px;
 }

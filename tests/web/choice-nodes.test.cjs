@@ -13,15 +13,164 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await h.sleep(800);
-  const choices = () => p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node')].filter((n) => /choice_/.test(n.id)).map((n) => ({ id: n.id, state: n.getAttribute('data-state-id'), diamond: !!n.querySelector('polygon') })));
+  const choices = () => p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node')].filter((n) => /choice_/.test(n.id)).map((n) => ({ id: n.id, state: n.getAttribute('data-state-id'), diamond: !!n.querySelector('polygon'), size: (() => { const b = n.querySelector('polygon')?.getBBox(); return b ? Math.round(b.width) : 0; })() })));
   expect((await choices()).length === 0, 'off: no choices');
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   const on = await choices();
   const clamped = on.find((c) => /choice_TABLEMANAGER_CLAMPED_/.test(c.id));
+  expect(clamped?.size >= 40, `a diamond you can see and grab: ${clamped?.size} wide (SVG units)`);
   expect(on.length > 0 && !!clamped && clamped.diamond, `on: ${on.length} choices drawn as diamonds (CLAMPED's: ${clamped?.id.replace(/^.*?(choice_)/, '$1')})`);
   expect(!(await p.evaluate(() => /Mermaid Render Error/.test(document.body.innerText))), 'no render error');
   expect(await p.evaluate(() => localStorage.getItem('kss.choiceNodes')) === 'true', 'kept per viewer');
+  // A choice dragged (ELK): its transitions stay orthogonal, their ends on the diamond's border
+  const edgesOf = (id) => p.evaluate((id) => {
+    const node = document.getElementById(id);
+    const sid = node?.getAttribute('data-state-id');
+    const svg = node?.ownerSVGElement;
+    const paths = [...(svg?.querySelectorAll('path[data-source-id], path[data-target-id]') ?? [])].filter((e) => e.getAttribute('data-source-id') === sid || e.getAttribute('data-target-id') === sid);
+    const diag = [];
+    for (const e of paths) {
+      const d = e.getAttribute('d') || '';
+      const cmds = [...d.matchAll(/([MLQC])([^MLQCZ]*)/gi)].map((m) => ({ c: m[1].toUpperCase(), n: m[2].trim().split(/[\s,]+/).map(Number) }));
+      let last = null;
+      for (const k of cmds) {
+        const end = { x: k.n[k.n.length - 2], y: k.n[k.n.length - 1] };
+        if (k.c === 'L' && last && Math.abs(end.x - last.x) > 1 && Math.abs(end.y - last.y) > 1) diag.push(`${e.getAttribute('data-source-id')}->${e.getAttribute('data-target-id')}: (${last.x.toFixed(0)},${last.y.toFixed(0)})-(${end.x.toFixed(0)},${end.y.toFixed(0)})`);
+        if (k.c === 'C') diag.push(`${e.getAttribute('data-source-id')}->${e.getAttribute('data-target-id')}: a curve`);
+        last = end;
+      }
+    }
+    return { sid, n: paths.length, diag };
+  }, id);
+  // (the view on CLAMPED: Go to State zooms in; its choice is by it)
+  await p.evaluate(() => [...document.getElementById('state-list-item-TABLEMANAGER_CLAMPED').querySelectorAll('button')].find((b) => /Go to State/.test(b.textContent))?.click());
+  await h.sleep(1500);
+  const choiceGaps = () => p.evaluate(() => {
+    const out = [];
+    for (const n of document.querySelectorAll('#mermaid-canvas-area g.node')) {
+      if (!/choice_/.test(n.id)) continue;
+      const poly = n.querySelector('polygon');
+      const svg = n.ownerSVGElement;
+      const sid = n.getAttribute('data-state-id');
+      // in the SVG's own units: the polygon's box
+      const pm = poly.getCTM(); const sm = svg.getCTM ? svg.getScreenCTM() : null;
+      const b = poly.getBBox();
+      const toSvg = (x, y) => { const m = svg.getScreenCTM().inverse().multiply(poly.getScreenCTM()); return { x: x * m.a + y * m.c + m.e, y: x * m.b + y * m.d + m.f }; };
+      const tl = toSvg(b.x, b.y); const br = toSvg(b.x + b.width, b.y + b.height);
+      let worst = 0; let at = '';
+      for (const pth of svg.querySelectorAll('path[data-source-id], path[data-target-id]')) {
+        const isIn = pth.getAttribute('data-target-id') === sid; const isOut = pth.getAttribute('data-source-id') === sid;
+        if (!isIn && !isOut) continue;
+        const L = pth.getTotalLength(); const q0 = pth.getPointAtLength(isIn ? L : 0);
+        const m = svg.getScreenCTM().inverse().multiply(pth.getScreenCTM());
+        const q = { x: q0.x * m.a + q0.y * m.c + m.e, y: q0.x * m.b + q0.y * m.d + m.f };
+        // (how far from the diamond's border itself: |x - cx| / hw + |y - cy| / hh = 1 on it)
+        const cx = (tl.x + br.x) / 2; const cy = (tl.y + br.y) / 2; const hw = (br.x - tl.x) / 2; const hh = (br.y - tl.y) / 2;
+        const d = Math.abs(Math.abs(q.x - cx) / hw + Math.abs(q.y - cy) / hh - 1) * Math.min(hw, hh) / Math.SQRT2;
+        if (d > worst) { worst = d; at = (isIn ? 'in from ' + pth.getAttribute('data-source-id') : 'out to ' + pth.getAttribute('data-target-id')); }
+      }
+      out.push([sid.replace('choice_TABLEMANAGER_', ''), Math.round(br.x - tl.x), Math.round(worst), at]);
+    }
+    return out.sort((a, b) => b[2] - a[2]);
+  });
+  const fresh = await choiceGaps();
+  expect(fresh.length > 20 && fresh[0][2] <= 6, `every choice's transitions end at its diamond (worst: ${fresh[0]?.[0]}, ${fresh[0]?.[2]} units off, ${fresh[0]?.[3]})`);
+  const before = await edgesOf(clamped.id);
+  const box = await p.evaluate((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, clamped.id);
+  const hit = await p.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('g.node')?.id ?? '', [box.x, box.y]);
+  expect(hit === clamped.id, `the choice under the mouse (${hit || 'nothing'})`);
+  await p.mouse.move(box.x, box.y);
+  await p.mouse.down();
+  await p.mouse.move(box.x + 70, box.y + 45, { steps: 8 });
+  await p.mouse.up();
+  await h.sleep(800);
+  const after = await edgesOf(clamped.id);
+  const draggedGaps = await choiceGaps();
+  expect(draggedGaps[0][2] <= 6, `... and after the drag (worst: ${draggedGaps[0]?.[0]}, ${draggedGaps[0]?.[2]} units off)`);
+  const moved = await p.evaluate((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, clamped.id);
+  expect(Math.hypot(moved.x - box.x - 70, moved.y - box.y - 45) < 12, `the choice moved with the mouse (${(moved.x - box.x).toFixed(0)},${(moved.y - box.y).toFixed(0)} of 70,45)`);
+  expect(before.n > 0 && after.n === before.n && after.diag.length === 0, `the choice dragged (ELK): its ${after.n} transitions orthogonal (${after.diag.slice(0, 3).join(' | ') || 'no diagonal'}; before: ${before.diag.length} diagonal)`);
+  await p.screenshot({ path: h.out('choice-dragged.png') });
+  // AUTOFEED_IDLE's choice moved a little sideways: its transitions still end on its sides (not beside it)
+  const idleChoice = (await choices()).find((c) => /choice_TABLEMANAGER_AUTOFEED_IDLE_/.test(c.id));
+  const ib = await p.evaluate((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, idleChoice.id);
+  await p.mouse.move(ib.x, ib.y);
+  await p.mouse.down();
+  await p.mouse.move(ib.x - 3, ib.y + 1, { steps: 4 });
+  await p.mouse.up();
+  await h.sleep(800);
+  const sideways = (await choiceGaps()).find((g) => /^AUTOFEED_IDLE_/.test(g[0]));
+  expect(!!sideways && sideways[2] <= 6,`AUTOFEED_IDLE's choice moved sideways: its transitions on its sides (${sideways?.[2]} units off, ${sideways?.[3]})`);
+  // A moved badge hovered: it grows where it is (no jump back to where it was: no flicker)
+  const badge = await p.evaluate((sid) => {
+    const b = [...document.querySelectorAll('#mermaid-canvas-area .tc-priority-badge')].find((x) => x.getAttribute('data-from') === sid && x.getAttribute('transform'));
+    if (!b) return null;
+    const r = b.querySelector('circle').getBoundingClientRect();
+    b.setAttribute('data-test-badge', '1');
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  }, after.sid);
+  let jumped = null;
+  if (badge) {
+    // (zoomed in on it, as when you look at it)
+    await p.mouse.move(badge.x + 60, badge.y + 60);
+    await p.keyboard.down('Control');
+    for (let i = 0; i < 8; i++) {
+      await p.mouse.wheel({ deltaY: -120 });
+      await h.sleep(40);
+    }
+    await p.keyboard.up('Control');
+    await h.sleep(700);
+    const b2 = await p.evaluate(() => { const r = document.querySelector('[data-test-badge] circle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    badge.x = b2.x;
+    badge.y = b2.y;
+    await p.evaluate(() => { window.__badgeAt = []; const t0 = performance.now(); const f = () => { const r = document.querySelector('[data-test-badge] circle')?.getBoundingClientRect(); if (r) window.__badgeAt.push(Math.round(r.x + r.width / 2) + ',' + Math.round(r.y + r.height / 2)); if (performance.now() - t0 < 700) requestAnimationFrame(f); }; requestAnimationFrame(f); });
+    await p.mouse.move(badge.x, badge.y);
+    await h.sleep(800);
+    const spots = [...new Set(await p.evaluate(() => window.__badgeAt))];
+    const hovered = await p.evaluate(() => { const r = document.querySelector('[data-test-badge] circle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, over: document.querySelector('[data-test-badge]').matches(':hover') }; });
+    jumped = { d: Math.hypot(hovered.x - badge.x, hovered.y - badge.y), over: hovered.over, w: hovered.w, spots };
+  }
+  expect(!!jumped && jumped.d < 2 && jumped.over && jumped.spots.length === 1, `a moved priority badge hovered: stays under the mouse, no flicker (at ${jumped?.spots.join(' ')} while hovered; ${jumped?.w.toFixed(1)} px wide)`);
+  // ... and the mouse away: it shrinks back where it is (about its middle, not drifting down-right and back)
+  await p.evaluate(() => {
+    window.__badgeLeave = [];
+    const t0 = performance.now();
+    const f = () => {
+      const r = document.querySelector('[data-test-badge] circle')?.getBoundingClientRect();
+      if (r) window.__badgeLeave.push({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      if (performance.now() - t0 < 500) requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  });
+  await p.mouse.move(badge ? badge.x + 150 : 5, badge ? badge.y + 150 : 5);
+  await h.sleep(650);
+  const leave = await p.evaluate(() => window.__badgeLeave);
+  const drift = leave.length ? Math.max(...leave.map((q) => Math.hypot(q.x - leave[leave.length - 1].x, q.y - leave[leave.length - 1].y))) : NaN;
+  expect(leave.length > 5 && drift < 1, `the mouse away: the badge shrinks back in place (drifted at most ${drift.toFixed(1)} px over ${leave.length} frames)`);
+  await p.mouse.move(5, 5);
+  // Laid out again with the moves kept (the states' descriptions off: every state another size): still on their diamonds
+  await p.click('#include-descriptions-checkbox').catch(() => {});
+  await h.sleep(3000);
+  const relaid = await choiceGaps();
+  expect(relaid.length > 20 && relaid[0][2] <= 6, `laid out again, the moves kept: every choice's transitions on its diamond (worst: ${relaid[0]?.[0]}, ${relaid[0]?.[2]} units off, ${relaid[0]?.[3]})`);
+  await p.screenshot({ path: h.out('choice-relaid.png') });
+  await p.click('#include-descriptions-checkbox').catch(() => {});
+  await h.sleep(3000);
+  // (a close look)
+  const ib2 = await p.evaluate((id) => { const r = [...document.querySelectorAll('#mermaid-canvas-area g.node')].find((n) => n.id.endsWith(id.replace(/^.*?(choice_)/, '$1'))).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, idleChoice.id);
+  await p.mouse.move(ib2.x, ib2.y);
+  await p.keyboard.down('Control');
+  for (let i = 0; i < 22; i++) {
+    await p.mouse.wheel({ deltaY: -120 });
+    await h.sleep(40);
+  }
+  await p.keyboard.up('Control');
+  await h.sleep(900);
+  await p.mouse.move(5, 500);
+  await h.sleep(400);
+  const ib3 = await p.evaluate((id) => { const r = [...document.querySelectorAll('#mermaid-canvas-area g.node')].find((n) => n.id.endsWith(id.replace(/^.*?(choice_)/, '$1'))).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width }; }, idleChoice.id);
+  await p.screenshot({ path: h.out('choice-sideways.png'), clip: { x: Math.max(0, ib3.x - 220), y: Math.max(0, ib3.y - 220), width: 440, height: 440 } });
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   expect((await choices()).length === 0, 'off again: gone');

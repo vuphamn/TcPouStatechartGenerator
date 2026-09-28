@@ -12,7 +12,7 @@ const off = generateStatechartModel(s.dutContent, s.pouContent, { flowchartOutpu
 expect(!/choice_/.test(off), 'off: no choices (the chart as before)');
 
 const fc = generateStatechartModel(s.dutContent, s.pouContent, { flowchartOutput: true, choiceNodes: true });
-const id = fc.markdown.match(new RegExp(`(choice_${C}_\\d+)\\{" "\\}`))?.[1];
+const id = fc.markdown.match(new RegExp(`(choice_${C}_\\d+)\\{"[^"]*"\\}`))?.[1];
 expect(!!id, `flowchart: CLAMPED's IF / ELSIF is a choice (${id})`);
 expect(new RegExp(`\\n\\s*${C} --> ${id}\\n`).test(fc.markdown), 'CLAMPED goes to it');
 expect(new RegExp(`${id} -->\\|"[^"]*cmd_bUnclamp[^"]*"\\| TABLEMANAGER_UNCLAMP_START`).test(fc.markdown) && new RegExp(`${id} -->\\|"[^"]*cmd_bStartReClamp[^"]*"\\| TABLEMANAGER_REFEED_START`).test(fc.markdown), 'its arms leave the choice, with their conditions');
@@ -20,9 +20,9 @@ expect(!new RegExp(`${C} -->\\|[^\\n]*TABLEMANAGER_UNCLAMP_START`).test(fc.markd
 expect(fc.edges.some((e) => e.from === id && /UNCLAMP_START/.test(e.to)), 'the model: the edge from the choice (guards / live values)');
 // Its declaration is in CLAMPED's composite
 const sub = fc.markdown.match(/subgraph TableManagerEnabled[\s\S]*?\n {4}end\n/)?.[0] ?? '';
-expect(sub.includes(`${id}{" "}`), 'declared in its composite');
+expect(sub.includes(`${id}{"`), 'declared in its composite');
 // A state whose transitions are in separate IFs gets none
-const count = (fc.markdown.match(/choice_\w+\{" "\}/g) ?? []).length;
+const count = (fc.markdown.match(/choice_\w+\{"[^"]*"\}/g) ?? []).length;
 expect(count >= 1 && count < 20, `${count} choices in the Table Manager`);
 
 const sd = generateStatechartModel(s.dutContent, s.pouContent, { choiceNodes: true }).markdown;

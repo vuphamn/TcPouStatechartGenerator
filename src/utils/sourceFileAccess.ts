@@ -217,3 +217,74 @@ export function downloadSource(name: string, content: string) {
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
+
+// ---- The project's other POUs (web): a name's uses, written back (rename across POUs) ----
+
+/** The other .TcPOU files read from the granted folder, by relative path: they can be written back */
+const pouHandles = new Map<string, FsFileHandle>();
+
+/**
+ * Web: the project's other .TcPOU files that mention the name (as a word), from the granted folder (asked for once,
+ * read and write). { error: 'canceled' } when the user cancels; the loaded POU itself is left out.
+ */
+export async function webProjectUses(name: string): Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }> {
+  if (typeof w.showDirectoryPicker !== 'function') return { error: 'this browser cannot open a project folder (Chrome or Edge can)' };
+  if (!grantedFolder) {
+    try {
+      grantedFolder = await w.showDirectoryPicker({ id: 'tc-project', mode: 'readwrite', startIn: lastPouHandle ?? undefined });
+    } catch (e) {
+      return { error: isAbort(e) ? 'canceled' : String(e) };
+    }
+  }
+  const word = new RegExp(`(^|[^\\w])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`, 'i');
+  const files: { name: string; path: string; content: string }[] = [];
+  const self = lastPouHandle as (FsFileHandle & { isSameEntry?: (o: FsHandle) => Promise<boolean> }) | null;
+  async function walk(d: FsDirectoryHandle, prefix: string, depth: number) {
+    if (depth > MAX_DEPTH || files.length >= 400) return;
+    for await (const entry of d.values()) {
+      if (entry.kind === 'directory') {
+        if (!entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name.toLowerCase())) await walk(entry, `${prefix}${entry.name}/`, depth + 1);
+      } else if (entry.name.toLowerCase().endsWith('.tcpou')) {
+        try {
+          if (self?.isSameEntry && (await self.isSameEntry(entry))) continue;
+          const content = (await (await entry.getFile()).text()).replace(/^\ufeff/, '');
+          if (!word.test(content)) continue;
+          files.push({ name: entry.name, path: prefix + entry.name, content });
+          pouHandles.set(prefix + entry.name, entry);
+        } catch {
+          // unreadable file
+        }
+      }
+    }
+  }
+  await walk(grantedFolder, '', 0);
+  return { files };
+}
+
+/** Web: the other POUs written back (each only if it did not change since it was read); what went wrong, or null */
+export async function writeWebOtherPous(files: { path: string; content: string; baseline: string }[]): Promise<string | null> {
+  const problems: string[] = [];
+  for (const f of files) {
+    const handle = pouHandles.get(f.path);
+    if (!handle?.createWritable) {
+      problems.push(`${f.path}: not read from the project folder`);
+      continue;
+    }
+    let permission = (await handle.queryPermission?.({ mode: 'readwrite' })) ?? 'prompt';
+    if (permission !== 'granted') permission = (await handle.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+    if (permission !== 'granted') {
+      problems.push(`${f.path}: not allowed to write`);
+      continue;
+    }
+    const file = await handle.getFile();
+    if ((await file.text()).replace(/^\ufeff/, '') !== f.baseline) {
+      problems.push(`${f.path} changed since it was read`);
+      continue;
+    }
+    const bom = file.size === 0 || (await hasBom(file));
+    const writable = await handle.createWritable();
+    await writable.write((bom ? '\ufeff' : '') + f.content);
+    await writable.close();
+  }
+  return problems.length ? problems.join('; ') : null;
+}

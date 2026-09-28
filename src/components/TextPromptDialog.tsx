@@ -41,6 +41,8 @@ export interface TextPromptRequest {
   preview?: (value: string) => string[];
   /** The scopes offered when declaring */
   declareScopes?: NewVariable['scope'][];
+  /** Another way to go, left of the buttons (the dialog closes first) */
+  altAction?: { id: string; label: string; title?: string; run: () => void };
 }
 
 /** A name with the part matching what is typed marked */
@@ -425,7 +427,7 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
           {preview.length > 0 && (
             <ul id="text-prompt-preview" className="max-h-48 overflow-y-auto rounded bg-slate-950 border border-slate-800 px-3 py-2 space-y-0.5 font-mono text-[11px] text-slate-300">
               {preview.map((d, i) => (
-                <li key={i} className="break-words whitespace-pre-wrap">
+                <li key={i} className={`break-words whitespace-pre-wrap ${/^\+ /.test(d) ? 'text-emerald-300' : /^- /.test(d) ? 'text-rose-300' : ''}`}>
                   {d}
                 </li>
               ))}
@@ -433,6 +435,20 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
           )}
         </div>
         <div className={`flex justify-end gap-2 px-4 py-2.5 border-t border-slate-800 ${request.inline ? 'hidden' : ''}`}>
+          {request.altAction && (
+            <button
+              id={request.altAction.id}
+              onClick={() => {
+                const run = request.altAction!.run;
+                onClose();
+                setTimeout(run, 0);
+              }}
+              title={request.altAction.title}
+              className="mr-auto px-3 py-1 rounded-md text-sky-300 hover:bg-slate-800"
+            >
+              {request.altAction.label}
+            </button>
+          )}
           <button onClick={onClose} className="px-3 py-1 rounded-md text-slate-300 hover:bg-slate-800">
             Cancel
           </button>

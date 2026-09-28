@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { usePendingSave } from '../utils/pendingSaves.ts';
 import {
   Code2,
   Save,
@@ -120,6 +121,8 @@ export const StateStructuredTextEditor: React.FC<StateStructuredTextEditorProps>
     }
   };
 
+  usePendingSave('state-code', `${selectedStateId}'s code`, isDirty, () => handleSaveRef.current());
+  const handleSaveRef = useRef<() => void>(() => {});
   const handleSave = () => {
     if (!onSaveStateCode) {
       setSaveStatus({ type: 'error', message: 'Save handler not available.' });
@@ -175,8 +178,9 @@ export const StateStructuredTextEditor: React.FC<StateStructuredTextEditorProps>
     return Math.max(1, code.split('\n').length);
   }, [code]);
 
+  handleSaveRef.current = () => handleSave();
   return (
-    <div id="state-st-code-editor" className="flex flex-col text-xs text-slate-200">
+    <div id="state-st-code-editor" data-save-scope="state-code" className="flex flex-col text-xs text-slate-200">
       {/* State & Method Context Banner */}
       <div className="px-3.5 py-2 bg-slate-950/70 border-b border-slate-800 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">

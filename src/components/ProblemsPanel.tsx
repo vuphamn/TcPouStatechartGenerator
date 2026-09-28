@@ -38,6 +38,10 @@ const FIX_LABEL: Record<NonNullable<LintFinding['fix']>['kind'], string> = {
   'remove-variable': 'Remove',
   'insert-call': 'Insert call',
   'remove-lines': 'Remove the lines',
+  'add-else': 'Add ELSE',
+  'remove-method': 'Remove method',
+  'delete-state': 'Delete state…',
+  'remove-enum-member': 'Remove from enum',
 };
 
 export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({

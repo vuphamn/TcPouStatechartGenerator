@@ -146,7 +146,8 @@ jobs:
             $tag = "$($e.id)-v$($e.v)"
             node scripts/release-plan.cjs --notes $e.id | Out-File -Encoding utf8 "out/$($e.id)-notes.md"
             # Paths relative to the workspace: gh reads "D:\..." as the file "D" (a colon starts an asset's label)
-            $assets = $e.files | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { "out/$($_.Name)" }
+            # (always a list: one file alone would be a string, and @assets would pass its letters one by one)
+            $assets = @($e.files | ForEach-Object { Get-ChildItem $_ } | ForEach-Object { "out/$($_.Name)" })
             if (-not $assets) { Write-Host "::error::No files for $($e.title)"; $failed += $tag; continue }
             gh release view $tag *> $null
             if ($LASTEXITCODE -eq 0) {

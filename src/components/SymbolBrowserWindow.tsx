@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Binary, ChevronDown, ChevronRight, Eye, ExternalLink, Filter, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react';
+import { Binary, ChevronDown, ChevronRight, Eye, ExternalLink, Filter, ListTree, Loader2, Radio, RefreshCw, Search, Square, X } from 'lucide-react';
 import type { LiveBrowseResult, SymbolChild } from '../utils/xaeHost.ts';
 import type { LiveValue, WatchedVar } from '../utils/liveGuards.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
@@ -40,7 +40,20 @@ interface SymbolBrowserWindowProps {
   openTarget: 'tab' | 'window';
   /** The loaded POU's type (SM_TableManager): the type filter starts with it */
   loadedType?: string;
+  /** Another instance of the loaded POU, followed here instead (live again on it) */
+  onGoLiveHere?: (path: string) => void;
 }
+
+const typeKey = (t: string) => `kss.symbols.type.${t.toLowerCase()}`;
+const readTypeFilter = (loaded?: string) => {
+  if (!loaded) return '';
+  try {
+    const v = localStorage.getItem(typeKey(loaded));
+    return v === null ? loaded : v;
+  } catch {
+    return loaded;
+  }
+};
 
 export const symbolWatchId = (path: string) => `sym:${path.toLowerCase()}`;
 
@@ -67,19 +80,36 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   onWatch,
   openTarget,
   loadedType,
+  onGoLiveHere,
 }) => {
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState('');
   const [rootDraft, setRootDraft] = useState(root);
-  // The type filter: the loaded POU's type until changed here
-  const [typeFilter, setTypeFilter] = useState(loadedType ?? '');
+  // The type filter: the loaded POU's type at first; what was typed here, kept for that POU type
+  const [typeFilter, setTypeFilterState] = useState(() => readTypeFilter(loadedType));
   const typeTouchedRef = useRef(false);
   useEffect(() => {
-    if (!typeTouchedRef.current) setTypeFilter(loadedType ?? '');
+    setTypeFilterState(readTypeFilter(loadedType));
   }, [loadedType]);
+  const setTypeFilter = (v: string) => {
+    typeTouchedRef.current = true;
+    setTypeFilterState(v);
+    if (!loadedType) return;
+    try {
+      // (the loaded type itself: the default, nothing kept)
+      if (v.trim().toLowerCase() === loadedType.toLowerCase()) localStorage.removeItem(typeKey(loadedType));
+      else localStorage.setItem(typeKey(loadedType), v);
+    } catch {
+      // per-viewer convenience only
+    }
+  };
   const typeNeedle = typeFilter.trim().toLowerCase();
-  const [search, setSearch] = useState<{ matches: SymbolChild[]; reads: number; done: boolean; capped: boolean; errors: number }>({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
+  // Where the search starts: the Root, or all of MAIN
+  const [searchMain, setSearchMain] = useState(false);
+  const searchRoot = searchMain ? 'MAIN' : root;
+  const [search, setSearch] = useState<{ matches: SymbolChild[]; reads: number; done: boolean; capped: boolean; errors: number; stopped?: boolean }>({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
+  const searchMatchesRef = useRef<SymbolChild[]>([]);
   const searchGenRef = useRef(0);
   // (the search reads through the latest browse: a new function each render must not start it again)
   const browseRef = useRef(browse);
@@ -129,7 +159,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   const [searchNonce, setSearchNonce] = useState(0);
   useEffect(() => {
     const gen = ++searchGenRef.current;
-    if (!connected || !root || !typeNeedle) {
+    if (!connected || !searchRoot || !typeNeedle) {
       setSearch({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
       return;
     }
@@ -137,6 +167,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
     setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
     const timer = window.setTimeout(() => {
       const matches: SymbolChild[] = [];
+      searchMatchesRef.current = matches;
       let reads = 0;
       let errors = 0;
       let capped = false;
@@ -145,7 +176,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
       const matchesType = (c: SymbolChild) => c.kind !== 'array' && bareType(c.type).toLowerCase().includes(typeNeedle);
       setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
       void (async () => {
-        let level = [root];
+        let level = [searchRoot];
         for (let depth = 0; depth < TYPE_SEARCH_DEPTH && level.length && alive(); depth++) {
           const next: string[] = [];
           for (let i = 0; i < level.length && alive(); i += 4) {
@@ -177,7 +208,11 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
       })();
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [connected, root, typeNeedle, searchNonce]);
+  }, [connected, searchRoot, typeNeedle, searchNonce]);
+  const stopSearch = () => {
+    searchGenRef.current++;
+    setSearch((s) => ({ ...s, matches: [...searchMatchesRef.current].sort((a, b) => a.path.localeCompare(b.path)), done: true, stopped: true }));
+  };
   const sameAsLoaded = (c: SymbolChild) => !!loadedType && bareType(c.type).toLowerCase() === loadedType.toLowerCase();
 
   // What is on show, in tree order (filtered: matches and the members leading to them)
@@ -275,10 +310,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
           <input
             id="symbol-browser-type-filter"
             value={typeFilter}
-            onChange={(e) => {
-              typeTouchedRef.current = true;
-              setTypeFilter(e.target.value);
-            }}
+            onChange={(e) => setTypeFilter(e.target.value)}
             placeholder="Instances of a type (empty: the whole tree)"
             spellCheck={false}
             title={`Only the instances of this type under ${root} (at first the loaded POU's type). Clear it for the whole tree`}
@@ -287,10 +319,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
           {typeFilter && (
             <button
               id="symbol-browser-type-clear"
-              onClick={() => {
-                typeTouchedRef.current = true;
-                setTypeFilter('');
-              }}
+              onClick={() => setTypeFilter('')}
               className="p-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800"
               title="Clear: the whole tree, every type"
             >
@@ -300,10 +329,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
           {loadedType && typeFilter.trim().toLowerCase() !== loadedType.toLowerCase() && (
             <button
               id="symbol-browser-type-loaded"
-              onClick={() => {
-                typeTouchedRef.current = false;
-                setTypeFilter(loadedType);
-              }}
+              onClick={() => setTypeFilter(loadedType)}
               className="px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 shrink-0"
               title={`Only the instances of ${loadedType} (the loaded POU)`}
             >
@@ -345,12 +371,30 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
               {!search.done && <Loader2 className="w-3 h-3 animate-spin" />}
               <span>
                 {search.done
-                  ? `${search.matches.length} instance${search.matches.length === 1 ? '' : 's'} of ${typeFilter.trim()} under ${root}`
-                  : `Searching ${root} for ${typeFilter.trim()}… (${search.reads} read, ${search.matches.length} found)`}
+                  ? `${search.matches.length} instance${search.matches.length === 1 ? '' : 's'} of ${typeFilter.trim()} under ${searchRoot}${search.stopped ? ' (stopped)' : ''}`
+                  : `Searching ${searchRoot} for ${typeFilter.trim()}… (${search.reads} read, ${search.matches.length} found)`}
                 {search.done && search.capped && ` (stopped after ${search.reads} symbols: a narrower root finds the rest)`}
                 {search.done && search.errors > 0 && ` (${search.errors} could not be read)`}
               </span>
             </div>
+            {typeNeedle && (
+              <div className="flex items-center gap-1.5 px-2 pb-1 font-sans text-[10px] text-slate-500">
+                <span>Search in</span>
+                <button id="symbol-browser-search-root" onClick={() => setSearchMain(false)} className={`px-1.5 rounded border ${!searchMain ? 'border-sky-700 text-sky-200' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`} title="From the Root above">
+                  {root}
+                </button>
+                {root !== 'MAIN' && (
+                  <button id="symbol-browser-search-main" onClick={() => setSearchMain(true)} className={`px-1.5 rounded border ${searchMain ? 'border-sky-700 text-sky-200' : 'border-slate-700 text-slate-400 hover:bg-slate-800'}`} title="All of MAIN (slower)">
+                    MAIN
+                  </button>
+                )}
+                {!search.done && (
+                  <button id="symbol-browser-search-stop" onClick={stopSearch} className="ml-auto flex items-center gap-1 px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="Stop: keep what was found">
+                    <Square className="w-2.5 h-2.5" /> Stop
+                  </button>
+                )}
+              </div>
+            )}
             {search.done && search.matches.length === 0 && (
               <div className="px-6 py-2 text-slate-500 font-sans">
                 None found. Clear the filter for the whole tree, or change the Root.
@@ -385,6 +429,16 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                       <ExternalLink className="w-3 h-3" /> Open
                     </button>
                   ) : (
+                    <>
+                      {onGoLiveHere && (
+                        <button
+                          onClick={() => onGoLiveHere(c.path)}
+                          className="symbol-here shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-emerald-300 hover:bg-slate-700"
+                          title={`Follow ${c.path} in this ${openTarget} instead (live again on it)`}
+                        >
+                          <Radio className="w-3 h-3" /> Here
+                        </button>
+                      )}
                     <button
                       onClick={open}
                       className="symbol-watch shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-sky-300 hover:bg-slate-700"
@@ -392,6 +446,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                     >
                       <Eye className="w-3 h-3" /> Watch
                     </button>
+                    </>
                   )}
                 </div>
               );

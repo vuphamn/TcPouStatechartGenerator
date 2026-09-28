@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { usePendingSave } from '../utils/pendingSaves.ts';
 import { createPortal } from 'react-dom';
 import {
   FileCode,
@@ -528,6 +529,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  usePendingSave('enum-editor', 'the Enum Editor', isDirty, () => handleSave());
   // Keyboard shortcut handler
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -557,6 +559,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   const editorContent = (
     <div
       ref={rootRef}
+      data-save-scope="enum-editor"
       onKeyDown={handleKeyDown}
       style={isModal && !embedded ? containerStyle : undefined}
       className={`flex flex-col bg-slate-950 text-slate-200 font-sans transition-all duration-150 overflow-hidden ${

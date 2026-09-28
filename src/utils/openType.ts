@@ -22,6 +22,8 @@ export interface OpenTypeHandler {
   rename?: (name: string, method?: string) => void;
   /** Extract Method: lines of a method (1-based, the saved POU's) into a new method; asks for its name */
   extractMethod?: (method: string, startLine: number, endLine: number) => void;
+  /** An expression of one line (its columns) into a new property */
+  extractProperty?: (method: string, line: number, from: number, to: number) => void;
   /** Rename a method / property of the POU (and where other POUs call it): asks for the name, previews */
   renameMethod?: (name: string) => void;
   /** Declare variables in the POU's declaration (written at once); false: not done (the reason was shown) */

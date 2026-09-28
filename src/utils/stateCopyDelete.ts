@@ -24,10 +24,11 @@ function setMethod(pou: string, method: string, code: string): string {
 }
 
 /** A free name for a copy: NAME_COPY, NAME_COPY2, … */
-export function copyName(pouXml: string, dutContent: string, name: string): string {
+/** taken: names already given in this paste (several states copied at once) */
+export function copyName(pouXml: string, dutContent: string, name: string, taken: string[] = []): string {
   for (let i = 1; ; i++) {
     const candidate = `${name}_COPY${i === 1 ? '' : i}`;
-    if (!checkNewStateName(pouXml, dutContent, candidate)) return candidate;
+    if (!taken.some((n) => n.toLowerCase() === candidate.toLowerCase()) && !checkNewStateName(pouXml, dutContent, candidate)) return candidate;
   }
 }
 
@@ -237,4 +238,47 @@ export function deleteState(pouXml: string, dutContent: string, name: string, st
   } catch (e) {
     return { error: (e as Error).message };
   }
+}
+
+/**
+ * Several states copied at once (names: the copies' names, in the same order): each as copyState does, then in the
+ * copies' branches a transition to another of the copied states goes to its copy (the group copied as a whole).
+ */
+export function copyStates(pouXml: string, dutContent: string, froms: string[], names: string[], stateVar: string): { pou: string; dut: string | null; methods: string[] } | { error: string } {
+  let pou = pouXml;
+  let dut: string | null = dutContent?.trim() ? dutContent : null;
+  const methods = new Set<string>();
+  for (let i = 0; i < froms.length; i++) {
+    const r = copyState(pou, dut ?? '', froms[i], names[i], stateVar);
+    if ('error' in r) return { error: `${froms[i]}: ${r.error}` };
+    pou = r.pou;
+    if (r.dut) dut = r.dut;
+    r.methods.forEach((m) => methods.add(m));
+  }
+  // The copies' transitions to the other copied states: to their copies
+  for (const method of methods) {
+    const m = getMethodCodeFromPou(pou, method);
+    if (!m.methodFound) continue;
+    const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+    const lines = m.code.split(/\r?\n/);
+    const code = blankedLines(lines);
+    let changed = false;
+    for (const name of names) {
+      const range = caseBranchRange(code, name);
+      if (!range) continue;
+      for (let l = range.start + 1; l < range.end; l++) {
+        let line = lines[l];
+        froms.forEach((from, k) => {
+          const rx = new RegExp(`(\\b${escapeRx(stateVar)}\\s*:=\\s*(?:[A-Za-z_]\\w*\\s*\\.\\s*)*)${escapeRx(from)}\\b`, 'g');
+          line = line.replace(rx, `$1${names[k]}`);
+        });
+        if (line !== lines[l]) {
+          lines[l] = line;
+          changed = true;
+        }
+      }
+    }
+    if (changed) pou = setMethod(pou, method, lines.join(eol));
+  }
+  return { pou, dut: dut === dutContent ? null : dut, methods: [...methods] };
 }

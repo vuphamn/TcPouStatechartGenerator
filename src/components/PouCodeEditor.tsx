@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePendingSave } from '../utils/pendingSaves.ts';
 import { Blocks, ChevronDown, ChevronUp, Copy, FileCode2, FoldVertical, RotateCcw, Save, Search, UnfoldVertical, X } from 'lucide-react';
 import { StructuredTextCodeEditor, StructuredTextCodeEditorRef } from './StructuredTextCodeEditor.tsx';
 import { getPouBody } from '../utils/pouBody.ts';
@@ -325,6 +326,8 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       .filter((b) => b.startLine <= line && line <= b.endLine)
       .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0];
 
+  usePendingSave('pou-editor', `the POU Editor (${pouFileName})`, dirty, () => save());
+
   const onEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
@@ -383,7 +386,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   );
 
   return (
-    <div id="pou-editor" className="flex-1 min-h-0 w-full flex flex-col bg-slate-950 text-xs">
+    <div id="pou-editor" data-save-scope="pou-editor" className="flex-1 min-h-0 w-full flex flex-col bg-slate-950 text-xs">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-slate-800 bg-slate-950/90 shrink-0">
         <Blocks className="w-4 h-4 text-sky-400 shrink-0" />

@@ -262,13 +262,88 @@ function reattachEnd(route: Point[], box: NodeBox, gap: number, atStart: boolean
   return atStart ? out.reverse() : out;
 }
 
+/** A diamond (a Choice): its shape is a polygon of 4 corners */
+function isDiamondNode(el: Element | null): boolean {
+  const poly = el?.querySelector(':scope > polygon, :scope > g > polygon');
+  return !!poly && (poly.getAttribute('points') ?? '').trim().split(/[\s,]+/).filter(Boolean).length === 8;
+}
+
+/**
+ * An orthogonal route's end put on a diamond's corner, square to it: a vertical end on the top or bottom corner, a
+ * horizontal one on the left or right corner, on the side the route comes from, so the line meets the diamond (and
+ * its arrow head touches it) instead of ending beside it or crossing it. The bend before it moves onto the corner's
+ * line when it is well outside the diamond on that side; else a short step just outside the corner is added.
+ * gap: how far outside the corner it stops.
+ */
+function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: number): Point[] {
+  if (route.length < 2) return route;
+  // (the diamond's end last)
+  const pts = (atStart ? [...route].reverse() : [...route]).map((p) => ({ ...p }));
+  const n = pts.length;
+  // Where the route heads: the first point back from the diamond that is well away from it (its half-sizes as the
+  // unit); mostly above / below: the top / bottom corner, mostly beside it: the left / right corner
+  const far = (c: Point) => Math.max(Math.abs(c.x - box.cx) / box.hw, Math.abs(c.y - box.cy) / box.hh);
+  let k = 0;
+  for (let i = n - 2; i >= 0; i--) {
+    if (far(pts[i]) > 1.6) {
+      k = i;
+      break;
+    }
+  }
+  let F = pts[k];
+  let vertical = Math.abs(F.y - box.cy) / box.hh >= Math.abs(F.x - box.cx) / box.hw;
+  // (a bend just above / below that then runs off sideways: the side corner, so it does not share the top / bottom
+  // corner with the transition that comes in there)
+  const G = k > 0 ? pts[k - 1] : null;
+  if (vertical && G && Math.abs(G.y - F.y) < ORTHO_EPS && Math.abs(G.x - box.cx) > 2 * box.hw && Math.abs(F.y - box.cy) < 4 * box.hh) {
+    k -= 1;
+    F = G;
+    vertical = false;
+  }
+  const STUB = 14;
+  let tail: Point[];
+  if (vertical) {
+    const side = F.y < box.cy ? -1 : 1;
+    const end = { x: box.cx, y: box.cy + side * (box.hh + gap) };
+    if (side * (F.y - end.y) >= STUB) tail = [F, { x: box.cx, y: F.y }, end];
+    else {
+      const stubY = end.y + side * STUB;
+      tail = [F, { x: F.x, y: stubY }, { x: box.cx, y: stubY }, end];
+    }
+  } else {
+    const side = F.x < box.cx ? -1 : 1;
+    const end = { x: box.cx + side * (box.hw + gap), y: box.cy };
+    if (side * (F.x - end.x) >= STUB) tail = [F, { x: F.x, y: box.cy }, end];
+    else {
+      const stubX = end.x + side * STUB;
+      tail = [F, { x: stubX, y: F.y }, { x: stubX, y: box.cy }, end];
+    }
+  }
+  const out = simplifyOrthogonal([...pts.slice(0, k), ...tail]);
+  return atStart ? out.reverse() : out;
+}
+
+/**
+ * A node's centre where the layout put it: measured where it is now (getNodeGeometry), less the offset it has already
+ * been moved by (its transform now against the one the layout gave it, data-orig-transform). The chart drawn again
+ * with the moves kept measures nodes that have moved; taken as their layout place, their offsets would count twice.
+ */
+export function layoutCenterOf(node: SVGGElement, svg: SVGSVGElement | null | undefined): NodeGeometry {
+  const geom = getNodeGeometry(node, svg);
+  const origTf = node.getAttribute('data-orig-transform');
+  if (origTf === null) return geom;
+  const now = parseTranslation(node.getAttribute('transform') || '');
+  const was = parseTranslation(origTf);
+  return { ...geom, origCenterX: geom.origCenterX - (now.x - was.x), origCenterY: geom.origCenterY - (now.y - was.y) };
+}
+
 /** A state's box from its element (as the reroutes measure it), moved by its offset */
 function nodeBoxOf(el: Element | null, svg: SVGSVGElement, offset: Point): NodeBox | null {
   if (!el) return null;
   let cx = parseFloat(el.getAttribute('data-orig-cx') || 'NaN');
   let cy = parseFloat(el.getAttribute('data-orig-cy') || 'NaN');
   if (isNaN(cx) || isNaN(cy)) {
-    const geom = getNodeGeometry(el as SVGGElement, svg);
+    const geom = layoutCenterOf(el as SVGGElement, svg);
     cx = geom.origCenterX;
     cy = geom.origCenterY;
     el.setAttribute('data-orig-cx', cx.toFixed(1));
@@ -808,7 +883,7 @@ export function initializeSvgDragMetadata(
       node.setAttribute('data-orig-y', String(y));
     }
 
-    const geom = getNodeGeometry(node, svg);
+    const geom = layoutCenterOf(node, svg);
     node.setAttribute('data-orig-cx', geom.origCenterX.toFixed(1));
     node.setAttribute('data-orig-cy', geom.origCenterY.toFixed(1));
     node.setAttribute('data-hw', geom.halfWidth.toFixed(1));
@@ -1313,7 +1388,7 @@ function rerouteElkOrthogonal(
   tgtOffset: Point,
   edgeOffset: EdgeOffset = { x: 0, y: 0 },
   /** The states' boxes (moved, and where they were): a dragged end re-attaches to the side it is dropped by */
-  boxes: { src?: NodeBox | null; tgt?: NodeBox | null; origSrc?: NodeBox | null; origTgt?: NodeBox | null } = {}
+  boxes: { src?: NodeBox | null; tgt?: NodeBox | null; origSrc?: NodeBox | null; origTgt?: NodeBox | null; srcDiamond?: boolean; tgtDiamond?: boolean } = {}
 ): { d: string; midPoint: Point; startPoint: Point; endPoint: Point } | null {
   // Start / end handle drags move that endpoint on top of any node movement
   srcOffset = { x: srcOffset.x + (edgeOffset.startDx || 0), y: srcOffset.y + (edgeOffset.startDy || 0) };
@@ -1326,6 +1401,18 @@ function rerouteElkOrthogonal(
   if (drawn.length < 2) return null;
   const orig: Point[] = [drawn[0], ...route.slice(1, -1), drawn[drawn.length - 1]].map((p) => ({ x: p.x, y: p.y }));
 
+  // A diamond's end (a Choice) sits on a slanted side: its first / last bit is squared to the next segment's axis
+  const square = (end: number, next: number) => {
+    const a = orig[end];
+    const b = orig[next];
+    if (isVerticalSeg(a, b) || isHorizontalSeg(a, b)) return;
+    if (Math.abs(b.y - a.y) >= Math.abs(b.x - a.x)) a.x = b.x;
+    else a.y = b.y;
+  };
+  if (orig.length > 2) {
+    if (boxes.srcDiamond) square(0, 1);
+    if (boxes.tgtDiamond) square(orig.length - 1, orig.length - 2);
+  }
   // Only handle routes that are orthogonal to begin with
   for (let i = 1; i < orig.length; i++) {
     if (!isVerticalSeg(orig[i - 1], orig[i]) && !isHorizontalSeg(orig[i - 1], orig[i])) return null;
@@ -1382,6 +1469,9 @@ function rerouteElkOrthogonal(
   let attached = routed;
   if (boxes.tgt && (edgeOffset.endDx || edgeOffset.endDy)) attached = reattachEnd(attached, boxes.tgt, boxes.origTgt ? gapOutside(boxes.origTgt, drawn[drawn.length - 1]) : 3, false);
   if (boxes.src && (edgeOffset.startDx || edgeOffset.startDy)) attached = reattachEnd(attached, boxes.src, boxes.origSrc ? gapOutside(boxes.origSrc, drawn[0]) : 0, true);
+  // A diamond's end: back on its border (the route's end moved with it, square to its segment)
+  if (boxes.srcDiamond && boxes.src && !(edgeOffset.startDx || edgeOffset.startDy)) attached = clipToDiamond(attached, boxes.src, true, 0);
+  if (boxes.tgtDiamond && boxes.tgt && !(edgeOffset.endDx || edgeOffset.endDy)) attached = clipToDiamond(attached, boxes.tgt, false, 3);
   routed.splice(0, routed.length, ...attached);
 
   // Middle handle drag: move the segment at the middle of the route perpendicular to its direction.
@@ -1523,6 +1613,8 @@ export function calculateReroutedEdgePath(
       tgt: nodeBoxOf(tgtNodeEl, svg, tgtOffset),
       origSrc: nodeBoxOf(srcNodeEl, svg, { x: 0, y: 0 }),
       origTgt: nodeBoxOf(tgtNodeEl, svg, { x: 0, y: 0 }),
+      srcDiamond: isDiamondNode(srcNodeEl),
+      tgtDiamond: isDiamondNode(tgtNodeEl),
     });
     if (orthogonal) return orthogonal;
   }
@@ -1533,7 +1625,7 @@ export function calculateReroutedEdgePath(
     let sOrigCx = parseFloat(srcNodeEl.getAttribute('data-orig-cx') || 'NaN');
     let sOrigCy = parseFloat(srcNodeEl.getAttribute('data-orig-cy') || 'NaN');
     if (isNaN(sOrigCx) || isNaN(sOrigCy)) {
-      const geom = getNodeGeometry(srcNodeEl, svg);
+      const geom = layoutCenterOf(srcNodeEl, svg);
       sOrigCx = geom.origCenterX;
       sOrigCy = geom.origCenterY;
       srcNodeEl.setAttribute('data-orig-cx', sOrigCx.toFixed(1));
@@ -1558,7 +1650,7 @@ export function calculateReroutedEdgePath(
     let tOrigCx = parseFloat(tgtNodeEl.getAttribute('data-orig-cx') || 'NaN');
     let tOrigCy = parseFloat(tgtNodeEl.getAttribute('data-orig-cy') || 'NaN');
     if (isNaN(tOrigCx) || isNaN(tOrigCy)) {
-      const geom = getNodeGeometry(tgtNodeEl, svg);
+      const geom = layoutCenterOf(tgtNodeEl, svg);
       tOrigCx = geom.origCenterX;
       tOrigCy = geom.origCenterY;
       tgtNodeEl.setAttribute('data-orig-cx', tOrigCx.toFixed(1));

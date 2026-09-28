@@ -203,6 +203,25 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   code = await doState();
   const branch = code.split(`\t${S('CLAMPED')}:`)[1]?.split(/\n\t[A-Z_]+:/)[0] ?? '';
   expect(/END_IF\r?\n\r?\n\t\tIF machineState <> TABLEMANAGER_CLAMPED THEN\r?\n\t\t\tstatus_bBusy := FALSE;\r?\n\t\tEND_IF\s*$/.test(branch), `written back at the end of CLAMPED's branch, at its indentation:\n${branch.split('\n').slice(-5).join('\n')}`);
+  // What changes, before Set code; Open in Method Editor: doState() at the state's CASE label
+  await p.mouse.click(pt.x, pt.y, { button: 'right' });
+  await h.sleep(400);
+  await p.click('#context-menu-edit-state-code-btn');
+  await p.waitForSelector('textarea#text-prompt-input', { timeout: 4000 });
+  const noChange = !(await p.$('#text-prompt-preview'));
+  await p.keyboard.down('Control'); await p.keyboard.press('Home'); await p.keyboard.up('Control');
+  await p.keyboard.type('// first\n', { delay: 3 });
+  await h.sleep(200);
+  const diffRows = await p.$$eval('#text-prompt-preview li', (r) => r.map((x) => `${x.textContent}|${x.className.includes('emerald') ? 'green' : ''}`));
+  expect(noChange && /^1 line in, 0 out/.test(diffRows[0] ?? '') && diffRows.some((r) => /^\+ \/\/ first\|green$/.test(r)), `the changes shown: ${diffRows.slice(0, 3).join(' / ')}`);
+  await p.click('#text-prompt-open-method-btn');
+  await h.sleep(1200);
+  const caretAt = await p.$eval('#method-implementation-editor', (e) => e.value.slice(0, e.selectionStart).split('\n').pop() + '|' + e.value.split('\n')[e.value.slice(0, e.selectionStart).split('\n').length - 1]).catch(() => '');
+  const methodOpen = !(await p.$('#text-prompt-dialog')) && !!(await p.$('#method-implementation-editor'));
+  const typedKept = (await doState()).includes('// first');
+  expect(methodOpen && !typedKept && /TABLEMANAGER_CLAMPED:/.test(await p.evaluate(() => document.querySelector('#method-implementation-editor')?.value.split('\n').find((l) => /TABLEMANAGER_CLAMPED:/.test(l)) ?? '')), `Open in Method Editor: doState() (what was typed not kept); caret line "${caretAt.split('|')[1]?.trim()}"`);
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await h.sleep(600);
   // Shown on the state
   await p.evaluate(() => { const c = document.getElementById('state-actions-checkbox'); if (c && !c.checked) c.click(); });
   await h.sleep(2000);

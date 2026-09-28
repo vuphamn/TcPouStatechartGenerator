@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save } from 'lucide-react';
+import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save, SaveAll } from 'lucide-react';
+import { usePendingEditors } from '../utils/pendingSaves.ts';
 import { DockMenu, DockMenuItem } from './dock/DockMenu.tsx';
 import { DutMatch } from '../utils/dutMatcher.ts';
 
@@ -28,12 +29,49 @@ export interface SourceFilesHeaderItemProps {
   onChooseDutFiles: () => void;
   onSelectDut: (match: DutMatch) => void;
   /** Write the edited .TcPOU / .TcDUT back (XAE: into the project; desktop / web: to the files), with a menu */
-  hostSave?: { dirtyCount: number; onSave: () => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
+  hostSave?: { dirtyCount: number; onSave: () => void;
+    /** Save (the editor used last) / Save All (every editor): their edits into the POU, then the files written */
+    onSaveEditor?: (which: 'active' | 'all') => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
   /** TwinCAT XAE extension: a file with unsaved edits here was changed in XAE */
   hostConflict?: { name: string; onReload: () => void; onKeepMine: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
+/** The header's Save and Save All icons: an editor's edits (the one used last / all of them) into the POU, then the files */
+const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => void; fileCount: number }> = ({ onSaveEditor, fileCount }) => {
+  const editors = usePendingEditors();
+  const active = editors.find((e) => e.active) ?? editors[0];
+  const files = fileCount > 0 ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
+  const btn = (on: boolean) => `p-1 rounded-md ${on ? 'text-sky-300 hover:text-white hover:bg-slate-800' : 'text-slate-600 cursor-default'}`;
+  const canSave = !!active || fileCount > 0;
+  const canAll = editors.length > 0 || fileCount > 0;
+  return (
+    <>
+      <button
+        id="header-save-btn"
+        type="button"
+        disabled={!canSave}
+        onClick={() => onSaveEditor('active')}
+        className={btn(canSave)}
+        title={canSave ? `Save (Ctrl+S): ${[active ? `${active.label}'s edits into the POU` : '', files ? `the ${files} written` : 'then the files written'].filter(Boolean).join(', ')}` : 'Save: nothing to save'}
+      >
+        <Save className="w-3.5 h-3.5" />
+      </button>
+      <button
+        id="header-save-all-btn"
+        type="button"
+        disabled={!canAll}
+        onClick={() => onSaveEditor('all')}
+        className={`relative ${btn(canAll)}`}
+        title={canAll ? `Save All: ${editors.length ? `the edits of ${editors.map((e) => e.label).join(', ')} into the POU, ` : ''}then the files written` : 'Save All: nothing to save'}
+      >
+        <SaveAll className="w-3.5 h-3.5" />
+        {editors.length > 0 && <span id="header-save-all-count" className="absolute -top-0.5 -right-0.5 min-w-[12px] h-3 px-0.5 rounded-full bg-amber-500 text-[8px] leading-3 font-bold text-slate-950 text-center">{editors.length}</span>}
+      </button>
+    </>
+  );
+};
+
 export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   pouFileName,
   pouPath,
@@ -239,6 +277,9 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           {hostSave.label ?? 'Save to project'}
           {hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
         </button>
+        {hostSave.onSaveEditor && (
+          <HeaderSaveIcons onSaveEditor={hostSave.onSaveEditor} fileCount={hostSave.dirtyCount} />
+        )}
         {hostSave.menu && hostSave.menu.length > 0 && (
           <button
             id="save-sources-menu-btn"

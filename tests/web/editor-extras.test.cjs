@@ -278,6 +278,53 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   const db = { x: b1.x - b0.x, y: b1.y - b0.y };
   expect(Math.abs(da.y) > 20 && Math.abs(da.x - db.x) < 3 && Math.abs(da.y - db.y) < 3, `drag S_IDLE: S_RUN moves with it (${da.x.toFixed(0)},${da.y.toFixed(0)} / ${db.x.toFixed(0)},${db.y.toFixed(0)})`);
   await p.keyboard.press('Escape');
+  // Ctrl+Z twice: the drag, then the lining up, undone (the states where they were); Ctrl+Y: the lining up again
+  await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+  await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control');
+  await h.sleep(500);
+  const u1 = await nodeAt('S_IDLE');
+  await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control');
+  await h.sleep(500);
+  const u2 = await nodeAt('S_IDLE');
+  const r2 = await nodeAt('S_RUN');
+  expect(Math.abs(u1.x - a0.x) < 3 && Math.abs(u1.y - a0.y) < 3, `Ctrl+Z: the drag undone (S_IDLE at ${u1.x.toFixed(0)},${u1.y.toFixed(0)} / ${a0.x.toFixed(0)},${a0.y.toFixed(0)})`);
+  expect(Math.abs(u2.x - idleC.x) < 3 && Math.abs(u2.y - idleC.y) < 3 && Math.abs(r2.x - runC.x) < 3 && Math.abs(r2.y - runC.y) < 3, `Ctrl+Z again: the lining up undone (both where they started)`);
+  await p.keyboard.down('Control'); await p.keyboard.press('y'); await p.keyboard.up('Control');
+  await h.sleep(500);
+  const y1 = await nodeAt('S_IDLE');
+  // Copy the 2 states, then Ctrl+V: a copy of each, the transitions between them going to the copies
+  const sel2 = [await nodeAt('S_IDLE'), await nodeAt('S_RUN')];
+  await p.keyboard.down('Control');
+  await p.mouse.click(sel2[0].x, sel2[0].y);
+  await h.sleep(150);
+  if ((await marked()).join() !== 'S_IDLE,S_RUN') await p.mouse.click(sel2[1].x, sel2[1].y);
+  await p.keyboard.up('Control');
+  await h.sleep(300);
+  await p.mouse.click(sel2[0].x, sel2[0].y, { button: 'right' });
+  await h.sleep(400);
+  const copyLabel = await p.$eval('#context-menu-multi-copy-btn', (e) => e.textContent.trim()).catch(() => '');
+  await p.click('#context-menu-multi-copy-btn').catch(() => {});
+  await h.sleep(300);
+  await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+  await p.keyboard.down('Control'); await p.keyboard.press('v'); await p.keyboard.up('Control');
+  await h.sleep(1500);
+  await p.click('#dock-tab-method');
+  await h.sleep(600);
+  const pasted = await code();
+  const copyBranch = (s) => pasted.split(`\t${s}:`)[1]?.split(/\n\t[A-Z_]+:/)[0] ?? '';
+  expect(copyLabel === 'Copy the 2 states' && /machineState := E_S\.S_RUN_COPY;/.test(copyBranch('E_S.S_IDLE_COPY') || copyBranch('S_IDLE_COPY')) && /machineState := E_S\.S_IDLE_COPY;/.test(copyBranch('E_S.S_RUN_COPY') || copyBranch('S_RUN_COPY')), `${copyLabel}, Ctrl+V: S_IDLE_COPY → S_RUN_COPY → S_IDLE_COPY`);
+  await p.click('#dock-tab-diagram');
+  await h.sleep(800);
+  expect((await marked()).join() === 'S_IDLE_COPY,S_RUN_COPY', `the copies selected: ${(await marked()).join(', ')}`);
+  await p.keyboard.press('Escape');
+  // (the copies taken out again: Ctrl+Z)
+  await p.mouse.click(5, 300);
+  await h.sleep(200);
+  await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+  await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control');
+  await h.sleep(1200);
+  expect(!(await p.$('#mermaid-diagram-svg-container g.node[data-state-id="S_IDLE_COPY"]')), `Ctrl+Z: the paste undone (${await p.evaluate(() => [...document.body.innerText.matchAll(/(Move|Nothing|Undone|Redone)[^\n]*/g)].map((m) => m[0]).slice(-2).join(' | '))})`);
+  expect(Math.abs(y1.x - a0.x) < 3 && Math.abs(y1.y - a0.y) < 3,`Ctrl+Y: the lining up redone (S_IDLE at ${y1.x.toFixed(0)},${y1.y.toFixed(0)} / ${a0.x.toFixed(0)},${a0.y.toFixed(0)}; start ${idleC.x.toFixed(0)},${idleC.y.toFixed(0)}) ${await p.evaluate(() => document.body.innerText.match(/(Move|Nothing|Undone|Redone)[^\n]*/g)?.slice(-2).join(' | '))}`);
 
   // 9. A state renamed here and in the other POU
   const run2 = await nodeAt('S_RUN');

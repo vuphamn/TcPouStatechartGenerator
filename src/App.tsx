@@ -107,6 +107,8 @@ import {
   canWriteBack,
   downloadSource,
   writeWebSource,
+  webProjectUses,
+  writeWebOtherPous,
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
@@ -116,12 +118,14 @@ import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
 import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols, onProjectSymbols, setProjectSymbols, symbolScope, type ProjectFile } from './utils/projectSymbols.ts';
 import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
 import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
+import { lineDiff } from './utils/lineDiff.ts';
+import { savePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
-import { checkExtract, extractMethod, planExtract } from './utils/extractMethod.ts';
+import { checkExtract, checkExtractProperty, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
 import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
@@ -147,7 +151,7 @@ import { findPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
 import { addState, addTransition, checkNewStateName, renameEdgeKeys, renameKey, renameState } from './utils/stateEdits.ts';
 import { deleteTransition, moveTransitionStart, retargetTransition, setTransitionPriority, transitionOrder, TransitionEditResult } from './utils/transitionEdits.ts';
-import { copyName, copyState, deleteState, removeEnumMember } from './utils/stateCopyDelete.ts';
+import { copyName, copyState, copyStates, deleteState, removeEnumMember } from './utils/stateCopyDelete.ts';
 import {
   addChoice,
   addCompletionTransition,
@@ -1838,6 +1842,15 @@ export const App: React.FC = () => {
   }, [hostDirtyFiles, hostSavedContent, pouPath, dutPath, dutContent, confirmSeenRemovals]);
   const handleSaveToProjectRef = useRef(handleSaveToProject);
   handleSaveToProjectRef.current = handleSaveToProject;
+  // The header's Save / Save All: the editor used last (or every editor) puts its edits into the POU, then the files
+  // are written (once the POU has them)
+  const handleHeaderSave = useCallback((which: 'active' | 'all') => {
+    const n = savePendingEditors(which);
+    window.setTimeout(() => {
+      if (isXaeHost()) handleSaveToProjectRef.current();
+      else void saveSourcesRef.current(n ? { quiet: false } : undefined);
+    }, n ? 120 : 0);
+  }, []);
 
   /** Opens TwinCAT's editor at a state's CASE branch or a transition's assignment (POU loaded from the project) */
   const handleShowInXae = useCallback(
@@ -2457,18 +2470,54 @@ export const App: React.FC = () => {
     [pouContent, knownStates, currentEdge, applyTransitionEdit, stateVarName, showCopyToast, seen]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
-  const copiedStateRef = useRef<string | null>(null);
+  // The state(s) copied (Ctrl+C: the selected one, or the several selected ones)
+  const copiedStateRef = useRef<string[] | null>(null);
   const [pendingRename, setPendingRename] = useState<string | null>(null);
   const handleCopyState = useCallback(
-    (id: string) => {
-      copiedStateRef.current = id;
-      showCopyToast(`Copied ${id}: Ctrl+V (or right-click the canvas) pastes a new state with its code`, 'success');
+    (id: string | string[]) => {
+      const ids = Array.isArray(id) ? id : [id];
+      copiedStateRef.current = ids;
+      showCopyToast(ids.length > 1 ? `Copied ${ids.length} states: Ctrl+V (or right-click the canvas) pastes new states with their code, the transitions between them going to the copies` : `Copied ${ids[0]}: Ctrl+V (or right-click the canvas) pastes a new state with its code`, 'success');
     },
     [showCopyToast]
   );
   const handlePasteState = useCallback(() => {
-    const from = copiedStateRef.current;
-    if (!from || !pouContent) return;
+    const list = copiedStateRef.current;
+    if (!list?.length || !pouContent) return;
+    // Several: a copy of each, selected together (no names asked: rename them as you like)
+    if (list.length > 1) {
+      const gone = list.filter((s) => !knownStates.has(s));
+      if (gone.length) {
+        showCopyToast(`No longer states: ${gone.join(', ')}`, 'error');
+        return;
+      }
+      const names: string[] = [];
+      let pouAcc = pouContent;
+      let dutAcc = dutContent;
+      for (const s of list) {
+        const n = copyName(pouAcc, dutAcc, s, names);
+        names.push(n);
+      }
+      const r = copyStates(pouContent, dutContent, list, names, stateVarName);
+      if ('error' in r) {
+        showCopyToast(r.error, 'error', 6000);
+        return;
+      }
+      pouAcc = r.pou;
+      dutAcc = r.dut ?? dutContent;
+      handleReplaceSources(pouAcc, r.dut);
+      setCustomNodeStyles((m) => {
+        const next = { ...m };
+        list.forEach((s, i) => {
+          if (m[s]) next[names[i]] = m[s];
+        });
+        return next;
+      });
+      setMultiSelected(names);
+      showCopyToast(`Pasted ${names.join(', ')}: ${r.dut ? 'the enum, ' : ''}${r.methods.map((m) => `${m}()`).join(', ')}. The transitions between them go to the copies`, 'success', 7000);
+      return;
+    }
+    const from = list[0];
     if (!knownStates.has(from)) {
       showCopyToast(`${from} is no longer a state`, 'error');
       return;
@@ -2639,6 +2688,23 @@ export const App: React.FC = () => {
         submitLabel: 'Set code',
         scope: codeScope('doState'),
         hint: 'Structured Text statements',
+        // What changes (before Set code)
+        preview: (v) => {
+          const d = lineDiff(whole, v.replace(/\r\n/g, '\n').split('\n'));
+          if (!d.added && !d.removed) return [];
+          return [`${d.added} line${d.added === 1 ? '' : 's'} in, ${d.removed} out:`, ...d.rows.slice(0, 60), ...(d.rows.length > 60 ? [`… ${d.rows.length - 60} more`] : [])];
+        },
+        altAction: {
+          id: 'text-prompt-open-method-btn',
+          label: 'Open in Method Editor',
+          title: `doState() at ${state}'s CASE label (what is typed here is not kept)`,
+          run: () => {
+            const m = getMethodCodeFromPou(pouContent, 'doState');
+            const range = m.methodFound ? caseBranchRange(blankComments(m.code).split(/\r?\n/), state) : null;
+            handleOpenInspectorPanel('method', { method: 'doState' });
+            if (range) setCodeJump({ method: 'doState', line: range.start + 1, nonce: Date.now() });
+          },
+        },
         onSubmit: (code, declarations) => {
           const r = writeStateCode(pouContent, state, code);
           if ('error' in r) return showCopyToast(r.error, 'error', 6000);
@@ -2999,16 +3065,52 @@ export const App: React.FC = () => {
   );
 
   // Undo / Redo: the POU and the enum as they were before each edit (edits within a second of each other are one
-  // step); another file starts a new history
+  // step), and the states' places on the canvas before each move (a drag, Align / Distribute, arrow keys, a reset),
+  // in the order they were made; another file starts a new history
   type Snapshot = { pou: string; dut: string };
-  const historyRef = useRef<{ past: Snapshot[]; future: Snapshot[]; last: Snapshot | null; lastAt: number; applying: boolean; file: string }>({
+  const historyRef = useRef<{
+    past: Snapshot[];
+    future: Snapshot[];
+    last: Snapshot | null;
+    lastAt: number;
+    applying: boolean;
+    file: string;
+    layoutPast: NodeOffsetsMap[];
+    layoutFuture: NodeOffsetsMap[];
+    layoutAt: number;
+    orderPast: ('code' | 'layout')[];
+    orderFuture: ('code' | 'layout')[];
+  }>({
     past: [],
     future: [],
     last: null,
     lastAt: 0,
     applying: false,
     file: '',
+    layoutPast: [],
+    layoutFuture: [],
+    layoutAt: 0,
+    orderPast: [],
+    orderFuture: [],
   });
+  const nodeOffsetsRef = useRef(nodeOffsets);
+  nodeOffsetsRef.current = nodeOffsets;
+  // The canvas moved states: where they were is kept for Undo (a held arrow key is one step)
+  const handleCanvasNodeOffsets = useCallback((next: NodeOffsetsMap) => {
+    const h = historyRef.current;
+    const now = Date.now();
+    if (now - h.layoutAt > 300 || h.orderPast[h.orderPast.length - 1] !== 'layout') {
+      h.layoutPast.push(nodeOffsetsRef.current);
+      h.orderPast.push('layout');
+      if (h.layoutPast.length > 100) h.layoutPast.shift();
+    }
+    h.layoutAt = now;
+    h.future = [];
+    h.layoutFuture = [];
+    h.orderFuture = [];
+    setNodeOffsets(next);
+    setHistoryVersion((v) => v + 1);
+  }, []);
   const [historyVersion, setHistoryVersion] = useState(0);
   useEffect(() => {
     const h = historyRef.current;
@@ -3018,6 +3120,10 @@ export const App: React.FC = () => {
       h.file = file;
       h.past = [];
       h.future = [];
+      h.layoutPast = [];
+      h.layoutFuture = [];
+      h.orderPast = [];
+      h.orderFuture = [];
       h.last = snap;
       h.applying = false;
       setHistoryVersion((v) => v + 1);
@@ -3027,9 +3133,14 @@ export const App: React.FC = () => {
     if (h.applying) h.applying = false;
     else {
       const now = Date.now();
-      if (now - h.lastAt > 1000 || h.past.length === 0) h.past.push(h.last);
+      if (now - h.lastAt > 1000 || h.past.length === 0 || h.orderPast[h.orderPast.length - 1] !== 'code') {
+        h.past.push(h.last);
+        h.orderPast.push('code');
+      }
       if (h.past.length > 100) h.past.shift();
       h.future = [];
+      h.layoutFuture = [];
+      h.orderFuture = [];
       h.lastAt = now;
     }
     h.last = snap;
@@ -3038,20 +3149,43 @@ export const App: React.FC = () => {
   const stepHistory = useCallback(
     (back: boolean) => {
       const h = historyRef.current;
+      const orderFrom = back ? h.orderPast : h.orderFuture;
+      const orderTo = back ? h.orderFuture : h.orderPast;
+      // A move on the canvas last: the states back where they were
+      if (orderFrom[orderFrom.length - 1] === 'layout') {
+        const lFrom = back ? h.layoutPast : h.layoutFuture;
+        const lTo = back ? h.layoutFuture : h.layoutPast;
+        const offsets = lFrom.pop();
+        orderFrom.pop();
+        if (offsets) {
+          lTo.push(nodeOffsetsRef.current);
+          orderTo.push('layout');
+          h.layoutAt = 0;
+          setNodeOffsets(offsets);
+          setHistoryVersion((v) => v + 1);
+          showCopyToast(`${back ? 'Move undone' : 'Move redone'} (${h.orderPast.length} to undo, ${h.orderFuture.length} to redo)`, 'success');
+          return;
+        }
+      }
+      if (orderFrom[orderFrom.length - 1] === 'code') orderFrom.pop();
       const from = back ? h.past : h.future;
       const to = back ? h.future : h.past;
       const snap = from.pop();
       if (!snap || !h.last) return showCopyToast(back ? 'Nothing to undo' : 'Nothing to redo', 'error');
       to.push(h.last);
+      orderTo.push('code');
       h.applying = true;
       h.lastAt = 0;
       handleReplaceSources(snap.pou !== pouContent ? snap.pou : null, snap.dut !== dutContent ? snap.dut : null);
       setHistoryVersion((v) => v + 1);
-      showCopyToast(`${back ? 'Undone' : 'Redone'} (${h.past.length} to undo, ${h.future.length} to redo)`, 'success');
+      showCopyToast(`${back ? 'Undone' : 'Redone'} (${h.orderPast.length || h.past.length} to undo, ${h.orderFuture.length || h.future.length} to redo)`, 'success');
     },
     [pouContent, dutContent, handleReplaceSources, showCopyToast]
   );
-  const historyState = useMemo(() => ({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 }), [historyVersion]);
+  const historyState = useMemo(
+    () => ({ canUndo: historyRef.current.past.length + historyRef.current.layoutPast.length > 0, canRedo: historyRef.current.future.length + historyRef.current.layoutFuture.length > 0 }),
+    [historyVersion] // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const handleCanvasKey = useCallback(
     (e: KeyboardEvent, sel: { stateId: string | null; edge: EdgeInfo | null }) => {
@@ -3072,6 +3206,10 @@ export const App: React.FC = () => {
         return true;
       }
       // Ctrl+C / Ctrl+V: copy the selected state, paste a new state with its code
+      if (ctrl && e.key.toLowerCase() === 'c' && !sel.edge && !textSelected && pouContent && multiSelected.length > 1) {
+        handleCopyState(multiSelected);
+        return true;
+      }
       if (ctrl && e.key.toLowerCase() === 'c' && sel.stateId && sel.stateId !== '[*]' && !sel.edge && !textSelected && pouContent) {
         handleCopyState(sel.stateId);
         return true;
@@ -3106,7 +3244,7 @@ export const App: React.FC = () => {
       }
       return false;
     },
-    [handleTransitionPriorityStep, pouContent, handleCopyState, handlePasteState, handleDeleteTransition, handleDeleteState, stepHistory, handleEditCondition]
+    [handleTransitionPriorityStep, pouContent, handleCopyState, handlePasteState, handleDeleteTransition, handleDeleteState, stepHistory, handleEditCondition, multiSelected]
   );
 
   // Open a state machine the diagram references (its POU in the same PLC project), with Back
@@ -3221,6 +3359,8 @@ export const App: React.FC = () => {
     }
     const desktop = (window as unknown as { tcDesktop?: { projectUses?: (from: string, n: string) => Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }> } }).tcDesktop;
     if (desktop?.projectUses && pouPath) return desktop.projectUses(pouPath, name);
+    // Web: the project folder (asked for once)
+    if (canPickFolder()) return webProjectUses(name);
     return { error: 'none' };
   }, [pouPath]);
   const writeOtherPous = useCallback(
@@ -3238,7 +3378,7 @@ export const App: React.FC = () => {
         });
       }
       const desktop = (window as unknown as { tcDesktop?: { saveSources?: (f: unknown) => Promise<{ saved: string[]; conflicts: { path: string }[]; errors: { path: string; error: string }[] }> } }).tcDesktop;
-      if (!desktop?.saveSources) return 'The other POUs cannot be written here';
+      if (!desktop?.saveSources) return canPickFolder() ? writeWebOtherPous(files) : 'The other POUs cannot be written here';
       const r = await desktop.saveSources(files);
       if (r.conflicts.length) return `Changed since they were read: ${r.conflicts.map((c) => c.path.split(/[\\/]/).pop()).join(', ')}`;
       if (r.errors.length) return r.errors.map((e) => e.error).join('; ');
@@ -3249,7 +3389,7 @@ export const App: React.FC = () => {
   projectIoRef.current = {
     fetch: fetchProjectUses,
     write: writeOtherPous,
-    can: () => isXaeHost() || Boolean((window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop?.projectUses && pouPath),
+    can: () => isXaeHost() || Boolean((window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop?.projectUses && pouPath) || (!isDesktopApp() && canPickFolder()),
   };
   const handleRenameVariable = useCallback(
     (name: string, method?: string) => {
@@ -3257,7 +3397,7 @@ export const App: React.FC = () => {
       const v = (method ? declarationVariables(getMethodCodeFromPou(pouContent, method).declaration || '') : declarationVariables(extractPouDeclaration(pouContent))).find((x) => x.name.toLowerCase() === name.toLowerCase());
       const outside = !method && v && ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT'].includes(v.scope);
       const desktop = (window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop;
-      const canProject = !!outside && (isXaeHost() || Boolean(desktop?.projectUses && pouPath));
+      const canProject = !!outside && (isXaeHost() || Boolean(desktop?.projectUses && pouPath) || (!desktop && canPickFolder()));
       const pouName = pouFileName.replace(/\.TcPOU$/i, '');
       // The other POUs' changes for a new name (the files are read once)
       renameUsesRef.current = null;
@@ -3338,7 +3478,7 @@ export const App: React.FC = () => {
       const probe = renameMethod(pouContent, name, `${name}_`);
       if ('error' in probe) return showCopyToast(probe.error, 'error');
       const desktop = (window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop;
-      const canProject = !probe.isPrivate && (isXaeHost() || Boolean(desktop?.projectUses && pouPath));
+      const canProject = !probe.isPrivate && (isXaeHost() || Boolean(desktop?.projectUses && pouPath) || (!desktop && canPickFolder()));
       let files: { name: string; path: string; content: string }[] | null = null;
       let lookupError: string | undefined;
       const otherChanges = (n: string) => {
@@ -3416,7 +3556,8 @@ export const App: React.FC = () => {
           const p = planExtract(pouContent, method, start, end, n);
           return [
             `In ${method}(), lines ${start}–${end} become:`,
-            `  ${p.call.trim()}`,
+            ...p.call.split('\n').map((l) => `  ${l.trim()}`),
+            ...(p.returns ? [`(the lines RETURN: ${n}() returns TRUE when they did, and ${method}() RETURNs after it)`] : []),
             `${n}() takes: ${p.inputs.length ? `VAR_INPUT ${p.inputs.map((x) => `${x.name} : ${x.type}`).join(', ')}` : 'no inputs'}${p.inOuts.length ? `; VAR_IN_OUT ${p.inOuts.map((x) => `${x.name} : ${x.type}`).join(', ')} (written by the lines)` : ''}`,
             `Its body (${p.body.filter((l) => l.trim()).length} lines):`,
             ...p.body.slice(0, 12).map((l) => `  ${l}`),
@@ -3428,6 +3569,45 @@ export const App: React.FC = () => {
           if ('error' in r) return showCopyToast(r.error, 'error', 6000);
           handleReplaceSources(r.pou, null);
           showCopyToast(`Extracted ${end - start + 1} line${end === start ? '' : 's'} of ${method}() into ${n}()`, 'success', 6000);
+        },
+      });
+    },
+    [pouContent, handleReplaceSources, showCopyToast]
+  );
+  // Extract Property: "Name : TYPE" asked for (the type guessed from the expression)
+  const handleExtractProperty = useCallback(
+    (method: string, line: number, from: number, to: number) => {
+      if (!pouContent) return;
+      const text = (getMethodCodeFromPou(pouContent, method).code ?? '').split(/\r?\n/)[line - 1] ?? '';
+      const expr = text.slice(from, to).trim();
+      const guessed = guessExpressionType(pouContent, method, expr);
+      const parse = (v: string) => {
+        const m = v.match(/^\s*([A-Za-z_]\w*)\s*:\s*(.+?)\s*;?\s*$/);
+        return m ? { name: m[1], type: m[2] } : { name: v.trim(), type: '' };
+      };
+      const first = checkExtractProperty(pouContent, method, line, from, to, 'NewProperty_', guessed || 'BOOL');
+      if (first && !/already/.test(first)) return showCopyToast(first, 'error', 6000);
+      setPromptRequest({
+        title: `Extract Property from ${method}() (line ${line})`,
+        label: `The new property: its name and type (PRIVATE, Get only; ${expr} becomes its value, its name takes its place):`,
+        initial: `${/^BOOL$/i.test(guessed) ? 'bNewProperty' : 'NewProperty'} : ${guessed || 'INT'}`,
+        monospace: true,
+        submitLabel: 'Extract',
+        validate: (v) => {
+          const p = parse(v);
+          return checkExtractProperty(pouContent, method, line, from, to, p.name, p.type);
+        },
+        preview: (v) => {
+          const p = parse(v);
+          const plan = planExtractProperty(pouContent, method, line, from, to, p.name, p.type);
+          return [`In ${method}(), line ${line} becomes:`, `  ${plan.line.trim()}`, `PROPERTY PRIVATE ${p.name} : ${p.type}`, `  Get: ${p.name} := ${plan.expression};`];
+        },
+        onSubmit: (v) => {
+          const p = parse(v);
+          const r = extractProperty(pouContent, method, line, from, to, p.name, p.type);
+          if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+          handleReplaceSources(r.pou, null);
+          showCopyToast(`Extracted ${r.plan.expression} into the property ${p.name} : ${p.type}`, 'success', 6000);
         },
       });
     },
@@ -3456,6 +3636,7 @@ export const App: React.FC = () => {
       rename: handleRenameVariable,
       renameMethod: handleRenameMethod,
       extractMethod: handleExtractMethod,
+      extractProperty: handleExtractProperty,
       declare: handleDeclareInPou,
       findReferences: handleFindReferences,
       problems: () => lintFindingsRef.current,
@@ -3466,7 +3647,7 @@ export const App: React.FC = () => {
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -3541,6 +3722,7 @@ export const App: React.FC = () => {
           items.push({ id: 'multi-distribute-h-btn', label: 'Distribute horizontally', icon: <AlignHorizontalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-h') });
           items.push({ id: 'multi-distribute-v-btn', label: 'Distribute vertically', icon: <AlignVerticalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-v') });
         }
+        if (pouContent) items.push({ id: 'multi-copy-btn', label: `Copy the ${n} states`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+C; then Ctrl+V pastes copies of them, the transitions between them going to the copies', onSelect: () => handleCopyState(many) });
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
       }
       // A free note (from the palette): only the viewer's note items
@@ -3619,8 +3801,14 @@ export const App: React.FC = () => {
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
       if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
         items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
-        if (copiedStateRef.current)
-          items.push({ id: 'paste-state-btn', label: `Paste a copy of ${copiedStateRef.current}`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+V: a new state with its code', onSelect: handlePasteState });
+        if (copiedStateRef.current?.length)
+          items.push({
+            id: 'paste-state-btn',
+            label: copiedStateRef.current.length > 1 ? `Paste copies of ${copiedStateRef.current.length} states` : `Paste a copy of ${copiedStateRef.current[0]}`,
+            icon: <ClipboardPaste className="w-3.5 h-3.5" />,
+            title: copiedStateRef.current.length > 1 ? `Ctrl+V: new states with their code (${copiedStateRef.current.join(', ')}), the transitions between them going to the copies` : 'Ctrl+V: a new state with its code',
+            onSelect: handlePasteState,
+          });
       }
       // A transition's priority (its order in the state's doState() branch, or in preProcess())
       if (target.type === 'edge' && pouContent) {
@@ -3859,6 +4047,74 @@ export const App: React.FC = () => {
         });
         return;
       }
+      if (fix.kind === 'add-else') {
+        const m = getMethodCodeFromPou(pouContent, fix.method);
+        const lines = m.code.split(/\r?\n/);
+        const end = fix.line - 1;
+        if (!/^\s*END_CASE\b/i.test(lines[end] ?? '')) return showCopyToast('END_CASE was not found where it was: check the Problems again', 'error');
+        const caseIndent = lines[end].match(/^[ \t]*/)![0];
+        // (the ELSE at the labels' indentation: the first label after CASE ... OF)
+        const labelLine = lines.slice(0, end).reverse().find((l) => /^\s*(?:[A-Za-z_][\w.]*|\d+)(?:\s*,\s*(?:[A-Za-z_][\w.]*|\d+))*\s*:(?!=)/.test(l));
+        const labelIndent = labelLine ? labelLine.match(/^[ \t]*/)![0] : `${caseIndent}\t`;
+        const added = [`${labelIndent}ELSE`, `${labelIndent}\t// a value of ${fix.name} not listed above`, `${labelIndent}\t;`];
+        setPromptRequest({
+          title: `Add an ELSE branch to CASE ${fix.name} OF?`,
+          label: `In ${fix.method}(), before its END_CASE (line ${fix.line}):`,
+          details: added.map((l) => l.trim()),
+          confirmOnly: true,
+          submitLabel: 'Add ELSE',
+          onSubmit: () => {
+            const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+            lines.splice(end, 0, ...added);
+            const res = handleSaveMethodCode(fix.method, lines.join(eol));
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`ELSE added to CASE ${fix.name} OF in ${fix.method}()`, 'success');
+            setCodeJump({ method: fix.method, line: end + 2, nonce: Date.now() });
+          },
+        });
+        return;
+      }
+      if (fix.kind === 'remove-method') {
+        const rx = new RegExp(`[ \\t]*<Method\\b[^>]*\\bName="${fix.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>[\\s\\S]*?<\\/Method>[ \\t]*\\r?\\n?`, 'i');
+        const m = pouContent.match(rx);
+        if (!m) return showCopyToast(`${fix.name}() was not found`, 'error');
+        const code = getMethodCodeFromPou(pouContent, fix.name);
+        setPromptRequest({
+          title: `Remove ${fix.name}()?`,
+          label: `Nothing in the POU calls it (it is PRIVATE). Its declaration and code (${(code.code ?? '').split(/\r?\n/).filter((l) => l.trim()).length} lines) go:`,
+          details: [(code.declaration ?? '').split(/\r?\n/)[0] ?? `METHOD ${fix.name}`, ...(code.code ?? '').split(/\r?\n/).filter((l) => l.trim()).slice(0, 8), ...((code.code ?? '').split(/\r?\n/).filter((l) => l.trim()).length > 8 ? ['…'] : [])],
+          confirmOnly: true,
+          danger: true,
+          submitLabel: 'Remove',
+          onSubmit: () => {
+            handleReplaceSources(pouContent.replace(rx, ''), null);
+            showCopyToast(`Removed ${fix.name}() (Ctrl+Z brings it back)`, 'success');
+          },
+        });
+        return;
+      }
+      if (fix.kind === 'delete-state') {
+        handleDeleteState(fix.name);
+        return;
+      }
+      if (fix.kind === 'remove-enum-member') {
+        if (!dutContent.trim()) return showCopyToast('No .TcDUT loaded', 'error');
+        const r = removeEnumMember(dutContent, fix.name);
+        if (!r) return showCopyToast(`${fix.name} was not found in the enum`, 'error');
+        setPromptRequest({
+          title: `Remove ${fix.name} from the enum?`,
+          label: 'Nothing in the POU uses it. Members after it get new values when they have none of their own.',
+          details: [fix.name],
+          confirmOnly: true,
+          danger: true,
+          submitLabel: 'Remove',
+          onSubmit: () => {
+            handleReplaceSources(null, r.dut);
+            showCopyToast(`Removed ${fix.name} from the enum`, 'success');
+          },
+        });
+        return;
+      }
       if (fix.kind === 'remove-lines' && fix.method) {
         const m = getMethodCodeFromPou(pouContent, fix.method);
         const range = deadLines(m.code, fix.line);
@@ -3929,7 +4185,7 @@ export const App: React.FC = () => {
         showCopyToast(`Added a CASE branch for ${fix.name} to doState()`, 'success');
       }
     },
-    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast, handleReplaceSources]
+    [dutContent, dutFileName, pouContent, handleSaveDutContent, handleSaveMethodCode, showCopyToast, handleReplaceSources, handleDeleteState]
   );
 
   // Live view controls (the handlers for the host's messages are above, next to the other host handlers)
@@ -4269,6 +4525,22 @@ export const App: React.FC = () => {
       }),
     []
   );
+  // Another instance of this POU followed here instead: live again on it (stopped first when connected)
+  const liveRestartRef = useRef<string | null>(null);
+  const handleGoLiveHere = useCallback(
+    (path: string) => {
+      liveRestartRef.current = path;
+      if (liveStatus.state === 'connected' || liveStatus.state === 'connecting') handleLiveStopRef.current();
+      handleLiveSettingsChange({ ...liveSettings, instance: path });
+    },
+    [liveStatus.state, liveSettings, handleLiveSettingsChange]
+  );
+  useEffect(() => {
+    const want = liveRestartRef.current;
+    if (!want || liveSettings.instance !== want || liveStatus.state === 'connected' || liveStatus.state === 'connecting') return;
+    liveRestartRef.current = null;
+    handleLiveStartRef.current();
+  }, [liveSettings.instance, liveStatus.state]);
   // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
   const handleWatchMachine = useCallback(
     (node: SymbolChild, on?: Partial<LiveSettings>) => {
@@ -4367,6 +4639,10 @@ export const App: React.FC = () => {
     else gatewayRef.current?.stop();
     setLiveStatus((prev) => ({ ...prev, state: 'stopped', message: 'Not connected' }));
   }, []);
+  const handleLiveStartRef = useRef(handleLiveStart);
+  handleLiveStartRef.current = handleLiveStart;
+  const handleLiveStopRef = useRef(handleLiveStop);
+  handleLiveStopRef.current = handleLiveStop;
   // ---- Recording and replay ----
   const handleSaveRecording = useCallback(async () => {
     const rec = recorderRef.current.toRecording({
@@ -5295,7 +5571,7 @@ export const App: React.FC = () => {
             hostSave={
               isXaeHost()
                 ? pouPath
-                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
+                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, onSaveEditor: handleHeaderSave, menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
                   : undefined
                 : pouContent
                 ? {
@@ -5303,6 +5579,7 @@ export const App: React.FC = () => {
                     label: 'Save',
                     dirtyCount: localDirtyCount,
                     onSave: () => void handleSaveSources(),
+                    onSaveEditor: handleHeaderSave,
                     title: desktopSave()?.saveSources
                       ? `Write the edits back to ${[pouDirty && (pouPath ? pouFileName : `${pouFileName} (Save As)`), dutDirty && dutFileName].filter(Boolean).join(' and ')} (Ctrl+S)`
                       : canWriteBack()
@@ -6252,7 +6529,7 @@ export const App: React.FC = () => {
                   history={{ ...historyState, onUndo: () => stepHistory(true), onRedo: () => stepHistory(false) }}
                   placeRequest={placeRequest}
                   nodeOffsets={nodeOffsets}
-                  onNodeOffsetsChange={setNodeOffsets}
+                  onNodeOffsetsChange={handleCanvasNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
                   notes={diagramNotes}
                   onSaveNote={handleSaveNote}
@@ -6514,6 +6791,7 @@ export const App: React.FC = () => {
           onWatch={handleWatchMachine}
           openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
           loadedType={pouTypeName}
+          onGoLiveHere={handleGoLiveHere}
         />,
           dockRegistry.nodes.symbols
         )}

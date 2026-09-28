@@ -3838,6 +3838,27 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         target[i.id] = h ? { cx: v, cy: i.cy } : { cx: i.cx, cy: v };
       });
     }
+    // (snapping on: the line they are lined up on, and each spread place, on the grid)
+    if (snapConfig.enabled && snapConfig.gridSize > 0) {
+      const g = snapConfig.gridSize;
+      const snap = (v: number) => Math.round(v / g) * g;
+      const first = items.find((i) => target[i.id]);
+      if (first && ['left', 'right', 'center'].includes(mode)) {
+        const tg = target[first.id];
+        const edge = mode === 'left' ? tg.cx - first.hw : mode === 'right' ? tg.cx + first.hw : tg.cx;
+        const d = snap(edge) - edge;
+        for (const i of items) if (target[i.id]) target[i.id] = { ...target[i.id], cx: target[i.id].cx + d };
+      } else if (first && ['top', 'bottom', 'middle'].includes(mode)) {
+        const tg = target[first.id];
+        const edge = mode === 'top' ? tg.cy - first.hh : mode === 'bottom' ? tg.cy + first.hh : tg.cy;
+        const d = snap(edge) - edge;
+        for (const i of items) if (target[i.id]) target[i.id] = { ...target[i.id], cy: target[i.id].cy + d };
+      } else if (mode === 'distribute-h') {
+        for (const i of items) if (target[i.id]) target[i.id] = { ...target[i.id], cx: snap(target[i.id].cx) };
+      } else if (mode === 'distribute-v') {
+        for (const i of items) if (target[i.id]) target[i.id] = { ...target[i.id], cy: snap(target[i.id].cy) };
+      }
+    }
     const next = { ...currentNodeOffsetsRef.current };
     for (const i of items) {
       const tg = target[i.id];

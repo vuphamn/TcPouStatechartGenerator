@@ -653,6 +653,10 @@ function tryLoadUmlGrouping(doc: Document | null): GroupingResult | null {
   return result.groups.size > 0 ? result : null;
 }
 
+// A choice diamond's label: an empty box of a set size (index.css: .kss-choice-pad), so the diamond is big enough to
+// see and grab, the same size everywhere (a bare space draws a tiny one; a blank character's width depends on the font)
+const CHOICE_LABEL = "<span class='kss-choice-pad'></span>";
+
 export function extractDeclaration(tcDutContent: string): string | null {
   const doc = parseXmlDoc(tcDutContent);
   if (doc) {
@@ -1377,7 +1381,7 @@ function emitFlowchartSubgraph(
       const own = regions.get(s);
       if (own) emitFlowchartRegions(lines, bodyIndent, s, own, declared, stateDescriptions);
       else lines.push(`${bodyIndent}${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
-      for (const c of choicesOf.get(s) ?? []) lines.push(`${bodyIndent}${c}{" "}`);
+      for (const c of choicesOf.get(s) ?? []) lines.push(`${bodyIndent}${c}{"${CHOICE_LABEL}"}`);
       declared.add(s);
     }
   }
@@ -1683,7 +1687,7 @@ function buildMermaid(
       const own = regions.get(s);
       if (own) emitFlowchartRegions(lines, '    ', s, own, declared, stateDescriptions);
       else lines.push(`    ${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
-      for (const c of choicesOf.get(s) ?? []) lines.push(`    ${c}{" "}`);
+      for (const c of choicesOf.get(s) ?? []) lines.push(`    ${c}{"${CHOICE_LABEL}"}`);
       declared.add(s);
     }
 
