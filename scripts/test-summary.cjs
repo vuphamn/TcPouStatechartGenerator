@@ -10,7 +10,7 @@ const LOGS = path.join(OUT, 'logs');
 const title = process.argv[2] || 'Tests';
 const lines = [`## ${title}`];
 
-const logs = fs.existsSync(LOGS) ? fs.readdirSync(LOGS).filter((f) => f.endsWith('.log') && f !== 'vite.log').sort() : [];
+const logs = fs.existsSync(LOGS) ? fs.readdirSync(LOGS).filter((f) => f.endsWith('.log') && !/^vite/.test(f)).sort() : [];
 const failed = [];
 for (const f of logs) {
   const text = fs.readFileSync(path.join(LOGS, f), 'utf8');

@@ -184,6 +184,16 @@ function failuresOf(log) {
     if (left > 0) console.log(`\n(${left} test browser processes were still running: stopped)`);
   }
   const failed = results.filter((r) => !r.ok);
+  // In GitHub Actions: an annotation per failed test (shown on the run's page, and readable without signing in)
+  if (process.env.GITHUB_ACTIONS) {
+    const esc = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    for (const r of failed) {
+      const text = fs.existsSync(r.log) ? fs.readFileSync(r.log, 'utf8') : '';
+      const found = text.split(/\r?\n/).filter((l) => /^FAIL\b|Error|timed out/.test(l)).slice(0, 12).map((l) => l.slice(0, 300));
+      const title = esc(`${r.suite}/${r.name}`).replace(/:/g, '%3A').replace(/,/g, '%2C');
+      console.log(`::error title=${title}::${esc(found.join('\n') || 'failed (no FAIL line: see its log)')}`);
+    }
+  }
   console.log(`\n${results.length - failed.length}/${results.length} passed${failed.length ? `; failed: ${failed.map((r) => `${r.suite}/${r.name}`).join(', ')} (logs in tests/.output/logs)` : ''}`);
   process.exit(failed.length ? 1 : 0);
 })().catch((e) => {
