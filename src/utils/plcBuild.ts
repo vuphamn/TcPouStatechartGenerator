@@ -31,6 +31,8 @@ export interface PlcBuildResult {
   plcState?: string;
   plcProject?: string;
   applied?: string[];
+  /** A project build (desktop): the compile information files copied back into the project after the write */
+  compileInfoCopied?: number;
   /** XAE kept open for the next build until then (ms since 1970) */
   xaeOpenUntil?: number;
   /** After a write: the PLC read again (its code the one written?) */

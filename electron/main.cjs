@@ -317,7 +317,18 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
 // Rebuild the PLC's project with the edits (TwinCAT XAE on this computer), and write it back when asked: progress on
 // 'tc:live' (plcBuildProgress), the result returned
+// Build (and write back) from the TwinCAT project the POU was opened from (a copy of it; the new compile
+// information copied back after a write)
+ipcMain.handle('tc:project-build', (event, req) => {
+  const contents = event.sender;
+  return new Promise((resolve) => liveFor(contents).projectBuild((m) => {
+    if (m.type === 'plcBuildResult') resolve(m);
+    else if (!contents.isDestroyed()) contents.send('tc:live', m);
+  }, req));
+});
 ipcMain.handle('tc:live-build-close', (event, req) => new Promise((resolve) => liveFor(event.sender).closeBuild(resolve, req)));
+// The connected PLC's TwinCAT trial license (read-only)
+ipcMain.handle('tc:live-license', (event, req) => new Promise((resolve) => liveFor(event.sender).license(resolve, req)));
 ipcMain.handle('tc:live-build', (event, req) => {
   const contents = event.sender;
   return new Promise((resolve) => liveFor(contents).build((m) => {

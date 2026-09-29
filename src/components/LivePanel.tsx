@@ -3,7 +3,7 @@ import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRi
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
-import type { CheckResult } from '../utils/connectionCheck.ts';
+import { checkAsText, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { formatLimit, parseDuration } from '../utils/stateLimits.ts';
@@ -127,8 +127,12 @@ interface LivePanelProps {
   onForgetPlc?: (netId: string) => void;
   /** Browse: searches the network for PLCs (desktop, XAE) */
   onScanPlcs?: (addresses: string[]) => Promise<PlcScanResult>;
+  /** The PLC's TwinCAT trial license ran out, or runs out soon */
+  licenseNotice?: { state: 'expired' | 'soon'; text: string } | null;
   /** Link on this computer is another version than this page: what to do */
   linkNotice?: string | null;
+  /** Check any PLC (Browse: Check all, the remembered ones) */
+  onCheckPlc?: (req: CheckRequest) => Promise<CheckResult>;
   /** Check: why the PLC does not answer, step by step (desktop, Link) */
   onCheckConnection?: () => Promise<CheckResult>;
   /** Browse: Add Route to a found PLC (desktop, Link, XAE) */
@@ -287,7 +291,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onScanPlcs,
   onAddRoute,
   onCheckConnection,
+  onCheckPlc,
   linkNotice,
+  licenseNotice,
   onRenamePlc,
   onSwitchPlc,
   canSaveRecording = false,
@@ -317,6 +323,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const [browsing, setBrowsing] = useState(false);
   // The connection check: running (no result yet) or its steps
   const [checking, setChecking] = useState<{ result: CheckResult | null } | null>(null);
+  const [checkCopied, setCheckCopied] = useState('');
   const [pickedName, setPickedName] = useState<{ netId: string; name: string; twincat?: string; os?: string } | null>(null);
   const netIdNow = settings.netId.trim();
   const remembered = rememberedPlcs.some((p) => p.netId === netIdNow);
@@ -867,6 +874,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           )}
         </div>
         )}
+        {licenseNotice && (
+          <div id="live-license-notice" data-state={licenseNotice.state} className={`rounded border px-2 py-1 text-[11px] leading-snug ${licenseNotice.state === 'expired' ? 'border-rose-800 bg-rose-950/40 text-rose-200' : 'border-amber-800 bg-amber-950/30 text-amber-200'}`}>
+            {licenseNotice.text}
+          </div>
+        )}
         {checking && !running && (
           <div id="live-check-panel" className="rounded border border-slate-700 bg-slate-900/80 p-2 text-[11px] space-y-1" data-state={checking.result ? 'done' : 'running'}>
             <div className="flex items-center justify-between">
@@ -893,6 +905,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 <div id="live-check-verdict" className={`pt-1 border-t border-slate-800 ${checking.result.steps.some((s) => s.ok === false) ? 'text-rose-200' : 'text-emerald-200'}`}>
                   {checking.result.verdict}
                 </div>
+                <button
+                  type="button"
+                  id="live-check-copy"
+                  onClick={() => {
+                    const text = checkAsText({ netId: settings.netId, ip: settings.ip }, checking.result!);
+                    void navigator.clipboard.writeText(text).then(
+                      () => setCheckCopied('Copied'),
+                      () => setCheckCopied('Copying is blocked here: select the lines above'),
+                    );
+                    window.setTimeout(() => setCheckCopied(''), 2500);
+                  }}
+                  className="mr-2 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                  title="The check as text: for a message or a colleague"
+                >
+                  Copy
+                </button>
+                {checkCopied && <span id="live-check-copied" className="mr-2 text-slate-400">{checkCopied}</span>}
                 {checking.result.suggest && checking.result.suggest.netId !== settings.netId && (
                   <button
                     type="button"
@@ -917,6 +946,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             currentNetId={netIdNow}
             onPick={pickPlc}
             onFound={onPlcsFound}
+            checkPlc={onCheckPlc}
             onForget={(netId) => onForgetPlc?.(netId)}
             onClose={() => setBrowsing(false)}
             scan={onScanPlcs}

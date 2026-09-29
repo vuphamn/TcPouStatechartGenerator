@@ -20,6 +20,8 @@ const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? '
 const ads = require(`${sharedDir}/tcAds.cjs`);
 const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
 const { buildFromPlc, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
+const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
+const { checkConnection } = require(`${sharedDir}/tcCheck.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -458,6 +460,8 @@ function start() {
       return c?.client ? { connected: true, viewers: c.viewers.size, plcState: c.plcState } : { connected: false };
     },
     testPlc,
+    // (the Live tab's Check, from the gateway: its NetId, its network)
+    checkPlc: (plc) => checkConnection({ netId: plc.netId, ip: plc.ip, adsPort: plc.port || 851, localNetId: plc.localNetId || config.localNetId || '', discoveryPort: Number(process.env.KSS_DISCOVERY_PORT) || 48899 }),
     discover: discovery.discover,
     localNetworks: discovery.localNetworks,
     sha256,
@@ -709,6 +713,13 @@ function start() {
       // off with symbol browsing (config.allowBrowse: false) or on its own (config.allowSources: false)
       // Rebuild the PLC's project with the page's edits (TwinCAT XAE on the gateway's computer), write it back: only
       // when the gateway allows it (allowBuild; writing: allowWrite too), logged in the audit
+      // The connected PLC's TwinCAT trial license (read-only)
+      if (m.type === 'plcLicense') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (!session?.conn.client) return send({ type: 'plcLicenseResult', requestId, trial: null, state: null, error: 'Not connected' });
+        const trial = await readTrialLicense(session.conn.client).catch(() => null);
+        return send({ type: 'plcLicenseResult', requestId, trial, state: licenseState(trial) });
+      }
       if (m.type === 'plcBuildClose') {
         if (config.allowBuild !== true) return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: false });
         return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: closeXae() });

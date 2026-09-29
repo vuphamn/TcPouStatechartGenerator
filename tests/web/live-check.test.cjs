@@ -51,6 +51,12 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   expect(r.steps.includes('search:true') && r.steps.includes('port:true') && r.steps.includes('netid:false') && /CX-<b>202<\/b>/.test(r.text), `steps: ${r.steps.join(' ')} (the name shown as text)`);
   expect(/does not match: 127\.0\.0\.1 is 127\.0\.0\.1\.1\.1, not 10\.9\.9\.9\.1\.1/.test(r.verdict) && /Use 127\.0\.0\.1\.1\.1/.test(r.fix), `verdict: "${r.verdict.slice(0, 90)}", ${r.fix}`);
   await a.screenshot({ path: h.out('live-check.png') });
+  // Copy: the check as text (the clipboard taken over here: a headless browser has none to read)
+  await a.evaluate(() => { window.__copied = ''; navigator.clipboard.writeText = (t) => { window.__copied = t; return Promise.resolve(); }; });
+  await a.click('#live-check-copy');
+  await sleep(200);
+  const copied = await a.evaluate(() => window.__copied);
+  expect(/^Kval StateScope connection check: 10\.9\.9\.9\.1\.1 at 127\.0\.0\.1:48972/.test(copied) && /\[X\]  The AMS NetId does not match/.test(copied) && /=> The AMS NetId does not match/.test(copied), `Copy: the check as text (${copied.split('\n').length} lines)`);
   await a.click('#live-check-fix');
   await sleep(300);
   const target = await a.$eval('#live-netid-input', (e) => e.value);
@@ -102,6 +108,11 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   // (kept in this browser: the remembered list's entry for it)
   const stored = await a.evaluate(() => Object.values(localStorage).some((v) => { try { const l = JSON.parse(v); return Array.isArray(l) && l.some((p) => p?.netId === '127.0.0.2.1.1' && p.twincat === '3.1.4024' && typeof p.seen === 'number'); } catch { return false; } }));
   expect(/TC 3\.1\.4024 · seen \d/.test(seenText) && stored, `remembered with what Browse found: "${seenText}" (kept: ${stored})`);
+  // Check all: each remembered PLC checked, a mark on its row, the verdict on it
+  await a.click('#live-plc-check-all').catch(() => {});
+  await a.waitForFunction(() => { const m = document.querySelector('.live-plc-remembered[data-netid="127.0.0.2.1.1"] .live-plc-check-mark'); return m && m.getAttribute('data-ok') !== 'running'; }, { timeout: 20000 }).catch(() => {});
+  const mark = await a.$eval('.live-plc-remembered[data-netid="127.0.0.2.1.1"] .live-plc-check-mark', (e) => e.getAttribute('data-ok') + '|' + e.getAttribute('title')).catch(() => '');
+  expect(/^(true|false)\|.+/.test(mark), `Check all: the remembered PLC's mark and verdict ("${mark.slice(0, 90)}")`);
   await a.click('#live-plc-browser-close').catch(() => {});
 
   // 5. A Link of another version (its stamp not this page's): the Live tab says so

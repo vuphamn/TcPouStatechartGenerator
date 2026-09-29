@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc } = require('../../shared/tcBuild.cjs');
+const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree } = require('../../shared/tcBuild.cjs');
 const { writeZip } = require('../lib/zip.cjs');
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { buildItemWhere, itemInPou, plcEdits } from '../../src/utils/plcBuild.ts';
@@ -146,6 +146,34 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(written.ok && written.written === 'online' && written.verified?.ok === true && /runs the code written/.test(written.verified.text), `after the write: ${JSON.stringify(written.verified ?? written.fatal)}`);
   const failing = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[noSuchVar := 1;]]></ST></Implementation></POU>' }], write: 'online' });
   expect(!failing.ok && !failing.written && !failing.verified && failing.errors === 1, 'with an error: not written, not checked');
+  // A trial license that ran out: a download (the application would not start again) refused before anything is built
+  const lic = (h: number) => Buffer.from(`<TcLicenseInfo><LicenseInfo><ExpireTime>${new Date(Date.now() + h * 3600000).toISOString().slice(0, 19)}</ExpireTime></LicenseInfo></TcLicenseInfo>`);
+  boot['../License/TrialLicense.tclrs'] = lic(-2);
+  const refusedDl = await buildFromPlc(client, { edits: [], write: 'download' });
+  expect(!refusedDl.ok && /Nothing was written: The PLC's TwinCAT trial license ran out/.test(refusedDl.fatal ?? '') && !refusedDl.written, `an expired trial: the download refused (${(refusedDl.fatal ?? '').slice(0, 70)})`);
+  boot['../License/TrialLicense.tclrs'] = lic(30);
+  const soon = await buildFromPlc(client, { edits: [], write: 'download' });
+  expect(soon.ok && soon.written === 'download' && soon.items.some((i: { text: string }) => /runs out tomorrow/.test(i.text)), 'running out tomorrow: written, with the warning');
+  delete boot['../License/TrialLicense.tclrs'];
+  const none = await buildFromPlc(client, { edits: [], write: 'download' });
+  expect(none.ok && !none.items.some((i: { text: string }) => /trial license/.test(i.text)), 'no trial (a full license): nothing said');
+  // 5d. From a TwinCAT project on this computer: found from a POU, built from a copy with the edit (the project left
+  // as it is), its error placed; a file outside it refused; a copy synced again: only the changed files
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-unit-proj-'));
+  fs.mkdirSync(path.join(proj, 'LinePlc', 'POUs'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'Line.tsproj'), '<TcSmProject/>');
+  fs.writeFileSync(path.join(proj, 'LinePlc', 'LinePlc.plcproj'), '<Project/>');
+  const projPou = path.join(proj, 'LinePlc', 'POUs', 'SM_Line.TcPOU');
+  fs.writeFileSync(projPou, '<POU Name="SM_Line"><Implementation><ST><![CDATA[x := 1;]]></ST></Implementation></POU>');
+  expect(projectRootOf(projPou) === proj && projectRootOf(path.join(os.tmpdir(), 'nowhere.TcPOU')) === null, 'the project found from its POU (none elsewhere)');
+  const fromProj = await buildFromProject(client, { file: projPou, edits: [{ file: projPou, content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[noSuchVar := 1;]]></ST></Implementation></POU>' }] });
+  expect(!fromProj.ok && fromProj.errors === 1 && fromProj.items[0].place?.path === 'POUs/SM_Line.TcPOU' && fromProj.items[0].place?.plcProject === 'LinePlc' && /x := 1/.test(fs.readFileSync(projPou, 'utf8')), `built from a copy: the error in ${JSON.stringify(fromProj.items[0]?.place)}; the project's file unchanged`);
+  const outside = await buildFromProject(client, { file: projPou, edits: [{ file: path.join(os.tmpdir(), 'x.TcPOU'), content: 'x' }] });
+  expect(/Not a source of this project/.test(outside.fatal ?? ''), `a file outside the project: "${outside.fatal}"`);
+  const copyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-unit-sync-'));
+  expect(syncTree(proj, copyDir) === 3 && syncTree(proj, copyDir) === 0, 'synced: the files, then nothing (unchanged)');
+  fs.writeFileSync(projPou, '<POU Name="SM_Line"/>');
+  expect(syncTree(proj, copyDir) === 1, 'one file changed: one copied');
   delete process.env.KSS_BUILD_DRYRUN;
 
   // 6. The app: the edits (the POU, its enum when one of the PLC's), where a message is

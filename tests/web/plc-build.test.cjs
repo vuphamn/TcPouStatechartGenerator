@@ -8,7 +8,7 @@ const path = require('path');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
-const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build.json', [], { sources: true });
+const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build.json', [], { sources: true, license: 5 });
 
 (async () => {
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48966', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-build.txt'), 'w'), 'ignore'] });
@@ -60,6 +60,10 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.waitForSelector('#live-build-btn', { timeout: 10000 }).catch(() => {});
   await a.screenshot({ path: h.out('plc-build-open.png') });
   expect(/CONVEYOR_RUNNING/.test(live) && !!(await a.$('#live-build-btn')), `SM_Conveyor from the PLC, live (${live}): Build offered`);
+  // Its TwinCAT trial license runs out in 5 h: the Live tab says so
+  await a.waitForSelector('#live-license-notice', { timeout: 8000 }).catch(() => {});
+  const lic = await a.$eval('#live-license-notice', (e) => e.getAttribute('data-state') + '|' + e.textContent).catch(() => '');
+  expect(/^soon\|The PLC's TwinCAT trial license runs out in [45] h/.test(lic), `the trial license running out: "${lic.slice(0, 90)}"`);
 
   const status = () => a.$eval('#plc-build-status', (e) => ({ phase: e.getAttribute('data-phase'), ok: e.getAttribute('data-ok'), text: e.textContent.trim() })).catch(() => ({ phase: '', ok: '', text: '' }));
   const waitDone = async () => { let s = await status(); for (let i = 0; i < 100 && s.phase !== 'done'; i++) { await sleep(200); s = await status(); } return s; };
@@ -181,6 +185,9 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.click('#plc-build-confirm-btn');
   s = await waitDone();
   expect(s.ok === 'true' && /Written to the PLC \(download\)/.test(s.text), `written: "${s.text}"`);
+  await a.click('#plc-build-warnings-toggle').catch(() => {});
+  const warned = await a.$$eval('#plc-build-warnings .plc-build-item', (r) => r.map((x) => x.innerText)).catch(() => []);
+  expect(warned.some((t) => /trial license runs out/.test(t)), `the download warned of the trial license (${warned.length} warnings)`);
   const log = fs.readFileSync(linkOut, 'utf8');
   // (the POU and its enum, one of the PLC's)
   expect(/build: .* rebuilds the PLC's project \(2 edited file\(s\)\), then online/.test(log) && /then download/.test(log) && /SM_Conveyor\.TcPOU, E_Conveyor_States\.TcDUT/.test(files), 'Link: the build and the write logged (the POU and its enum)');

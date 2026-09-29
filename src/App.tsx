@@ -140,7 +140,7 @@ import { armState } from './utils/choiceArms.ts';
 import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
 import { editionOf, editionVersion } from './utils/releaseNotes.ts';
 import { PlcBuildDialog, type PlcBuildState } from './components/PlcBuildDialog.tsx';
-import type { CheckResult } from './utils/connectionCheck.ts';
+import type { CheckRequest, CheckResult } from './utils/connectionCheck.ts';
 import { buildItemWhere, itemInPou, placeOfXaeFile, plcEdits, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
@@ -3588,6 +3588,31 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [plcOrigin, pouContent, dutContent, dutFileName, liveStatus.target, showCopyToast, plcSessionEdits]
   );
+  // Desktop app, a POU of a TwinCAT project on this computer: built from that project (a copy of it, this POU and its
+  // enum as edited here); after a write the POU is saved and the project gets the new compile information
+  const runProjectBuild = useCallback(
+    (write: PlcWrite | null) => {
+      const desktop = desktopLive();
+      if (!pouPath || !desktop?.projectBuild) return;
+      const edits = [{ file: pouPath, content: pouContent }, ...(dutPath && dutContent ? [{ file: dutPath, content: dutContent }] : [])];
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.file.split(/[\\/]/).pop() ?? e.file), project: 'this POU\'s TwinCAT project', target: liveStatus.target };
+      setPlcBuild(base);
+      setPlcBuildShown(true);
+      void desktop
+        .projectBuild({ requestId: Date.now() % 1e9, file: pouPath, edits, write })
+        .catch((e: unknown) => ({ ok: false, fatal: e instanceof Error ? e.message : String(e) }) as PlcBuildResult)
+        .then((r) => {
+          setPlcBuild({ ...base, project: r.plcProject ?? base.project, phase: 'done', result: r });
+          if (r.written && r.ok) {
+            // On the PLC now: saved to its file too
+            void saveSourcesRef.current();
+            showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : r.written === 'download' ? 'downloaded' : 'configuration activated'}), saved${r.compileInfoCopied ? ', the project\'s compile information updated' : ''}`, 'success', 7000);
+          }
+        });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouPath, pouContent, dutPath, dutContent, liveStatus.target, showCopyToast]
+  );
   // XAE edition: XAE's own build of its solution (this POU saved there first), its Error List here
   const xaeBuildIdRef = useRef(0);
   const runXaeBuild = useCallback(() => {
@@ -3607,6 +3632,30 @@ export const App: React.FC = () => {
       setPlcBuild((b) => (b ? { ...b, phase: 'done', result: { ok: m.ok, fatal: m.fatal, errors: m.errors, warnings: m.warnings, items } } : b));
     });
   }, []);
+  // The connected PLC's TwinCAT trial license: read once per connection; the Live tab says so when it ran out or
+  // runs out soon (the next application start would fail)
+  const [licenseNotice, setLicenseNotice] = useState<{ state: 'expired' | 'soon'; text: string } | null>(null);
+  useEffect(() => {
+    setLicenseNotice(null);
+    if (liveStatus.state !== 'connected' || isXaeHost()) return;
+    let alive = true;
+    const desktop = desktopLive();
+    const ask: Promise<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }> = desktop?.license
+      ? desktop.license({ requestId: Date.now() % 1e9 })
+      : gatewayRef.current
+        ? gatewayRef.current.request<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }>({ type: 'plcLicense' }, 'plcLicenseResult', 20000)
+        : Promise.resolve({ state: null });
+    void ask
+      .catch(() => ({ state: null }))
+      .then((r) => {
+        if (alive && r.state && r.state.state !== 'ok') setLicenseNotice({ state: r.state.state, text: r.state.text });
+      });
+    return () => {
+      alive = false;
+    };
+    // (once per connection: its target)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus.state === 'connected' ? liveStatus.target : null]);
   // Close the XAE kept open for builds now (the desktop app, Link, the gateway: where the build ran)
   const handleCloseXae = useCallback(async (): Promise<boolean> => {
     const desktop = desktopLive();
@@ -4772,14 +4821,24 @@ export const App: React.FC = () => {
   // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
   const liveMode: 'xae' | 'desktop' | 'web' | null = canNavigateInXae ? 'xae' : isXaeHost() ? null : desktopLive() ? 'desktop' : 'web';
   const [gatewayOrigin, setGatewayOrigin] = useState<string | null>(null);
+  // (known: whether a gateway serves this page, and then whether it signs in with company accounts; a page opened to
+  // go live waits for it, else it would go live without its gateway on a slow start)
+  const [gatewayKnown, setGatewayKnown] = useState(false);
   useEffect(() => {
-    if (liveMode === 'web') void detectGatewayOrigin().then(setGatewayOrigin);
+    if (liveMode !== 'web') return;
+    void detectGatewayOrigin().then((origin) => {
+      setGatewayOrigin(origin);
+      if (!origin) setGatewayKnown(true);
+    });
   }, [liveMode]);
   const [gatewayToken, setGatewayToken, rememberGatewayToken, setRememberGatewayToken] = useStoredSecret('kss.gateway.token');
   // Sign-in with company accounts on the gateway serving this page (its session cookie is this site's)
   const [gatewaySso, setGatewaySso] = useState<GatewaySso | null>(null);
   useEffect(() => {
-    if (liveMode === 'web' && gatewayOrigin) void fetchGatewaySso(gatewayOrigin).then(setGatewaySso);
+    if (liveMode === 'web' && gatewayOrigin)
+      void fetchGatewaySso(gatewayOrigin)
+        .then(setGatewaySso)
+        .finally(() => setGatewayKnown(true));
   }, [liveMode, gatewayOrigin]);
   const ssoHere = !!gatewaySso?.sso && !!gatewayOrigin && (!liveSettings.gateway || gatewaySocketUrl(liveSettings.gateway) === gatewaySocketUrl(gatewayOrigin));
   const ssoUser = ssoHere ? gatewaySso?.user ?? null : null;
@@ -4944,9 +5003,11 @@ export const App: React.FC = () => {
   // Opened to follow an instance: go live once the POU and its live settings are loaded
   useEffect(() => {
     if (!autoLivePending || !pouContent || !liveMode || liveSettingsLoadedKey !== liveSettingsKey) return;
+    // (the web edition: once it knows its gateway)
+    if (liveMode === 'web' && !gatewayKnown) return;
     setAutoLivePending(false);
     handleLiveStart();
-  }, [autoLivePending, pouContent, liveMode, liveSettingsLoadedKey, liveSettingsKey, handleLiveStart]);
+  }, [autoLivePending, pouContent, liveMode, liveSettingsLoadedKey, liveSettingsKey, handleLiveStart, gatewayKnown]);
   // Live: another window / tab on this POU that follows another of its PLC instances (XAE: a tab, desktop: a window,
   // web: a browser tab). The POU goes along: XAE and the desktop app load it from its file, else it is handed over.
   const handleOpenInstance = useCallback(
@@ -5488,12 +5549,16 @@ export const App: React.FC = () => {
     return canScanPlcs() ? (d: FoundPlc, user: string, password: string, both?: AddRouteBoth) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId, ...(both ?? {}) }) : undefined;
   }, [viaLink, linkRequest, liveSettings.localNetId]);
   // The Live tab's Check: why the PLC does not answer, from the computer that talks to it (desktop app, Link)
-  const handleCheckConnection = useMemo(() => {
-    const req = () => ({ netId: liveSettings.netId.trim(), ip: liveSettings.ip.trim(), port: parseInt(liveSettings.port, 10) || undefined, localNetId: liveSettings.localNetId.trim() || undefined });
-    if (viaLink) return () => linkRequest<CheckResult>({ type: 'checkConnection', ...req() }, 'checkConnectionResult');
+  // (any PLC: the target's by default; Browse's Check all asks each remembered one)
+  const handleCheckPlc = useMemo(() => {
+    if (viaLink) return (req: CheckRequest) => linkRequest<CheckResult>({ type: 'checkConnection', ...req }, 'checkConnectionResult');
     const api = desktopLive();
-    return api?.checkConnection ? () => api.checkConnection!(req()) : undefined;
-  }, [viaLink, linkRequest, liveSettings.netId, liveSettings.ip, liveSettings.port, liveSettings.localNetId]);
+    return api?.checkConnection ? (req: CheckRequest) => api.checkConnection!(req) : undefined;
+  }, [viaLink, linkRequest]);
+  const handleCheckConnection = useMemo(() => {
+    if (!handleCheckPlc) return undefined;
+    return () => handleCheckPlc({ netId: liveSettings.netId.trim(), ip: liveSettings.ip.trim(), port: parseInt(liveSettings.port, 10) || undefined, localNetId: liveSettings.localNetId.trim() || undefined });
+  }, [handleCheckPlc, liveSettings.netId, liveSettings.ip, liveSettings.port, liveSettings.localNetId]);
   // Machine Overview, other PLCs: how they are reached in this edition (XAE: not), and which can be added
   const sideVia = useMemo<SideVia | null>(() => {
     if (liveMode === 'desktop') return { kind: 'desktop' };
@@ -7422,7 +7487,7 @@ export const App: React.FC = () => {
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
             onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
-            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : undefined}
+            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : undefined}
             buildOffline={isXaeHost()}
             lastBuild={plcBuild && !plcBuildShown && plcBuild.phase === 'done' && plcBuild.result ? { text: plcBuild.result.fatal ? 'failed' : plcBuild.result.written ? 'written' : `${plcBuild.result.errors ?? plcBuild.result.items?.filter((i) => i.level === 'error').length ?? 0} error${(plcBuild.result.errors ?? 0) === 1 ? '' : 's'}`, ok: !!plcBuild.result.ok, onOpen: () => setPlcBuildShown(true) } : undefined}
             onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
@@ -7438,7 +7503,9 @@ export const App: React.FC = () => {
             onScanPlcs={handleScanPlcs}
             onAddRoute={handleAddRoute}
             onCheckConnection={handleCheckConnection}
+            onCheckPlc={handleCheckPlc}
             linkNotice={viaLink ? linkNotice : null}
+            licenseNotice={licenseNotice}
             onRenamePlc={(netId, name) => updateRememberedPlcs((list) => list.map((p) => (p.netId === netId ? { ...p, name } : p)))}
             onSwitchPlc={handleSwitchPlc}
             sso={ssoHere && gatewaySso ? { provider: gatewaySso.provider, user: gatewaySso.user, name: gatewaySso.name, tokens: gatewaySso.tokens } : undefined}
@@ -7665,8 +7732,8 @@ export const App: React.FC = () => {
           canOpen={(i) => itemInPou(i, isXaeHost() && pouPath ? { path: pouPath.replace(/\\/g, '/'), dutPaths: {} } : plcOrigin)}
           canWrite={!isXaeHost()}
           onOpenItem={openPlcBuildItem}
-          onRebuild={() => (isXaeHost() ? runXaeBuild() : runPlcBuild(null))}
-          onWrite={(w) => runPlcBuild(w)}
+          onRebuild={() => (isXaeHost() ? runXaeBuild() : plcOrigin ? runPlcBuild(null) : runProjectBuild(null))}
+          onWrite={(w) => (plcOrigin ? runPlcBuild(w) : runProjectBuild(w))}
           onClose={() => setPlcBuildShown(false)}
           onCloseXae={isXaeHost() ? undefined : handleCloseXae}
         />

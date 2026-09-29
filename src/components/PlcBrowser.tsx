@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
+import type { CheckRequest, CheckResult } from '../utils/connectionCheck.ts';
 
 export interface PickedPlc {
   name: string;
@@ -19,6 +20,8 @@ interface PlcBrowserProps {
   remembered: RememberedPlc[];
   currentNetId: string;
   onPick: (plc: PickedPlc) => void;
+  /** Check all: each remembered PLC's connection check (desktop, Link) */
+  checkPlc?: (req: CheckRequest) => Promise<CheckResult>;
   /** A search's result (the remembered PLCs are kept up to date with it) */
   onFound?: (r: PlcScanResult) => void;
   onForget: (netId: string) => void;
@@ -35,7 +38,31 @@ const rowClass = (current: boolean) =>
   `w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 ${current ? 'bg-sky-950/60' : ''}`;
 
 /** The Live tab's Browse: the remembered PLCs and the TwinCAT devices found on the network; a click picks one */
-export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename }) => {
+export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc }) => {
+  // Check all: each remembered PLC in turn (NetId: its result, while running: null)
+  const [checks, setChecks] = useState<Record<string, CheckResult | null>>({});
+  const [checkingAll, setCheckingAll] = useState(false);
+  const checkAll = async () => {
+    if (!checkPlc) return;
+    setCheckingAll(true);
+    setChecks({});
+    for (const p of remembered) {
+      setChecks((c) => ({ ...c, [p.netId]: null }));
+      const r = await checkPlc({ netId: p.netId, ip: p.ip, port: parseInt(p.port, 10) || undefined, localNetId: p.localNetId || undefined }).catch((e: unknown) => ({ steps: [], verdict: e instanceof Error ? e.message : String(e) }) as CheckResult);
+      setChecks((c) => ({ ...c, [p.netId]: r }));
+    }
+    setCheckingAll(false);
+  };
+  const checkMark = (netId: string) => {
+    if (!(netId in checks)) return null;
+    const r = checks[netId];
+    const ok = r ? !r.steps.some((s) => s.ok === false) && r.steps.length > 0 : null;
+    return (
+      <span className="live-plc-check-mark shrink-0 ml-1 font-mono text-[11px]" data-ok={r ? String(ok) : 'running'} title={r ? r.verdict : 'Checking…'}>
+        {r ? (ok ? <span className="text-emerald-400">✓</span> : <span className="text-rose-400">✗</span>) : <Loader2 className="inline w-3 h-3 animate-spin text-slate-400" />}
+      </span>
+    );
+  };
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<PlcScanResult | null>(null);
   const [addresses, setAddresses] = useState('');
@@ -96,7 +123,14 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
       <div className="max-h-64 overflow-y-auto p-1 space-y-1">
         {remembered.length > 0 && (
           <div>
-            <div className="px-2 pt-0.5 text-[10px] uppercase tracking-wide text-slate-500">Remembered</div>
+            <div className="flex items-center px-2 pt-0.5">
+              <span className="text-[10px] uppercase tracking-wide text-slate-500">Remembered</span>
+              {checkPlc && (
+                <button id="live-plc-check-all" type="button" disabled={checkingAll} onClick={() => void checkAll()} className="ml-auto px-1.5 rounded text-[10px] text-slate-300 hover:text-sky-300 hover:bg-slate-800 disabled:opacity-50" title="Check each remembered PLC: does it answer, with the right NetId and a route (nothing is changed)">
+                  {checkingAll ? 'Checking…' : 'Check all'}
+                </button>
+              )}
+            </div>
             {remembered.map((p) => (
               <div key={p.netId} className="live-plc-remembered flex items-center" data-netid={p.netId}>
                 {renaming?.netId === p.netId ? (
@@ -135,6 +169,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                 <button className="live-plc-forget shrink-0 p-0.5 ml-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800" onClick={() => onForget(p.netId)} title="Forget this PLC">
                   <X className="w-3 h-3" />
                 </button>
+                {checkMark(p.netId)}
               </div>
             ))}
           </div>

@@ -8,7 +8,8 @@ const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources } = require('./tcSources.cjs');
-const { buildFromPlc, checkEdits, closeXae } = require('./tcBuild.cjs');
+const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
+const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
@@ -322,12 +323,49 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
+  /**
+   * Build (and write back) from the TwinCAT project on this computer (the desktop app: a POU opened from a project
+   * folder): req { requestId, file, edits: [{ file, content }], write }; progress plcBuildProgress, result
+   * plcBuildResult
+   */
+  async function projectBuild(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Not connected', items: [] });
+    if (req?.write != null && !['online', 'download', 'activate'].includes(req.write)) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'write: online, download or activate', items: [] });
+    if (building) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'A build is already running', items: [] });
+    building = true;
+    try {
+      const edits = (Array.isArray(req?.edits) ? req.edits : []).slice(0, 100).filter((e) => typeof e?.file === 'string' && typeof e?.content === 'string');
+      const r = await buildFromProject(s.client, { file: String(req?.file ?? ''), edits, write: req?.write ?? null, netId: s.netId, adsPort: s.adsPort, onStep: (text) => send({ type: 'plcBuildProgress', requestId, text }) });
+      if (r.written) s.sources = null;
+      send({ type: 'plcBuildResult', requestId, ...r });
+    } catch (err) {
+      send({ type: 'plcBuildResult', requestId, ok: false, fatal: err?.message ?? String(err), items: [] });
+    } finally {
+      building = false;
+    }
+  }
+
+  /** The connected PLC's TwinCAT trial license (plcLicense → plcLicenseResult { trial, state }); read-only */
+  async function license(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcLicenseResult', requestId, trial: null, state: null, error: 'Not connected' });
+    try {
+      const trial = await readTrialLicense(s.client);
+      send({ type: 'plcLicenseResult', requestId, trial, state: licenseState(trial) });
+    } catch (err) {
+      send({ type: 'plcLicenseResult', requestId, trial: null, state: null, error: err?.message ?? String(err) });
+    }
+  }
+
   /** Close the XAE kept open for builds now (plcBuildClose → plcBuildClosed { closed }) */
   function closeBuild(send, req) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae() });
   }
 
-  return { start, stop, watch, browse, sources, build, closeBuild };
+  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId };

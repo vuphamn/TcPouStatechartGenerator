@@ -96,9 +96,13 @@ const pickSample = async (p, title) => {
   await w1.bringToFront();
   await w1.click('#live-open-all-instances');
   pages = await waitPages(3);
-  await sleep(2500);
-  pages = await appPages();
-  const titles = await Promise.all(pages.map((p) => p.title()));
+  // (the new window's title once its POU and instance are in: a slow machine takes a while)
+  let titles = [];
+  for (let i = 0; i < 60 && !titles.some((t) => /smTable3/.test(t)); i++) {
+    await sleep(500);
+    pages = await appPages();
+    titles = await Promise.all(pages.map((p) => p.title().catch(() => '')));
+  }
   expect(pages.length === 3 && titles.some((t) => /smTable3/.test(t)), `Open all adds smTable3 only: ${titles.join(' | ')}`);
   const w3 = pages.find((p) => p !== w1 && p !== w2);
   if (w3) {

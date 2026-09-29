@@ -134,6 +134,13 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
       detail: s.ok ? '' : `It has no route for this computer, or not on this port: add one on the PLC for AMS NetId ${myNetId}, IP ${myIp} (Browse > Add route, or TwinCAT's Router > Edit Routes there). ${s.error ? `(${s.error})` : ''}`.trim(),
     });
   }
+  // (the PLC answers ADS: a search that went unanswered is not the problem, only Browse and Add Route need it)
+  const adsOk = steps.some((s) => (s.id === 'ads' || s.id === 'router') && s.ok === true);
+  const search = steps.find((s) => s.id === 'search');
+  if (adsOk && search && search.ok === false) {
+    search.ok = null;
+    search.detail = 'The PLC answers ADS, so going live works; only Browse (it will not list it) and Add Route need UDP 48899.';
+  }
   const failing = steps.find((s) => s.ok === false);
   const verdict = failing ? `${failing.title}. ${failing.detail}`.trim() : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';
   return { steps, verdict, ...(suggest ? { suggest } : {}) };

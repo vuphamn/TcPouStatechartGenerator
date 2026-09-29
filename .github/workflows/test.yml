@@ -65,8 +65,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm ci --prefix gateway
+      # The built app, served by vite preview: pages load at once (the dev server compiles each module on first use,
+      # which a slow runner does not keep up with)
+      - name: Build
+        run: npm run build
       - name: Web app tests (headless Edge)
-        run: node tests/run.cjs web --shard ${{ matrix.shard }}/2
+        run: node tests/run.cjs web --preview --shard ${{ matrix.shard }}/2
       - name: Test summary
         if: always()
         run: node scripts/test-summary.cjs "Web tests (${{ matrix.shard }}/2)" >> "$env:GITHUB_STEP_SUMMARY"
@@ -82,7 +86,7 @@ jobs:
   desktop:
     # The Electron app (its window on the runner's desktop, driven over its debugging port) against the dev server
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -98,8 +102,10 @@ jobs:
           if (-not (Test-Path node_modules/electron/dist/electron.exe)) { node node_modules/electron/install.js }
           if (-not (Test-Path node_modules/electron/dist/electron.exe)) { Write-Error 'No Electron binary'; exit 1 }
           node -e "console.log(require('electron'))"
+      - name: Build
+        run: npm run build
       - name: Desktop app tests (Electron)
-        run: node tests/run.cjs desktop
+        run: node tests/run.cjs desktop --preview
       - name: Test summary
         if: always()
         run: node scripts/test-summary.cjs "Desktop tests" >> "$env:GITHUB_STEP_SUMMARY"

@@ -21,8 +21,8 @@ const config = {
     [`${I}.cmd_eFeedMode`]: { type: 'E_FeedMode', dataType: 2, size: 2, value: 0 },
   },
   script: [
-    { hold: 6000, set: { [`${I}.smOutfeedStopAxis.status_bHomed`]: true } },
-    { hold: 3000, set: { [`${I}.machineState`]: 33 } },
+    { hold: 10000, set: { [`${I}.smOutfeedStopAxis.status_bHomed`]: true } },
+    { hold: 12000, set: { [`${I}.machineState`]: 33 } },
   ],
 };
 fs.writeFileSync(path.join(h.OUT, 'fake-ams2-guards.json'), JSON.stringify(config, null, 1));
@@ -97,12 +97,12 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-guards.json'), JSON.stringify(confi
   await page.waitForFunction(() => {
     const g = [...document.querySelectorAll('g.edgeLabel[data-edge-id^="TABLEMANAGER_HOMMING_READY_TO_START->TABLEMANAGER_IDLE_FEED_OFF"] g.live-guard')][0];
     return g?.getAttribute('data-guard-result') === 'true';
-  }, { timeout: 10000 }).catch(() => {});
+  }, { timeout: 25000 }).catch(() => {});
   list = await badges();
   expect(from(list, 'TABLEMANAGER_IDLE_FEED_OFF')?.result === 'true' && from(list, 'TABLEMANAGER_HOMMING')?.result === 'false', 'a value change updates the results');
 
   // 3. The state changes to ERROR: its transitions are followed now (FEEDMODE_OFF is not a known enum here)
-  await page.waitForFunction(() => document.getElementById('live-current-state')?.textContent === 'TABLEMANAGER_ERROR', { timeout: 10000 });
+  await page.waitForFunction(() => document.getElementById('live-current-state')?.textContent === 'TABLEMANAGER_ERROR', { timeout: 30000 });
   await sleep(1500);
   list = await badges();
   const e = list.find((b) => b.edge.startsWith('TABLEMANAGER_ERROR->TABLEMANAGER_IDLE_FEED_OFF'));

@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { readBootFile, unzip, readPlcSources } = require('./tcSources.cjs');
+const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 
 const dry = () => process.env.KSS_BUILD_DRYRUN === '1';
 const text = (b) => b.toString('utf8').replace(/^﻿/, '');
@@ -342,7 +343,7 @@ function Build-Kss($r) {
         Start-Sleep -Milliseconds 500
       }
       Say @{ kind = 'online'; loggedIn = [string]$online.LoggedIn; app = [string]$online.PlcAppState; op = [string]$online.PlcOpState; info = [string]$online.OnlineAppInfo.InnerXml; error = $loginError }
-      if ($online.LoggedIn -ne 'true') { Say @{ kind = 'done'; ok = $false; errors = 0; fatal = ('No online change was made, nothing was written' + $(if ($loginError) { ': ' + $loginError } else { ' (XAE did not log in to the PLC)' }) + '. From the PLC''s copy of the project XAE cannot compute an online change; Download writes it (the PLC application stops and starts again).') }; return }
+      if ($online.LoggedIn -ne 'true') { Say @{ kind = 'done'; ok = $false; errors = 0; fatal = ('No online change was made, nothing was written' + $(if ($loginError) { ': ' + $loginError } else { ' (XAE did not log in to the PLC)' }) + '. TwinCAT did not make the online change through the Automation Interface (it logs in only when it can compute one). Download writes it (the PLC application stops and starts again).') }; return }
       if ($online.PlcAppState -ne 'Run') { try { [KssPlcOnline]::Start($plc) } catch { } }
       # The boot project too (as XAE's Activate Boot Project): a restart keeps the new code, and the PLC's archive
       # gets its sources
@@ -665,6 +666,14 @@ let warmWorkspace = null;
  */
 async function buildFromPlc(client, { edits = [], plcProject = '', write = null, netId = '', adsPort = 851, onStep } = {}) {
   if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
+  // A write that starts the application again (download, activate) on a trial license that ran out would leave the
+  // PLC stopped: refused before anything is built; one running out soon: said
+  let licenseNote = null;
+  if (write) {
+    const lic = licenseState(await readTrialLicense(client).catch(() => null));
+    if (lic?.state === 'expired' && write !== 'online') return { ok: false, fatal: `Nothing was written: ${lic.text}`, items: [], license: lic };
+    if (lic && lic.state !== 'ok') licenseNote = lic;
+  }
   onStep?.('Reading the project from the PLC');
   const archives = await fetchProjectArchives((rel) => readBootFile(client, rel));
   const key = `${netId}|${archives.info?.project?.name ?? ''}`;
@@ -719,6 +728,7 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   }
   // (XAE kept open for the next build: until when; the stand-in says as a real build would)
   const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : xaeOpenUntil();
+  if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
   const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(openUntil ? { xaeOpenUntil: openUntil } : {}) };
   delete result.broken;
   return result;
@@ -748,7 +758,7 @@ function standInBuild(ws, edits, write) {
   items.push({ level: 'warning', text: 'A stand-in warning (dry run)', file: '', line: 0, column: 0, project: '' });
   const errors = items.filter((i) => i.level === 'error').length;
   if (errors === 0 && write === 'online' && process.env.KSS_BUILD_REFUSE_ONLINE === '1') {
-    return { ok: false, items, errors: 0, warnings: 1, dry: script, fatal: 'No online change was made, nothing was written (XAE did not log in to the PLC). From the PLC\'s copy of the project XAE cannot compute an online change; Download writes it (the PLC application stops and starts again).' };
+    return { ok: false, items, errors: 0, warnings: 1, dry: script, fatal: 'No online change was made, nothing was written (XAE did not log in to the PLC). TwinCAT did not make the online change through the Automation Interface (it logs in only when it can compute one). Download writes it (the PLC application stops and starts again).' };
   }
   return { ok: errors === 0, items, errors, warnings: 1, dry: script, ...(errors === 0 && write ? { written: write } : {}) };
 }
@@ -766,4 +776,148 @@ function checkEdits(req) {
   return null;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, closeXae };
+
+// ---- From the engineering project on this computer (the desktop app: a POU opened from a TwinCAT project) ----
+// Its compile information is the running code's when this project made the last download: then TwinCAT can compute
+// an online change (a copy of the PLC's archive cannot). Built from a copy (the project folder is left as it is),
+// the edits put in; after a write the new compile information is copied back, so XAE's next login still matches.
+
+/** The folder holding the .tsproj above this file (up to 8 levels), or null */
+function projectRootOf(file) {
+  let dir = path.dirname(path.resolve(file));
+  for (let i = 0; i < 8; i++) {
+    try {
+      if (fs.readdirSync(dir).some((f) => /\.tsproj$/i.test(f))) return dir;
+    } catch {
+      return null;
+    }
+    const up = path.dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  return null;
+}
+
+const SKIP_DIRS = new Set(['.vs', '.git', '_Boot', 'xae-settings']);
+/** src copied onto dst, file by file where size or time differ (the rest left: XAE reloads only what changed) */
+function syncTree(src, dst) {
+  let changed = 0;
+  fs.mkdirSync(dst, { recursive: true });
+  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(e.name)) continue;
+    const a = path.join(src, e.name);
+    const b = path.join(dst, e.name);
+    if (e.isDirectory()) changed += syncTree(a, b);
+    else if (e.isFile()) {
+      const sa = fs.statSync(a);
+      let sb = null;
+      try {
+        sb = fs.statSync(b);
+      } catch {
+        // new
+      }
+      if (!sb || sb.size !== sa.size || Math.abs(sb.mtimeMs - sa.mtimeMs) > 1) {
+        fs.copyFileSync(a, b);
+        fs.utimesSync(b, sa.atime, sa.mtime);
+        changed++;
+      }
+    }
+  }
+  return changed;
+}
+
+/** The PLC projects of a project folder (their .plcproj): [{ name, dir, plcproj }] */
+function plcProjectsIn(root, depth = 0, out = []) {
+  if (depth > 4) return out;
+  for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(e.name)) continue;
+    const p = path.join(root, e.name);
+    if (e.isDirectory()) plcProjectsIn(p, depth + 1, out);
+    else if (/\.plcproj$/i.test(e.name)) out.push({ name: e.name.replace(/\.plcproj$/i, ''), dir: root, plcproj: p });
+  }
+  return out;
+}
+
+let projectWorkspace = null;
+
+/**
+ * Build (and write back) from the TwinCAT project on this computer: file (a POU of it) finds the project; edits:
+ * [{ file: its full path, content }] put into the copy. write: null, 'online', 'download', 'activate'. →
+ * { ok, items, ..., compileInfoCopied }
+ */
+async function buildFromProject(client, { file, edits = [], plcProject = '', write = null, netId = '', adsPort = 851, syncCompileInfo = true, onStep } = {}) {
+  if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
+  const root = file ? projectRootOf(file) : null;
+  if (!root) return { ok: false, fatal: 'This POU is not in a TwinCAT project folder (no .tsproj above it)', items: [] };
+  let licenseNote = null;
+  if (write && client) {
+    const lic = licenseState(await readTrialLicense(client).catch(() => null));
+    if (lic?.state === 'expired' && write !== 'online') return { ok: false, fatal: `Nothing was written: ${lic.text}`, items: [], license: lic };
+    if (lic && lic.state !== 'ok') licenseNote = lic;
+  }
+  const w = xaeWorker();
+  onStep?.('Copying the project');
+  // (the same project, its copy still open in XAE: only the changed files copied again)
+  let ws;
+  let changed = false;
+  if (!dry() && projectWorkspace && projectWorkspace.root === root && w.running && w.openTsproj === projectWorkspace.tsproj) {
+    ws = projectWorkspace;
+    changed = syncTree(root, ws.dir) > 0;
+  } else {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-project-'));
+    syncTree(root, dir);
+    const tsproj = fs.readdirSync(dir).find((f) => /\.tsproj$/i.test(f));
+    ws = { root, dir, tsproj: path.join(dir, tsproj), plcProjects: plcProjectsIn(dir) };
+  }
+  // The POUs edited here (not saved yet, or saved: the same), into the copy
+  const applied = [];
+  for (const e of edits) {
+    const rel = path.relative(root, path.resolve(String(e.file ?? '')));
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || !/\.(TcPOU|TcDUT|TcGVL|TcIO)$/i.test(rel)) return { ok: false, fatal: `Not a source of this project: ${e.file}`, items: [] };
+    const p = path.join(ws.dir, rel);
+    const next = Buffer.from(String(e.content).replace(/\r?\n/g, '\r\n'), 'utf8');
+    if (!fs.existsSync(p) || !fs.readFileSync(p).equals(next)) {
+      fs.writeFileSync(p, next);
+      changed = true;
+    }
+    applied.push(rel.replace(/\\/g, '/'));
+  }
+  const plc = ws.plcProjects.find((p) => p.name.toLowerCase() === plcProject.toLowerCase()) ?? ws.plcProjects[0];
+  if (!plc) return { ok: false, fatal: 'The project has no PLC project (.plcproj)', items: [] };
+  let r;
+  if (dry()) r = standInBuild(ws, edits.map((e) => ({ plcProject: plc.name, path: path.relative(path.join(root, path.relative(ws.dir, plc.dir)), path.resolve(e.file)).replace(/\\/g, '/'), content: e.content })), write);
+  else {
+    const previous = projectWorkspace;
+    r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed }), { onStep });
+    projectWorkspace = w.running ? ws : null;
+    if (previous && previous !== projectWorkspace) fs.rm(previous.dir, { recursive: true, force: true }, () => {});
+  }
+  const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
+  if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
+  // Written: the new compile information into the project (XAE's next login matches the running code)
+  let compileInfoCopied = 0;
+  if (r.ok && r.written && syncCompileInfo && !dry()) {
+    for (const p of ws.plcProjects) {
+      const from = path.join(p.dir, '_CompileInfo');
+      const to = path.join(root, path.relative(ws.dir, p.dir), '_CompileInfo');
+      try {
+        fs.mkdirSync(to, { recursive: true });
+        for (const f of fs.readdirSync(from).filter((x) => /\.compileinfo$/i.test(x))) {
+          if (!fs.existsSync(path.join(to, f))) {
+            fs.copyFileSync(path.join(from, f), path.join(to, f));
+            compileInfoCopied++;
+          }
+        }
+      } catch {
+        // (no compile information there)
+      }
+    }
+  }
+  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : xaeOpenUntil();
+  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, ...(openUntil ? { xaeOpenUntil: openUntil } : {}) };
+  delete result.broken;
+  if (dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
+  return result;
+}
+
+module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, closeXae, buildFromProject, projectRootOf, syncTree };

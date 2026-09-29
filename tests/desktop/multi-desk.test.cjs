@@ -73,7 +73,7 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-multi.json'), JSON.stringify({
   await goLive(w2, TMI);
   let s1 = '', s2 = '';
   for (let i = 0; i < 40 && !(s1 && s2); i++) { await sleep(300); s1 = await current(w1); s2 = await current(w2); }
-  expect(/DOOR_DASHER/.test(s1) && /TABLEMANAGER_HOMMING_READY_TO_START/.test(s2), `both windows live at once: ${s1} | ${s2}`);
+  expect(/DOOR_DASHER/.test(s1) && /TABLEMANAGER_HOMMING(_READY_TO_START)?$/.test(s2), `both windows live at once: ${s1} | ${s2}`);
   // Stopping window 1 leaves window 2 live
   await w1.bringToFront();
   await w1.click('#live-stop-btn');

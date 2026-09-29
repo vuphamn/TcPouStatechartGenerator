@@ -34,7 +34,13 @@ const pair = (code) =>
   const appdata = h.out('link-page-appdata');
   fs.rmSync(appdata, { recursive: true, force: true });
   const outFile = h.out('link-page-run.txt');
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata, KSS_SERVICE_DRYRUN: '1' }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
+  // (an installed Link older than this one, both stand-in files: Replace offered; dry run, nothing copied)
+  const installedExe = h.out('link-page-installed.exe');
+  const thisExe = h.out('link-page-this.exe');
+  fs.writeFileSync(installedExe, 'old');
+  fs.writeFileSync(thisExe, 'new');
+  fs.utimesSync(installedExe, new Date(Date.now() - 86400000), new Date(Date.now() - 86400000));
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata, KSS_SERVICE_DRYRUN: '1', KSS_INSTALLED_LINK: installedExe, KSS_THIS_LINK: thisExe }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
   const code = (await h.waitForText(outFile, /Pairing code:\s+(\S+)/))?.[1];
   expect(!!code && /http:\/\/127\.0\.0\.1:48985\//.test(fs.readFileSync(outFile, 'utf8')), `started: code ${code}, its page announced`);
 
@@ -89,6 +95,15 @@ const pair = (code) =>
   const after = await vis();
   expect(!after.on && after.off && /starts \(minimized\) when you sign in/.test(after.state) && JSON.parse((await request('GET', '/status')).body).startup.on === true, `turned on: "${after.state}"`);
   await bp.screenshot({ path: h.out('link-page.png') });
+  // Replace the installed Link: offered (this one is newer), confirmed, done (dry run: the elevated copy's command)
+  const replace = await bp.evaluate(() => ({ shown: !document.getElementById('replace-installed').hidden, installed: document.getElementById('installed').textContent }));
+  expect(replace.shown && /The installed Link .*link-page-installed\.exe/.test(replace.installed), `an older installed Link: Replace offered ("${replace.installed.slice(0, 70)}")`);
+  bp.once('dialog', (d) => d.accept());
+  await bp.click('#replace-installed');
+  await h.sleep(800);
+  const replaced = await bp.$eval('#replace-state', (e) => e.textContent);
+  expect(/Replaced: the Start menu now starts this Link/.test(replaced) && fs.readFileSync(installedExe, 'utf8') === 'old', `replaced (dry run, nothing copied): "${replaced}"`);
+  expect((await request('POST', '/replace-installed', { origin: 'https://evil.example' })).status === 403, 'replace: refused from another origin');
   await bp.click('#startup-off');
   await h.sleep(800);
   expect((await vis()).on && JSON.parse((await request('GET', '/status')).body).startup.on === false, `turned off: "${(await vis()).state}"`);

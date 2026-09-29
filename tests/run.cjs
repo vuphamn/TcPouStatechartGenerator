@@ -2,6 +2,8 @@
 // Test runner (see tests/README.md).
 //   node tests/run.cjs [suite ...] [--filter <text>] [--shard <i>/<n>]
 //   --shard: only every n-th test of each suite, from the i-th (1-based; CI runs the web suite in parallel jobs)
+//   --preview: the built app (dist/, npm run build first) served by vite preview, not the dev server: pages load at
+//   once instead of compiling each module on first use (CI: a slow machine)
 //   suites: unit (logic, no browser), web (the app in a headless browser), live (gateway / Link / ADS against a
 //   simulated PLC), desktop (the Electron app, Windows only), all (= unit web live desktop). Default: unit web live.
 // web and desktop use TEST_APP_URL when set, else a Vite dev server started here. Logs: tests/.output/logs.
@@ -25,9 +27,11 @@ fs.mkdirSync(LOGS, { recursive: true });
 const argv = process.argv.slice(2);
 let filter = null;
 let shard = null;
+let preview = false;
 let suites = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--filter') filter = argv[++i];
+  else if (argv[i] === '--preview') preview = true;
   else if (argv[i] === '--shard') {
     const [k, n] = String(argv[++i]).split('/').map(Number);
     if (!(n >= 1 && k >= 1 && k <= n)) throw new Error('--shard: expected <i>/<n>, e.g. 1/2');
@@ -37,7 +41,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 if (suites.length === 0) suites = ['unit', 'web', 'live'];
 if (suites.includes('all')) suites = ['unit', 'web', 'live', 'desktop'];
-const TIMEOUT = { unit: 120000, web: 300000, live: 180000, desktop: 300000 };
+const TIMEOUT = { unit: 120000, web: 300000, live: 180000, desktop: 600000 };
 
 const files = (suite, ext) =>
   fs.existsSync(path.join(__dirname, suite))
@@ -75,6 +79,9 @@ const get = (url) =>
  * The first page load makes Vite compile the app and optimize its dependencies (which can reload the page): done
  * once in a browser here, so the tests start from a warm server
  */
+// (the app given from outside; warmUp sets TEST_APP_URL for the harness)
+const GIVEN_URL = process.env.TEST_APP_URL;
+
 async function warmUp(url) {
   process.env.TEST_APP_URL = url;
   const h = require('./lib/harness.cjs');
@@ -93,12 +100,15 @@ async function warmUp(url) {
   }
 }
 
-async function startApp() {
-  if (process.env.TEST_APP_URL) return { url: process.env.TEST_APP_URL, stop() {} };
-  const port = 5199;
+// (dev: the dev server even with --preview, for the tests that import the app's modules from /src/)
+async function startApp({ dev = false } = {}) {
+  if (GIVEN_URL) return { url: GIVEN_URL, stop() {} };
+  const built = preview && !dev;
+  const port = built || !preview ? 5199 : 5198;
   const url = `http://localhost:${port}/`;
-  const log = fs.openSync(path.join(LOGS, 'vite.log'), 'w');
-  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log] });
+  const log = fs.openSync(path.join(LOGS, dev ? 'vite-dev.log' : 'vite.log'), 'w');
+  if (built && !fs.existsSync(path.join(REPO, 'dist', 'index.html'))) throw new Error('--preview: dist/ is missing (npm run build first)');
+  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), ...(built ? ['preview'] : []), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log] });
   for (let i = 0; i < 120; i++) {
     if ((await get(url)) === 200) {
       await warmUp(url);
@@ -119,6 +129,7 @@ function failuresOf(log) {
 (async () => {
   const results = [];
   let app = null;
+  let devApp = null;
   try {
     for (const suite of suites) {
       if (suite === 'desktop' && process.platform !== 'win32') {
@@ -148,7 +159,10 @@ function failuresOf(log) {
           }
           r = await run(process.execPath, [bundle], { timeout: TIMEOUT.unit, log });
         } else {
-          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: app ? app.url : '' }, timeout: TIMEOUT[suite] ?? 300000, log });
+          // (the built app has no /src/: a test importing from it gets the dev server)
+          const needsDev = preview && app && !GIVEN_URL && fs.readFileSync(path.join(__dirname, suite, f), 'utf8').includes("'/src/");
+          if (needsDev && !devApp) devApp = await startApp({ dev: true });
+          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: TIMEOUT[suite] ?? 300000, log });
         }
         const text = fs.readFileSync(log, 'utf8');
         // A test fails on a non-zero exit, and on any "FAIL" line (some tests only print them)
@@ -161,6 +175,7 @@ function failuresOf(log) {
     }
   } finally {
     app?.stop();
+    devApp?.stop();
   }
   // Test browsers still running (a test that did not clean up): reported, then stopped
   if (process.platform === 'win32') {

@@ -7,6 +7,7 @@ npm run test:unit        # one suite: unit | web | live | desktop
 npm run test:all         # all four
 node tests/run.cjs web --filter pou     # only the tests whose file name contains "pou"
 node tests/run.cjs web --shard 1/2      # every other web test, from the first (CI runs 1/2 and 2/2 side by side)
+node tests/run.cjs web --preview        # against the built app (npm run build first): what CI does, pages load at once
 ```
 
 The runner prints one line per test and a summary. It exits with 1 when a test fails. Each test's output is in

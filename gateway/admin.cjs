@@ -57,7 +57,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -92,6 +92,12 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, d
       const result = await discover({ localNetId: getConfig().localNetId, addresses, broadcast: body.broadcast !== false && getConfig().discoveryBroadcast !== false, port: getConfig().discoveryPort ?? 48899 });
       log(`admin: network search, ${result.devices.length} TwinCAT device(s)`);
       return result;
+    },
+    // Check: why a PLC does not answer the gateway, step by step (read-only; the gateway's NetId)
+    'POST check': async (body) => {
+      const [plc] = checkPlcs([{ id: body.id || 'check', name: body.name || 'The PLC', netId: body.netId, ip: body.ip, port: body.port ?? 851, localNetId: body.localNetId || undefined }]);
+      if (!checkPlc) throw new Error('Not available on this gateway');
+      return checkPlc(plc);
     },
     'POST test': async (body) => {
       const [plc] = checkPlcs([{ id: body.id || 'test', name: body.name || 'The PLC', netId: body.netId, ip: body.ip, port: body.port ?? 851, localNetId: body.localNetId || undefined }]);
@@ -305,6 +311,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; } .row > input[type=text] { flex: 1 1 260px; width: auto; } .row > select { width: auto; max-width: 100%; }
 .msg { margin-top: 10px; font-size: 13px; min-height: 1em; } .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
 .status { font-size: 12px; } .status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.busy { color: var(--warn); }
+.admin-check-row td { padding: 4px 8px 10px; font-size: 12px; } .admin-check-step.ok { color: var(--ok); } .admin-check-step.bad { color: var(--bad); } .admin-check-step.warn { color: var(--warn); } .admin-check-verdict { margin-top: 4px; font-weight: 600; }
 .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 9px; background: #1e293b; color: var(--dim); }
 .token { margin-top: 12px; padding: 12px; border: 1px solid #0284c7; border-radius: 8px; background: #082f49; }
 .token .mono { font-size: 16px; word-break: break-all; color: var(--accent); }
@@ -447,9 +454,31 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         el('td', { class: 'w-status' }, status),
         el('td', {}, el('div', { class: 'row nowrap' },
           el('button', { class: 'admin-test', on: { click: () => testRow(p, status) } }, 'Test'),
+          el('button', { class: 'admin-check', title: 'Why does it not answer? Each step: the network, TwinCAT, its NetId, the route (nothing is changed)', on: { click: () => checkRow(p) } }, 'Check'),
           el('button', { class: 'danger', title: 'Remove from the list (Save to apply)', on: { click: () => { plcs.splice(i, 1); renderPlcs(); renderFound(); refreshButtons(); } } }, 'Remove'))),
       ));
     });
+  }
+
+  // Check: the steps in a row under the PLC's
+  async function checkRow(p) {
+    const tr = document.querySelector('tr[data-plc="' + CSS.escape(p.id) + '"]');
+    if (!tr) return;
+    let out = tr.nextElementSibling;
+    if (!out || !out.classList.contains('admin-check-row')) {
+      out = el('tr', { class: 'admin-check-row', 'data-check': p.id }, el('td', { colspan: '7' }));
+      tr.after(out);
+    }
+    const cell = out.firstChild;
+    cell.textContent = 'Checking...';
+    try {
+      const r = await call('check', { id: p.id, name: p.name, netId: String(p.netId).trim(), ip: String(p.ip).trim(), port: Number(p.port) || 851, localNetId: p.localNetId || $('admin-local-netid').value.trim() });
+      cell.textContent = '';
+      for (const s of r.steps) cell.append(el('div', { class: 'admin-check-step ' + (s.ok === true ? 'ok' : s.ok === false ? 'bad' : 'warn'), 'data-step': s.id, 'data-ok': String(s.ok) }, (s.ok === true ? '✓ ' : s.ok === false ? '✗ ' : '! ') + s.title + (s.detail && s.ok !== true ? ' — ' + s.detail : '')));
+      cell.append(el('div', { class: 'admin-check-verdict' }, r.verdict));
+    } catch (err) {
+      cell.textContent = err.message;
+    }
   }
 
   async function testRow(p, status) {

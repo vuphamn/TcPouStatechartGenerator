@@ -60,8 +60,17 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const flags = (await page.$$eval('.live-trail-row', (r) => r.map((x) => !x.className.includes('rose')))).reverse();
   expect(JSON.stringify(flags) === JSON.stringify(seq.legal), '"not in diagram" flags');
   expect(await hidden(), 'settings hidden while connected');
-  const rows = await page.$$eval('.live-trail-row', (r) => r.filter((x) => x.getBoundingClientRect().height > 0 && x.getBoundingClientRect().top < innerHeight).length);
-  expect(rows >= 3, `trail rows visible (${rows})`);
+  // (the rows the window has room for: brought into view; three, or as many as a smaller screen's window shows)
+  await page.evaluate(() => document.querySelector('.live-trail-row')?.scrollIntoView({ block: 'start' }));
+  await sleep(300);
+  const view = await page.evaluate(() => {
+    const r = [...document.querySelectorAll('.live-trail-row')];
+    const shown = r.filter((x) => { const b = x.getBoundingClientRect(); return b.height > 0 && b.top >= 0 && b.bottom <= innerHeight + 1; }).length;
+    const rowHeight = r[0]?.getBoundingClientRect().height || 20;
+    const room = Math.floor((innerHeight - (r[0]?.getBoundingClientRect().top ?? 0)) / rowHeight);
+    return { shown, total: r.length, room, innerHeight };
+  });
+  expect(view.shown >= Math.min(3, view.total, Math.max(1, view.room)), `trail rows visible (${view.shown} of ${view.total}, room for ${view.room} in a ${view.innerHeight} px window)`);
   await page.screenshot({ path: path.join(h.OUT, 'desk-live-panel.png') });
   await page.click('#dock-tab-diagram');
   await sleep(1200);

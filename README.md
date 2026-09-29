@@ -382,6 +382,7 @@ The desktop app's **Live** tab follows a state machine in a PLC on another compu
      - in that router, for the PLC. This needs this computer's Windows user; the password goes only to this computer's own TwinCAT.
 
      XAE and StateScope then both reach the PLC through the router.
+   - **Copy** puts the check's steps and verdict on the clipboard as text, for a message or a colleague. **Check all**, in Browse's remembered list, checks each remembered PLC in turn and marks each ✓ or ✗, with the verdict on hover.
    - **Remembered PLCs** keep what Browse found: their TwinCAT version, OS and when they were last seen. Each search updates them, including an address changed by DHCP. Names you gave them and addresses you typed on purpose (a host name, `host:port`) are kept.
 2. **Network:** the laptop must reach the PLC on TCP 48898.
 
@@ -487,7 +488,12 @@ The POU is a copy of the PLC's source: **Save As** keeps it on this computer. A 
   - The PLC's **boot project** is updated, as XAE's *Activate Boot Project* does, so a restart keeps the new code. That also rewrites the PLC's source archive (when the project saves its sources, as a downloaded project does), so From PLC then shows the new code.
   - The PLC is read again to confirm it runs the code written.
   - The POU counts as saved.
-- **The TwinCAT license** is checked by the target whenever an application starts. On a trial license that has run out, a download or restart leaves the PLC in Stop, or TwinCAT in Config mode, until the license is renewed (XAE: *SYSTEM > License > 7 Days Trial License*).
+- **The TwinCAT license** is checked by the target whenever an application starts. On a trial license that has run out, a download or restart leaves the PLC in Stop, or TwinCAT in Config mode, until the license is renewed (XAE: *SYSTEM > License > 7 Days Trial License*). StateScope reads the PLC's trial license before writing (read-only):
+  - **Ran out:** a Download or Activate is refused before anything is built.
+  - **Runs out within 2 days:** the build shows a warning.
+  - **The Live tab** also says so while you're live on that PLC.
+- **From your engineering project** (desktop app, a POU opened from a TwinCAT project folder, while live): **Build…** builds that project, from a copy of its folder with this POU and its enum as edited here. The folder itself is left as it is until a write works. Then the POU is saved, and the new compile information goes into the project's `_CompileInfo`, so XAE still matches the PLC.
+- **Online change through the Automation Interface:** tried against a real TwinCAT 3.1.4026, TwinCAT refused it from the PLC's copy of the project, and from a copy of the engineering project whose compile information matched. It writes nothing when it refuses. Use **Download** (the application restarts), or XAE's own Login for an online change.
 - **XAE stays open** after a build, until the time the dialog shows, so the next build is quicker. **Close XAE now** in the dialog closes it at once.
 - **Several POUs at once:** after you edit a POU from the PLC, opening another from the PLC (From PLC, Here) keeps your edits for the session instead of discarding them. Opening that POU again brings them back. **Build** sends every one edited, with their enums, and a successful write clears the list.
 - **Before writing,** the confirmation lists what changes on the PLC: each file sent against the PLC's own version, part by part, with its changed lines.

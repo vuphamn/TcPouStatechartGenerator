@@ -101,6 +101,13 @@ const hello = (token) =>
   const statuses = await p.$$eval('#admin-plcs .status', (s) => s.map((x) => `${x.className}: ${x.textContent}`));
   expect(/ok: OK: PLC on port 851 Run, TwinCAT Run \(FakePlc 3\.1\.4026\)/.test(statuses[0]), `test, the PLC: ${statuses[0]}`);
   expect(/bad: No TwinCAT router at 127\.0\.0\.1:48987/.test(statuses[1]), `test, nothing there: ${statuses[1]}`);
+  // Check: the steps, from the gateway (its NetId): the PLC's ADS port open; nothing there: closed, and why
+  const checked = (await post('/admin/api/check', { netId: '127.0.0.1.1.1', ip: '127.0.0.1:48986', port: 851, localNetId: '127.0.0.1.1.1' })).json;
+  expect(checked && checked.steps.some((s) => s.id === "port" && s.ok === true) && checked.steps.some((s) => s.id === "ads" && s.ok === true) && /All good/.test(checked.verdict), `check (API): ${checked?.steps?.map((s) => `${s.id}:${s.ok}`).join(' ')}; "${checked?.verdict}"`);
+  await p.click('#admin-plcs tr:nth-child(2) .admin-check');
+  await p.waitForFunction(() => /ADS port is closed/.test(document.querySelector('#admin-plcs .admin-check-row')?.textContent || ''), { timeout: 15000 }).catch(() => {});
+  const checkRow = await p.$eval('#admin-plcs .admin-check-row', (e) => e.getAttribute('data-check') + '|' + e.textContent).catch(() => '');
+  expect(/\|.*✗ The ADS port is closed \(TCP 48987\)/.test(checkRow), `check (the page): "${checkRow.slice(0, 110)}"`);
 
   // Save: config.json (the other settings kept), the running gateway offers them
   expect(await p.$eval('#admin-save', (b) => !b.disabled), 'Save enabled after the changes');
