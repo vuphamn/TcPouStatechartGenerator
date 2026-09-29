@@ -1,5 +1,6 @@
 // Kval StateScope Link's page (http://127.0.0.1:<port>/): the pairing code, the paired pages; a new code only from
-// its own page; another host name refused; started again while it runs: it points at the running one
+// its own page; another host name refused; started again while it runs: it points at the running one; Start when I
+// sign in (a shortcut in the Startup folder: its command only, KSS_SERVICE_DRYRUN)
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -33,7 +34,7 @@ const pair = (code) =>
   const appdata = h.out('link-page-appdata');
   fs.rmSync(appdata, { recursive: true, force: true });
   const outFile = h.out('link-page-run.txt');
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata, KSS_SERVICE_DRYRUN: '1' }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
   const code = (await h.waitForText(outFile, /Pairing code:\s+(\S+)/))?.[1];
   expect(!!code && /http:\/\/127\.0\.0\.1:48985\//.test(fs.readFileSync(outFile, 'utf8')), `started: code ${code}, its page announced`);
 
@@ -74,7 +75,21 @@ const pair = (code) =>
   const shown = await bp.evaluate(() => ({ code: document.getElementById('code').textContent, clients: document.getElementById('clients').innerText }));
   expect(shown.code === next && /localhost:3000/.test(shown.clients), `the browser shows the code and the paired page (${shown.code})`);
   expect(pageErrors.length === 0, `no errors in the page ${pageErrors.slice(0, 2).join(' | ')}`);
+  // Start when I sign in: off, turned on from the page (the shortcut's command: this Link, minimized, not opening its page)
+  const before = JSON.parse((await request('GET', '/status')).body).startup;
+  expect(before.supported && before.on === false && /Startup[\\/]Kval StateScope Link\.lnk$/.test(before.shortcut) && before.shortcut.startsWith(appdata), `startup: off, in this user's Startup folder (${before.shortcut})`);
+  expect(/link\.cjs"? --no-open --port 48985$/.test(before.command), `its command: ${before.command}`);
+  expect((await request('POST', '/startup', { origin: 'https://evil.example' })).status === 403, 'startup: refused from another origin');
+  const vis = () => bp.evaluate(() => ({ on: !document.getElementById('startup-on').hidden, off: !document.getElementById('startup-off').hidden, state: document.getElementById('startup-state').textContent }));
+  expect((await vis()).on && !(await vis()).off, 'the page offers to start at sign-in');
+  await bp.click('#startup-on');
+  await h.sleep(800);
+  const after = await vis();
+  expect(!after.on && after.off && /starts \(minimized\) when you sign in/.test(after.state) && JSON.parse((await request('GET', '/status')).body).startup.on === true, `turned on: "${after.state}"`);
   await bp.screenshot({ path: h.out('link-page.png') });
+  await bp.click('#startup-off');
+  await h.sleep(800);
+  expect((await vis()).on && JSON.parse((await request('GET', '/status')).body).startup.on === false, `turned off: "${(await vis()).state}"`);
   paired2.ws.close();
   await browser.close();
 

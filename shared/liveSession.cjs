@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources } = require('./tcSources.cjs');
+const { buildFromPlc, checkEdits } = require('./tcBuild.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
@@ -91,7 +92,7 @@ function createLiveSession(hooks = {}) {
       hideConsoleWarnings: true,
     });
     // desired: guard variables asked for before the connection was made (liveWatch)
-    const s = { id, client, adsPort, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false, sources: null };
+    const s = { id, client, adsPort, netId, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false, sources: null };
     session = s;
     const found = [];
     try {
@@ -230,20 +231,52 @@ function createLiveSession(hooks = {}) {
 
   /**
    * The PLC project's sources as the PLC keeps them (plcSources): answered with plcSourcesResult { project, files }
-   * or { error }. Read once per connection (a few MB). Only while connected; req: { requestId }
+   * or { error }. Read once per connection (a few MB). Only while connected; req: { requestId, plcProject? } (another
+   * PLC project on the same target)
    */
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
     if (!s || !s.connected) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
     try {
-      s.sources ??= readPlcSources(s.client, s.adsPort ?? 851);
-      const r = await s.sources;
-      if (r.error) s.sources = null;
+      const key = typeof req?.plcProject === 'string' ? req.plcProject.slice(0, 100) : '';
+      s.sources ??= new Map();
+      if (!s.sources.has(key)) s.sources.set(key, readPlcSources(s.client, s.adsPort ?? 851, { plcProject: key }));
+      const r = await s.sources.get(key);
+      if (r.error) s.sources.delete(key);
       if (session === s) send({ type: 'plcSourcesResult', requestId, ...r });
     } catch (err) {
       s.sources = null;
       if (session === s) send({ type: 'plcSourcesResult', requestId, error: ads.adsErrorText(err) });
+    }
+  }
+
+  /**
+   * Rebuild the PLC's project with the POUs edited here (plcBuild), in TwinCAT XAE on this computer; write it back when
+   * asked (write: 'online' or 'activate', only without errors). Progress: plcBuildProgress { requestId, text }; the
+   * result: plcBuildResult { requestId, ok, items, errors, warnings, fatal, written }. One at a time
+   */
+  let building = false;
+  async function build(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Not connected', items: [] });
+    const bad = checkEdits(req);
+    if (bad) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: bad, items: [] });
+    if (building) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'A build is already running', items: [] });
+    building = true;
+    try {
+      const r = await buildFromPlc(s.client, {
+        edits: req.edits, plcProject: typeof req.plcProject === 'string' ? req.plcProject : '', write: req.write ?? null, netId: s.netId, adsPort: s.adsPort ?? 851,
+        onStep: (text) => send({ type: 'plcBuildProgress', requestId, text }),
+      });
+      // (written: the PLC's code and sources change: read them again next time)
+      if (r.written) s.sources = null;
+      send({ type: 'plcBuildResult', requestId, ...r });
+    } catch (err) {
+      send({ type: 'plcBuildResult', requestId, ok: false, fatal: err?.message ?? String(err), items: [] });
+    } finally {
+      building = false;
     }
   }
 
@@ -255,7 +288,7 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
-  return { start, stop, watch, browse, sources };
+  return { start, stop, watch, browse, sources, build };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId };

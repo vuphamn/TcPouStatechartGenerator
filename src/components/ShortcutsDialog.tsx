@@ -39,6 +39,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['F12', 'Go to Definition (another POU: at its member)'],
       ['Shift+F12', 'Find All References'],
       ['Shift+F2', 'Declare the name at the caret'],
+      ['Shift+F6', 'Rename in place: the name at the caret (its uses highlighted)'],
       ['Ctrl+F2', 'Toggle a bookmark on the line'],
       ['Shift+Alt+F', 'Format the code (re-indent)'],
       ['Ctrl+F / F3 / Shift+F3', 'Find / next / previous'],

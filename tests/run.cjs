@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Test runner (see tests/README.md).
-//   node tests/run.cjs [suite ...] [--filter <text>]
+//   node tests/run.cjs [suite ...] [--filter <text>] [--shard <i>/<n>]
+//   --shard: only every n-th test of each suite, from the i-th (1-based; CI runs the web suite in parallel jobs)
 //   suites: unit (logic, no browser), web (the app in a headless browser), live (gateway / Link / ADS against a
 //   simulated PLC), desktop (the Electron app, Windows only), all (= unit web live desktop). Default: unit web live.
 // web and desktop use TEST_APP_URL when set, else a Vite dev server started here. Logs: tests/.output/logs.
@@ -23,9 +24,15 @@ fs.mkdirSync(LOGS, { recursive: true });
 
 const argv = process.argv.slice(2);
 let filter = null;
+let shard = null;
 let suites = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--filter') filter = argv[++i];
+  else if (argv[i] === '--shard') {
+    const [k, n] = String(argv[++i]).split('/').map(Number);
+    if (!(n >= 1 && k >= 1 && k <= n)) throw new Error('--shard: expected <i>/<n>, e.g. 1/2');
+    shard = { k, n };
+  }
   else suites.push(argv[i]);
 }
 if (suites.length === 0) suites = ['unit', 'web', 'live'];
@@ -118,9 +125,10 @@ function failuresOf(log) {
         console.log('desktop: skipped (Windows only)');
         continue;
       }
-      const list = suite === 'unit' ? files('unit', '.test.ts') : files(suite, '.test.cjs');
+      let list = suite === 'unit' ? files('unit', '.test.ts') : files(suite, '.test.cjs');
+      if (shard) list = list.filter((_, i) => i % shard.n === shard.k - 1);
       if (!list.length) continue;
-      console.log(`\n${suite} (${list.length})`);
+      console.log(`\n${suite} (${list.length}${shard ? `, shard ${shard.k}/${shard.n}` : ''})`);
       // Everything but the logic and protocol tests runs against the app
       if (suite !== 'unit' && suite !== 'live' && !app) app = await startApp();
       for (const f of list) {

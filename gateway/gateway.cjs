@@ -19,6 +19,7 @@ const { Client } = require('ads-client');
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
 const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
+const { buildFromPlc, checkEdits } = require(`${sharedDir}/tcBuild.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -706,15 +707,49 @@ function start() {
       }
       // The PLC project's sources as the PLC keeps them (read-only: its boot folder), read once per PLC connection;
       // off with symbol browsing (config.allowBrowse: false) or on its own (config.allowSources: false)
+      // Rebuild the PLC's project with the page's edits (TwinCAT XAE on the gateway's computer), write it back: only
+      // when the gateway allows it (allowBuild; writing: allowWrite too), logged in the audit
+      if (m.type === 'plcBuild') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBuild !== true) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Building the PLC\'s project is turned off on this gateway (allowBuild)', items: [] });
+        if (m.write && config.allowWrite !== true) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Writing to the PLC is turned off on this gateway (allowWrite)', items: [] });
+        // (writeUsers: only these may write; builds stay open to everyone signed in)
+        const writers = Array.isArray(config.writeUsers) ? config.writeUsers.map((u) => String(u).toLowerCase()) : null;
+        if (m.write && writers && !writers.includes(String(user ?? '').toLowerCase())) {
+          audit.add(user, 'plc.write.refused', { plc: session?.conn.plc?.id ?? null });
+          return send({ type: 'plcBuildResult', requestId, ok: false, fatal: `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)`, items: [] });
+        }
+        if (!session?.conn.client) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Not connected', items: [] });
+        const bad = checkEdits(m);
+        if (bad) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: bad, items: [] });
+        const conn = session.conn;
+        if (conn.building) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'A build for this PLC is already running', items: [] });
+        conn.building = true;
+        audit.add(user, m.write ? 'plc.write' : 'plc.build', { plc: conn.plc.id, files: (m.edits ?? []).map((e) => e.path), write: m.write ?? null });
+        try {
+          const r = await buildFromPlc(conn.client, { edits: m.edits, plcProject: typeof m.plcProject === 'string' ? m.plcProject : '', write: m.write ?? null, netId: conn.plc.netId, adsPort: Number(conn.plc?.port) || 851, onStep: (text) => send({ type: 'plcBuildProgress', requestId, text }) });
+          if (r.written) conn.sources = null;
+          log(`build: ${user} ${m.write ? `wrote to` : 'built for'} ${conn.plc.id}: ${r.ok ? 'ok' : r.fatal ?? `${r.errors} error(s)`}`);
+          send({ type: 'plcBuildResult', requestId, ...r });
+        } catch (err) {
+          send({ type: 'plcBuildResult', requestId, ok: false, fatal: err?.message ?? String(err), items: [] });
+        } finally {
+          conn.building = false;
+        }
+        return;
+      }
       if (m.type === 'plcSources') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });
         if (!session?.conn.client) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
         const conn = session.conn;
         try {
-          conn.sources ??= readPlcSources(conn.client, Number(conn.plc?.port) || 851);
-          const r = await conn.sources;
-          if (r.error) conn.sources = null;
+          // (per PLC project: plcProject, another one on the same target; read once each)
+          const key = typeof m.plcProject === 'string' ? m.plcProject.slice(0, 100) : '';
+          conn.sources ??= new Map();
+          if (!conn.sources.has(key)) conn.sources.set(key, readPlcSources(conn.client, Number(conn.plc?.port) || 851, { plcProject: key }));
+          const r = await conn.sources.get(key);
+          if (r.error) conn.sources.delete(key);
           send({ type: 'plcSourcesResult', requestId, ...r });
         } catch (err) {
           conn.sources = null;

@@ -10,6 +10,9 @@ export interface SeenTransition {
   n: number;
   /** Last time (PLC ms since 1970) */
   last: number;
+  /** The watched values that changed just before it (within a second), and how many times: candidates for its
+   * condition (a learned diagram's) */
+  before?: Record<string, number>;
 }
 
 export type SeenMap = Record<string, SeenTransition>;
@@ -36,16 +39,35 @@ export function saveSeen(pouType: string | undefined, seen: SeenMap): void {
   }
 }
 
-/** seen with these transitions added */
-export function addSeen(seen: SeenMap, transitions: { from: string; to: string; t: number }[]): SeenMap {
+/** seen with these transitions added (before: the watched values that changed just before each) */
+export function addSeen(seen: SeenMap, transitions: { from: string; to: string; t: number; before?: string[] }[]): SeenMap {
   if (!transitions.length) return seen;
   const next = { ...seen };
   for (const tr of transitions) {
     const k = seenKey(tr.from, tr.to);
     const was = next[k];
-    next[k] = { n: (was?.n ?? 0) + 1, last: Math.max(was?.last ?? 0, tr.t) };
+    const before = { ...(was?.before ?? {}) };
+    for (const id of tr.before ?? []) before[id] = (before[id] ?? 0) + 1;
+    next[k] = { n: (was?.n ?? 0) + 1, last: Math.max(was?.last ?? 0, tr.t), ...(Object.keys(before).length ? { before } : {}) };
   }
   return next;
+}
+
+/** seen without a transition (seen by mistake: a test, a manual jump) */
+export function forgetSeen(seen: SeenMap, from: string, to: string): SeenMap {
+  const k = seenKey(from, to);
+  if (!(k in seen)) return seen;
+  const next = { ...seen };
+  delete next[k];
+  return next;
+}
+
+/** A transition's candidates for its condition: the values that changed just before it, the most often first */
+export function candidatesOf(s: SeenTransition | undefined, max = 3): { id: string; n: number }[] {
+  return Object.entries(s?.before ?? {})
+    .map(([id, n]) => ({ id, n }))
+    .sort((a, b) => b.n - a.n || a.id.localeCompare(b.id))
+    .slice(0, max);
 }
 
 /** How often the PLC was in (entered or left) a state */

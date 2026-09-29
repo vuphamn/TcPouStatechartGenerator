@@ -23,7 +23,8 @@ This builds `release/link/Kval StateScope Link.exe`. It's a single file that nee
 1. **Start `Kval StateScope Link.exe`** and keep its window open while you go live. It opens **its page** in your browser, `http://127.0.0.1:48960/`, which shows:
    - the **pairing code**, with a *Copy* button (the code is kept in `%APPDATA%\KvalStateScope\link.json`);
    - the **paired pages**: each web app page connected to Link, since when, and the variable it follows;
-   - **Make a new code**: pages paired with the old code have to enter the new one.
+   - **Make a new code**: pages paired with the old code have to enter the new one;
+   - **Start when I sign in**: a shortcut in your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) starts Link minimized, without its page, each time you sign in to Windows. It's per user and needs no administrator. *Don't start when I sign in* removes the shortcut.
 
    The code is also in Link's window. Started again while it runs, Link opens the page of the running one and exits. In the web app, **Open Link** (Live tab, next to *Remember*) opens the page too.
 2. **Set up the Live tab** in the web app:
@@ -36,6 +37,8 @@ This builds `release/link/Kval StateScope Link.exe`. It's a single file that nee
 Instances are found from the PLC's own symbol tables. The web app has no project files.
 
 Link also reads the **guard values** the Live tab asks for: the variables in the active state's transition conditions (see the main README). It also serves the Machine Overview's **Other PLCs**, one connection per PLC shown. All of this is read-only.
+
+**Build and write back:** with TwinCAT XAE on this computer, Link also runs the web app's **Build…**. It rebuilds the PLC's project, from the PLC's own copy, with the POU edited in the page, and writes it to the PLC when you confirm. See the main README. Link's window logs each build and write.
 
 **Options:**
 - `--port <n>`: another port, if 48960 is taken. Enter the same port next to the pairing code.

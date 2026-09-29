@@ -396,4 +396,5 @@ module.exports = {
   discoverInstances,
   isSymbolPath,
   browseSymbol,
+  dataTypeInfo,
 };

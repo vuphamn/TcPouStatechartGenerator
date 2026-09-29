@@ -5,6 +5,7 @@
 // Used by the desktop app and Link (shared/liveSession.cjs) and the gateway.
 
 const zlib = require('zlib');
+const { dataTypeInfo } = require('./tcAds.cjs');
 
 const SYSTEM_SERVICE_PORT = 10000;
 const FOPEN = 120;
@@ -65,8 +66,10 @@ function unzip(buf, keep = () => true) {
     const flags = buf.readUInt16LE(p + 8);
     const rawName = buf.subarray(p + 46, p + 46 + nameLen);
     const path = (flags & 0x800 ? rawName.toString('utf8') : rawName.toString('latin1')).replace(/\\/g, '/');
+    // (a folder: its name ends with /, or only its attributes say so, as in TwinCAT's archives)
+    const isDir = path.endsWith('/') || (buf.readUInt32LE(p + 38) & 0x10) !== 0;
     p += 46 + nameLen + extraLen + commentLen;
-    if (path.endsWith('/') || !keep(path)) continue;
+    if (isDir || !keep(path)) continue;
     const lNameLen = buf.readUInt16LE(local + 26);
     const lExtraLen = buf.readUInt16LE(local + 28);
     const start = local + 30 + lNameLen + lExtraLen;
@@ -80,31 +83,107 @@ function unzip(buf, keep = () => true) {
 const SOURCE_FILE = /\.(TcPOU|TcDUT|TcGVL)$/i;
 const text = (b) => b.toString('utf8').replace(/^﻿/, '');
 
+/** A type of the project as it was built (the archive's .tmc): its size and own members */
+function builtTypes(tmc, names) {
+  const out = new Map();
+  for (const m of tmc.matchAll(/<DataType><Name[^>]*>([^<]+)<\/Name>([\s\S]*?)<\/DataType>/g)) {
+    const key = m[1].toLowerCase();
+    if (!names.has(key) || out.has(key)) continue;
+    const bits = Number(/^\s*<BitSize>(\d+)<\/BitSize>/.exec(m[2])?.[1]);
+    // (the compiler's own members, ".PT" and the like, are not the PLC's to list: left out)
+    const members = [...m[2].matchAll(/<SubItem><Name>([^<]+)<\/Name>/g)].map((s) => s[1]).filter((n) => /^[A-Za-z_]\w*$/.test(n));
+    out.set(key, { name: m[1], size: bits / 8, members });
+  }
+  return out;
+}
+
+/** The library of each library type the project uses (the .tmc's Namespace): { lower-case name: library } */
+function libraryTypesOf(tmc) {
+  const out = {};
+  for (const m of tmc.matchAll(/<DataType><Name [^>]*?Namespace="([^"]+)"[^>]*>([^<]+)<\/Name>/g)) out[m[2].toLowerCase()] ??= m[1];
+  return out;
+}
+
+/** Most function blocks compared with the PLC's own types (an ADS read each) */
+const STALE_CHECKS = 80;
+
 /**
- * The PLC project's sources from the PLC: the project of this ADS port (851: the first PLC), its .TcPOU, .TcDUT and
- * .TcGVL files (their paths in the project). { error } when the PLC keeps none (downloaded without its sources).
+ * Sources older than the running code (the project changed and activated since its sources were downloaded): a few
+ * of its function blocks as built into the archive (its .tmc) against the PLC's own data types. The first difference,
+ * or null
  */
-async function readPlcSources(client, adsPort = 851) {
+async function staleCheck(client, tmc, sourceFiles) {
+  if (!tmc || typeof client.readWriteRaw !== 'function') return null;
+  const fbs = new Set();
+  for (const f of sourceFiles) {
+    const name = /\.TcPOU$/i.test(f.path) && /<POU\s+Name="([^"]+)"/.exec(f.content)?.[1];
+    if (name && /FUNCTION_BLOCK\b/i.test(f.content)) fbs.add(name.toLowerCase());
+  }
+  const built = [...builtTypes(tmc, fbs).values()].slice(0, STALE_CHECKS);
+  const cache = new Map();
+  for (const b of built) {
+    let dt;
+    try {
+      dt = await dataTypeInfo(client, b.name, cache);
+    } catch {
+      return null;
+    }
+    // (a type the PLC does not describe: not compared)
+    if (!dt) continue;
+    // (the PLC lists inherited members too, the .tmc only the type's own: a member of the sources it lacks, or
+    // another size)
+    const online = new Set((dt.subItems ?? []).map((s) => s.name.toLowerCase()));
+    const removed = b.members.filter((x) => !online.has(x.toLowerCase()));
+    if (removed.length || (Number.isFinite(b.size) && dt.size !== b.size)) {
+      const what = removed.length ? `${removed.slice(0, 3).join(', ')} not in the PLC's` : `${dt.size} bytes in the PLC, ${b.size} in the sources`;
+      return `The PLC's code differs from its sources (${b.name}: ${what}). The project was changed since its sources were downloaded: download them again (PLC project > Settings > Source download) to see the running code.`;
+    }
+  }
+  return null;
+}
+
+/** The PLC projects the boot folder names: [{ name, port }] */
+function plcProjectsOf(info) {
+  return (Array.isArray(info?.sub_projects) ? info.sub_projects : [])
+    .map((s) => ({ name: String(s?.name ?? ''), port: Number(/Port_(\d+)/i.exec(String(s?.file ?? ''))?.[1]) || null }))
+    .filter((s) => /^[\w .-]+$/.test(s.name));
+}
+
+/**
+ * The PLC project's sources from the PLC: the project of this ADS port (851: the first PLC), or the one named
+ * (options.plcProject: another PLC project on the same target), its .TcPOU, .TcDUT and .TcGVL files (their paths in
+ * the project); projects: all PLC projects there; stale: when they are older than the running code. { error } when
+ * the PLC keeps none (downloaded without its sources).
+ */
+async function readPlcSources(client, adsPort = 851, options = {}) {
   let info;
   try {
     info = JSON.parse(text(await readBootFile(client, 'CurrentProjectInfo.json')));
   } catch (err) {
     return { error: `The PLC has no project information in its boot folder (${err?.adsError?.errorStr ?? err?.message ?? err})` };
   }
-  const subs = Array.isArray(info?.sub_projects) ? info.sub_projects : [];
-  // (the one of this port: Plc/Port_851.json; else the only one)
-  const sub = subs.find((s) => new RegExp(`Port_${adsPort}\\b`, 'i').test(String(s?.file ?? ''))) ?? (subs.length === 1 ? subs[0] : null);
+  const projects = plcProjectsOf(info);
+  const wanted = String(options.plcProject ?? '').trim().toLowerCase();
+  // (the one asked for; else the one of this port: Plc/Port_851.json; else the only one)
+  const sub = wanted
+    ? projects.find((s) => s.name.toLowerCase() === wanted)
+    : projects.find((s) => s.port === adsPort) ?? (projects.length === 1 ? projects[0] : null);
   const name = sub?.name;
-  if (!name || !/^[\w .-]+$/.test(name)) return { error: `The PLC's project information names no PLC project for ADS port ${adsPort}` };
+  if (!name) return { error: wanted ? `The PLC has no PLC project ${options.plcProject}` : `The PLC's project information names no PLC project for ADS port ${adsPort}`, projects };
   let zip;
   try {
     zip = await readBootFile(client, `CurrentConfig/${name}.tpzip`);
   } catch (err) {
     const code = err?.adsError?.errorCode;
-    return { error: code === 0x70c || code === 1804 ? `The PLC keeps no sources of ${name} (download the project with its sources: PLC project > Settings > Source download)` : `Could not read ${name}'s sources: ${err?.adsError?.errorStr ?? err?.message ?? err}` };
+    return { error: code === 0x70c || code === 1804 ? `The PLC keeps no sources of ${name} (download the project with its sources: PLC project > Settings > Source download)` : `Could not read ${name}'s sources: ${err?.adsError?.errorStr ?? err?.message ?? err}`, projects };
   }
-  const files = unzip(zip, (p) => SOURCE_FILE.test(p)).map((f) => ({ path: f.path, content: text(f.data) }));
-  return { project: info?.project?.name ?? name, plcProject: name, files };
+  const unpacked = unzip(zip, (p) => SOURCE_FILE.test(p) || /^[^/]+\.tmc$/i.test(p));
+  const files = unpacked.filter((f) => SOURCE_FILE.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
+  const tmc = unpacked.find((f) => /\.tmc$/i.test(f.path));
+  // (only the port's own project runs where this connection reads types)
+  const stale = sub.port === adsPort || projects.length === 1 ? await staleCheck(client, tmc ? text(tmc.data) : '', files) : null;
+  const libraryTypes = tmc ? libraryTypesOf(text(tmc.data)) : {};
+  return { project: info?.project?.name ?? name, plcProject: name, projects, files, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { readBootFile, readPlcSources, unzip, SYSTEM_SERVICE_PORT };
+module.exports = { readBootFile, readPlcSources, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT };

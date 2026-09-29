@@ -13,7 +13,10 @@ interface Props {
   after: { pou: string; dut: string };
   diff: ChartDiff;
   savedLabel: string;
-  onSave: () => void;
+  /** None: nothing to save here (Compare with the PLC) */
+  onSave?: () => void;
+  /** The code's changes, part by part (declaration, body, methods) */
+  parts?: import('../utils/pouDiff.ts').PartDiff[];
   onClose: () => void;
 }
 
@@ -32,7 +35,7 @@ async function render(code: string, mark: Record<string, string>): Promise<strin
   return new XMLSerializer().serializeToString(doc.documentElement);
 }
 
-export const BeforeAfterDialog: React.FC<Props> = ({ before, after, diff, savedLabel, onSave, onClose }) => {
+export const BeforeAfterDialog: React.FC<Props> = ({ before, after, diff, savedLabel, onSave, onClose, parts }) => {
   const [svgs, setSvgs] = useState<{ before: string; after: string } | null>(null);
   const [error, setError] = useState('');
   const done = useRef(false);
@@ -83,22 +86,42 @@ export const BeforeAfterDialog: React.FC<Props> = ({ before, after, diff, savedL
           ))}
         </div>
         <div id="review-list" className="max-h-40 overflow-y-auto px-3 py-2 border-t border-slate-800 font-mono text-[11px] space-y-0.5">
-          {lines.length ? lines.map((l, i) => <div key={i} className={l.cls}>{l.t}</div>) : <div className="text-slate-500">No changes to the states or transitions (other code may have changed).</div>}
+          {lines.length ? lines.map((l, i) => <div key={i} className={l.cls}>{l.t}</div>) : <div className="text-slate-500">No changes to the states or transitions{parts ? '' : ' (other code may have changed)'}.</div>}
         </div>
+        {parts && (
+          <div id="review-code" className="max-h-56 overflow-y-auto px-3 py-2 border-t border-slate-800 font-mono text-[11px] space-y-1.5">
+            {parts.length === 0 && <div className="text-slate-500">The code is the same, part by part.</div>}
+            {parts.map((p) => (
+              <div key={p.part} className="review-code-part" data-part={p.part}>
+                <div className="text-sky-200">
+                  {p.part}: {p.only ? (p.only === 'after' ? 'only here' : `only ${savedLabel}`) : `${p.added} line${p.added === 1 ? '' : 's'} in, ${p.removed} out`}
+                </div>
+                {p.rows.slice(0, 40).map((r, i) => (
+                  <div key={i} className={`whitespace-pre ${r.startsWith('+') ? 'text-emerald-300' : r.startsWith('-') ? 'text-rose-300' : 'text-slate-500'}`}>
+                    {r}
+                  </div>
+                ))}
+                {p.rows.length > 40 && <div className="text-slate-500">… {p.rows.length - 40} more</div>}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex justify-end gap-2 px-3 py-2 border-t border-slate-800">
           <button className="px-3 py-1 rounded border border-slate-700 hover:bg-slate-800" onClick={onClose}>
             Keep editing
           </button>
+          {onSave && (
           <button
             id="review-save"
             onClick={() => {
               onClose();
-              onSave();
+              onSave?.();
             }}
             className="flex items-center gap-1 px-3 py-1 rounded bg-sky-700 hover:bg-sky-600 text-white"
           >
             <Save className="w-3.5 h-3.5" /> Save
           </button>
+          )}
         </div>
       </div>
     </div>

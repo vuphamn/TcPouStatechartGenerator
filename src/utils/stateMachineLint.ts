@@ -36,6 +36,9 @@ export type LintRuleId =
   | 'unreachable-code'
   | 'fb-not-called'
   | 'timer-no-pt'
+  | 'trigger-constant'
+  | 'empty-if'
+  | 'output-never-set'
   | 'no-description';
 
 export type LintFix =
@@ -47,8 +50,8 @@ export type LintFix =
   | { kind: 'remove-variable'; name: string; method?: string }
   /** A timer / trigger / counter never called: its call put in before its first use */
   | { kind: 'insert-call'; name: string; type: string }
-  /** Code that never runs (after a RETURN): removed, to the end of its block */
-  | { kind: 'remove-lines'; name: string; method?: string; line: number }
+  /** Code that never runs (after a RETURN): removed, to the end of its block; count: exactly these lines */
+  | { kind: 'remove-lines'; name: string; method?: string; line: number; count?: number }
   /** The state machine's CASE without ELSE: an ELSE branch put in before END_CASE */
   | { kind: 'add-else'; name: string; method: string; line: number }
   /** A PRIVATE method nothing calls: removed */
@@ -182,6 +185,21 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'warning',
     title: 'Timer without time',
     description: 'A TON, TOF or TP that is called, but never given its time (PT): its time is T#0S, so it runs out at once.',
+  },
+  'trigger-constant': {
+    severity: 'warning',
+    title: 'Trigger on a constant',
+    description: "An R_TRIG or F_TRIG whose CLK is always the same (TRUE, FALSE or a constant): its Q is never TRUE, or only in the first cycle. Where removing the call changes nothing, the fix removes it.",
+  },
+  'empty-if': {
+    severity: 'info',
+    title: 'Empty IF',
+    description: 'An IF … THEN with nothing before its END_IF (and no ELSE): it does nothing. The fix removes it (when its condition calls nothing).',
+  },
+  'output-never-set': {
+    severity: 'info',
+    title: 'Output never set',
+    description: 'A VAR_OUTPUT that no code of the POU writes: whoever reads it always gets its initial value. (Not removed for you: other POUs may read it.)',
   },
   'no-description': {
     severity: 'info',

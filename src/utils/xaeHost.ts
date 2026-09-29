@@ -50,6 +50,10 @@ export type HostMessage =
   | { type: 'editorCaret'; method: string; line: number; lineCount: number }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
+  /** Build for the PLC (desktop app, Link, gateway): what XAE does now */
+  | { type: 'plcBuildProgress'; requestId: number; text: string }
+  /** XAE edition: XAE's own build of the open solution, its Error List */
+  | { type: 'xaeBuildResult'; requestId: number; ok: boolean; errors?: number; warnings?: number; fatal?: string; items?: { level: 'error' | 'warning'; text: string; file: string; line: number; column?: number; project?: string }[] }
   /** The Live tab's Browse: the router's routes and the devices on the network (route: XAE can go live on it) */
   | {
       type: 'plcList';
@@ -133,7 +137,9 @@ export type AppMessage =
   /** Other POUs of the project written (a rename; answered with saveOtherResult) */
   | { type: 'saveOther'; requestId: number; files: { path: string; content: string; baseline: string }[] }
   /** Save a document (a save dialog; answered with saveDocumentResult) */
-  | { type: 'saveDocument'; name: string; content: string };
+  | { type: 'saveDocument'; name: string; content: string }
+  /** Build: XAE's own build of the open solution (answered with xaeBuildResult) */
+  | { type: 'buildProject'; requestId: number };
 
 interface WebViewBridge {
   postMessage(message: unknown): void;

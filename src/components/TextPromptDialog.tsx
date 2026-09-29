@@ -7,6 +7,8 @@ import { DEFAULT_SCOPES, DeclareVariableForm } from './DeclareVariableForm.tsx';
 import { highlightStructuredText } from '../utils/stSyntaxHighlighter.ts';
 
 export interface TextPromptRequest {
+  /** Called when it closes (submitted or not) */
+  onDismiss?: () => void;
   title: string;
   label: string;
   initial?: string;

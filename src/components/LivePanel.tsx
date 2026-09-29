@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
@@ -99,6 +99,14 @@ interface LivePanelProps {
   onOpenSymbols?: () => void;
   /** A POU of the PLC's own sources (the project downloaded with its sources) opened here */
   onOpenFromPlc?: () => void;
+  /** The POU from the PLC's sources, edited here: the PLC's project rebuilt with it, then written back */
+  onBuildForPlc?: () => void;
+  /** Build without a live connection (XAE edition: XAE's own project) */
+  buildOffline?: boolean;
+  /** This POU against the PLC's version (its sources), side by side */
+  onCompareWithPlc?: () => void;
+  /** The last build's result (its dialog closed): reopened */
+  lastBuild?: { text: string; ok: boolean; onOpen: () => void };
   /** Opens the Machine Overview tab */
   onOpenOverview?: () => void;
   /** Stuck-state alert: the current state's time limit (ms; its own or the default), and whether it is over it */
@@ -253,6 +261,10 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   openTarget = 'window',
   onOpenSymbols,
   onOpenFromPlc,
+  onBuildForPlc,
+  buildOffline,
+  onCompareWithPlc,
+  lastBuild,
   onOpenOverview,
   limitMs,
   stateLimitMs,
@@ -421,6 +433,36 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               title="Open a POU of the PLC's own sources (the project downloaded with its sources, as XAE's Open from Target reads them)"
             >
               <FolderDown className="w-3 h-3" /> From PLC
+            </button>
+          )}
+          {onCompareWithPlc && status.state === 'connected' && (
+            <button
+              id="live-compare-plc-btn"
+              onClick={onCompareWithPlc}
+              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+              title="This POU against the PLC's version of it (the sources it keeps), side by side"
+            >
+              <GitCompare className="w-3 h-3" /> vs PLC
+            </button>
+          )}
+          {lastBuild && (
+            <button
+              id="live-last-build-btn"
+              onClick={lastBuild.onOpen}
+              className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] hover:bg-slate-800 ${lastBuild.ok ? 'border-emerald-800 text-emerald-300' : 'border-rose-800 text-rose-300'}`}
+              title="The last build's messages (its errors open at their line)"
+            >
+              Last build: {lastBuild.text}
+            </button>
+          )}
+          {onBuildForPlc && (status.state === 'connected' || buildOffline) && (
+            <button
+              id="live-build-btn"
+              onClick={onBuildForPlc}
+              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-amber-700/70 text-amber-200 hover:text-amber-100 hover:bg-slate-800"
+              title="Rebuild the PLC's project with this POU as edited here (TwinCAT XAE on this computer), review its errors, then write it to the PLC"
+            >
+              <Hammer className="w-3 h-3" /> Build…
             </button>
           )}
         </div>
@@ -727,6 +769,17 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               title="ADS port of the PLC runtime (empty: from the project, usually 851)"
               className="w-14 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
             />
+            {direct && (
+              <button
+                id="live-plc-local"
+                type="button"
+                onClick={() => onSettingsChange({ ...settings, netId: '127.0.0.1.1.1', ip: '127.0.0.1', localNetId: '' })}
+                className="shrink-0 flex items-center gap-1 px-1.5 rounded border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+                title="The PLC on this computer (TwinCAT runtime here): 127.0.0.1.1.1 through this computer's TwinCAT router"
+              >
+                This PC
+              </button>
+            )}
             {canBrowse && (
               <button
                 id="live-plc-browse"

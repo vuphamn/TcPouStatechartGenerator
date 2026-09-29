@@ -185,9 +185,19 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   const cards = await p.$$eval('[id^="state-bookmark-"]', (m) => m.map((x) => x.id).sort());
   const ribbons = await p.$$eval('#mermaid-diagram-svg-container g.state-bookmark-marker', (m) => m.map((x) => x.getAttribute('data-state-id')).sort());
   expect(ribbons.join() === 'S_IDLE,S_RUN', `both bookmarked: ${ribbons.join(', ')} ${cards.join(', ')}`);
+  // The minimap: the bookmarks marked (a click goes there), the selected states too
+  const onMap = await p.$$eval('.minimap-bookmark-marker', (m) => m.map((x) => x.getAttribute('data-state-id')).sort()).catch(() => []);
+  const multiOnMap = await p.$$eval('.minimap-multi-marker', (m) => m.length).catch(() => 0);
+  expect(onMap.join() === 'S_IDLE,S_RUN' && multiOnMap >= 1, `minimap: bookmarks ${onMap.join(', ')}, ${multiOnMap} selected marked`);
   await p.keyboard.press('Escape');
   await h.sleep(200);
   expect((await marked()).length === 0, 'Esc: the selection cleared');
+  await p.evaluate(() => document.querySelector('.minimap-bookmark-marker[data-state-id="S_RUN"]')?.click());
+  await h.sleep(500);
+  const picked = await p.$$eval('#mermaid-diagram-svg-container g.node.selected, #mermaid-diagram-svg-container g.node[data-selected="true"]', (n) => n.map((x) => x.getAttribute('data-state-id'))).catch(() => []);
+  const docState = await p.evaluate(() => document.body.innerText.match(/State:\s*(S_\w+)/)?.[1] ?? '');
+  expect(picked.includes('S_RUN') || docState === 'S_RUN', `a bookmark on the minimap clicked: S_RUN selected (${picked.join(',') || docState})`);
+  await p.keyboard.press('Escape');
   // Shift+drag a box around both
   const box = { l: Math.min(idle.r.l, run.r.l) - 20, t: Math.min(idle.r.t, run.r.t) - 20, r: Math.max(idle.r.rr, run.r.rr) + 20, b: Math.max(idle.r.b, run.r.b) + 20 };
   await p.keyboard.down('Shift');
@@ -200,6 +210,19 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.keyboard.up('Shift');
   await h.sleep(300);
   expect(band && (await marked()).join() === 'S_IDLE,S_RUN', `Shift+drag: the box, then ${await marked()}`);
+  // Arrow keys: both move, by the same step; back again
+  await p.evaluate(() => document.activeElement?.blur());
+  const [i0, r0] = [await nodeAt('S_IDLE'), await nodeAt('S_RUN')];
+  for (let k = 0; k < 3; k++) await p.keyboard.press('ArrowRight');
+  await p.keyboard.press('ArrowDown');
+  await h.sleep(300);
+  const [i1, r1] = [await nodeAt('S_IDLE'), await nodeAt('S_RUN')];
+  const moved = [Math.round(i1.x - i0.x), Math.round(i1.y - i0.y), Math.round(r1.x - r0.x), Math.round(r1.y - r0.y)];
+  expect(moved[0] > 0 && moved[1] > 0 && moved[0] === moved[2] && moved[1] === moved[3], `arrows: both states moved alike (${moved.join(', ')})`);
+  for (let k = 0; k < 3; k++) await p.keyboard.press('ArrowLeft');
+  await p.keyboard.press('ArrowUp');
+  await h.sleep(300);
+  expect(Math.round((await nodeAt('S_RUN')).x - r0.x) === 0, 'and back');
   await p.keyboard.press('Escape');
 
   // 7. F2 through the bookmarked states

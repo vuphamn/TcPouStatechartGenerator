@@ -113,15 +113,15 @@ import {
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
-import { setOpenTypeHandler, type OpenTypeWhere } from './utils/openType.ts';
+import { setOpenTypeHandler, type OpenTypeWhere, type InlineRename } from './utils/openType.ts';
 import { declareInDeclaration, declareVariables, declarationVariables, guessType, removeFromDeclaration, type NewVariable } from './utils/pouVariables.ts';
 import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
 import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols, onProjectSymbols, setProjectSymbols, symbolScope, type ProjectFile } from './utils/projectSymbols.ts';
 import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
 import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
 import { lineDiff } from './utils/lineDiff.ts';
-import { isLearnedPou, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
-import { plcPous, plcPouSource, type PlcSources } from './utils/plcSources.ts';
+import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
+import { plcPous, plcPouSource, plcProjectFiles, type PlcSources } from './utils/plcSources.ts';
 import { pendingEditors, savePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -135,6 +135,12 @@ import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
 import { BODY, clearBookmarks, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
+import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
+import { armState } from './utils/choiceArms.ts';
+import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
+import { editionOf, editionVersion } from './utils/releaseNotes.ts';
+import { PlcBuildDialog, type PlcBuildState } from './components/PlcBuildDialog.tsx';
+import { itemInPou, placeOfXaeFile, plcEdits, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
@@ -146,7 +152,7 @@ import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
 import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
-import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou } from './utils/pouStateEditor.ts';
+import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -197,7 +203,7 @@ import {
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
 import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
-import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap } from './utils/seenTransitions.ts';
+import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen } from './utils/seenTransitions.ts';
 import { probePlcs, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
 import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
@@ -1285,8 +1291,13 @@ export const App: React.FC = () => {
   // Go live once the POU (and its live settings) are loaded
   const [autoLivePending, setAutoLivePending] = useState(false);
 
+  // A POU from the PLC's own sources: where it is there (Build puts the edits back)
+  const [plcOrigin, setPlcOrigin] = useState<PlcOrigin | null>(null);
+  // The other POUs (and enums) of the PLC edited in this session, kept when another was opened: built with it
+  const [plcSessionEdits, setPlcSessionEdits] = useState<Record<string, PlcEdit>>({});
   const applyLoadedPou = useCallback(
     (src: PouSource, launch?: InstanceLaunch) => {
+      setPlcOrigin(src.plc ?? null);
       setWindowInstance(launch?.instance?.trim() || null);
       setAutoLivePending(!!launch?.live);
       if (launch?.connection) adoptLiveConnection(src.name, launch.connection);
@@ -1351,7 +1362,7 @@ export const App: React.FC = () => {
       if (h.connection) adoptLiveConnection(sample.pouName, h.connection);
     } else if (h.pou) {
       const dut = h.dutCandidates ?? (h.dut ? [{ name: h.dut.name, relativePath: h.dut.name, content: h.dut.content, path: h.dut.path }] : null);
-      applyLoadedPou({ name: h.pou.name, content: h.pou.content, path: h.pou.path, dutCandidates: dut }, h);
+      applyLoadedPou({ name: h.pou.name, content: h.pou.content, path: h.pou.path, dutCandidates: dut, plc: h.pou.plc }, h);
     }
     // At start-up only
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1476,6 +1487,9 @@ export const App: React.FC = () => {
   // The transitions the PLC took with this POU type (kept in the app): edits and Save that drop one say so first
   const seenPouType = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
   const [seen, setSeen] = useState<SeenMap>({});
+  // The watched values: the last one of each, and when it last changed (PLC ms)
+  const varLastRef = useRef(new Map<string, string>());
+  const varChangedRef = useRef(new Map<string, number>());
   useEffect(() => setSeen(loadSeen(seenPouType)), [seenPouType]);
   const seenUpToRef = useRef(0);
   useEffect(() => {
@@ -1484,8 +1498,11 @@ export const App: React.FC = () => {
     seenUpToRef.current = Math.max(...fresh.map((t) => t.t));
     // (a replay shows transitions already counted when they happened)
     if (replayingRef.current) return;
+    // (the watched values that changed within a second before each: candidates for its condition)
+    const changed = [...varChangedRef.current.entries()];
+    const withBefore = fresh.map((t) => ({ ...t, before: changed.filter(([, at]) => at <= t.t && t.t - at <= 1000).map(([id]) => id) }));
     setSeen((s) => {
-      const next = addSeen(s, fresh);
+      const next = addSeen(s, withBefore);
       saveSeen(seenPouType, next);
       return next;
     });
@@ -1540,6 +1557,13 @@ export const App: React.FC = () => {
   const handleLiveVars = useCallback((values: { id: string; t: number; v: LiveValue | null }[]) => {
     recorderRef.current.addVars(values);
     if (replayingRef.current) return;
+    // (when each value last changed, PLC time: a transition right after it has it as a candidate)
+    for (const s of values) {
+      if (s.v === null || s.v === undefined) continue;
+      const key = JSON.stringify(s.v);
+      if (varLastRef.current.has(s.id) && varLastRef.current.get(s.id) !== key && Number.isFinite(s.t)) varChangedRef.current.set(s.id, s.t);
+      varLastRef.current.set(s.id, key);
+    }
     setLiveVarValues((prev) => {
       const next = { ...prev };
       for (const s of values) {
@@ -1711,8 +1735,8 @@ export const App: React.FC = () => {
   };
   /** Save As (desktop: a file picked; web: a download) */
   const handleSaveAs = useCallback(
-    async (kind: 'pou' | 'dut') => {
-      const content = kind === 'pou' ? pouContent : dutContent;
+    async (kind: 'pou' | 'dut', given?: string) => {
+      const content = given ?? (kind === 'pou' ? pouContent : dutContent);
       if (!content) return;
       const d = desktopSave();
       if (d?.saveSourceAs) {
@@ -1738,6 +1762,15 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, dutContent, pouPath, dutPath, pouFileName, dutFileName, showCopyToast]
   );
+  // A learned diagram as a source to finish: its POU (not learned any more: its conditions FALSE, to write) and enum
+  const handleSaveLearnedAsSource = useCallback(() => {
+    const pou = learnedAsSource(pouContent);
+    setPouContent(pou);
+    void (async () => {
+      await handleSaveAs('pou', pou);
+      if (dutContent) await handleSaveAs('dut', dutContent);
+    })();
+  }, [pouContent, dutContent, handleSaveAs]);
   /**
    * Save: the edited sources back to their files (desktop), or through the browser's handles (web; a download when
    * it cannot write them). A file changed on disk since it was read is overwritten only when the user says so.
@@ -2022,6 +2055,9 @@ export const App: React.FC = () => {
   identifiedStatesRef.current = identifiedStatesResult.states.map((s) => s.id);
   // Keyboard shortcuts (?): every shortcut in one list
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // The release notes (the status bar's version)
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const appHost: 'XAE' | 'Desktop' | 'Web' = isXaeHost() ? 'XAE' : desktopLive() ? 'Desktop' : 'Web';
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '?' || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -2082,8 +2118,11 @@ export const App: React.FC = () => {
     [bookmarksOpen, bookmarks, pouContent, pouFileName]
   );
   const [projectFiles, setProjectFiles] = useState<{ project?: string; files: ProjectFile[] } | null>(null);
+  // A POU opened from the PLC's sources: code help from the rest of them (no project folder)
+  const [plcCodeFiles, setPlcCodeFiles] = useState<{ project?: string; files: ProjectFile[] } | null>(null);
   useEffect(() => {
     setProjectFiles(null);
+    if (pouPath) setPlcCodeFiles(null);
     if (isXaeHost()) {
       const off = onHostMessage((m) => {
         if (m.type === 'projectSymbols' && m.files) setProjectFiles({ project: m.project, files: m.files });
@@ -2110,8 +2149,9 @@ export const App: React.FC = () => {
       ...(pouContent ? [{ name: pouFileName || 'POU.TcPOU', content: pouContent }] : []),
       ...(dutContent ? [{ name: dutFileName || 'E_States.TcDUT', content: dutContent }] : []),
     ];
-    setProjectSymbols(buildProjectSymbols(projectFiles?.files ?? [], loaded, projectFiles?.project), !!projectFiles);
-  }, [projectFiles, pouContent, dutContent, pouFileName, dutFileName]);
+    const files = projectFiles ?? plcCodeFiles;
+    setProjectSymbols(buildProjectSymbols(files?.files ?? [], loaded, files?.project), !!files);
+  }, [projectFiles, plcCodeFiles, pouContent, dutContent, pouFileName, dutFileName]);
   const lintFindings = useMemo(
     () => [
       ...lintStateMachine(pouContent, dutContent, availableEdges),
@@ -2247,12 +2287,14 @@ export const App: React.FC = () => {
       });
     })();
   }, [changesTabMounted, compareBase, gitKey, gitBaseline?.key, pouPath, dutPath]);
+  // The PLC's version of this POU (and its enum), from the sources it keeps: read when compared with it
+  const [plcBaseline, setPlcBaseline] = useState<{ key: string; loading: boolean; pou?: string; dut?: string; error?: string; note?: string } | null>(null);
   const savedBaseline =
     isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined
       ? { pou: hostSavedContent[pouPath], dut: (dutPath && hostSavedContent[dutPath]) || dutContent }
       : loadedBaseline;
   // Review and save: the version as saved (XAE: saved in XAE) against the edit, side by side
-  const [review, setReview] = useState<{ before: { pou: string; dut: string }; after: { pou: string; dut: string }; diff: ReturnType<typeof diffCharts>; label: string } | null>(null);
+  const [review, setReview] = useState<{ before: { pou: string; dut: string }; after: { pou: string; dut: string }; diff: ReturnType<typeof diffCharts>; label: string; parts?: PartDiff[]; noSave?: boolean } | null>(null);
   const openReview = () => {
     const xae = isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined;
     const before = xae ? { pou: hostSavedContent[pouPath!], dut: (dutPath && hostSavedContent[dutPath]) || dutContent } : { pou: savedSources.pou, dut: savedSources.dut || dutContent };
@@ -2263,10 +2305,15 @@ export const App: React.FC = () => {
   const [compareOpen, setCompareOpen] = useState(false);
   const chartDiff = useMemo(() => {
     if (!changesTabMounted) return null;
-    const baseline = compareBase === 'git' ? (gitBaseline?.pou ? { pou: gitBaseline.pou, dut: gitBaseline.dut ?? dutContent } : null) : savedBaseline;
+    const baseline =
+      compareBase === 'git'
+        ? gitBaseline?.pou ? { pou: gitBaseline.pou, dut: gitBaseline.dut ?? dutContent } : null
+        : compareBase === 'plc'
+          ? plcBaseline?.pou ? { pou: plcBaseline.pou, dut: plcBaseline.dut ?? dutContent } : null
+          : savedBaseline;
     if (!baseline?.pou || !pouContent) return null;
     return diffCharts(baseline, { pou: pouContent, dut: dutContent });
-  }, [changesTabMounted, compareBase, gitBaseline, savedBaseline.pou, savedBaseline.dut, pouContent, dutContent]);
+  }, [changesTabMounted, compareBase, gitBaseline, plcBaseline, savedBaseline.pou, savedBaseline.dut, pouContent, dutContent]);
   const diffHighlight = useMemo(() => {
     if (!compareOnDiagram || !chartDiff || chartDiff.total === 0) return null;
     return {
@@ -2528,17 +2575,30 @@ export const App: React.FC = () => {
     [handleSaveMethodCode, showCopyToast]
   );
   // The edge as the chart has it now (its priority changes with each edit)
-  const currentEdge = useCallback((edge: EdgeInfo) => availableEdges.find((e) => e.id === edge.id) ?? edge, [availableEdges]);
+  // (a choice's arm is drawn from its diamond, choice_<state>_<n>: the transition is its state's)
+  const drawnEdge = useCallback((edge: EdgeInfo) => availableEdges.find((e) => e.id === edge.id) ?? edge, [availableEdges]);
+  const currentEdge = useCallback(
+    (edge: EdgeInfo) => {
+      const e = drawnEdge(edge);
+      const from = armState(e.from);
+      return from ? { ...e, from, id: `${from}->${e.to}` } : e;
+    },
+    [drawnEdge]
+  );
   const handleTransitionPriority = useCallback(
-    (edge: EdgeInfo, priority: number) => pouContent && applyTransitionEdit(setTransitionPriority(pouContent, currentEdge(edge), priority, varFor(edge.from))),
+    (edge: EdgeInfo, priority: number) => {
+      const e = currentEdge(edge);
+      return pouContent && applyTransitionEdit(setTransitionPriority(pouContent, e, priority, varFor(e.from)));
+    },
     [pouContent, applyTransitionEdit, currentEdge, stateVarName]
   );
   const handleTransitionPriorityStep = useCallback(
     (edge: EdgeInfo, delta: number) => {
       if (!pouContent) return;
-      const order = transitionOrder(pouContent, currentEdge(edge), varFor(edge.from));
+      const e = currentEdge(edge);
+      const order = transitionOrder(pouContent, e, varFor(e.from));
       if ('error' in order) showCopyToast(order.error, 'error', 6000);
-      else if (order.count < 2) showCopyToast(`${edge.from} has only this transition`, 'error');
+      else if (order.count < 2) showCopyToast(`${e.from} has only this transition`, 'error');
       else handleTransitionPriority(edge, order.priority + delta);
     },
     [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast]
@@ -2551,6 +2611,11 @@ export const App: React.FC = () => {
         showCopyToast(`${stateId} is not a state of the enum / doState() (a composite state?)`, 'error');
         return;
       }
+      // (an arm starts at its IF: its end moves, its start is the IF's state)
+      if (end === 'start' && armState(drawnEdge(edge).from)) {
+        showCopyToast(`An arm of ${armState(drawnEdge(edge).from)}'s IF starts at the IF: drag its end to another state`, 'error');
+        return;
+      }
       const e = currentEdge(edge);
       if ((regionOfRef.current.get(e.from)?.variable ?? null) !== (regionOfRef.current.get(stateId)?.variable ?? null)) {
         showCopyToast(`${stateId} is ${regionOfRef.current.has(stateId) ? 'in another parallel region' : 'outside the parallel region'}`, 'error');
@@ -2560,7 +2625,7 @@ export const App: React.FC = () => {
       const taken = seen[seenKey(e.from, e.to)];
       if (taken) showCopyToast(`⚠ The PLC took ${e.from} → ${e.to} ${seenText(taken)}: the running machine uses it (Undo: Ctrl+Z)`, 'error', 8000);
     },
-    [pouContent, knownStates, currentEdge, applyTransitionEdit, stateVarName, showCopyToast, seen]
+    [pouContent, knownStates, currentEdge, drawnEdge, applyTransitionEdit, stateVarName, showCopyToast, seen]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
   // The state(s) copied (Ctrl+C: the selected one, or the several selected ones)
@@ -2783,7 +2848,8 @@ export const App: React.FC = () => {
         showCopyToast(c.error, 'error', 6000);
         return;
       }
-      const anchor = edgeAnchor(e);
+      // (on the label as drawn: an arm's is on its line from the diamond)
+      const anchor = edgeAnchor(drawnEdge(edge));
       setPromptRequest({
         title: `Condition of ${e.from} → ${e.to}`,
         label: c.condition
@@ -3443,6 +3509,82 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, handleOpenInspectorPanel, refsView, showCopyToast]
   );
+  // Build (the Live tab): the PLC's project rebuilt with this POU as edited here, its errors listed; then written back
+  const [plcBuild, setPlcBuild] = useState<PlcBuildState | null>(null);
+  // (closed: the last build kept, the Live tab reopens it)
+  const [plcBuildShown, setPlcBuildShown] = useState(false);
+  const runPlcBuild = useCallback(
+    (write: PlcWrite | null) => {
+      if (!plcOrigin) return;
+      const mine = plcEdits(plcOrigin, { content: pouContent }, { name: dutFileName, content: dutContent });
+      const edits = [...Object.values(plcSessionEdits).filter((e) => !mine.some((m) => m.path.toLowerCase() === e.path.toLowerCase())), ...mine];
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.path.split('/').pop() ?? e.path), project: plcOrigin.plcProject ?? plcOrigin.project, target: liveStatus.target ?? plcOrigin.target };
+      setPlcBuild(base);
+      setPlcBuildShown(true);
+      const req = { requestId: Date.now() % 1e9, edits, plcProject: plcOrigin.plcProject, write };
+      const desktop = desktopLive();
+      const p: Promise<PlcBuildResult> = desktop
+        ? desktop.build?.(req) ?? Promise.resolve({ ok: false, fatal: 'Update the desktop app: it cannot build the PLC\'s project' })
+        : gatewayRef.current
+          ? gatewayRef.current.request<PlcBuildResult>({ type: 'plcBuild', edits, plcProject: plcOrigin.plcProject, write }, 'plcBuildResult', 45 * 60 * 1000)
+          : Promise.resolve({ ok: false, fatal: 'Not connected' });
+      void p
+        .catch((e: unknown) => ({ ok: false, fatal: e instanceof Error ? e.message : String(e) }) as PlcBuildResult)
+        .then(async (r) => {
+          // (built, not written yet: what a write would change, each file against the PLC's)
+          let changes: PlcBuildState['changes'];
+          if (r.ok && !r.written) {
+            const theirs = await fetchPlcSources(plcOrigin.plcProject ?? '').catch(() => null);
+            if (theirs?.files) {
+              changes = edits.map((e) => {
+                const was = theirs.files!.find((f) => f.path.toLowerCase() === e.path.toLowerCase())?.content ?? '';
+                const name = e.path.split('/').pop() ?? e.path;
+                return { file: name, parts: /\.TcPOU$/i.test(e.path) ? pouPartDiffs(was, e.content) : dutPartDiff(was, e.content) };
+              });
+            }
+          }
+          setPlcBuild({ ...base, phase: 'done', result: r, changes });
+          if (r.written && r.ok) {
+            // On the PLC now: this POU is saved there, and its sources are read again
+            setSavedSources((b) => ({ ...b, pou: pouContent, dut: dutContent }));
+            setPlcSessionEdits({});
+            plcSourcesRef.current = new Map();
+            showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : 'configuration activated'})`, 'success', 7000);
+          }
+        });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plcOrigin, pouContent, dutContent, dutFileName, liveStatus.target, showCopyToast, plcSessionEdits]
+  );
+  // XAE edition: XAE's own build of its solution (this POU saved there first), its Error List here
+  const xaeBuildIdRef = useRef(0);
+  const runXaeBuild = useCallback(() => {
+    // (XAE builds what is saved in its project: this POU's edits saved there first; the host takes them in order)
+    if (hostDirtyFiles.length) handleSaveToProjectRef.current(true);
+    const requestId = ++xaeBuildIdRef.current;
+    const base: PlcBuildState = { phase: 'building', write: null, files: [], project: 'the solution open in XAE', target: 'XAE' };
+    setPlcBuild(base);
+    setPlcBuildShown(true);
+    postToHost({ type: 'buildProject', requestId });
+  }, [hostDirtyFiles.length, showCopyToast]);
+  useEffect(() => {
+    if (!isXaeHost()) return;
+    return onHostMessage((m) => {
+      if (m.type !== 'xaeBuildResult' || m.requestId !== xaeBuildIdRef.current) return;
+      const items: PlcBuildItem[] = (m.items ?? []).map((x) => ({ ...x, place: placeOfXaeFile(x.file, x.line) }));
+      setPlcBuild((b) => (b ? { ...b, phase: 'done', result: { ok: m.ok, fatal: m.fatal, errors: m.errors, warnings: m.warnings, items } } : b));
+    });
+  }, []);
+  const openPlcBuildItem = useCallback(
+    (i: PlcBuildItem) => {
+      const p = i.place;
+      const origin = isXaeHost() && pouPath ? { path: pouPath.replace(/\\/g, '/'), dutPaths: {} } : plcOrigin;
+      if (!p || !itemInPou(i, origin)) return false;
+      handleOpenReference({ where: '', unit: p.member ?? undefined, part: p.part ?? 'implementation', line: p.line ?? 1, column: 0, text: '', kind: 'read' });
+      return true;
+    },
+    [plcOrigin, handleOpenReference, pouPath]
+  );
   const handleOpenType = useCallback(
     async (type: string, where: OpenTypeWhere, member?: string) => {
       const info = getProjectSymbols()?.types.get(type.toLowerCase());
@@ -3532,7 +3674,7 @@ export const App: React.FC = () => {
     can: () => isXaeHost() || Boolean((window as unknown as { tcDesktop?: { projectUses?: unknown } }).tcDesktop?.projectUses && pouPath) || (!isDesktopApp() && canPickFolder()),
   };
   const handleRenameVariable = useCallback(
-    (name: string, method?: string) => {
+    (name: string, method?: string, inline?: InlineRename) => {
       if (!pouContent) return;
       const v = (method ? declarationVariables(getMethodCodeFromPou(pouContent, method).declaration || '') : declarationVariables(extractPouDeclaration(pouContent))).find((x) => x.name.toLowerCase() === name.toLowerCase());
       const outside = !method && v && ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT'].includes(v.scope);
@@ -3559,6 +3701,8 @@ export const App: React.FC = () => {
       };
       const ask = () =>
         setPromptRequest({
+          // (Shift+F6: in place, at the name)
+          ...(inline ? { anchor: inline.anchor, inline: true, onDismiss: inline.done } : {}),
           title: `Rename ${name}${method ? ` (in ${method}())` : ''}`,
           label: method ? `The new name of ${method}()'s ${name}, in that method:` : `The new name of ${name}${v ? ` (${v.scope} : ${v.type})` : ''}, everywhere in the POU: its declaration, body, methods and the guards${canProject ? ', and where other POUs of the project use it' : ''}:`,
           initial: name,
@@ -3612,7 +3756,7 @@ export const App: React.FC = () => {
   );
   // Rename a method / property: in the POU, and (not PRIVATE) where other POUs of the project call it
   const handleRenameMethod = useCallback(
-    (name: string) => {
+    (name: string, inline?: InlineRename) => {
       if (!pouContent) return;
       const pouName = pouFileName.replace(/\.TcPOU$/i, '');
       const probe = renameMethod(pouContent, name, `${name}_`);
@@ -3636,6 +3780,7 @@ export const App: React.FC = () => {
           .filter((x): x is NonNullable<typeof x> => !!x);
       };
       setPromptRequest({
+        ...(inline ? { anchor: inline.anchor, inline: true, onDismiss: inline.done } : {}),
         title: `Rename ${probe.kind} ${name}`,
         label: `The new name of ${name}${probe.kind === 'method' ? '()' : ''}: its declaration and every call in the POU${canProject ? ', and where other POUs of the project call it' : probe.isPrivate ? ' (PRIVATE: only this POU calls it)' : ''}:`,
         initial: name,
@@ -3966,6 +4111,24 @@ export const App: React.FC = () => {
           items.push({ id: 'edit-state-code-btn', label: `Edit the state's code…${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}`, icon: <Code2 className="w-3.5 h-3.5" />, title: "Its CASE branch in doState(), as written: actions and transitions", onSelect: () => handleEditStateCode(target.id) });
         }
       }
+      // A learned diagram: each transition seen from the state can be forgotten (seen by mistake)
+      if (target.type === 'node' && learnedPou)
+        for (const [k, s] of Object.entries(seen)) {
+          const [from, to] = k.split('->');
+          if (from !== target.id) continue;
+          items.push({
+            id: `forget-seen-${to}-btn`,
+            label: `Forget ${from} → ${to} (seen ${s.n}×)`,
+            icon: <Trash2 className="w-3.5 h-3.5" />,
+            title: 'Seen by mistake (a test, a manual jump): taken out of what was seen on the PLC',
+            onSelect: () =>
+              setSeen((cur) => {
+                const next = forgetSeen(cur, from, to);
+                saveSeen(seenPouType, next);
+                return next;
+              }),
+          });
+        }
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
       if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
         items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
@@ -3981,10 +4144,12 @@ export const App: React.FC = () => {
       // A transition's priority (its order in the state's doState() branch, or in preProcess())
       if (target.type === 'edge' && pouContent) {
         const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
-        const order = transitionOrder(pouContent, edge, varFor(edge.from));
+        // (a choice's arm: its state's order)
+        const real = currentEdge(edge);
+        const order = transitionOrder(pouContent, real, varFor(real.from));
         if (!('error' in order) && order.count > 1) {
           const pre = order.method === 'preProcess';
-          const where = pre ? 'preProcess()' : `${edge.from}`;
+          const where = pre ? 'preProcess()' : `${real.from}`;
           if (order.priority > 1)
             items.push({
               id: 'priority-up-btn',
@@ -4008,7 +4173,7 @@ export const App: React.FC = () => {
             title: `The order of the transitions of ${where}`,
             onSelect: () =>
               setPromptRequest({
-                title: `Priority of ${edge.from} → ${edge.to}`,
+                title: `Priority of ${real.from} → ${real.to}`,
                 label: `1 is checked first. The transitions of ${where} now: ${order.targets.map((t, i) => `${i + 1} ${t}`).join(', ')}`,
                 initial: String(order.priority),
                 monospace: true,
@@ -4018,7 +4183,20 @@ export const App: React.FC = () => {
               }),
           });
         }
-        if (edge.from !== '[*]')
+        if (learnedPou && seen[seenKey(edge.from, edge.to)])
+          items.push({
+            id: 'forget-seen-btn',
+            label: 'Forget this transition',
+            icon: <Trash2 className="w-3.5 h-3.5" />,
+            title: `Seen by mistake (a test, a manual jump): ${edge.from} → ${edge.to} taken out of what was seen on the PLC`,
+            onSelect: () =>
+              setSeen((s) => {
+                const next = forgetSeen(s, edge.from, edge.to);
+                saveSeen(seenPouType, next);
+                return next;
+              }),
+          });
+        if (edge.from !== '[*]' && !learnedPou)
           items.push({ id: 'edit-condition-btn', label: 'Edit condition…', icon: <Pencil className="w-3.5 h-3.5" />, title: 'F2: its condition, with the variables of the POU', onSelect: () => handleEditCondition(edge) });
         if (edge.from !== '[*]')
           items.push({ id: 'delete-transition-btn', label: 'Delete transition…', icon: <Trash2 className="w-3.5 h-3.5" />, title: 'Delete: its code in doState() / preProcess()', onSelect: () => handleDeleteTransition(edge) });
@@ -4060,6 +4238,7 @@ export const App: React.FC = () => {
     for (const st of identifiedStatesResult.states) cmds.push({ id: `sym-state:${st.id}`, group: 'State', label: st.id, hint: st.label && st.label !== st.id ? st.label : undefined, run: () => handleJumpToState(st.id) });
     for (const m of pouContent ? getAllMethodsFromPou(pouContent) : []) cmds.push({ id: `sym-method:${m}`, group: 'Method', label: `${m}()`, run: () => handleOpenInspectorPanel('method', { method: `${m}()` }) });
     // (a property: its Get / Set, opened in the Method Editor)
+    for (const a of pouContent ? getActionsFromPou(pouContent) : []) cmds.push({ id: `sym-action:${a}`, group: 'Action', label: a, hint: 'action', run: () => handleOpenInspectorPanel('method', { method: `${a}()` }) });
     for (const p of pouContent ? getPropertyAccessorsFromPou(pouContent) : []) cmds.push({ id: `sym-property:${p.name}`, group: 'Property', label: p.name, hint: p.type || undefined, run: () => handleOpenInspectorPanel('method', { method: `${p.name}()` }) });
     for (const v of pouContent ? declarationVariables(extractPouDeclaration(pouContent)) : [])
       cmds.push({ id: `sym-member:${v.name}`, group: 'Member', label: v.name, hint: `${v.type} · ${v.scope}`, run: () => { setDockLayout((l) => activateDockTab(l, 'pou')); setPouReveal({ symbol: v.name, nonce: Date.now() }); } });
@@ -4344,12 +4523,12 @@ export const App: React.FC = () => {
       }
       if (fix.kind === 'remove-lines' && fix.method) {
         const m = getMethodCodeFromPou(pouContent, fix.method);
-        const range = deadLines(m.code, fix.line);
+        const range = fix.count ? { start: fix.line, end: fix.line + fix.count - 1 } : deadLines(m.code, fix.line);
         const lines = m.code.split(/\r?\n/);
         const gone = lines.slice(range.start - 1, range.end);
         setPromptRequest({
-          title: `Remove ${gone.length} line${gone.length === 1 ? '' : 's'} that never run?`,
-          label: `In ${fix.method}(), lines ${range.start}–${range.end} (after a RETURN, to the end of their block):`,
+          title: fix.count ? `Remove ${fix.name}?` : `Remove ${gone.length} line${gone.length === 1 ? '' : 's'} that never run?`,
+          label: fix.count ? `In ${fix.method}(), line${gone.length === 1 ? ` ${range.start}` : `s ${range.start}–${range.end}`} (it does nothing):` : `In ${fix.method}(), lines ${range.start}–${range.end} (after a RETURN, to the end of their block):`,
           details: gone.map((l) => l.trim()).filter(Boolean),
           confirmOnly: true,
           danger: true,
@@ -4420,10 +4599,19 @@ export const App: React.FC = () => {
   const [storedLiveSettings, setLiveSettings] = useState<LiveSettings>(DEFAULT_LIVE_SETTINGS);
   // The key whose saved settings are in state (auto go-live waits for them)
   const [liveSettingsLoadedKey, setLiveSettingsLoadedKey] = useState<string | null>(null);
+  // The project's connection (the last one used with any of its POUs): a POU of it without its own settings starts
+  // with it
+  const liveProject = (projectFiles ?? plcCodeFiles)?.project ?? '';
+  const liveProjectKey = liveProject ? `kss.live.project.${liveProject}` : '';
   useEffect(() => {
     try {
       const raw = localStorage.getItem(liveSettingsKey);
-      const loaded: LiveSettings = raw ? { ...DEFAULT_LIVE_SETTINGS, ...(JSON.parse(raw) as Partial<LiveSettings>) } : DEFAULT_LIVE_SETTINGS;
+      const ofProject = !raw && liveProjectKey ? localStorage.getItem(liveProjectKey) : null;
+      const loaded: LiveSettings = raw
+        ? { ...DEFAULT_LIVE_SETTINGS, ...(JSON.parse(raw) as Partial<LiveSettings>) }
+        : ofProject
+          ? { ...DEFAULT_LIVE_SETTINGS, ...connectionOf(JSON.parse(ofProject) as Record<string, string>) }
+          : DEFAULT_LIVE_SETTINGS;
       // A POU without a target starts with the last remembered PLC (XAE: empty is the project's target, kept so)
       const last = !loaded.netId && !isXaeHost() ? loadRememberedPlcs()[0] : undefined;
       setLiveSettings(last ? { ...loaded, netId: last.netId, ip: last.ip, port: last.port, localNetId: last.localNetId } : loaded);
@@ -4431,7 +4619,7 @@ export const App: React.FC = () => {
       setLiveSettings(DEFAULT_LIVE_SETTINGS);
     }
     setLiveSettingsLoadedKey(liveSettingsKey);
-  }, [liveSettingsKey]);
+  }, [liveSettingsKey, liveProjectKey]);
   // Opened by another window (Open instance, Watch): the same PLC, so its connection becomes this POU's
   function adoptLiveConnection(pouName: string, connection: Record<string, string>) {
     const key = `kss.live.${pouName || 'POU'}`;
@@ -4462,11 +4650,12 @@ export const App: React.FC = () => {
       setLiveSettings(toStore);
       try {
         localStorage.setItem(liveSettingsKey, JSON.stringify(toStore));
+        if (liveProjectKey) localStorage.setItem(liveProjectKey, JSON.stringify(connectionOf(toStore)));
       } catch {
         // per-viewer convenience only
       }
     },
-    [liveSettingsKey, windowInstance, storedLiveSettings.instance]
+    [liveSettingsKey, liveProjectKey, windowInstance, storedLiveSettings.instance]
   );
   // Follow: pan the canvas to the live state on each change (off by default: the canvas stays where it is)
   const [liveFollow, setLiveFollowState] = useState<boolean>(() => {
@@ -4494,6 +4683,7 @@ export const App: React.FC = () => {
       else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
       else if (m.type === 'liveVars') handleLiveVars(m.values);
       else if (m.type === 'liveBrowseResult') handleLiveBrowseResult(m);
+      else if (m.type === 'plcBuildProgress') setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: String(m.text ?? '') } : b));
     });
   }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
   // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
@@ -4521,6 +4711,7 @@ export const App: React.FC = () => {
       else if (m.type === 'liveWatchResult') handleLiveWatchResult(m.vars);
       else if (m.type === 'liveVars') handleLiveVars(m.values);
       else if (m.type === 'liveBrowseResult') handleLiveBrowseResult(m);
+      else if (m.type === 'plcBuildProgress') setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: String(m.text ?? '') } : b));
       else if (m.type === 'closed') setLiveStatus((prev) => ({ ...prev, state: 'lost', message: m.message }));
     });
     return gatewayRef.current;
@@ -4769,35 +4960,87 @@ export const App: React.FC = () => {
     handleLiveStartRef.current();
   }, [liveSettings.instance, liveStatus.state]);
   // The PLC project's sources as the PLC keeps them: read once per connection (a few MB), through the live connection
-  const plcSourcesRef = useRef<{ key: string; p: Promise<PlcSources> } | null>(null);
-  const fetchPlcSources = useCallback((): Promise<PlcSources> => {
-    const key = `${liveMode}|${liveStatus.target ?? ''}`;
-    if (plcSourcesRef.current?.key === key) return plcSourcesRef.current.p;
+  // (plcProject: another PLC project on the same target; each read once)
+  const plcSourcesRef = useRef<Map<string, Promise<PlcSources>>>(new Map());
+  const plcSourcesTargetRef = useRef('');
+  const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
+    const target = `${liveMode}|${liveStatus.target ?? ''}`;
+    if (plcSourcesTargetRef.current !== target) {
+      plcSourcesTargetRef.current = target;
+      plcSourcesRef.current = new Map();
+    }
+    const cache = plcSourcesRef.current;
+    const known = cache.get(plcProject);
+    if (known) return known;
+    const req = { requestId: Date.now() % 1e9, ...(plcProject ? { plcProject } : {}) };
     let p: Promise<PlcSources>;
     if (isXaeHost()) p = Promise.resolve({ error: 'XAE opens the project from the target itself' });
-    else if (liveMode === 'desktop') p = desktopLive()?.sources?.({ requestId: Date.now() % 1e9 }) ?? Promise.resolve({ error: 'Update the desktop app: it cannot read the PLC\'s sources' });
-    else p = gatewayRef.current ? gatewayRef.current.request<PlcSources>({ type: 'plcSources' }, 'plcSourcesResult', 120000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
+    else if (liveMode === 'desktop') p = desktopLive()?.sources?.(req) ?? Promise.resolve({ error: 'Update the desktop app: it cannot read the PLC\'s sources' });
+    else p = gatewayRef.current ? gatewayRef.current.request<PlcSources>({ type: 'plcSources', ...(plcProject ? { plcProject } : {}) }, 'plcSourcesResult', 120000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
     p = p.then((r) => {
-      if (r.error && plcSourcesRef.current?.key === key) plcSourcesRef.current = null;
+      if (r.error && cache.get(plcProject) === p) cache.delete(plcProject);
       return r;
     });
-    plcSourcesRef.current = { key, p };
+    cache.set(plcProject, p);
     return p;
   }, [liveMode, liveStatus.target]);
+  const plcCompareKey = `${liveStatus.target ?? ''}|${pouTypeName ?? ''}`;
+  const loadPlcBaseline = useCallback(async (): Promise<{ pou?: string; dut?: string; error?: string; note?: string; project?: string }> => {
+    if (!pouTypeName) return { error: 'No POU loaded' };
+    const r = await fetchPlcSources(plcOrigin?.plcProject ?? '');
+    if (r.error || !r.files) return { error: r.error ?? 'The PLC keeps no sources' };
+    const src = plcPouSource(r.files, pouTypeName);
+    if (!src) return { error: `${pouTypeName}.TcPOU is not in the PLC's sources (${r.plcProject ?? r.project})` };
+    const dut = dutFileName ? src.dutCandidates?.find((d) => d.name.toLowerCase() === dutFileName.toLowerCase()) : undefined;
+    return { pou: src.content, dut: dut?.content, project: r.plcProject ?? r.project, note: [r.stale, dutFileName && !dut ? `The enum was not compared (${dutFileName} is not in the PLC's sources)` : ''].filter(Boolean).join(' ') || undefined };
+  }, [pouTypeName, dutFileName, fetchPlcSources, plcOrigin?.plcProject]);
+  useEffect(() => {
+    if (!changesTabMounted || compareBase !== 'plc' || plcBaseline?.key === plcCompareKey) return;
+    if (liveStatus.state !== 'connected') {
+      setPlcBaseline({ key: plcCompareKey, loading: false, error: 'Go live on the PLC to compare with its version' });
+      return;
+    }
+    setPlcBaseline({ key: plcCompareKey, loading: true });
+    void loadPlcBaseline().then((r) => setPlcBaseline({ key: plcCompareKey, loading: false, ...r }));
+  }, [changesTabMounted, compareBase, plcCompareKey, plcBaseline?.key, liveStatus.state, loadPlcBaseline]);
+  // Compare with the PLC (the Live tab): this POU against the PLC's, side by side
+  const handleCompareWithPlc = useCallback(() => {
+    showCopyToast("Reading the PLC's sources…", 'success', 3000);
+    void loadPlcBaseline().then((r) => {
+      if (r.error || !r.pou) return showCopyToast(r.error ?? 'Not in the PLC', 'error', 8000);
+      const before = { pou: r.pou, dut: r.dut ?? dutContent };
+      const after = { pou: pouContent, dut: dutContent };
+      setReview({ before, after, diff: diffCharts(before, after), label: `on the PLC (${r.project ?? 'its project'})`, parts: pouPartDiffs(r.pou, pouContent), noSave: true });
+      if (r.note) showCopyToast(r.note, 'error', 10000);
+    });
+  }, [loadPlcBaseline, pouContent, dutContent, showCopyToast]);
   // Open from the PLC (the Live tab): its POUs listed, one opened in this window
   const [plcPicker, setPlcPicker] = useState<PlcSources | null>(null);
-  const handleOpenFromPlc = useCallback(() => {
-    showCopyToast('Reading the PLC\'s sources…', 'success', 3000);
-    void fetchPlcSources().then((r) => {
-      if (r.error || !r.files) return showCopyToast(r.error ?? 'The PLC keeps no sources', 'error', 8000);
-      setPlcPicker(r);
-    });
-  }, [fetchPlcSources, showCopyToast]);
+  const handleOpenFromPlc = useCallback(
+    (plcProject = '') => {
+      showCopyToast(plcProject ? `Reading the PLC's sources of ${plcProject}…` : 'Reading the PLC\'s sources…', 'success', 3000);
+      void fetchPlcSources(plcProject).then((r) => {
+        if (r.error || !r.files) return showCopyToast(r.error ?? 'The PLC keeps no sources', 'error', 8000);
+        if (r.stale) showCopyToast(r.stale, 'error', 12000);
+        setPlcPicker(r);
+      });
+    },
+    [fetchPlcSources, showCopyToast]
+  );
   const openPlcPouHere = useCallback(
     (sources: PlcSources, typeName: string) => {
-      const src = sources.files ? plcPouSource(sources.files, typeName) : null;
-      if (!src) return showCopyToast(`${typeName}.TcPOU is not in the PLC's sources`, 'error');
-      confirmDiscard(() => {
+      const found = sources.files ? plcPouSource(sources.files, typeName, { project: sources.project, plcProject: sources.plcProject, target: liveStatus.target }) : null;
+      if (!found) return showCopyToast(`${typeName}.TcPOU is not in the PLC's sources`, 'error');
+      // This one from the PLC, edited: its edits kept for the session (built with the others), not discarded
+      const keep: Record<string, PlcEdit> = {};
+      if (plcOrigin && (pouDirty || dutDirty)) for (const e of plcEdits(plcOrigin, { content: pouContent }, { name: dutFileName, content: dutContent })) keep[e.path.toLowerCase()] = e;
+      if (Object.keys(keep).length) setPlcSessionEdits((m) => ({ ...m, ...keep }));
+      const edits = { ...plcSessionEdits, ...keep };
+      // (edited earlier in this session: its edits back)
+      const again = edits[found.plc!.path.toLowerCase()];
+      const src = again ? { ...found, content: again.content } : found;
+      const proceed = (go: () => void) => (Object.keys(keep).length ? go() : confirmDiscard(go));
+      proceed(() => {
         // Live: stopped, then live again on an instance of this type (the PLC's first; the Live tab lists the others),
         // not on the previous type's instance
         const wasLive = liveStatus.state === 'connected' || liveStatus.state === 'connecting';
@@ -4807,18 +5050,26 @@ export const App: React.FC = () => {
         }
         // (the connection comes along: the live settings are kept per POU)
         applyLoadedPou(src, wasLive ? { live: true, connection: connectionOf(liveSettings) } : undefined);
-        showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer`, 'success', 7000);
+        // (its edits, still to build: unsaved against the PLC's version)
+        if (again) setSavedSources((b) => ({ ...b, pou: found.content }));
+        // Code help from the whole PLC project (its types, GVLs, the other POUs' members)
+        setPlcCodeFiles({ project: sources.project, files: plcProjectFiles(sources.files ?? []) });
+        const keptNote = Object.keys(keep).length ? ` Kept your edits of ${Object.values(keep).map((e) => e.path.split('/').pop()).join(', ')} for the build.` : '';
+        if (sources.stale) showCopyToast(`${sources.stale}${keptNote}`, 'error', 12000);
+        else showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer.${keptNote}`, 'success', 7000);
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showCopyToast, applyLoadedPou, liveStatus.state, liveSettings, handleLiveSettingsChange]
+    [showCopyToast, applyLoadedPou, liveStatus.state, liveSettings, handleLiveSettingsChange, plcOrigin, pouDirty, dutDirty, pouContent, dutContent, dutFileName, plcSessionEdits]
   );
   // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
   const handleWatchMachine = useCallback(
-    (node: SymbolChild, on?: Partial<LiveSettings>) => {
+    (node: SymbolChild, on?: Partial<LiveSettings>, opts?: { here?: boolean }) => {
       // on: another PLC (the Machine Overview's other PLCs): its connection instead of this window's
       const connection = connectionOf(on ? { ...liveSettings, ...on } : liveSettings);
       const typeName = node.type.trim().split('.').pop() ?? '';
+      // A library's type (Tc2_MC2.MC_Power): its library named when its source is not at hand
+      const qualifier = node.type.trim().split('.').slice(0, -1).join('.');
       if (!/^[A-Za-z_]\w*$/.test(typeName)) {
         showCopyToast(`${node.type} is not a function block type`, 'error');
         return;
@@ -4839,12 +5090,21 @@ export const App: React.FC = () => {
         };
       }).tcDesktop;
       const handOver = (src: PouSource) => {
+        // Here: this window's POU replaced (live on the instance)
+        if (opts?.here) {
+          confirmDiscard(() => {
+            if (liveStatus.state === 'connected' || liveStatus.state === 'connecting') handleLiveStopRef.current();
+            applyLoadedPou(src, { instance: node.path, live: true, connection });
+            showCopyToast(`${src.name} here, live on ${node.path}`, 'success', 5000);
+          });
+          return;
+        }
         if (d?.newWindow && src.path) {
           void d.newWindow(src.path, { instance: node.path, live: true, connection });
           return;
         }
         const dut = src.dutCandidates ?? undefined;
-        const id = putHandoff({ instance: node.path, live: true, connection, pou: { name: src.name, content: src.content, path: src.path }, dutCandidates: dut });
+        const id = putHandoff({ instance: node.path, live: true, connection, pou: { name: src.name, content: src.content, path: src.path, plc: src.plc }, dutCandidates: dut });
         if (!id) {
           showCopyToast('Cannot hand the POU to another window: this browser blocks local storage', 'error');
           return;
@@ -4874,12 +5134,14 @@ export const App: React.FC = () => {
       };
       // No source at hand: from the PLC's own sources when it keeps them; else its .TcPOU chosen, or its diagram learned
       // live (the PLC's states, the transitions it takes)
+      const inLibrary = (lib?: string) => (lib ? `${typeName} is in the library ${lib}: its source is not in the project` : undefined);
       const pick = () => {
-        if (liveStatus.state !== 'connected' || isXaeHost()) return offer();
+        if (liveStatus.state !== 'connected' || isXaeHost()) return offer(inLibrary(qualifier));
         showCopyToast(`Looking for ${typeName} in the PLC's sources…`, 'success', 3000);
         void fetchPlcSources().then((r) => {
-          const src = r.files ? plcPouSource(r.files, typeName) : null;
-          if (!src) return offer(r.error ?? (r.files ? `${typeName} is not in the PLC's sources (${r.project})` : undefined));
+          const src = r.files ? plcPouSource(r.files, typeName, { project: r.project, plcProject: r.plcProject, target: liveStatus.target }) : null;
+          const lib = qualifier || r.libraryTypes?.[typeName.toLowerCase()];
+          if (!src) return offer(inLibrary(lib) ?? r.error ?? (r.files ? `${typeName} is not in the PLC's sources (${r.project})` : undefined));
           showCopyToast(`${typeName} from the PLC's sources (${r.project}), live on ${node.path}`, 'success', 6000);
           handOver(src);
         });
@@ -4914,7 +5176,8 @@ export const App: React.FC = () => {
       }
       pick();
     },
-    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources, applyLoadedPou]
   );
   // Stop following the window's values when it closes or the connection ends
   useEffect(() => {
@@ -6831,6 +7094,7 @@ export const App: React.FC = () => {
                   stateProblems={stateProblems}
                   groupSnapEach={groupSnapEach}
                   canvasBanner={learnedPou ? `Learned live: no source. ${availableEdges.length} transition${availableEdges.length === 1 ? '' : 's'} seen so far; each one the PLC takes is added (their conditions are not known)` : undefined}
+                  canvasBannerAction={learnedPou ? { id: 'canvas-learned-save-btn', label: 'Save as source…', title: 'A .TcPOU and its enum to finish by hand: each transition seen, its condition FALSE to write (what changed just before it in its comment)', onClick: handleSaveLearnedAsSource } : undefined}
                   multiSelection={multiSelected}
                   onMultiSelectionChange={setMultiSelected}
                   liveHighlight={liveHighlight ?? simHighlight}
@@ -7051,7 +7315,11 @@ export const App: React.FC = () => {
             onOpenInstance={liveMode ? handleOpenInstance : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
-            onOpenFromPlc={liveMode && !replay && !isXaeHost() ? handleOpenFromPlc : undefined}
+            onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
+            onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
+            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : undefined}
+            buildOffline={isXaeHost()}
+            lastBuild={plcBuild && !plcBuildShown && plcBuild.phase === 'done' && plcBuild.result ? { text: plcBuild.result.fatal ? 'failed' : plcBuild.result.written ? 'written' : `${plcBuild.result.errors ?? plcBuild.result.items?.filter((i) => i.level === 'error').length ?? 0} error${(plcBuild.result.errors ?? 0) === 1 ? '' : 's'}`, ok: !!plcBuild.result.ok, onOpen: () => setPlcBuildShown(true) } : undefined}
             onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
             limitMs={liveLimit}
             stateLimitMs={liveSession.current ? stateLimits[liveSession.current.state] ?? null : null}
@@ -7110,9 +7378,11 @@ export const App: React.FC = () => {
           currentInstance={liveStatus.instance}
           stateVar={liveStateVar}
           onWatch={handleWatchMachine}
+          onOpenHere={isXaeHost() ? undefined : (m) => handleWatchMachine(m, undefined, { here: true })}
           openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
           loadedType={pouTypeName}
           onGoLiveHere={handleGoLiveHere}
+          plcKey={liveStatus.target}
         />,
           dockRegistry.nodes.symbols
         )}
@@ -7123,13 +7393,15 @@ export const App: React.FC = () => {
             base={compareBase}
             onBaseChange={(b) => {
               if (b === 'git') setGitBaseline(null); // read it again
+              if (b === 'plc') setPlcBaseline(null);
               setCompareBase(b);
             }}
             savedLabel={isXaeHost() && pouPath && hostSavedContent[pouPath] !== undefined ? 'saved in XAE' : 'as loaded'}
             gitAvailable={canReadGitVersions()}
-            loading={compareBase === 'git' && !!gitBaseline?.loading}
-            error={compareBase === 'git' ? gitBaseline?.error ?? null : null}
-            note={compareBase === 'git' ? gitBaseline?.note ?? null : null}
+            plcAvailable={liveStatus.state === 'connected' && !!liveMode && liveMode !== 'xae' && !isXaeHost()}
+            loading={(compareBase === 'git' && !!gitBaseline?.loading) || (compareBase === 'plc' && !!plcBaseline?.loading)}
+            error={compareBase === 'git' ? gitBaseline?.error ?? null : compareBase === 'plc' ? plcBaseline?.error ?? null : null}
+            note={compareBase === 'git' ? gitBaseline?.note ?? null : compareBase === 'plc' ? plcBaseline?.note ?? null : null}
             diff={chartDiff}
             showOnDiagram={compareOnDiagram}
             onShowOnDiagramChange={setCompareOnDiagram}
@@ -7248,7 +7520,15 @@ export const App: React.FC = () => {
           dockRegistry.nodes.logger
         )}
 
-      {promptRequest && <TextPromptDialog request={promptRequest} onClose={() => setPromptRequest(null)} />}
+      {promptRequest && (
+        <TextPromptDialog
+          request={promptRequest}
+          onClose={() => {
+            promptRequest.onDismiss?.();
+            setPromptRequest(null);
+          }}
+        />
+      )}
       {declareFix && (
         <DeclareVariableDialog
           initial={{ name: declareFix.name, type: guessType(declareFix.name), scope: declareFix.method ? 'VAR' : 'VAR_INPUT' }}
@@ -7270,13 +7550,31 @@ export const App: React.FC = () => {
         />
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {releaseNotesOpen && <ReleaseNotesDialog edition={editionOf(appHost)} onClose={() => setReleaseNotesOpen(false)} />}
+      {plcBuild && plcBuildShown && (
+        <PlcBuildDialog
+          state={plcBuild}
+          canOpen={(i) => itemInPou(i, isXaeHost() && pouPath ? { path: pouPath.replace(/\\/g, '/'), dutPaths: {} } : plcOrigin)}
+          canWrite={!isXaeHost()}
+          onOpenItem={openPlcBuildItem}
+          onRebuild={() => (isXaeHost() ? runXaeBuild() : runPlcBuild(null))}
+          onWrite={(w) => runPlcBuild(w)}
+          onClose={() => setPlcBuildShown(false)}
+        />
+      )}
       {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}
       {plcPicker?.files && (
         <CommandPalette
           id="plc-pou-picker"
           label="Open from the PLC"
-          placeholder={`A POU of ${plcPicker.project ?? 'the PLC'}'s sources (${plcPous(plcPicker.files).length}), opened here…`}
-          commands={plcPous(plcPicker.files).map((p) => ({ id: `plc-pou:${p.path}`, group: 'POU', label: p.name, hint: p.folder, run: () => openPlcPouHere(plcPicker, p.name) }))}
+          placeholder={`A POU of ${plcPicker.plcProject ?? plcPicker.project ?? 'the PLC'}'s sources (${plcPous(plcPicker.files).length}), opened here…`}
+          commands={[
+            ...plcPous(plcPicker.files).map((p) => ({ id: `plc-pou:${p.path}`, group: 'POU', label: p.name, hint: p.folder, run: () => openPlcPouHere(plcPicker, p.name) })),
+            // Several PLC projects on the target: another one's POUs
+            ...(plcPicker.projects ?? [])
+              .filter((p) => p.name !== plcPicker.plcProject)
+              .map((p) => ({ id: `plc-project:${p.name}`, group: 'PLC project', label: p.name, hint: p.port ? `ADS port ${p.port}: its POUs` : 'its POUs', run: () => handleOpenFromPlc(p.name) })),
+          ]}
           onClose={() => setPlcPicker(null)}
         />
       )}
@@ -7337,8 +7635,9 @@ export const App: React.FC = () => {
           after={review.after}
           diff={review.diff}
           savedLabel={review.label}
+          parts={review.parts}
           onClose={() => setReview(null)}
-          onSave={() => (isXaeHost() ? handleSaveToProject() : void handleSaveSources())}
+          onSave={review.noSave ? undefined : () => (isXaeHost() ? handleSaveToProject() : void handleSaveSources())}
         />
       )}
       {compareOpen && (
@@ -7400,7 +7699,9 @@ export const App: React.FC = () => {
           onOpenLive={() => showDockTab('live')}
           changes={chartDiff && compareOnDiagram ? chartDiff.total : null}
           onOpenChanges={() => showDockTab('changes')}
-          host={isXaeHost() ? 'XAE' : desktopLive() ? 'Desktop' : 'Web'}
+          host={appHost}
+          version={editionVersion(editionOf(appHost))}
+          onOpenReleaseNotes={() => setReleaseNotesOpen((v) => !v)}
           followSelection={followSelection}
           onFollowSelectionChange={setFollowSelection}
           backTo={pouHistory.length ? { name: pouHistory[pouHistory.length - 1].name, onClick: handleBackToPreviousPou } : null}

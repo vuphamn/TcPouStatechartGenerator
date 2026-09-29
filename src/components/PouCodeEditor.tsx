@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { caretAnchor } from '../utils/caretAnchor.ts';
 import { usePendingSave } from '../utils/pendingSaves.ts';
 import { Blocks, ChevronDown, ChevronUp, Copy, FileCode2, FoldVertical, RotateCcw, Save, Search, UnfoldVertical, X } from 'lucide-react';
 import { StructuredTextCodeEditor, StructuredTextCodeEditorRef } from './StructuredTextCodeEditor.tsx';
@@ -187,7 +188,14 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     const t = window.setTimeout(() => setDeclHighlight(null), 3000);
     return () => window.clearTimeout(t);
   }, [declHighlight]);
-  const methods = useMemo(() => (/<Method\b/i.test(pouContent) ? getAllMethodsFromPou(pouContent) : []), [pouContent]);
+  // (with the actions and properties: Rename works on them too)
+  const methods = useMemo(
+    () => [
+      ...(/<Method\b/i.test(pouContent) ? getAllMethodsFromPou(pouContent) : []),
+      ...[...pouContent.matchAll(/<(?:Action|Property)\b[^>]*\bName="([^"]+)"/gi)].map((m) => m[1]),
+    ],
+    [pouContent]
+  );
 
   const goToDefinition = useCallback(
     (symbol: string, memberOf?: string) => {
@@ -215,7 +223,9 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       }
       const method = methods.find((m) => m.toLowerCase() === sym.toLowerCase());
       if (method && onOpenMethod) {
-        onOpenMethod(`${method}()`);
+        // (a property: its Get accessor)
+        const property = new RegExp(`<Property\\b[^>]*\\bName="${method}"[^>]*>[\\s\\S]*?<Get\\b`, 'i').test(pouContent);
+        onOpenMethod(property ? `${method}.Get()` : `${method}()`);
         return;
       }
       // A type (another POU of the project): opened in StateScope
@@ -291,7 +301,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
     const asMethod = !memberOf && methods.find((m) => m.toLowerCase() === sym.toLowerCase());
     if (asMethod && services?.renameMethod)
-      items.push({ id: 'editor-menu-rename-method', label: `Rename method ${asMethod}…`, title: 'Its declaration and every call (a preview first)', onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.renameMethod!(asMethod)) });
+      items.push({ id: 'editor-menu-rename-method', label: `Rename ${new RegExp(`<Action\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'action' : new RegExp(`<Property\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'property' : 'method'} ${asMethod}…`, title: 'Its declaration and every call (a preview first)', onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.renameMethod!(asMethod)) });
     if (services?.watchVariable) {
       const path = memberOf ? `${memberOf}.${sym}` : sym;
       const on = services.isWatched?.(path);
@@ -344,6 +354,34 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       const ta = e.currentTarget;
       const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
       if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F6' && e.shiftKey) {
+      // Rename in place: the field at the name, its uses highlighted (the Find's whole-word match) while it is open
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      const sym = resolved?.symbol;
+      const services = editorServices();
+      if (!sym || resolved?.memberOf) return;
+      if (dirtyRef.current) return showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU');
+      const start = ta.value.slice(0, ta.selectionStart).search(/[A-Za-z_]\w*$/);
+      const anchor = caretAnchor(ta, start >= 0 ? start : ta.selectionStart, sym.length);
+      const before = { query, wholeWord, matchCase };
+      setQuery(sym);
+      setWholeWord(true);
+      setMatchCase(false);
+      const done = () => {
+        setQuery(before.query);
+        setWholeWord(before.wholeWord);
+        setMatchCase(before.matchCase);
+      };
+      const v = declared.find((x) => x.name.toLowerCase() === sym.toLowerCase());
+      const m = methods.find((x) => x.toLowerCase() === sym.toLowerCase());
+      if (v && services?.rename) services.rename(v.name, undefined, { anchor, done });
+      else if (m && services?.renameMethod) services.renameMethod(m, { anchor, done });
+      else {
+        done();
+        showNotice('warning', `'${sym}' is no variable, method, property or action of this POU`);
+      }
     } else if (e.key === 'F2' && e.shiftKey) {
       // Declare the name at the caret (as TwinCAT's Auto Declare)
       e.preventDefault();

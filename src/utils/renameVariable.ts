@@ -337,15 +337,15 @@ export function checkMethodRename(pouXml: string, oldName: string, newName: stri
 }
 
 /**
- * A method (or property) of the POU renamed: its element's name, its METHOD / PROPERTY line, every call in the POU
- * (x(, THIS^.x(, its result x := inside it)
+ * A method (or property, or action) of the POU renamed: its element's name, its METHOD / PROPERTY line, every call in
+ * the POU (x(, THIS^.x(, its result x := inside it)
  */
-export function renameMethod(pouXml: string, oldName: string, newName: string): { pou: string; changes: RenameChange[]; kind: 'method' | 'property'; isPrivate: boolean } | { error: string } {
+export function renameMethod(pouXml: string, oldName: string, newName: string): { pou: string; changes: RenameChange[]; kind: 'method' | 'property' | 'action'; isPrivate: boolean } | { error: string } {
   const err = checkMethodRename(pouXml, oldName, newName);
   if (err) return { error: err };
-  const el = pouXml.match(new RegExp(`<(Method|Property)\\b[^>]*\\bName="(${oldName})"[^>]*>`, 'i'));
-  if (!el) return { error: `${oldName} is no method or property of the POU` };
-  const kind = el[1].toLowerCase() === 'method' ? 'method' : 'property';
+  const el = pouXml.match(new RegExp(`<(Method|Property|Action)\\b[^>]*\\bName="(${oldName})"[^>]*>`, 'i'));
+  if (!el) return { error: `${oldName} is no method, property or action of the POU` };
+  const kind = el[1].toLowerCase() === 'method' ? 'method' : el[1].toLowerCase() === 'action' ? 'action' : 'property';
   const old = el[2];
   // Every use in the POU (its header line included: METHOD PUBLIC old : BOOL)
   const changes: RenameChange[] = [];

@@ -31,6 +31,9 @@ interface StatusBarProps {
   onFollowSelectionChange: (on: boolean) => void;
   /** The chart opened before this one (a referenced state machine was opened) */
   backTo?: { name: string; onClick: () => void } | null;
+  /** This edition's version (the release notes open on a click) */
+  version?: string;
+  onOpenReleaseNotes?: () => void;
 }
 
 /** One quiet line at the bottom: messages, the file and its save state, counts, problems and the live view */
@@ -53,6 +56,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   followSelection,
   onFollowSelectionChange,
   backTo,
+  version,
+  onOpenReleaseNotes,
 }) => (
   <footer
     id="status-bar"
@@ -128,8 +133,15 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <input id="status-follow-selection" type="checkbox" className="w-3 h-3" checked={followSelection} onChange={(e) => onFollowSelectionChange(e.target.checked)} />
       Follow selection
     </label>
-    <span className="flex items-center gap-1 shrink-0 text-slate-500" title="Where Kval StateScope runs">
+    <button
+      id="status-version"
+      type="button"
+      onClick={onOpenReleaseNotes}
+      className="flex items-center gap-1 shrink-0 text-slate-500 hover:text-slate-200"
+      title={`Kval StateScope ${host} edition${version ? ` ${version}` : ''}: the release notes (change history)`}
+    >
       <CircleDot className="w-3 h-3" /> {host}
-    </span>
+      {version && <span className="font-mono">{version}</span>}
+    </button>
   </footer>
 );

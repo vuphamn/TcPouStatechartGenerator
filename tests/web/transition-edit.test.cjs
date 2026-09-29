@@ -20,11 +20,27 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('#statechart-palette-collapse').catch(() => {});
   await h.sleep(300);
 
+  // (a slow machine, a long run: what is checked is waited for, up to a limit, not a fixed pause)
+  const until = async (fn, ms = 8000) => {
+    const t0 = Date.now();
+    let v = await fn();
+    while (!v && Date.now() - t0 < ms) {
+      await h.sleep(150);
+      v = await fn();
+    }
+    return v;
+  };
   const doState = async () => {
     await p.click('#dock-tab-method');
     await p.waitForSelector('#method-implementation-editor');
-    await h.sleep(400);
-    const code = await p.$eval('#method-implementation-editor', (e) => e.value);
+    // (its code, once shown: the same twice in a row)
+    let code = '';
+    await until(async () => {
+      const now = await p.$eval('#method-implementation-editor', (e) => e.value).catch(() => '');
+      const same = !!now && now === code;
+      code = now;
+      return same;
+    });
     await p.click('#dock-tab-diagram');
     await h.sleep(500);
     return code;
@@ -53,7 +69,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   }, key);
   const priorityOf = (key) => p.evaluate((key) => document.querySelector(`#mermaid-canvas-area [data-edge-id="${key}"][data-priority]`)?.getAttribute('data-priority'), key);
   const selectEdge = async (key) => {
-    const pt = await edgePoint(key);
+    const pt = await until(() => edgePoint(key), 5000);
     if (!pt) return false;
     await p.mouse.click(pt.x, pt.y);
     await h.sleep(700);
@@ -66,14 +82,14 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const unclamp = `${S('CLAMPED')}->${S('UNCLAMP_START')}`;
   const code0 = await doState();
   expect((await priorityOf(refeed)) === '2' && (await priorityOf(unclamp)) === '1', 'CLAMPED: UNCLAMP_START 1, REFEED_START 2');
-  const pt = await edgePoint(refeed);
+  const pt = await until(() => edgePoint(refeed), 5000);
   await p.mouse.click(pt.x, pt.y, { button: 'right' });
-  await h.sleep(400);
+  await until(() => p.$('#context-menu-priority-up-btn'), 3000);
   const label = await p.evaluate(() => document.getElementById('context-menu-priority-up-btn')?.textContent);
   expect(/Raise priority \(2 → 1\)/.test(label || ''), `the transition's menu: "${label}"`);
   expect(await p.evaluate(() => /Priority 2 of 2/.test(document.getElementById('context-menu-priority-set-btn')?.textContent || '')), 'and Priority 2 of 2…');
   await p.evaluate(() => document.getElementById('context-menu-priority-up-btn').click());
-  await h.sleep(1200);
+  await until(async () => (await priorityOf(refeed)) === '1');
   expect((await priorityOf(refeed)) === '1' && (await priorityOf(unclamp)) === '2', 'the chart: REFEED_START 1, UNCLAMP_START 2');
   let code = await doState();
   let br = branch(code, S('CLAMPED'));
@@ -98,7 +114,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.keyboard.down('Alt');
   await p.keyboard.press('ArrowDown');
   await p.keyboard.up('Alt');
-  await h.sleep(1200);
+  await until(async () => (await priorityOf(refeed)) === '2');
   expect((await priorityOf(refeed)) === '2', `Alt+Down: priority ${await priorityOf(refeed)}`);
   code = await doState();
   expect(code === code0, 'the code as it was');
@@ -161,6 +177,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   expect(!!end && !!target, `the end handle and a state to drop it on (${target?.id})`);
   if (end && target) {
     const marked = await drag(end, target);
+    await until(() => p.$(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${S('CLAMPED')}->${target.id}"]`));
     expect(marked === target.id, `while dragging, ${target.id} is marked`);
     code = await doState();
     br = branch(code, S('CLAMPED'));
@@ -176,6 +193,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
     expect(!!start && !!source, `the start handle and a state to drop it on (${source?.id})`);
     if (start && source) {
       await drag(start, source);
+      await until(() => p.$(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${source.id}->${target.id}"]`));
       code = await doState();
       const before = branch(code, S('CLAMPED'));
       const after = branch(code, source.id);

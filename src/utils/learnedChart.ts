@@ -5,7 +5,7 @@
  * transition seen is an arm of its state's CASE branch (IF seenLive THEN ...). Marked, so the app knows it is not a
  * real source (nothing to save to a project) and draws it again as transitions are seen.
  */
-import type { SeenMap } from './seenTransitions.ts';
+import { candidatesOf, type SeenMap, type SeenTransition } from './seenTransitions.ts';
 
 export const LEARNED_MARK = '(* Learned live by Kval StateScope: no source. Its transitions: the ones seen on the PLC *)';
 
@@ -26,6 +26,24 @@ export interface LearnedInput {
   seen: SeenMap;
 }
 
+/** "; changed just before: bStart (5×), nCount (2×)": the watched values that changed just before it */
+const candidateText = (s: SeenTransition) => {
+  const c = candidatesOf(s);
+  return c.length ? `; changed just before: ${c.map((x) => `${x.id} (${x.n}×)`).join(', ')}` : '';
+};
+
+/**
+ * A learned diagram as a source to finish by hand (Save as source): not marked learned, each seen transition's
+ * unknown condition FALSE, to be written (its comment: how often it was seen, what changed just before it)
+ */
+export function learnedAsSource(pou: string): string {
+  return pou
+    .split(LEARNED_MARK + '\n').join('')
+    .split(LEARNED_MARK).join('')
+    .replace(/\tseenLive : BOOL;[^\n]*\n/, '')
+    .replace(/IF seenLive THEN/g, 'IF FALSE (* its condition: write it *) THEN');
+}
+
 /** The POU and enum of a learned diagram; null when the PLC gave no usable states */
 export function learnedSources({ typeName, stateVar, enumType, names, seen }: LearnedInput): { pou: string; dut: string } | null {
   const members = Object.entries(names)
@@ -35,16 +53,16 @@ export function learnedSources({ typeName, stateVar, enumType, names, seen }: Le
   if (!members.length || !ident(typeName) || !ident(stateVar) || !ident(enumType)) return null;
   const known = new Set(members.map((m) => m.n));
   // Each state: the transitions seen from it, the most taken first
-  const out = new Map<string, { to: string; n: number }[]>();
+  const out = new Map<string, { to: string; n: number; s: SeenTransition }[]>();
   for (const [k, s] of Object.entries(seen)) {
     const [from, to] = k.split('->');
     if (!known.has(from) || !known.has(to) || from === to) continue;
-    out.set(from, [...(out.get(from) ?? []), { to, n: s.n }]);
+    out.set(from, [...(out.get(from) ?? []), { to, n: s.n, s }]);
   }
   const branches = members.map((m) => {
     const arms = (out.get(m.n) ?? []).sort((a, b) => b.n - a.n);
     const body = arms.length
-      ? arms.map((a) => `\t\t// seen ${a.n}×\n\t\tIF seenLive THEN\n\t\t\t${stateVar} := ${enumType}.${a.to};\n\t\tEND_IF`).join('\n')
+      ? arms.map((a) => `\t\t// seen ${a.n}×${candidateText(a.s)}\n\t\tIF seenLive THEN\n\t\t\t${stateVar} := ${enumType}.${a.to};\n\t\tEND_IF`).join('\n')
       : '\t\t; // no transition out of it seen yet';
     return `\t${enumType}.${m.n}:\n${body}`;
   });

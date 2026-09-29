@@ -315,6 +315,15 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 });
 // The PLC project's sources as the PLC keeps them (read-only: its boot folder over ADS), for the window's session
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
+// Rebuild the PLC's project with the edits (TwinCAT XAE on this computer), and write it back when asked: progress on
+// 'tc:live' (plcBuildProgress), the result returned
+ipcMain.handle('tc:live-build', (event, req) => {
+  const contents = event.sender;
+  return new Promise((resolve) => liveFor(contents).build((m) => {
+    if (m.type === 'plcBuildResult') resolve(m);
+    else if (!contents.isDestroyed()) contents.send('tc:live', m);
+  }, req));
+});
 // The Live tab's Browse: the TwinCAT devices on the network (UDP 48899 search; read-only). KSS_DISCOVERY_PORT and
 // KSS_DISCOVERY_BROADCAST=0 are for the tests (a simulated device on another port, no broadcast)
 ipcMain.handle('tc:discover-plcs', (_event, options) => {

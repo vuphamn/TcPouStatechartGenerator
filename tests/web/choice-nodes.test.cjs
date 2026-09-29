@@ -189,6 +189,27 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     sizes[v] = await sizeNow();
   }
   expect(sizes.small < sizes.medium && sizes.medium < sizes.large && (await p.evaluate(() => localStorage.getItem('kss.choiceSize'))) === 'medium', `the Choices size: small ${sizes.small}, medium ${sizes.medium}, large ${sizes.large} (kept)`);
+  // An arm's condition: edited on its label (the transition is its state's, not the diamond's)
+  await p.evaluate(() => [...document.getElementById('state-list-item-TABLEMANAGER_CLAMPED').querySelectorAll('button')].find((b) => /Go to State/.test(b.textContent))?.click());
+  await h.sleep(1500);
+  const armLabel = await p.evaluate(() => {
+    const l = [...document.querySelectorAll('#mermaid-diagram-svg-container g.edgeLabel')].find((x) => /^choice_TABLEMANAGER_CLAMPED_\d+->/.test(x.getAttribute('data-edge-id') || x.getAttribute('data-linked-path-id') || '') && x.getBoundingClientRect().width > 4);
+    if (!l) return null;
+    const r = l.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, key: l.getAttribute('data-edge-id') || l.getAttribute('data-linked-path-id'), text: l.textContent.trim() };
+  });
+  if (armLabel) {
+    // (its label may be outside the view: the right-click sent to it)
+    await p.evaluate((key) => { const l = [...document.querySelectorAll('#mermaid-diagram-svg-container g.edgeLabel')].find((x) => (x.getAttribute('data-edge-id') || x.getAttribute('data-linked-path-id')) === key); const r = l.getBoundingClientRect(); (l.querySelector('span, p, text, rect') ?? l).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.min(innerWidth - 50, Math.max(50, r.x)), clientY: Math.min(innerHeight - 50, Math.max(50, r.y)), button: 2 })); }, armLabel.key);
+    await p.waitForSelector('#context-menu-edit-condition-btn', { timeout: 3000 }).catch(() => {});
+    await p.evaluate(() => document.getElementById('context-menu-edit-condition-btn')?.click());
+    await p.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  }
+  const armPrompt = await p.evaluate(() => ({ title: document.getElementById('text-prompt-dialog')?.getAttribute('aria-label') ?? '', value: document.getElementById('text-prompt-input')?.value ?? '', inline: document.getElementById('text-prompt-dialog')?.getAttribute('data-inline') === 'true' }));
+  const armTo = armLabel?.key?.split('->')[1];
+  expect(!!armLabel && armPrompt.title === `Condition of TABLEMANAGER_CLAMPED → ${armTo}` && armPrompt.value.length > 0 && armPrompt.inline, `an arm (${armLabel?.key}): "${armPrompt.title}", on its label, its condition "${armPrompt.value}"`);
+  await p.keyboard.press('Escape');
+  await h.sleep(300);
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   expect((await choices()).length === 0, 'off again: gone');

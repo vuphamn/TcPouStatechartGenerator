@@ -3,6 +3,8 @@
 //   node scripts/release-plan.cjs [--force xae,desktop,web]   the plan (JSON; also written to $GITHUB_OUTPUT)
 //   node scripts/release-plan.cjs --notes <edition>           the changes since its last release (Markdown)
 //   node scripts/release-plan.cjs --stamp <edition> <version> writes the version into the edition's files (CI only)
+//   node scripts/release-plan.cjs --history                   every edition's releases and their changes (JSON)
+// Also required by vite.config.ts: the versions and the release notes the app shows (its status bar, Release notes).
 // A changed edition's version: its last release with the patch number + 1, or the version in its files when that is
 // higher (raise major / minor there by hand). An edition never released gets the version in its files.
 const fs = require('fs');
@@ -87,8 +89,63 @@ function notes(e) {
   return `${last ? `Changes since ${last.tag}:` : 'First release. Recent changes:'}\n\n${log || '- (no commits touching this edition)'}\n`;
 }
 
-const args = process.argv.slice(2);
-if (args[0] === '--notes') {
+// ---- The release notes in the app: each edition's releases (its tags), newest first, with their changes ----
+
+/** A commit subject's changes: "feat: a, b (c, d); fix: e" → [{ kind: 'feat', text: 'a' }, ...] */
+function changesOf(subject) {
+  const parts = subject.split(/;\s+(?=(?:feat|fix|ci|docs|perf|refactor|test|tests|chore|build)\b[^:]{0,20}:)/i);
+  const out = [];
+  for (const part of parts) {
+    const m = /^(feat|fix|ci|docs|perf|refactor|test|tests|chore|build)\b[^:]{0,20}:\s*/i.exec(part);
+    const kind = m ? m[1].toLowerCase().replace(/^tests$/, 'test') : 'change';
+    const body = m ? part.slice(m[0].length) : part;
+    // (items apart at the commas outside brackets)
+    let depth = 0;
+    let cur = '';
+    for (const ch of body) {
+      if ('([{'.includes(ch)) depth++;
+      else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1);
+      if (ch === ',' && depth === 0) {
+        if (cur.trim()) out.push({ kind, text: cur.trim().replace(/^and\s+/, '') });
+        cur = '';
+      } else cur += ch;
+    }
+    if (cur.trim()) out.push({ kind, text: cur.trim().replace(/^and\s+/, '') });
+  }
+  return out;
+}
+
+function commitsOf(range, e) {
+  const log = git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s', ...range, '--', ...pathspec(e));
+  return log ? log.split('\n').map((l) => { const [hash, date, subject] = l.split('\x1f'); return { hash, date, changes: changesOf(subject ?? '') }; }) : [];
+}
+
+/** Every edition: its version (in its files), its releases (newest first) and what came after the last one */
+function history() {
+  const out = {};
+  for (const e of Object.keys(EDITIONS)) {
+    const tags = git('for-each-ref', `refs/tags/${e}-v*`, '--format=%(refname:short)%09%(creatordate:short)')
+      .split('\n').filter(Boolean).map((l) => { const [tag, date] = l.split('\t'); return { tag, date, version: tag.replace(/^[a-z]+-v/, '') }; })
+      .filter((t) => /^\d+\.\d+\.\d+$/.test(t.version))
+      .sort((a, b) => (newer(a.version, b.version) ? 1 : newer(b.version, a.version) ? -1 : 0));
+    const releases = tags.map((t, i) => ({ ...t, commits: commitsOf(i ? [`${tags[i - 1].tag}..${t.tag}`] : ['-n', '40', t.tag], e) })).reverse();
+    const last = tags[tags.length - 1];
+    out[e] = { title: EDITIONS[e].title, version: EDITIONS[e].version(), releases, unreleased: commitsOf(last ? [`${last.tag}..HEAD`] : ['-n', '40', 'HEAD'], e) };
+  }
+  return out;
+}
+
+/** The version in each edition's files (stamped by CI before a release build) */
+const versions = () => Object.fromEntries(Object.keys(EDITIONS).map((e) => [e, EDITIONS[e].version()]));
+
+module.exports = { history, versions, changesOf };
+
+const args = require.main === module ? process.argv.slice(2) : null;
+if (!args) {
+  // (required: nothing to run)
+} else if (args[0] === '--history') {
+  console.log(JSON.stringify(history(), null, 2));
+} else if (args[0] === '--notes') {
   process.stdout.write(notes(args[1]));
 } else if (args[0] === '--stamp') {
   const [e, v] = [args[1], args[2]];

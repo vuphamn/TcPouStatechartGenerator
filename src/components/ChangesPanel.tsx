@@ -2,7 +2,7 @@ import React from 'react';
 import { GitCompare, Loader2, Minus, Plus, PenLine } from 'lucide-react';
 import type { ChartDiff } from '../utils/chartDiff.ts';
 
-export type CompareBase = 'saved' | 'git';
+export type CompareBase = 'saved' | 'git' | 'plc';
 
 interface ChangesPanelProps {
   base: CompareBase;
@@ -10,6 +10,8 @@ interface ChangesPanelProps {
   /** Label of the "saved" baseline: "saved in XAE" or "as loaded" */
   savedLabel: string;
   gitAvailable: boolean;
+  /** Live on a PLC that keeps its sources: its version of this POU */
+  plcAvailable?: boolean;
   loading: boolean;
   error: string | null;
   /** Shown when the enum could not be compared (only the POU) */
@@ -35,6 +37,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
   onBaseChange,
   savedLabel,
   gitAvailable,
+  plcAvailable,
   loading,
   error,
   note,
@@ -69,6 +72,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
             [
               ['saved', savedLabel, true],
               ['git', 'committed (git)', gitAvailable],
+              ['plc', 'on the PLC', !!plcAvailable],
             ] as const
           ).map(([id, label, enabled]) => (
             <button
@@ -76,7 +80,7 @@ export const ChangesPanel: React.FC<ChangesPanelProps> = ({
               id={`changes-base-${id}`}
               disabled={!enabled}
               onClick={() => onBaseChange(id)}
-              title={enabled ? undefined : 'Needs the desktop app or TwinCAT XAE'}
+              title={enabled ? undefined : id === 'plc' ? 'Go live on a PLC that keeps its sources (desktop app, web edition)' : 'Needs the desktop app or TwinCAT XAE'}
               className={`px-2 py-0.5 rounded border text-[11px] ${
                 base === id ? 'bg-sky-900/60 border-sky-600 text-sky-200' : 'border-slate-700 text-slate-400 hover:text-slate-200'
               } disabled:opacity-40`}

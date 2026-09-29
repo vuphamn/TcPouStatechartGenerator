@@ -61,6 +61,7 @@
     <Compile Include="LiveMonitor.cs" />
     <Compile Include="LiveTargets.cs" />
     <Compile Include="PlcSearch.cs" />
+    <Compile Include="XaeBuild.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

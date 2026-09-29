@@ -475,7 +475,8 @@ export function getMethodCodeFromPou(pouXml: string, methodName: string): Extrac
   const methodRx = accessor
     ? new RegExp(`<Property[^>]*\\bName=["']${accessor[1]}["'][^>]*>[\\s\\S]*?<${accessor[2]}\\b[^>]*>([\\s\\S]*?)<\\/${accessor[2]}>`, 'i')
     : new RegExp(`<Method[^>]*\\bName=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/Method>`, 'i');
-  const methodMatch = pouXml.match(methodRx);
+  // (no method of that name: an action, edited the same way; it has no declaration)
+  const methodMatch = pouXml.match(methodRx) ?? (accessor ? null : pouXml.match(new RegExp(`<Action[^>]*\\bName=["']${escapedName}["'][^>]*>([\\s\\S]*?)<\\/Action>`, 'i')));
 
   if (!methodMatch) {
     return {
@@ -562,8 +563,11 @@ export function updateMethodCodeInPou(
   const methodRx = accessor
     ? new RegExp(`(<Property[^>]*\\bName=["']${accessor[1]}["'][^>]*>[\\s\\S]*?<${accessor[2]}\\b[^>]*>)([\\s\\S]*?)(<\\/${accessor[2]}>)`, 'i')
     : new RegExp(`(<Method[^>]*\\bName=["']${escapedName}["'][^>]*>)([\\s\\S]*?)(<\\/Method>)`, 'i');
-  const methodMatch = pouXml.match(methodRx);
+  const actionMatch = accessor || pouXml.match(methodRx) ? null : pouXml.match(new RegExp(`(<Action[^>]*\\bName=["']${escapedName}["'][^>]*>)([\\s\\S]*?)(<\\/Action>)`, 'i'));
+  const methodMatch = pouXml.match(methodRx) ?? actionMatch;
   if (accessor && !methodMatch) return { success: false, methodName: cleanName, updatedPou: pouXml, error: `The POU has no ${cleanName}` };
+  // (an action has no declaration: only its code is written)
+  if (actionMatch) newDeclaration = undefined;
 
   // If method doesn't exist, insert before </POU> or before doState
   if (!methodMatch || methodMatch.index === undefined) {
@@ -677,6 +681,11 @@ export function updatePreProcessCodeInPou(
   newDeclaration?: string
 ): UpdatePreProcessCodeResult {
   return updateMethodCodeInPou(pouXml, 'preProcess', newCode, newDeclaration);
+}
+
+/** The POU's actions (edited in the Method Editor like methods; no declaration of their own) */
+export function getActionsFromPou(pouXml: string): string[] {
+  return [...(pouXml || '').matchAll(/<Action\b[^>]*\bName="([^"]+)"/gi)].map((m) => m[1]).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
 /** The properties' accessors ("bReady.Get", "bReady.Set"), edited in the Method Editor like methods; with the type */

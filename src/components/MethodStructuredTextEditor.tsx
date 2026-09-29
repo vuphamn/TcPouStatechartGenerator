@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
+import { caretAnchor } from '../utils/caretAnchor.ts';
 import { usePendingSave } from '../utils/pendingSaves.ts';
 import { createPortal } from 'react-dom';
 import {
@@ -34,6 +35,7 @@ import {
 import {
   getAllMethodsFromPou,
   getPropertyAccessorsFromPou,
+  getActionsFromPou,
   getMethodCodeFromPou,
   parseTransitionsFromStateCode,
   ExtractedMethodCode,
@@ -141,7 +143,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   // 1. Extract and sort all methods from the input .TcPOU file in ascending order
   const availableMethods = useMemo<string[]>(() => {
     // (and the properties' Get / Set: "bReady.Get()", edited like methods)
-    const rawMethods = [...getAllMethodsFromPou(tcPouContent), ...getPropertyAccessorsFromPou(tcPouContent).map((a) => a.name)];
+    const rawMethods = [...getAllMethodsFromPou(tcPouContent), ...getActionsFromPou(tcPouContent), ...getPropertyAccessorsFromPou(tcPouContent).map((a) => a.name)];
     // Ensure unique and sorted in ascending alphabetical order
     const sorted = Array.from(new Set(rawMethods)).sort((a, b) =>
       a.localeCompare(b, undefined, { sensitivity: 'base' })
@@ -959,11 +961,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
     // A method / property of the POU: Rename method…
-    const asMethod = !memberOf && availableMethods.find((m) => m.replace(/\(\)$/, '').toLowerCase() === sym.toLowerCase());
+    // (a property: its accessors are listed, Prop.Get / Prop.Set)
+    const asMethod = !memberOf && availableMethods.map((m) => m.replace(/\(\)$/, '').replace(/\.(Get|Set)$/, '')).find((m) => m.toLowerCase() === sym.toLowerCase());
+    const memberKind = asMethod ? (new RegExp(`<Action\\b[^>]*\\bName="${asMethod}"`, 'i').test(tcPouContent) ? 'action' : new RegExp(`<Property\\b[^>]*\\bName="${asMethod}"`, 'i').test(tcPouContent) ? 'property' : 'method') : 'method';
     if (asMethod && services?.renameMethod)
       items.push({
         id: 'editor-menu-rename-method',
-        label: `Rename method ${asMethod.replace(/\(\)$/, '')}…`,
+        label: `Rename ${memberKind} ${asMethod}…`,
         title: 'Its declaration and every call (a preview first)',
         onSelect: () => {
           if (isDirty) {
@@ -1155,6 +1159,38 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       e.preventDefault();
       const ta = e.currentTarget;
       toggleBookmarkAt(toCodeLine(ta.value.slice(0, ta.selectionStart).split('\n').length));
+    } else if (e.key === 'F6' && e.shiftKey) {
+      // Rename in place: the field at the name, its uses in this editor highlighted while it is open
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      const sym = resolved?.symbol;
+      const services = editorServices();
+      if (!sym || resolved?.memberOf) return;
+      if (isDirty) {
+        setDefinitionNotification({ type: 'warning', message: 'Save first (Ctrl+S): the rename works on the saved POU' });
+        setTimeout(() => setDefinitionNotification(null), 3500);
+        return;
+      }
+      const start = ta.value.slice(0, ta.selectionStart).search(/[A-Za-z_]\w*$/);
+      const anchor = caretAnchor(ta, start >= 0 ? start : ta.selectionStart, sym.length);
+      const before = { query: findQuery, options: findOptions };
+      setFindQuery(sym);
+      setFindOptions({ ...findOptions, matchCase: false, wholeWord: true });
+      const done = () => {
+        setFindQuery(before.query);
+        setFindOptions(before.options);
+      };
+      const own = methodVars.find((v) => v.name.toLowerCase() === sym.toLowerCase());
+      const member = pouVars.find((v) => v.name.toLowerCase() === sym.toLowerCase());
+      const asMember = availableMethods.map((m) => m.replace(/\(\)$/, '').replace(/\.(Get|Set)$/, '')).find((m) => m.toLowerCase() === sym.toLowerCase());
+      if ((own ?? member) && services?.rename) services.rename((own ?? member)!.name, own ? cleanMethodName : undefined, { anchor, done });
+      else if (asMember && services?.renameMethod) services.renameMethod(asMember, { anchor, done });
+      else {
+        done();
+        setDefinitionNotification({ type: 'warning', message: `'${sym}' is no variable, method, property or action of this POU` });
+        setTimeout(() => setDefinitionNotification(null), 3500);
+      }
     } else if (e.key === 'F2' && e.shiftKey) {
       // Declare the name at the caret (as TwinCAT's Auto Declare)
       e.preventDefault();

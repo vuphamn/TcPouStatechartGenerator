@@ -26,6 +26,7 @@
   Var kssVs
   Var kssXae
   Var kssLink
+  Var kssLinkStartup
   Var kssGateway
   Var kssVsNames
   Var kssXaeFound
@@ -34,6 +35,7 @@
   Var kssVsBox
   Var kssXaeBox
   Var kssLinkBox
+  Var kssLinkStartupBox
   Var kssGatewayBox
   Var kssGatewayDir
 
@@ -58,6 +60,7 @@
     !insertmacro kssReadChoice "VisualStudio" $kssVs 0
     !insertmacro kssReadChoice "TcXaeShell" $kssXae 0
     !insertmacro kssReadChoice "Link" $kssLink 0
+    !insertmacro kssReadChoice "LinkStartup" $kssLinkStartup 0
     !insertmacro kssReadChoice "Gateway" $kssGateway 0
     StrCpy $kssDetected 0
   !macroend
@@ -140,11 +143,14 @@
       ${NSD_CreateCheckbox} 8u 79u -8u 10u "Kval StateScope &Link: the helper for a browser on this computer"
       Pop $kssLinkBox
       ${NSD_SetState} $kssLinkBox $kssLink
-      ${NSD_CreateCheckbox} 8u 91u -8u 10u "Kval StateScope &gateway: a shared server for a team (needs Node.js 20 or later)"
+      ${NSD_CreateCheckbox} 20u 90u -20u 10u "&Start Link when I sign in (minimized; on its page: Start with Windows)"
+      Pop $kssLinkStartupBox
+      ${NSD_SetState} $kssLinkStartupBox $kssLinkStartup
+      ${NSD_CreateCheckbox} 8u 102u -8u 10u "Kval StateScope &gateway: a shared server for a team (needs Node.js 20 or later)"
       Pop $kssGatewayBox
       ${NSD_SetState} $kssGatewayBox $kssGateway
 
-      ${NSD_CreateLabel} 8u 108u -8u 30u "Close Visual Studio and TcXaeShell before installing their extension. The gateway is set up after installing: see README.md in its folder (Start menu: Kval StateScope Gateway)."
+      ${NSD_CreateLabel} 8u 118u -8u 30u "Close Visual Studio and TcXaeShell before installing their extension. The gateway is set up after installing: see README.md in its folder (Start menu: Kval StateScope Gateway)."
       Pop $0
       nsDialogs::Show
     FunctionEnd
@@ -152,6 +158,10 @@
     Function kssPageLeave
       ${NSD_GetState} $kssMenuBox $kssMenu
       ${NSD_GetState} $kssLinkBox $kssLink
+      ${NSD_GetState} $kssLinkStartupBox $kssLinkStartup
+      ${If} $kssLink != 1
+        StrCpy $kssLinkStartup 0
+      ${EndIf}
       ${NSD_GetState} $kssGatewayBox $kssGateway
       ${If} $kssVsNames != ""
         ${NSD_GetState} $kssVsBox $kssVs
@@ -234,6 +244,17 @@
     ${Else}
       Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
     ${EndIf}
+    ; Start Link when this user signs in: the same shortcut as Link's page makes (this user's Startup folder, even when
+    ; installed for all users: minimized, without opening its page)
+    SetShellVarContext current
+    ${If} $kssLinkStartup == 1
+      CreateShortCut "$SMSTARTUP\Kval StateScope Link.lnk" "$INSTDIR\Link\Kval StateScope Link.exe" "--no-open" "" "" SW_SHOWMINIMIZED "" "Kval StateScope Link (started when you sign in: set on its page)"
+    ${ElseIf} $kssLink != 1
+      Delete "$SMSTARTUP\Kval StateScope Link.lnk"
+    ${EndIf}
+    ${If} $installMode == "all"
+      SetShellVarContext all
+    ${EndIf}
 
     ; The gateway: outside the program folder, so its config.json, certificate and tokens survive updates
     ${If} $kssGateway == 1
@@ -259,6 +280,7 @@
     WriteRegDWORD SHCTX "${KSS_REG}" "VisualStudio" $kssVs
     WriteRegDWORD SHCTX "${KSS_REG}" "TcXaeShell" $kssXae
     WriteRegDWORD SHCTX "${KSS_REG}" "Link" $kssLink
+    WriteRegDWORD SHCTX "${KSS_REG}" "LinkStartup" $kssLinkStartup
     WriteRegDWORD SHCTX "${KSS_REG}" "Gateway" $kssGateway
     SetOutPath "$INSTDIR"
   !macroend
@@ -282,6 +304,12 @@
       DetailPrint "Removing the TcXaeShell extension..."
       nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Uninstall'
       Pop $0
+    ${EndIf}
+    ; Link's start at sign-in (this user's)
+    SetShellVarContext current
+    Delete "$SMSTARTUP\Kval StateScope Link.lnk"
+    ${If} $installMode == "all"
+      SetShellVarContext all
     ${EndIf}
     ; The gateway's program files; its config.json, certificate and key stay
     ClearErrors

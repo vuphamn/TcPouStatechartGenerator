@@ -1,7 +1,8 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
 // A diagram learned live: the PLC's states (enum names and values) and the transitions seen, as a POU and enum the
 // generator draws; drawn again as more are seen; the POU marked as learned (no source)
-import { isLearnedPou, learnedInputOf, learnedSources } from '../../src/utils/learnedChart.ts';
+import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from '../../src/utils/learnedChart.ts';
+import { addSeen, candidatesOf, forgetSeen } from '../../src/utils/seenTransitions.ts';
 import { generateStatechartModel } from '../../src/generator.ts';
 
 let fails = 0;
@@ -37,6 +38,17 @@ else {
 }
 expect(learnedSources({ ...input, names: {}, seen: {} }) === null, 'no states from the PLC: none');
 expect(!isLearnedPou('<POU Name="SM_X">'), 'a real POU is not learned');
+
+// 5. What changed just before each transition (its candidates), counted; a transition forgotten; Save as source
+let seen2 = addSeen({}, [{ from: 'DOOR_DASHER_DISABLED', to: 'DOOR_DASHER_ENABLING', t: 1, before: ['bEnable', 'nCount'] }]);
+seen2 = addSeen(seen2, [{ from: 'DOOR_DASHER_DISABLED', to: 'DOOR_DASHER_ENABLING', t: 2, before: ['bEnable'] }, { from: 'DOOR_DASHER_ENABLING', to: 'DOOR_DASHER_ERROR', t: 3 }]);
+expect(JSON.stringify(candidatesOf(seen2['DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING'])) === '[{"id":"bEnable","n":2},{"id":"nCount","n":1}]' && !seen2['DOOR_DASHER_ENABLING->DOOR_DASHER_ERROR'].before, 'candidates: bEnable twice, nCount once; none for the other');
+const withC = learnedSources({ ...input, seen: seen2 })!;
+expect(/\/\/ seen 2×; changed just before: bEnable \(2×\), nCount \(1×\)/.test(withC.pou), 'in the learned code: seen 2×; changed just before: bEnable (2×), nCount (1×)');
+const forgot = forgetSeen(seen2, 'DOOR_DASHER_ENABLING', 'DOOR_DASHER_ERROR');
+expect(Object.keys(forgot).join() === 'DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING' && forgetSeen(forgot, 'X', 'Y') === forgot, 'forgotten: gone (an unknown one: nothing changes)');
+const src = learnedAsSource(withC.pou);
+expect(!isLearnedPou(src) && !/seenLive/.test(src) && /IF FALSE \(\* its condition: write it \*\) THEN/.test(src) && /changed just before: bEnable/.test(src), 'as source: not learned, its conditions FALSE to write, the candidates kept in its comments');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

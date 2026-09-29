@@ -21,7 +21,7 @@ namespace KvalStateScope.Xae
     ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch, discoverPlcs
     ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars, plcList
     /// </summary>
-    internal sealed class StateScopeControl : UserControl
+    internal sealed partial class StateScopeControl : UserControl
     {
         private const string AppHost = "statescope.example";
 
@@ -365,6 +365,9 @@ namespace KvalStateScope.Xae
                         break;
                     case "saveDocument":
                         HandleSaveDocument(msg);
+                        break;
+                    case "buildProject":
+                        HandleBuildProject(msg);
                         break;
                 }
             }

@@ -2,7 +2,7 @@
 // The PLC project's sources read from the PLC's boot folder (shared/tcSources.cjs, over a stand-in ADS client: the
 // system service's file open / read / close), unpacked; a POU of them opened with the project's enums
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { readPlcSources, unzip } = require('../../shared/tcSources.cjs');
+const { readPlcSources, unzip, builtTypes, libraryTypesOf } = require('../../shared/tcSources.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { writeZip } = require('../lib/zip.cjs');
 import { plcPous, plcPouSource } from '../../src/utils/plcSources.ts';
@@ -73,6 +73,17 @@ function client(boot: Record<string, Buffer>, calls: string[] = []) {
   expect(!!src && src.name === 'SM_Line.TcPOU' && src.dutCandidates?.length === 1 && src.dutCandidates[0].relativePath === 'POUs/Line/E_Line_States.TcDUT', `plcPouSource: ${src?.name} with ${src?.dutCandidates?.map((d) => d.name).join(', ')}`);
   expect(plcPouSource(r.files, 'SM_Nope') === null, 'a type not in them: null');
   expect(JSON.stringify(plcPous(r.files)) === JSON.stringify([{ name: 'SM_Line', folder: 'POUs/Line', path: 'POUs/Line/SM_Line.TcPOU' }]), `plcPous: ${JSON.stringify(plcPous(r.files))}`);
+
+  // 5. Another PLC project named (a second PLC on the target); all of them listed
+  const other = await readPlcSources(client({ 'CurrentProjectInfo.json': Buffer.from(JSON.stringify(info)), 'CurrentConfig/Other.tpzip': writeZip({ 'POUs/FB_Other.TcPOU': '<POU Name="FB_Other"/>' }) }), 851, { plcProject: 'other' });
+  expect(other.plcProject === 'Other' && other.files?.length === 1 && JSON.stringify(other.projects) === '[{"name":"Other","port":852},{"name":"PlantPlc","port":851}]', `plcProject: ${other.error ?? other.plcProject}, ${JSON.stringify(other.projects)}`);
+  expect(/no PLC project Nope/.test((await readPlcSources(c, 851, { plcProject: 'Nope' })).error ?? ''), 'an unknown PLC project: said');
+
+  // 6. The .tmc: the types as built (size, own members), the library of each library type
+  const tmc = '<DataTypes><DataType><Name>SM_Line</Name><BitSize>64</BitSize><ExtendsType>Base</ExtendsType><SubItem><Name>bGo</Name><Type>BOOL</Type></SubItem><SubItem><Name>machineState</Name></SubItem></DataType><DataType><Name Namespace="Tc2_MC2">MC_Power</Name><BitSize>8</BitSize></DataType><DataType><Name GUID="{x}" Namespace="Tc2_System">T_AmsNetID</Name></DataType></DataTypes>';
+  const bt = builtTypes(tmc, new Set(['sm_line']));
+  expect(JSON.stringify([...bt.values()]) === '[{"name":"SM_Line","size":8,"members":["bGo","machineState"]}]', `builtTypes: ${JSON.stringify([...bt.values()])}`);
+  expect(JSON.stringify(libraryTypesOf(tmc)) === '{"mc_power":"Tc2_MC2","t_amsnetid":"Tc2_System"}', `libraryTypesOf: ${JSON.stringify(libraryTypesOf(tmc))}`);
 
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

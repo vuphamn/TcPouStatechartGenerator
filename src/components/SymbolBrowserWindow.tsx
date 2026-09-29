@@ -17,7 +17,29 @@ export const DEFAULT_SYMBOL_ROOT = 'MAIN.mainStateMachine';
 export const MAX_SYMBOL_VALUES = 60;
 /** The type search: how deep under the root, and how many symbols it reads at most */
 export const TYPE_SEARCH_DEPTH = 8;
-export const TYPE_SEARCH_MAX_READS = 600;
+export const TYPE_SEARCH_MAX_READS = 3000;
+/** Reads in flight at once */
+export const TYPE_SEARCH_PARALLEL = 12;
+/** An array of plain values holds no instance: not opened */
+const PLAIN_ARRAY = /^ARRAY\s*\[[^\]]*\]\s*OF\s+(BOOL|BYTE|WORD|DWORD|LWORD|SINT|USINT|INT|UINT|DINT|UDINT|LINT|ULINT|REAL|LREAL|TIME|LTIME|DATE|TOD|TIME_OF_DAY|DT|DATE_AND_TIME|BIT|W?STRING(\s*\(\s*\d+\s*\))?|POINTER\s+TO\s+.+|REFERENCE\s+TO\s+.+)\s*$/i;
+
+// The last search's results for each PLC, root and type: shown at once the next time, while it searches again
+const foundKey = (plc: string, root: string, type: string) => `kss.symbols.found.${plc}|${root.toLowerCase()}|${type}`;
+function loadFound(key: string): SymbolChild[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(v) ? (v as SymbolChild[]).slice(0, 200) : [];
+  } catch {
+    return [];
+  }
+}
+function saveFound(key: string, matches: SymbolChild[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(matches.slice(0, 200)));
+  } catch {
+    // per-viewer convenience only
+  }
+}
 
 /** A symbol's type without its namespace (Lib.SM_X -> SM_X) */
 export const bareType = (type: string) => type.trim().split('.').pop() ?? '';
@@ -37,11 +59,15 @@ interface SymbolBrowserWindowProps {
   currentInstance?: string;
   stateVar: string;
   onWatch: (node: SymbolChild) => void;
+  /** Another type's instance opened in this window instead of a new one (its POU replaces this one) */
+  onOpenHere?: (node: SymbolChild) => void;
   openTarget: 'tab' | 'window';
   /** The loaded POU's type (SM_TableManager): the type filter starts with it */
   loadedType?: string;
   /** Another instance of the loaded POU, followed here instead (live again on it) */
   onGoLiveHere?: (path: string) => void;
+  /** The connected PLC (netId:port): the type search's results are remembered for it */
+  plcKey?: string;
 }
 
 const typeKey = (t: string) => `kss.symbols.type.${t.toLowerCase()}`;
@@ -78,10 +104,23 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   currentInstance,
   stateVar,
   onWatch,
+  onOpenHere,
   openTarget,
   loadedType,
   onGoLiveHere,
+  plcKey,
 }) => {
+  // Another type: in this window too (its POU instead of this one)
+  const openHereButton = (c: SymbolChild) =>
+    onOpenHere ? (
+      <button
+        onClick={() => onOpenHere(c)}
+        className="symbol-open-other-here shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-emerald-300 hover:bg-slate-700"
+        title={`${bareType(c.type)} in this ${openTarget} instead of the loaded POU, live on ${c.path}`}
+      >
+        <Radio className="w-3 h-3" /> Here
+      </button>
+    ) : null;
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState('');
@@ -108,7 +147,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   // Where the search starts: the Root, or all of MAIN
   const [searchMain, setSearchMain] = useState(false);
   const searchRoot = searchMain ? 'MAIN' : root;
-  const [search, setSearch] = useState<{ matches: SymbolChild[]; reads: number; done: boolean; capped: boolean; errors: number; stopped?: boolean }>({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
+  const [search, setSearch] = useState<{ matches: SymbolChild[]; reads: number; done: boolean; capped: boolean; errors: number; stopped?: boolean; remembered?: boolean }>({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
   const searchMatchesRef = useRef<SymbolChild[]>([]);
   const searchGenRef = useRef(0);
   // (the search reads through the latest browse: a new function each render must not start it again)
@@ -163,8 +202,11 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
       setSearch({ matches: [], reads: 0, done: true, capped: false, errors: 0 });
       return;
     }
-    // (typing: waits for a pause; shown as searching from now on, not "0 found")
-    setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
+    // (typing: waits for a pause; shown as searching from now on, not "0 found"; what it found last time on this PLC
+    // at once)
+    const key = plcKey ? foundKey(plcKey, searchRoot, typeNeedle) : '';
+    const before = key ? loadFound(key) : [];
+    setSearch({ matches: before, reads: 0, done: false, capped: false, errors: 0, remembered: before.length > 0 });
     const timer = window.setTimeout(() => {
       const matches: SymbolChild[] = [];
       searchMatchesRef.current = matches;
@@ -174,17 +216,16 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
       const alive = () => searchGenRef.current === gen;
       // (an array of them is not one: its elements are)
       const matchesType = (c: SymbolChild) => c.kind !== 'array' && bareType(c.type).toLowerCase().includes(typeNeedle);
-      setSearch({ matches: [], reads: 0, done: false, capped: false, errors: 0 });
       void (async () => {
         let level = [searchRoot];
         for (let depth = 0; depth < TYPE_SEARCH_DEPTH && level.length && alive(); depth++) {
           const next: string[] = [];
-          for (let i = 0; i < level.length && alive(); i += 4) {
+          for (let i = 0; i < level.length && alive(); i += TYPE_SEARCH_PARALLEL) {
             if (reads >= TYPE_SEARCH_MAX_READS) {
               capped = true;
               break;
             }
-            const batch = level.slice(i, Math.min(i + 4, i + TYPE_SEARCH_MAX_READS - reads));
+            const batch = level.slice(i, Math.min(i + TYPE_SEARCH_PARALLEL, i + TYPE_SEARCH_MAX_READS - reads));
             reads += batch.length;
             const results = await Promise.all(batch.map((p) => browseRef.current(p).catch((e: unknown) => ({ requestId: 0, path: p, error: String(e) }) as LiveBrowseResult)));
             if (!alive()) return;
@@ -196,19 +237,23 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
               for (const c of r.children ?? []) {
                 if (matchesType(c)) matches.push(c);
                 // (into FBs, structs and arrays: an instance can be in any of them)
-                if (c.kind === 'struct' || c.kind === 'array') next.push(c.path);
+                if (c.kind === 'struct' || (c.kind === 'array' && !PLAIN_ARRAY.test(c.type.trim()))) next.push(c.path);
               }
             }
-            setSearch({ matches: [...matches], reads, done: false, capped: false, errors });
+            // (the remembered ones until this search has found some)
+            setSearch({ matches: matches.length || !before.length ? [...matches] : before, reads, done: false, capped: false, errors, remembered: !matches.length && before.length > 0 });
           }
           if (capped) break;
           level = next;
         }
-        if (alive()) setSearch({ matches: [...matches].sort((a, b) => a.path.localeCompare(b.path)), reads, done: true, capped, errors });
+        if (!alive()) return;
+        const sorted = [...matches].sort((a, b) => a.path.localeCompare(b.path));
+        if (key && !errors) saveFound(key, sorted);
+        setSearch({ matches: sorted, reads, done: true, capped, errors });
       })();
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [connected, searchRoot, typeNeedle, searchNonce]);
+  }, [connected, searchRoot, typeNeedle, searchNonce, plcKey]);
   const stopSearch = () => {
     searchGenRef.current++;
     setSearch((s) => ({ ...s, matches: [...searchMatchesRef.current].sort((a, b) => a.path.localeCompare(b.path)), done: true, stopped: true }));
@@ -372,7 +417,9 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
               <span>
                 {search.done
                   ? `${search.matches.length} instance${search.matches.length === 1 ? '' : 's'} of ${typeFilter.trim()} under ${searchRoot}${search.stopped ? ' (stopped)' : ''}`
-                  : `Searching ${searchRoot} for ${typeFilter.trim()}… (${search.reads} read, ${search.matches.length} found)`}
+                  : search.remembered
+                    ? `${search.matches.length} found last time; searching ${searchRoot} again… (${search.reads} read)`
+                    : `Searching ${searchRoot} for ${typeFilter.trim()}… (${search.reads} read, ${search.matches.length} found)`}
                 {search.done && search.capped && ` (stopped after ${search.reads} symbols: a narrower root finds the rest)`}
                 {search.done && search.errors > 0 && ` (${search.errors} could not be read)`}
               </span>
@@ -421,13 +468,16 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                   {here ? (
                     <span className="shrink-0 font-sans text-[10px] text-emerald-300">this {openTarget}</span>
                   ) : other ? (
-                    <button
-                      onClick={open}
-                      className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
-                      title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
-                    >
-                      <ExternalLink className="w-3 h-3" /> Open
-                    </button>
+                    <>
+                      {openHereButton(c)}
+                      <button
+                        onClick={open}
+                        className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
+                        title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                      >
+                        <ExternalLink className="w-3 h-3" /> Open
+                      </button>
+                    </>
                   ) : (
                     <>
                       {onGoLiveHere && (
@@ -502,13 +552,16 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                       (here ? (
                         <span className="shrink-0 font-sans text-[10px] text-emerald-300">this {openTarget}</span>
                       ) : loadedType && !sameAsLoaded(c) ? (
-                        <button
-                          onClick={() => onWatch(c)}
-                          className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
-                          title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
-                        >
-                          <ExternalLink className="w-3 h-3" /> Open
-                        </button>
+                        <>
+                          {openHereButton(c)}
+                          <button
+                            onClick={() => onWatch(c)}
+                            className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
+                            title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                          >
+                            <ExternalLink className="w-3 h-3" /> Open
+                          </button>
+                        </>
                       ) : (
                         <button
                           onClick={() => onWatch(c)}
@@ -549,7 +602,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
         {loadedType && (
           <>
             {' '}
-            Another type's have <span className="text-amber-200">Open</span>: a new StateScope for that type, live on it.
+            Another type's have <span className="text-amber-200">Open</span>: a new StateScope for that type, live on it (<span className="text-emerald-300">Here</span>: in this one instead).
           </>
         )}
       </div>

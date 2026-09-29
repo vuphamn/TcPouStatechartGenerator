@@ -41,6 +41,14 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
     sent.push(m);
     if (m.type === 'ready') await toApp({ type: 'loadPou', source: { name: 'SM_X.TcPOU', path: 'C:\\proj\\SM_X.TcPOU', content: POU, dutCandidates: [{ name: 'E_S.TcDUT', relativePath: 'E_S.TcDUT', path: 'C:\\proj\\E_S.TcDUT', content: DUT }] } });
     else if (m.type === 'projectPous') await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
+    // XAE's own build (the stand-in: an error in timers(), a warning elsewhere)
+    else if (m.type === 'buildProject') {
+      await toApp({ type: 'plcBuildProgress', requestId: m.requestId, text: 'Building in XAE' });
+      await toApp({ type: 'xaeBuildResult', requestId: m.requestId, ok: false, errors: 1, warnings: 1, items: [
+        { level: 'error', text: "Identifier 'nope' not defined", file: 'C:\\proj\\SM_X.TcPOU@timers (Impl)', line: 1, column: 1, project: 'P' },
+        { level: 'warning', text: 'Some warning', file: 'C:\\proj\\Other.TcPOU (Impl)', line: 3, column: 1, project: 'P' },
+      ] });
+    }
   });
   await p.evaluateOnNewDocument(() => {
     const listeners = [];
@@ -202,6 +210,43 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   await h.sleep(1000);
   await goToSymbol('getstatedescription');
   expect(/\tE_S\.S_IDLE: getStateDescription := 'Idle';\n\tE_S\.S_RUN: getStateDescription := 'Run';\nEND_CASE/.test(await code()), `a line for S_RUN, like the others (${JSON.stringify((await code()).split('\n').slice(1, 3).join(' | '))})`);
+
+  // 9. Shift+F6: rename in place (the field at the name, its uses highlighted while it is open)
+  await goToSymbol('timers');
+  await p.evaluate((id) => { const ta = document.getElementById(id); const at = ta.value.indexOf('fbNoTime'); ta.focus(); ta.setSelectionRange(at + 2, at + 2); }, ID);
+  await p.keyboard.down('Shift'); await p.keyboard.press('F6'); await p.keyboard.up('Shift');
+  await p.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const inline = await p.evaluate((id) => {
+    const ta = document.getElementById(id);
+    const box = document.querySelector('#text-prompt-dialog')?.getBoundingClientRect();
+    const r = ta.getBoundingClientRect();
+    const marks = [...(ta.parentElement?.querySelectorAll('mark') ?? [])].filter((m) => /^fbnotime$/i.test(m.textContent));
+    return { value: document.getElementById('text-prompt-input')?.value, inside: !!box && box.top >= r.top - 40 && box.top <= r.bottom, marks: marks.length };
+  }, ID);
+  expect(inline.value === 'fbNoTime' && inline.inside && inline.marks === 1, `Shift+F6 on fbNoTime: the field in the editor ("${inline.value}"), ${inline.marks} use highlighted`);
+  await p.click('#text-prompt-input', { clickCount: 3 });
+  await p.keyboard.type('fbDelay', { delay: 5 });
+  await p.keyboard.press('Enter');
+  await h.sleep(1000);
+  const renamed = await code();
+  const marksAfter = await p.evaluate((id) => [...(document.getElementById(id)?.parentElement?.querySelectorAll('mark') ?? [])].length, ID);
+  expect(renamed.trim() === 'fbDelay(PT := T#1S, IN := cmd_bStart);' && marksAfter === 0, `renamed in place: ${JSON.stringify(renamed.trim())}, the highlights gone (${marksAfter})`);
+
+  // 10. Build (XAE edition): XAE's own build of its solution, its Error List here (a click opens it), no write
+  await p.click('#header-save-btn').catch(() => {});
+  await h.sleep(600);
+  await p.evaluate(() => document.getElementById('dock-tab-live')?.click());
+  await h.sleep(400);
+  await p.waitForSelector('#live-build-btn', { timeout: 5000 }).catch(() => {});
+  await p.click('#live-build-btn').catch(() => {});
+  await p.waitForSelector('#plc-build-status[data-phase="done"]', { timeout: 5000 }).catch(() => {});
+  const xb = await p.evaluate(() => ({ status: document.getElementById('plc-build-status')?.textContent.trim() ?? '', errs: [...document.querySelectorAll('#plc-build-errors .plc-build-item')].map((x) => x.innerText.replace(/\s+/g, ' ').trim()), write: !!document.getElementById('plc-build-online') }));
+  xb.asked = sent.some((m) => m.type === 'buildProject');
+  expect(xb.asked && /1 error, 1 warning/.test(xb.status) && xb.errs.length === 1 && /SM_X\.timers\(\) line 1/.test(xb.errs[0]) && !xb.write, `Build in XAE: "${xb.status}" ${xb.errs.join(' | ')} (no write: ${!xb.write})`);
+  await p.click('#plc-build-errors .plc-build-item').catch(() => {});
+  await h.sleep(900);
+  const onTimers = await p.evaluate(() => /fbDelay\(PT := T#1S/.test(document.getElementById('method-implementation-editor')?.value ?? ''));
+  expect(onTimers, 'its error opened: the Method Editor on timers()');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

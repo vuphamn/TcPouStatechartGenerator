@@ -7,6 +7,8 @@ export interface PouSource {
   /** Full path (desktop app only) */
   path?: string;
   dutCandidates: DutCandidate[] | null;
+  /** From the PLC's own sources: where it is there (Build puts the edits back) */
+  plc?: import('./plcBuild.ts').PlcOrigin;
 }
 
 // File System Access API (Chromium browsers): only the parts used here

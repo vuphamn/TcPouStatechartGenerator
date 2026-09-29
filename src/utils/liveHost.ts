@@ -5,7 +5,7 @@
 
 import type { HostMessage, LiveWatchVar } from './xaeHost.ts';
 
-export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' } | { type: 'liveWatchResult' } | { type: 'liveVars' } | { type: 'liveBrowseResult' }>;
+export type LiveMessage = Extract<HostMessage, { type: 'liveStatus' } | { type: 'liveValues' } | { type: 'liveWatchResult' } | { type: 'liveVars' } | { type: 'liveBrowseResult' } | { type: 'plcBuildProgress' }>;
 
 export interface DesktopLiveOptions {
   /** The .TcPOU's path: instance paths and the ADS port are found from its PLC project */
@@ -32,6 +32,7 @@ interface DesktopLiveApi {
   browse?: (req: { requestId: number; path: string; stateVar: string }) => Promise<void>;
   /** The PLC project's sources as the PLC keeps them (read-only, its boot folder) */
   sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
+  build?: (req: { requestId: number; edits: import('./plcBuild.ts').PlcEdit[]; plcProject?: string; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }
 

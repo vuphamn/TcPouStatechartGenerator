@@ -182,6 +182,84 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
     add({ key: `timer-no-pt:${v.name.toLowerCase()}`, rule: 'timer-no-pt', method: at?.method, line: at?.line, message: `${v.name} : ${v.type} is called without PT (its time): it runs out at once`, mark: v.line ? { line: v.line, declaration: true, name: v.name } : undefined, fix: at ? { kind: 'add-pt', name: v.name, method: at.method, line: at.line } : undefined });
   }
 
+  // An R_TRIG / F_TRIG on a value that never changes (TRUE, FALSE, a constant): Q never TRUE, or only once
+  const constants = new Map<string, string>();
+  {
+    let inConst = false;
+    for (const l of pouDecl.split(/\r?\n/)) {
+      if (/^\s*VAR\b[^\n]*\bCONSTANT\b/i.test(l)) inConst = true;
+      else if (/^\s*END_VAR\b/i.test(l)) inConst = false;
+      else if (inConst) {
+        const m = /^\s*([A-Za-z_]\w*)\s*:\s*BOOL\s*:=\s*(TRUE|FALSE)\b/i.exec(l);
+        if (m) constants.set(m[1].toLowerCase(), m[2].toUpperCase());
+      }
+    }
+  }
+  for (const v of pouVars) {
+    const type = baseTypeName(v.type).toUpperCase();
+    if (type !== 'R_TRIG' && type !== 'F_TRIG') continue;
+    // Every call of it (a call with FALSE to reset it, the real signal elsewhere, is fine): all the same constant
+    const calls: { u: (typeof units)[number]; i: number; arg: string; alone: boolean }[] = [];
+    for (const u of units) {
+      u.code.forEach((raw, i) => {
+        const l = masked(raw);
+        if (!new RegExp(`\\b${v.name}\\s*(\\[[^\\]]*\\])?\\s*\\(`, 'i').test(l)) return;
+        // (its arguments on this line; a call over several lines: not a constant)
+        const whole = new RegExp(`\\b${v.name}\\s*(\\[[^\\]]*\\])?\\s*\\(([^;()]*)\\)`, 'i').exec(l);
+        const m = whole ? /^\s*CLK\s*:=\s*([A-Za-z_]\w*)\s*$/i.exec(whole[2]) : null;
+        calls.push({ u, i, arg: m ? m[1] : '', alone: new RegExp(`^\\s*${v.name}\\s*\\([^;]*\\)\\s*;\\s*$`, 'i').test(l) });
+      });
+    }
+    // (also written from elsewhere: rt.CLK := ...)
+    if (!calls.length || new RegExp(`\\b${v.name}\\s*\\.\\s*CLK\\s*:=`, 'i').test(bodyCode)) continue;
+    const valueOf = (arg: string) => (/^(TRUE|FALSE)$/i.test(arg) ? arg.toUpperCase() : constants.get(arg.toLowerCase()));
+    const value = valueOf(calls[0].arg);
+    if (!value || calls.some((c) => valueOf(c.arg) !== value)) continue;
+    const { u, i, arg, alone } = calls[0];
+    // (never TRUE: removing the one call changes nothing; R_TRIG on TRUE: TRUE in the first cycle only)
+    const never = (type === 'R_TRIG' && value === 'FALSE') || (type === 'F_TRIG' && value === 'TRUE');
+    add({
+      key: `trigger-constant:${v.name.toLowerCase()}`,
+      rule: 'trigger-constant',
+      method: u.method ?? undefined,
+      line: u.method ? i + 1 : undefined,
+      text: u.lines[i]?.trim(),
+      message: `${v.name} : ${type} is ${calls.length === 1 ? 'called' : `called ${calls.length} times, each`} with CLK always ${value}${arg.toUpperCase() !== value ? ` (${arg})` : ''}: its Q is ${never ? 'never TRUE' : 'TRUE only in the first cycle'}`,
+      mark: { line: i + 1, declaration: false, name: v.name },
+      fix: never && alone && calls.length === 1 && u.method ? { kind: 'remove-lines', name: `the call of ${v.name}`, method: u.method, line: i + 1, count: 1 } : undefined,
+    });
+  }
+
+  // IF … THEN with nothing before END_IF (comments and blank lines do not count)
+  for (const u of units) {
+    for (let i = 0; i < u.code.length; i++) {
+      const head = /^\s*IF\b([\s\S]*)\bTHEN\s*$/i.exec(masked(u.code[i]));
+      if (!head) continue;
+      let j = i + 1;
+      while (j < u.code.length && !u.code[j].trim()) j++;
+      if (j >= u.code.length || !/^\s*END_IF\s*;?\s*$/i.test(u.code[j])) continue;
+      const calls = /\(/.test(head[1]);
+      add({
+        key: `empty-if:${u.method ?? 'body'}:${i + 1}`,
+        rule: 'empty-if',
+        method: u.method ?? undefined,
+        line: u.method ? i + 1 : undefined,
+        text: u.lines[i]?.trim(),
+        message: `Line ${i + 1}${u.method ? ` of ${u.method}()` : ' of the body'}: IF … THEN with nothing before its END_IF${calls ? ' (its condition calls something: kept)' : ''}`,
+        mark: { line: i + 1, declaration: false, name: 'IF' },
+        fix: !calls && u.method ? { kind: 'remove-lines', name: 'the empty IF', method: u.method, line: i + 1, count: j - i + 1 } : undefined,
+      });
+    }
+  }
+
+  // A VAR_OUTPUT nothing writes (assigned, an output's => target, passed on to a call: written)
+  for (const v of pouVars) {
+    if (!/^VAR_OUTPUT$/i.test(v.scope)) continue;
+    const n = v.name;
+    const written = new RegExp(`\\b${n}\\b(\\s*\\[[^\\]]*\\])?(\\s*\\.\\s*\\w+)*\\s*(:=|S=|R=|REF=)|=>\\s*${n}\\b|\\(\\s*[^()]*\\b${n}\\b[^()]*\\)|\\bADR\\s*\\(\\s*${n}\\b`, 'i').test(bodyCode);
+    if (!written) add({ key: `output-never-set:${n.toLowerCase()}`, rule: 'output-never-set', message: `${n} : ${v.type} is an output that no code of the POU sets: it keeps its initial value`, mark: v.line ? { line: v.line, declaration: true, name: n } : undefined });
+  }
+
   // Not declared (the project known, the base class too)
   if (fromProject && project) {
     for (const u of units) {

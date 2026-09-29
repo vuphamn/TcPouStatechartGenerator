@@ -195,6 +195,8 @@ export interface MermaidViewerProps {
   stateProblems?: Record<string, { messages: string[]; names: string[] }>;
   /** A line on top of the canvas about the chart (a diagram learned live) */
   canvasBanner?: string;
+  /** A button in the banner */
+  canvasBannerAction?: { id: string; label: string; title?: string; onClick: () => void };
   /** Several states moved together, snapping on: each of them on the grid (else they keep their places to the one dragged) */
   groupSnapEach?: boolean;
   /** Several states selected (Ctrl+click, Shift+drag a box): marked; the app's menu acts on all of them */
@@ -1555,6 +1557,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     stateTooltips,
     stateProblems,
     canvasBanner,
+    canvasBannerAction,
     groupSnapEach,
     multiSelection,
     onMultiSelectionChange,
@@ -5729,8 +5732,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
       }
 
-      // Keyboard arrow keys to nudge selected state node position
-      if (effectiveSelectedStateId && !isInspectorOpen && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // Keyboard arrow keys to nudge the selected state (several selected: all of them)
+      const nudged = (multiSelection?.length ?? 0) > 1 ? multiSelection! : effectiveSelectedStateId ? [effectiveSelectedStateId] : [];
+      if (nudged.length && !isInspectorOpen && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const isArrow =
           e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight';
         if (isArrow) {
@@ -5749,9 +5753,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               x: e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0,
               y: e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0,
             };
-            const current = effectiveNodeOffsets[effectiveSelectedStateId] || { x: 0, y: 0 };
-            const next = { x: current.x + delta.x, y: current.y + delta.y };
-            const nextOffsets = { ...effectiveNodeOffsets, [effectiveSelectedStateId]: next };
+            const nextOffsets = { ...effectiveNodeOffsets };
+            for (const id of nudged) {
+              const current = effectiveNodeOffsets[id] || { x: 0, y: 0 };
+              nextOffsets[id] = { x: current.x + delta.x, y: current.y + delta.y };
+            }
             currentNodeOffsetsRef.current = nextOffsets;
             setNodeOffsets(nextOffsets);
             if (containerRef.current) {
@@ -5784,7 +5790,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [isFullscreen, isInspectorOpen, effectiveSelectedStateId, effectiveNodeOffsets, selectedEdge]);
+  }, [isFullscreen, isInspectorOpen, effectiveSelectedStateId, effectiveNodeOffsets, selectedEdge, multiKey]);
 
   const handleClick = (e: React.MouseEvent) => {
     if (multiGestureRef.current) {
@@ -6519,8 +6525,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         />
       )}
       {canvasBanner && (
-        <div id="canvas-learned-banner" className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[80%] px-3 py-1 rounded-full bg-amber-950/90 border border-amber-600/80 text-[11px] text-amber-100 shadow-lg truncate" style={{ top: canvasTop + 8 + ((multiSelection?.length ?? 0) > 1 ? 30 : 0) }} title={canvasBanner}>
-          {canvasBanner}
+        <div id="canvas-learned-banner" className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[80%] flex items-center gap-2 px-3 py-1 rounded-full bg-amber-950/90 border border-amber-600/80 text-[11px] text-amber-100 shadow-lg" style={{ top: canvasTop + 8 + ((multiSelection?.length ?? 0) > 1 ? 30 : 0) }} title={canvasBanner}>
+          <span className="truncate">{canvasBanner}</span>
+          {canvasBannerAction && (
+            <button id={canvasBannerAction.id} type="button" onClick={canvasBannerAction.onClick} title={canvasBannerAction.title} className="shrink-0 px-2 py-0.5 rounded-full border border-amber-500/70 text-amber-100 hover:bg-amber-800/60">
+              {canvasBannerAction.label}
+            </button>
+          )}
         </div>
       )}
       {(multiSelection?.length ?? 0) > 1 && (
@@ -6687,6 +6698,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 selectedStateLabel={effectiveSelectedStateLabel}
                 availableStatesCount={availableStates.length}
                 canvasPositions={canvasNodePositions}
+                bookmarkedStateIds={bookmarkedStates}
+                multiSelection={multiSelection}
                 onSelectState={(id) => {
                   handleSelectState(id);
                   panToState(id);

@@ -8,6 +8,7 @@ import {
   Crosshair,
   Maximize2,
   Navigation,
+  Bookmark,
 } from 'lucide-react';
 import { CanvasNodePositionsMap } from '../utils/canvasPositions.ts';
 
@@ -30,6 +31,10 @@ export interface DiagramMinimapProps {
   availableStatesCount?: number;
   canvasPositions?: CanvasNodePositionsMap;
   onSelectState?: (stateId: string) => void;
+  /** Bookmarked states: marked, a click goes there */
+  bookmarkedStateIds?: string[];
+  /** Several states selected: each marked */
+  multiSelection?: string[];
   isOpen?: boolean;
   onClose?: () => void;
   theme?: string;
@@ -91,6 +96,8 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   availableStatesCount = 0,
   canvasPositions = {},
   onSelectState,
+  bookmarkedStateIds,
+  multiSelection,
   isOpen = true,
   onClose,
   theme = 'dark',
@@ -397,6 +404,19 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
     };
   }, [isDragging, geometry, onPanChange]);
 
+  // Bookmarked and selected states on the minimap: where each is
+  const markerAt = useCallback(
+    (id: string) => {
+      const pos = geometry ? canvasPositions?.[id] : undefined;
+      if (!pos || !geometry) return null;
+      const { miniContentLeft, miniContentTop, miniScale, bounds } = geometry;
+      return { id, x: miniContentLeft + (pos.centerX - bounds.minX) * miniScale, y: miniContentTop + (pos.centerY - bounds.minY) * miniScale, label: pos.label || id };
+    },
+    [geometry, canvasPositions]
+  );
+  const bookmarkMarkers = useMemo(() => (bookmarkedStateIds ?? []).map(markerAt).filter((m): m is NonNullable<typeof m> => !!m), [bookmarkedStateIds, markerAt]);
+  const multiMarkers = useMemo(() => ((multiSelection?.length ?? 0) > 1 ? multiSelection!.filter((id) => id !== selectedStateId).map(markerAt).filter((m): m is NonNullable<typeof m> => !!m) : []), [multiSelection, selectedStateId, markerAt]);
+
   // Selected state node coordinate on the minimap
   const selectedNodeMarker = useMemo(() => {
     if (!selectedStateId || !geometry || !canvasPositions[selectedStateId]) return null;
@@ -527,6 +547,26 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
         />
 
         {/* Selected State Marker & Beacon */}
+        {multiMarkers.map((m) => (
+          <div key={`multi-${m.id}`} className="minimap-multi-marker absolute pointer-events-none z-20 -translate-x-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-sky-300/80 ring-1 ring-sky-200" data-state-id={m.id} style={{ left: `${m.x}px`, top: `${m.y}px` }} />
+        ))}
+        {bookmarkMarkers.map((m) => (
+          <button
+            key={`bookmark-${m.id}`}
+            type="button"
+            className="minimap-bookmark-marker absolute z-30 -translate-x-1/2 -translate-y-full p-0.5 text-sky-300 hover:text-sky-100 hover:scale-125 transition-transform"
+            data-state-id={m.id}
+            style={{ left: `${m.x}px`, top: `${m.y}px` }}
+            title={`Bookmark: ${m.label} (click to go there)`}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectState?.(m.id);
+            }}
+          >
+            <Bookmark className="w-3 h-3 fill-sky-400" />
+          </button>
+        ))}
         {selectedNodeMarker && (
           <div
             className="absolute pointer-events-none z-20 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center"

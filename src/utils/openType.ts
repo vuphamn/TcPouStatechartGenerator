@@ -9,6 +9,12 @@ import type { NewVariable } from './pouVariables.ts';
 
 export type OpenTypeWhere = 'statescope' | 'xae';
 
+/** Rename in place (Shift+F6): the field at the name in the editor; done: it closed (its highlights cleared) */
+export interface InlineRename {
+  anchor: { x: number; y: number; width?: number; height?: number };
+  done?: () => void;
+}
+
 export interface OpenTypeHandler {
   /** Open a type (and go to its member). Absent in the web edition: it cannot open project files by name */
   open?: (type: string, where: OpenTypeWhere, member?: string) => void;
@@ -19,7 +25,7 @@ export interface OpenTypeHandler {
   /** The names the code of a method of the loaded POU sees (method: its name; none: the POU's body) */
   scope?: (method?: string) => SymbolScope;
   /** Rename a variable of the POU everywhere (method: a method's own, in it only): asks for the name, previews */
-  rename?: (name: string, method?: string) => void;
+  rename?: (name: string, method?: string, inline?: InlineRename) => void;
   /** Extract Method: lines of a method (1-based, the saved POU's) into a new method; asks for its name */
   extractMethod?: (method: string, startLine: number, endLine: number) => void;
   /** Lines into a new Action (they use only the POU's members) */
@@ -27,7 +33,7 @@ export interface OpenTypeHandler {
   /** An expression of one line (its columns) into a new property */
   extractProperty?: (method: string, line: number, from: number, to: number) => void;
   /** Rename a method / property of the POU (and where other POUs call it): asks for the name, previews */
-  renameMethod?: (name: string) => void;
+  renameMethod?: (name: string, inline?: InlineRename) => void;
   /** Declare variables in the POU's declaration (written at once); false: not done (the reason was shown) */
   declare?: (vars: NewVariable[]) => boolean;
   /** Find All References: every use of a name in the POU, listed (a click opens it) */

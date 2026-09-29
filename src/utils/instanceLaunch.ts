@@ -31,7 +31,7 @@ export function connectionOf(settings: object | null | undefined): Record<string
 
 export interface InstanceHandoff extends InstanceLaunch {
   sampleId?: string;
-  pou?: { name: string; content: string; path?: string };
+  pou?: { name: string; content: string; path?: string; plc?: import('./plcBuild.ts').PlcOrigin };
   dut?: { name: string; content: string; path?: string };
   /** The .TcDUT files found with the POU (the new page picks the enum as Browse does) */
   dutCandidates?: DutCandidate[];
