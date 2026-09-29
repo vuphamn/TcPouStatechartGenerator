@@ -32,7 +32,8 @@ const launch = (file, port) => exe
   await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
   let dut;
   for (let i = 0; i < 40 && !dut; i++) {
-    dut = await page.evaluate(() => document.body.innerText.match(/E_DoorDasher\w*/)?.[0]).catch(() => undefined);
+    // (textContent: the enum's breadcrumb is hidden in a window under 1024 px wide, as on CI's 1024x768 screen)
+    dut = await page.evaluate(() => document.body.textContent.match(/E_DoorDasher\w*/)?.[0]).catch(() => undefined);
     if (!dut) await sleep(500);
   }
   expect(!!dut, `its .TcDUT found next to it: ${dut}`);

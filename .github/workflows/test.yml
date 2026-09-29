@@ -13,7 +13,10 @@ jobs:
       # The desktop suite is not run here: no Electron binary needed
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
+      # (the whole history and its tags: the release notes are built from them)
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -58,7 +61,10 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
+      # (the whole history and its tags: the release notes are built from them)
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -88,7 +94,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
+      # (the whole history and its tags: the release notes are built from them)
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -104,6 +113,12 @@ jobs:
           node -e "console.log(require('electron'))"
       - name: Build
         run: npm run build
+      # The runner's screen is 1024x768: the app's 1280x850 window would be squeezed below its wide layout
+      - name: Screen 1920x1080
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction Stop } catch { Write-Warning "Screen size not set: $_" }
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
       - name: Desktop app tests (Electron)
         run: node tests/run.cjs desktop --preview
       - name: Test summary

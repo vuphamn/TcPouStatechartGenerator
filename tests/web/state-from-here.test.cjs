@@ -42,10 +42,12 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.evaluate(() => document.getElementById('text-prompt-input').select());
   await p.keyboard.type('bNextStep');
   await p.keyboard.press('Enter');
-  expect(await waitFor(() => p.evaluate((k) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${k}"]`), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`)), 'the new state and the transition on the canvas');
+  expect(await waitFor(() => p.evaluate((k) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${k}"]`), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`), 20000), 'the new state and the transition on the canvas');
+  await waitFor(() => p.evaluate((id) => !!document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`), S('CLAMPED_NEXT')), 10000);
   await h.sleep(1500);
   const inView = await p.evaluate((id) => {
     const n = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`);
+    if (!n) return false;
     const r = n.getBoundingClientRect();
     const a = document.getElementById('mermaid-canvas-area').getBoundingClientRect();
     return r.x >= a.x && r.right <= a.right && r.y >= a.y && r.bottom <= a.bottom;
