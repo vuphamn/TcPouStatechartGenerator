@@ -8,7 +8,7 @@ const net = require('net');
 const { execFile } = require('child_process');
 const { Client } = require('ads-client');
 const discovery = require('./tcDiscovery.cjs');
-const { localIpTowards, defaultLocalNetId, localTwinCatNetId } = require('./liveSession.cjs');
+const { localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS } = require('./liveSession.cjs');
 
 const NETID = /^\d{1,3}(\.\d{1,3}){5}$/;
 const run = (cmd, args, timeout = 6000) =>
@@ -81,6 +81,15 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
       ? 'Windows treats this network as Public: it blocks connections coming in. StateScope connects out, so it is not stopped by it, but XAE\'s routes (the PLC connecting back) are. Set it to Private: Settings > Network > the network > Private.'
       : 'The address the PLC sees, and the NetId its route must name.',
   });
+  // (no address on the PLC's network: the way goes through a router, which must let ADS through; the search's broadcast
+  // does not cross it)
+  const offNet = !local && /^\d+\.\d+\.\d+\.\d+$/.test(host) && !/^127\./.test(host) && !localAddressOn(host);
+  if (offNet) {
+    add({
+      id: 'network', ok: null, title: `This computer has no address on ${host}'s network: the way to it goes through a router`,
+      detail: `The router between them must pass TCP 48898 and UDP 48899 both ways (your IT: from ${myIp}'s network to ${host}'s). TwinCAT's search broadcast does not cross it: Browse asks it by its address. Or connect this computer to the PLC's network.`,
+    });
+  }
   if (local) {
     const s = await adsState({ targetAmsNetId: netId || '127.0.0.1.1.1', targetAdsPort: adsPort, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
     add({ id: 'ads', ok: s.ok, title: s.ok ? `The PLC on this computer answers (${s.state})` : 'The PLC on this computer does not answer', detail: s.ok ? '' : `${s.error}. Is TwinCAT running here (in Run mode), with a PLC on ADS port ${adsPort}?` });
@@ -122,12 +131,23 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   }
   // (the route works, TwinCAT there answers, nothing on that ADS port: TwinCAT's own state tells why)
   let twincatAnswers = false;
+  let portSuggest = null;
   const noPlc = async (options) => {
     const sys = await adsState({ ...options, targetAdsPort: 10000 });
     twincatAnswers = sys.ok;
+    const ports = [];
+    if (sys.ok && sys.state !== 'Config') {
+      for (const port of PLC_PORTS.filter((x) => x !== adsPort)) {
+        const st = await adsState({ ...options, targetAdsPort: port });
+        if (st.ok) ports.push({ port, state: st.state });
+      }
+    }
+    if (ports.length) portSuggest = { port: ports[0].port };
     add({
-      id: 'ads', ok: false, title: `Nothing on ADS port ${adsPort}: TwinCAT there is in ${sys.ok ? sys.state : 'an unknown state'}`,
-      detail: sys.ok && sys.state === 'Config' ? 'In Config mode no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.' : 'Is the PLC on another ADS port (852, 853...), or not started?',
+      id: 'ads', ok: false,
+      title: ports.length ? `Nothing on ADS port ${adsPort}: its PLC runs on port ${ports.map((x) => `${x.port} (${x.state})`).join(', ')}` : `Nothing on ADS port ${adsPort}: TwinCAT there is in ${sys.ok ? sys.state : 'an unknown state'}`,
+      detail: sys.ok && sys.state === 'Config' ? 'In Config mode no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.' : ports.length ? `Use port ${ports[0].port} as the Target's.` : 'No PLC runs on ports 851-854: is the PLC application loaded (a boot project, or XAE\'s Login)?',
+      ...(ports.length ? { fix: { port: ports[0].port } } : {}),
     });
   };
   if (viaRouter?.code === 6) {
@@ -158,8 +178,10 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
     search.detail = 'TwinCAT there answers ADS, so the way to it works; only Browse (it will not list it) and Add Route need UDP 48899.';
   }
   const failing = steps.find((s) => s.ok === false);
-  const verdict = failing ? `${failing.title}. ${failing.detail}`.trim() : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';
-  return { steps, verdict, ...(suggest ? { suggest } : {}) };
+  // (not answering from another network: the router between them is the first thing to look at)
+  const netHint = offNet && failing && ['ping', 'search', 'port'].includes(failing.id) ? ` ${steps.find((s) => s.id === 'network').title}: ${steps.find((s) => s.id === 'network').detail}` : '';
+  const verdict = failing ? `${failing.title}. ${failing.detail}${netHint}`.trim() : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';
+  return { steps, verdict, ...(suggest || portSuggest ? { suggest: { ...(suggest ?? {}), ...(portSuggest ?? {}) } } : {}) };
 }
 
 module.exports = { checkConnection, tcpOpen, networkProfile };

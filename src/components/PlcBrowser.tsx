@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
-import type { CheckRequest, CheckResult } from '../utils/connectionCheck.ts';
+import { firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
 
 export interface PickedPlc {
   name: string;
@@ -330,6 +330,12 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                           {routeBusy ? 'Adding...' : 'Add'}
                         </button>
                       </div>
+                      {routeResult && !routeResult.ok && (
+                        <details id="live-route-firewall" className="text-slate-400">
+                          <summary className="cursor-pointer">It did not answer? Commands for that computer (PowerShell as administrator)</summary>
+                          <pre className="mt-1 max-h-32 overflow-auto rounded bg-slate-950 border border-slate-800 p-1 text-[10px] whitespace-pre-wrap">{firewallCommands()}</pre>
+                        </details>
+                      )}
                       {routeResult && (
                         <div id="live-route-result" className={routeResult.ok ? 'text-emerald-300' : 'text-rose-300'}>
                           {routeResult.message}

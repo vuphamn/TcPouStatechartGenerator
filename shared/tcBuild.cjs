@@ -624,21 +624,27 @@ function xaeWorker(key) {
   workers.set(key, w);
   return w;
 }
-/** Until when this worker's XAE is kept open for the next build (ms since 1970), or null (not open) */
-const openUntilOf = (w) => (w?.running && w.until ? w.until : null);
+/** Until when this worker's XAE is kept open for the next build (ms since 1970), or null (not open; the stand-in: as a build would) */
+const openUntilOf = (w) => (w?.running && w.until ? w.until : dry() && w?.dryUntil > Date.now() ? w.dryUntil : null);
 /** Until when an XAE is kept open for a next build (the latest), or null (none open) */
 const xaeOpenUntil = () => Math.max(0, ...[...workers.values()].map((w) => openUntilOf(w) ?? 0)) || null;
 /** The projects open in XAE now (their XAE kept open for the next build) */
-const xaeOpenCount = () => [...workers.values()].filter((w) => w.running).length;
-/** Close every XAE kept open now (the next build opens its project again); true when one was open */
-function closeXae() {
+const xaeOpenCount = () => [...workers.values()].filter((w) => openUntilOf(w)).length;
+/** Each project open in XAE: { key, name (the project, and where from), until } */
+const xaeOpenList = () => [...workers.entries()].filter(([, w]) => openUntilOf(w)).map(([key, w]) => ({ key, name: w.label ?? key, until: openUntilOf(w) }));
+/**
+ * Close the XAE kept open now (the next build opens its project again): one project's (key, from xaeOpenList), or
+ * every one. true when one was open
+ */
+function closeXae(key) {
   let open = false;
-  for (const w of workers.values()) {
-    open ||= w.running;
+  for (const [k, w] of [...workers.entries()]) {
+    if (key && k !== key) continue;
+    open ||= !!openUntilOf(w);
     w.stop(false);
     dropWorkspace(w);
+    workers.delete(k);
   }
-  workers.clear();
   return open;
 }
 
@@ -765,6 +771,7 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   const key = `${netId}|${archives.info?.project?.name ?? ''}`;
   const hash = archivesHash(archives);
   const w = xaeWorker(`plc|${key}`);
+  w.label = `${archives.info?.project?.name || 'The PLC\'s project'} (from the PLC${netId ? ` ${netId}` : ''})`;
   let ws;
   let changed = false;
   if (!dry() && w.ws && w.ws.hash === hash && w.running && w.openTsproj === w.ws.tsproj && fs.existsSync(w.ws.tsproj)) {
@@ -814,9 +821,10 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   }
   const plcRun = r.ok && r.written ? await afterWrite(client, r.written, items, onStep) : undefined;
   // (XAE kept open for the next build: until when; the stand-in says as a real build would)
-  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : openUntilOf(w);
+  if (dry()) w.dryUntil = Date.now() + keepMinutes() * 60000;
+  const openUntil = openUntilOf(w);
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
-  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: dry() ? 1 : xaeOpenCount() } : {}) };
+  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
   delete result.broken;
   return result;
 }
@@ -967,6 +975,7 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
     if (lic && lic.state !== 'ok') licenseNote = lic;
   }
   const w = xaeWorker(`project|${root.toLowerCase()}`);
+  w.label = `${path.basename(root)} (a project folder)`;
   onStep?.('Copying the project');
   // (the same project, its copy still open in XAE: only the changed files copied again)
   let ws;
@@ -1034,11 +1043,12 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
     }
   }
   const plcRun = r.ok && r.written && client ? await afterWrite(client, r.written, items, onStep) : undefined;
-  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : openUntilOf(w);
-  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, compileInfoFiles, ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: dry() ? 1 : xaeOpenCount() } : {}) };
+  if (dry()) w.dryUntil = Date.now() + keepMinutes() * 60000;
+  const openUntil = openUntilOf(w);
+  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, compileInfoFiles, ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
   delete result.broken;
   if (dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
   return result;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

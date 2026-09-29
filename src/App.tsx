@@ -1533,6 +1533,7 @@ export const App: React.FC = () => {
       instance: state === 'connected' ? m.instance : prev.instance,
       instances: m.instances && m.instances.length ? m.instances : prev.instances,
       route: m.route ?? prev.route,
+      ports: state === 'error' ? m.ports : undefined,
     }));
   }, []);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
@@ -3610,8 +3611,15 @@ export const App: React.FC = () => {
       if (!picked.path) return picked.error ?? 'Not a TwinCAT project folder';
       root = picked.path;
     }
-    const pou = await api.saveIntoProject({ root, plcProject: plcOrigin.plcProject, path: plcOrigin.path, content: pouContent });
-    // (not that project's file: chosen again next time)
+    let pou = await api.saveIntoProject({ root, plcProject: plcOrigin.plcProject, path: plcOrigin.path, content: pouContent });
+    // (the remembered project no longer has it, renamed or moved: chosen again at once, then saved there)
+    if (pou.error && root === engineeringRoot) {
+      const again = await api.pickProjectFolder();
+      if (again.path) {
+        root = again.path;
+        pou = await api.saveIntoProject({ root, plcProject: plcOrigin.plcProject, path: plcOrigin.path, content: pouContent });
+      } else if (again.canceled) pou = { error: `${pou.error} (not saved: no other project chosen)` };
+    }
     if (pou.error) {
       try {
         localStorage.removeItem(engineeringKey);
@@ -3711,11 +3719,11 @@ export const App: React.FC = () => {
     return gatewayRef.current.request<PlcAppInfo>({ type: 'plcAppInfo' }, 'plcAppInfoResult', 20000);
   }, []);
   // Close the XAE kept open for builds now (the desktop app, Link, the gateway: where the build ran)
-  const handleCloseXae = useCallback(async (): Promise<boolean> => {
+  const handleCloseXae = useCallback(async (key?: string): Promise<boolean> => {
     const desktop = desktopLive();
-    if (desktop?.closeBuild) return (await desktop.closeBuild({ requestId: Date.now() % 1e9 })).closed;
+    if (desktop?.closeBuild) return (await desktop.closeBuild({ requestId: Date.now() % 1e9, ...(key ? { key } : {}) })).closed;
     if (!gatewayRef.current) return false;
-    const r = await gatewayRef.current.request<{ closed: boolean }>({ type: 'plcBuildClose' }, 'plcBuildClosed', 30000).catch(() => ({ closed: false }));
+    const r = await gatewayRef.current.request<{ closed: boolean }>({ type: 'plcBuildClose', ...(key ? { key } : {}) }, 'plcBuildClosed', 30000).catch(() => ({ closed: false }));
     return r.closed;
   }, []);
   const openPlcBuildItem = useCallback(
@@ -7676,6 +7684,7 @@ export const App: React.FC = () => {
             licenseNotice={licenseNotice}
             onRecheckLicense={() => setLicenseCheck((n) => n + 1)}
             onOpenXae={handleOpenXae}
+            onStartPlc={handleStartPlc}
             onRenamePlc={(netId, name) => updateRememberedPlcs((list) => list.map((p) => (p.netId === netId ? { ...p, name } : p)))}
             onSwitchPlc={handleSwitchPlc}
             sso={ssoHere && gatewaySso ? { provider: gatewaySso.provider, user: gatewaySso.user, name: gatewaySso.name, tokens: gatewaySso.tokens } : undefined}

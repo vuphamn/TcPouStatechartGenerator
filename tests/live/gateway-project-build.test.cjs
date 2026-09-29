@@ -15,7 +15,7 @@ const I = 'MAIN.mainStateMachine.smTable';
 (async () => {
   const plcCfg = h.out('fake-ams2-gwproj.json');
   fs.writeFileSync(plcCfg, JSON.stringify({ symbols: { [`${I}.machineState`]: { type: 'E_States', dataType: 2, size: 2, value: 1 } } }));
-  const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48958', plcCfg], { stdio: 'ignore' });
+  const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48959', plcCfg], { stdio: 'ignore' });
   const gwDir = h.out('gw-proj-test');
   fs.rmSync(gwDir, { recursive: true, force: true });
   fs.mkdirSync(gwDir, { recursive: true });
@@ -23,7 +23,7 @@ const I = 'MAIN.mainStateMachine.smTable';
   fs.writeFileSync(gwConfig, JSON.stringify({
     port: 8471, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [],
     allowBuild: true, allowWrite: true, writeUsers: ['someone-else'],
-    plcs: [{ id: 'line', name: 'Line', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48958', port: 851 }], tokens: [],
+    plcs: [{ id: 'line', name: 'Line', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48959', port: 851 }], tokens: [],
   }, null, 1));
   const token = execFileSync(process.execPath, [path.join(h.REPO, 'gateway', 'gateway.cjs'), 'add-token', 'tester', '--config', gwConfig], { encoding: 'utf8' }).match(/\n\s+(\S+)\s*\n/)[1];
   const gwLog = h.out('gw-proj-test-run.txt');

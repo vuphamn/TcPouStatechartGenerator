@@ -743,7 +743,7 @@ function start() {
       }
       if (m.type === 'plcBuildClose') {
         if (config.allowBuild !== true) return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: false });
-        return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: closeXae() });
+        return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: closeXae(typeof m.key === 'string' ? m.key : undefined) });
       }
       // A build, or a write, refused: turned off on this gateway (allowBuild, allowWrite), or not this user's (writeUsers)
       const buildRefused = (write) => {

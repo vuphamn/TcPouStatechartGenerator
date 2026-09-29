@@ -102,6 +102,8 @@ function handle(sock, f) {
   };
   // config.configMode: TwinCAT in Config mode (no PLC runtime): its system service (port 10000) says Config, every
   // other port is not there (ADS 6, target port not found)
+  // config.plcPorts: the only ADS ports with a PLC runtime (the others: not found; the system service answers Run)
+  if (config.plcPorts && target.port !== 10000 && !config.plcPorts.includes(target.port)) return result(6);
   if (config.configMode) {
     if (target.port !== 10000) return result(6);
     if (cmd === 4) { const st = Buffer.alloc(4); st.writeUInt16LE(15, 0); return result(0, st); }

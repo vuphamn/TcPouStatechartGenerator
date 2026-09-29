@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree, xaeWorker, openXae, saveIntoProject } = require('../../shared/tcBuild.cjs');
+const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree, xaeWorker, openXae, saveIntoProject, closeXae, xaeOpenList } = require('../../shared/tcBuild.cjs');
 const { plcAppInfo } = require('../../shared/tcAppInfo.cjs');
 const { ProjectMirror, relPath } = require('../../shared/projectMirror.cjs');
 const selfUpdate = require('../../link/selfUpdate.cjs');
@@ -120,6 +120,8 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
 
   // 5c. A write (the stand-in compiler): the PLC read again after it, the result says so
   process.env.KSS_BUILD_DRYRUN = '1';
+  // (no XAE closed for another project in these builds: the computer's free memory left out)
+  process.env.KSS_BUILD_MAX_XAE = '3';
   const ads = boot; // (the stand-in PLC: the same boot folder; no data types, so nothing to compare)
   const open = new Map<number, { data: Buffer; at: number }>();
   let next = 1;
@@ -192,6 +194,12 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const infoFile = projWritten.compileInfoFiles?.[0] ?? '';
   expect(projWritten.ok && projWritten.compileInfoCopied === 1 && /^LinePlc\/_CompileInfo\/StandIn-\d+\.compileinfo$/.test(infoFile) && fs.existsSync(path.join(proj, infoFile)) && projWritten.plcRun?.ok === true, `written from the project: ${infoFile} (${projWritten.compileInfoCopied} copied), in Run`);
   fs.rmSync(path.join(proj, 'LinePlc', '_CompileInfo'), { recursive: true, force: true });
+  // The projects open in XAE: the PLC's and the folder's, each with its own Close
+  const openNow = projWritten.xaeOpen ?? [];
+  const folderKey = openNow.find((x: { key: string }) => x.key.startsWith('project|'))?.key ?? '';
+  const closedOne = closeXae(folderKey);
+  const left = xaeOpenList();
+  expect(openNow.length === 2 && projWritten.xaeOpenProjects === 2 && openNow.some((x: { name: string }) => /from the PLC/.test(x.name)) && closedOne && left.length === 1 && !left.some((x: { key: string }) => x.key === folderKey), `open in XAE: ${openNow.map((x: { name: string }) => x.name).join(', ')}; the folder's closed, ${left.length} left`);
   const outside = await buildFromProject(client, { file: projPou, edits: [{ file: path.join(os.tmpdir(), 'x.TcPOU'), content: 'x' }] });
   expect(/Not a source of this project/.test(outside.fatal ?? ''), `a file outside the project: "${outside.fatal}"`);
   const copyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-unit-sync-'));

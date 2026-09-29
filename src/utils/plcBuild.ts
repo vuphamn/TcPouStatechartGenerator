@@ -39,6 +39,8 @@ export interface PlcBuildResult {
   /** XAE kept open for the next build until then (ms since 1970); the projects open in XAE */
   xaeOpenUntil?: number;
   xaeOpenProjects?: number;
+  /** Each project open in XAE (its key: Close closes that one) */
+  xaeOpen?: { key: string; name: string; until: number }[];
   /** After a write: the PLC application's state (ok: back in Run) */
   plcRun?: { state: string | null; ok: boolean };
   /** After a write: the PLC read again (its code the one written?) */

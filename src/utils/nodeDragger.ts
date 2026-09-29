@@ -2198,6 +2198,49 @@ export function applyDiagramOffsetsToSvg(
       }
     }
   }
+  spreadBadges(svg);
+}
+
+/**
+ * Priority badges on top of each other (two transitions leaving a state's side or a choice's corner together, drawn
+ * so by the layout, handed out to the corners, or after a move): the later one (by its priority) moved further along
+ * its own edge until it is clear of the others. Run after each drawing of the edges (the badges' moves are put back
+ * then), so it never builds up.
+ */
+export function spreadBadges(svg: SVGSVGElement) {
+  const GAP = 19;
+  const badges = (Array.from(svg.querySelectorAll('.tc-priority-badge')) as SVGGElement[])
+    .filter((b) => b.ownerSVGElement === svg)
+    .sort((a, b) => Number(a.getAttribute('data-priority') || 99) - Number(b.getAttribute('data-priority') || 99));
+  const placed: Point[] = [];
+  for (const badge of badges) {
+    const circle = badge.querySelector('circle');
+    const parent = badge.parentElement as unknown as SVGGraphicsElement | null;
+    if (!circle || !parent) continue;
+    const tf = parseTranslation(badge.getAttribute('transform') || '');
+    const base = { x: parseFloat(circle.getAttribute('cx') || '0'), y: parseFloat(circle.getAttribute('cy') || '0') };
+    const at = { x: base.x + tf.x, y: base.y + tf.y };
+    const clear = (q: Point) => placed.every((p) => Math.hypot(p.x - q.x, p.y - q.y) >= GAP);
+    if (!clear(at)) {
+      const pathId = badge.getAttribute('data-path-id') || '';
+      const path = (pathId && (svg.getElementById(pathId) as SVGPathElement | null)) || (svg.querySelector(`path[data-path-id="${CSS.escape(pathId)}"]`) as SVGPathElement | null);
+      const toParent = path && typeof path.getPointAtLength === 'function' ? parent.getScreenCTM()?.inverse().multiply(path.getScreenCTM() ?? new DOMMatrix()) : null;
+      if (path && toParent) {
+        // (from the edge's start: the first spot along it that is clear, within its first part)
+        const len = path.getTotalLength();
+        for (let d = 20; d <= Math.min(len * 0.6, 150); d += 8) {
+          const q = new DOMPoint(path.getPointAtLength(d).x, path.getPointAtLength(d).y).matrixTransform(toParent);
+          if (clear(q)) {
+            badge.setAttribute('transform', `translate(${(q.x - base.x).toFixed(1)}, ${(q.y - base.y).toFixed(1)})`);
+            at.x = q.x;
+            at.y = q.y;
+            break;
+          }
+        }
+      }
+    }
+    placed.push({ x: at.x, y: at.y });
+  }
 }
 
 /**

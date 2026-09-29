@@ -179,7 +179,14 @@ function reroutedSlanted(page) {
   });
 }
 
+/** The canvas's edges no longer drawn as Mermaid laid them out (re-routed after a move): ['from->to'] */
+function reroutedEdges(page) {
+  return page.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area path[data-edge-id][data-orig-d]')]
+    .filter((e) => e.id && e.getAttribute('d') !== e.getAttribute('data-orig-d'))
+    .map((e) => `${e.getAttribute('data-source-id')}->${e.getAttribute('data-target-id')}`));
+}
+
 const out = (name) => path.join(OUT, name);
 const fixture = (...parts) => path.join(FIXTURES, ...parts);
 
-module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted };
+module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted, reroutedEdges };

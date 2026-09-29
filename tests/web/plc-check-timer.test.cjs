@@ -49,8 +49,11 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   await a.waitForSelector('#live-plc-browser', { timeout: 5000 }).catch(() => {});
   const row = '.live-plc-remembered[data-netid="127.0.0.2.1.1"] .live-plc-check-mark';
   await a.click('#live-plc-check-all').catch(() => {});
-  await a.waitForFunction((sel) => document.querySelector(sel)?.getAttribute('data-ok') === 'true', { timeout: 30000 }, row).catch(() => {});
-  const first = await a.$eval(row, (e) => e.getAttribute('data-ok') + '|' + e.getAttribute('title')).catch(() => '');
+  // (read as it is marked: the timer checks it again every 3 s, "Checking…" meanwhile)
+  const first = await a.waitForFunction((sel) => {
+    const e = document.querySelector(sel);
+    return e?.getAttribute('data-ok') === 'true' ? e.getAttribute('data-ok') + '|' + e.getAttribute('title') : false;
+  }, { timeout: 30000, polling: 100 }, row).then((x) => x.jsonValue()).catch(() => '');
   const every = await a.$eval('#live-plc-check-every', (e) => e.value).catch(() => '');
   expect(/^true\|/.test(first) && every === '0.05', `checked: it answers ("${first.slice(0, 80)}"), again every ${every} min`);
 

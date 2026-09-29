@@ -3,7 +3,7 @@ import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRi
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
-import { checkAsText, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
+import { checkAsText, firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { formatLimit, notifyStuck, parseDuration } from '../utils/stateLimits.ts';
@@ -18,6 +18,8 @@ export interface LiveStatus {
   instances: string[];
   /** Desktop: the AMS NetId / IP this computer uses towards the PLC (the PLC needs a route for them) */
   route?: { localNetId: string; localIp: string };
+  /** Nothing on the chosen ADS port: the ports that have a PLC */
+  ports?: { port: number; state: string }[];
   /** Web edition: the PLCs the gateway offers, and who is signed in */
   plcs?: { id: string; name: string }[];
   user?: string;
@@ -133,6 +135,8 @@ interface LivePanelProps {
   onRecheckLicense?: () => void;
   /** TwinCAT XAE opened on this computer (desktop, Link): its license page renews a trial */
   onOpenXae?: () => Promise<{ ok: boolean; message: string }>;
+  /** The PLC application started (live, the PLC in Stop; after a confirmation) */
+  onStartPlc?: () => Promise<{ state: string | null; ok: boolean; error?: string }>;
   /** Link on this computer is another version than this page: what to do */
   linkNotice?: string | null;
   /** Check any PLC (Browse: Check all, the remembered ones) */
@@ -300,6 +304,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   licenseNotice,
   onRecheckLicense,
   onOpenXae,
+  onStartPlc,
   onRenamePlc,
   onSwitchPlc,
   canSaveRecording = false,
@@ -343,6 +348,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   }, [checker.lost, checker.checks, notify, rememberedPlcs]);
   // The license notice's Renew: the steps shown, what Open XAE said
   const [renewing, setRenewing] = useState(false);
+  // Start the PLC (live, in Stop): asked (its box), running, what it did
+  const [startPlc, setStartPlc] = useState<{ phase: 'ask' | 'running' | 'done'; safe: boolean; text?: string; ok?: boolean } | null>(null);
+  useEffect(() => {
+    if (status.plcState === 'Run' && startPlc?.phase !== 'done') setStartPlc(null);
+  }, [status.plcState, startPlc?.phase]);
   const [xaeOpened, setXaeOpened] = useState('');
   // The connection check: running (no result yet) or its steps
   const [checking, setChecking] = useState<{ result: CheckResult | null } | null>(null);
@@ -423,6 +433,54 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {status.state === 'connected' && <span className="live-dot shrink-0" />}
             <span className="truncate">{status.message || 'Not connected'}</span>
           </span>
+          {status.state === 'connected' && status.plcState === 'Stop' && onStartPlc && !startPlc && (
+            <button type="button" id="live-start-plc" onClick={() => setStartPlc({ phase: 'ask', safe: false })} className="shrink-0 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[11px]" title="The PLC application is in Stop: start it (asks first)">
+              Start PLC…
+            </button>
+          )}
+          {startPlc && (
+            <span id="live-start-plc-panel" className="shrink-0 flex items-center gap-1.5 text-[11px]" data-phase={startPlc.phase}>
+              {startPlc.phase === 'ask' && (
+                <>
+                  <span className="text-amber-200">Its outputs act on the machine at once.</span>
+                  <label className="flex items-center gap-1 text-slate-200">
+                    <input id="live-start-plc-safe" type="checkbox" checked={startPlc.safe} onChange={(e) => setStartPlc({ ...startPlc, safe: e.target.checked })} /> Safe to start
+                  </label>
+                  <button
+                    type="button"
+                    id="live-start-plc-confirm"
+                    disabled={!startPlc.safe}
+                    onClick={() => {
+                      setStartPlc({ phase: 'running', safe: true });
+                      void onStartPlc!()
+                        .catch((e: unknown) => ({ state: null, ok: false, error: e instanceof Error ? e.message : String(e) }))
+                        .then((r) => setStartPlc({ phase: 'done', safe: true, ok: r.ok, text: r.ok ? 'Started: the PLC runs.' : r.error ?? `The PLC is in ${r.state ?? '?'}` }));
+                    }}
+                    className="px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white disabled:opacity-40"
+                  >
+                    Start
+                  </button>
+                  <button type="button" onClick={() => setStartPlc(null)} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">Cancel</button>
+                </>
+              )}
+              {startPlc.phase === 'running' && <><Loader2 className="w-3 h-3 animate-spin" /> Starting…</>}
+              {startPlc.phase === 'done' && (
+                <span id="live-start-plc-result" data-ok={String(startPlc.ok)} className={startPlc.ok ? 'text-emerald-300' : 'text-rose-300'}>
+                  {startPlc.text}{' '}
+                  <button type="button" onClick={() => setStartPlc(null)} className="underline text-slate-400">OK</button>
+                </span>
+              )}
+            </span>
+          )}
+          {status.state === 'error' && status.ports && status.ports.length > 0 && !viaGateway && (
+            <span id="live-ports" className="shrink-0 flex items-center gap-1">
+              {status.ports.map((x) => (
+                <button key={x.port} type="button" className="live-port-use px-1.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-50 text-[11px]" data-port={x.port} onClick={() => onSettingsChange({ ...settings, port: String(x.port) })} title={`Its PLC on ADS port ${x.port} (${x.state}): use it, then Go live`}>
+                  Use port {x.port}
+                </button>
+              ))}
+            </span>
+          )}
           {/* One click to another remembered PLC (while live: stops and goes live on it) */}
           {!viaGateway && rememberedPlcs.length > 1 && (
             <select
@@ -975,12 +1033,39 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   Copy
                 </button>
                 {checkCopied && <span id="live-check-copied" className="mr-2 text-slate-400">{checkCopied}</span>}
-                {checking.result.suggest && checking.result.suggest.netId !== settings.netId && (
+                {checking.result.suggest?.port && String(checking.result.suggest.port) !== settings.port && (
+                  <button
+                    type="button"
+                    id="live-check-port-fix"
+                    onClick={() => {
+                      onSettingsChange({ ...settings, port: String(checking.result!.suggest!.port) });
+                      setChecking(null);
+                    }}
+                    className="mr-2 px-2 py-0.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-50"
+                  >
+                    Use port {checking.result.suggest.port}
+                  </button>
+                )}
+                {checking.result.steps.some((s) => (s.id === 'search' || s.id === 'port') && s.ok === false) && (
+                  <details id="live-check-firewall" className="mt-1">
+                    <summary className="cursor-pointer text-slate-300">Commands for the PLC's computer (PowerShell as administrator)</summary>
+                    <pre className="mt-1 max-h-40 overflow-auto rounded bg-slate-950 border border-slate-800 p-1.5 text-[10px] text-slate-300 whitespace-pre-wrap">{firewallCommands()}</pre>
+                    <button
+                      type="button"
+                      id="live-check-firewall-copy"
+                      onClick={() => void navigator.clipboard.writeText(firewallCommands()).then(() => setCheckCopied('Commands copied'), () => setCheckCopied('Copying is blocked here: select the commands'))}
+                      className="mt-1 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                      Copy the commands
+                    </button>
+                  </details>
+                )}
+                {checking.result.suggest?.netId && checking.result.suggest.netId !== settings.netId && (
                   <button
                     type="button"
                     id="live-check-fix"
                     onClick={() => {
-                      onSettingsChange({ ...settings, netId: checking.result!.suggest!.netId });
+                      onSettingsChange({ ...settings, netId: checking.result!.suggest!.netId! });
                       setChecking(null);
                     }}
                     className="px-2 py-0.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-50"

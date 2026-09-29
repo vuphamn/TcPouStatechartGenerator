@@ -19,7 +19,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   // along its edge), in the diagram's own units (the minimap's copy left out)
   const crowded = await p.evaluate(() => {
     const svg = document.querySelector('#mermaid-canvas-area g.node')?.ownerSVGElement;
-    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => ({ x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')), id: c.parentElement.getAttribute('data-edge-id') }));
+    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => { const m = svg.getScreenCTM().inverse().multiply(c.getScreenCTM()); const q = new DOMPoint(Number(c.getAttribute('cx')), Number(c.getAttribute('cy'))).matrixTransform(m); return { x: q.x, y: q.y, id: c.parentElement.getAttribute('data-edge-id') }; });
     const close = [];
     for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) if (Math.hypot(at[i].x - at[j].x, at[i].y - at[j].y) < 18) close.push(`${at[i].id} / ${at[j].id}`);
     return { n: at.length, close };
@@ -27,7 +27,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(crowded.n > 20 && crowded.close.length === 0, `the ${crowded.n} priority badges: none on top of another (${crowded.close.slice(0, 2).join('; ') || 'none'})`);
   const crowdedNow = () => p.evaluate(() => {
     const svg = document.querySelector('#mermaid-canvas-area g.node')?.ownerSVGElement;
-    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => ({ x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')), id: c.parentElement.getAttribute('data-edge-id') }));
+    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => { const m = svg.getScreenCTM().inverse().multiply(c.getScreenCTM()); const q = new DOMPoint(Number(c.getAttribute('cx')), Number(c.getAttribute('cy'))).matrixTransform(m); return { x: q.x, y: q.y, id: c.parentElement.getAttribute('data-edge-id') }; });
     const close = [];
     for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) if (Math.hypot(at[i].x - at[j].x, at[i].y - at[j].y) < 18) close.push(`${at[i].id} / ${at[j].id}`);
     return { n: at.length, close };
@@ -113,6 +113,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.mouse.up();
   await h.sleep(800);
   const after = await edgesOf(clamped.id);
+  // (its badges apart after the move too: moved along their edges when they meet)
+  const crowdedDragged = await crowdedNow();
+  expect(crowdedDragged.close.length === 0, `the choice dragged: its badges apart (${crowdedDragged.close.slice(0, 2).join('; ') || 'none on top of another'})`);
+  // Only the dragged choice's edges re-routed: every other edge exactly as Mermaid drew it
+  const rerouted = await h.reroutedEdges(p);
+  const others = rerouted.filter((k) => !k.split('->').includes(after.sid));
+  expect(rerouted.length > 0 && others.length === 0, `only the moved choice's edges re-routed (${rerouted.length}; others: ${others.slice(0, 3).join(', ') || 'none'})`);
   const draggedGaps = await choiceGaps();
   const ends = await p.evaluate((id) => {
     const n = document.getElementById(id);
@@ -254,6 +261,20 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   expect((await choices()).length === 0, 'off again: gone');
+  // INIT_RESTART's choice dragged left: two of its arms then leave the same corner; their badges kept apart
+  await p.evaluate(() => { if (!document.getElementById('choice-nodes-checkbox')?.checked) document.getElementById('choice-nodes-checkbox')?.click(); });
+  await h.sleep(2500);
+  const restartId = await p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node')].find((x) => /^choice_TABLEMANAGER_AUTOFEED_INIT_RESTART_\d+$/.test(x.getAttribute('data-state-id') ?? ''))?.id);
+  if (restartId) {
+    const rr = await p.evaluate((id) => { const b = document.getElementById(id).getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; }, restartId);
+    await p.mouse.move(rr.x, rr.y);
+    await p.mouse.down();
+    await p.mouse.move(rr.x - 40, rr.y + 15, { steps: 5 });
+    await p.mouse.up();
+    await h.sleep(700);
+  }
+  const crowdedRestart = await crowdedNow();
+  expect(!!restartId && crowdedRestart.close.length === 0, `INIT_RESTART's choice dragged left: its badges apart (${crowdedRestart.close.slice(0, 2).join('; ') || 'none on top of another'})`);
   // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)
   const slantedLeft = await h.reroutedSlanted(p);
   expect(slantedLeft.length === 0, `the moved edges on the canvas orthogonal (${slantedLeft.slice(0, 3).join(" | ") || "none slanted"})`);

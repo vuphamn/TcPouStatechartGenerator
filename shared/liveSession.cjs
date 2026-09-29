@@ -34,6 +34,21 @@ function localIpTowards(plcIp) {
   return (real[0] ?? all.find((a) => !a.address.startsWith('169.254.')) ?? all[0])?.address ?? '127.0.0.1';
 }
 
+/** This computer's address on host's network (an adapter whose subnet holds it), or null: the way goes through a router */
+function localAddressOn(host) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) return null;
+  const toInt = (ip) => ip.split('.').reduce((n, b) => (n << 8) + Number(b), 0) >>> 0;
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a && a.family === 'IPv4' && !a.internal && !a.address.startsWith('169.254.') && (toInt(a.address) & toInt(a.netmask)) === (toInt(host) & toInt(a.netmask))) return a.address;
+    }
+  }
+  return null;
+}
+
+// The PLC runtimes' ADS ports (TwinCAT 3: 851-854; TwinCAT 2: 801, 811, 821, 831)
+const PLC_PORTS = [851, 852, 853, 854, 801, 811, 821, 831];
+
 // ADS: the target's router answered, but nothing is on that port (no PLC runtime there)
 const ADS_PORT_NOT_FOUND = 6;
 const adsCode = (err) => err?.adsError?.errorCode ?? err?.parent?.adsError?.errorCode ?? null;
@@ -164,8 +179,24 @@ function createLiveSession(hooks = {}) {
       } catch (err) {
         // TwinCAT there answers, nothing on this port: its own state says why (Config mode: no PLC runs)
         if (adsCode(err) === ADS_PORT_NOT_FOUND) {
-          const sys = await systemState(makeClient(!!route.viaRouter || viaLocalRouter, 10000));
-          throw new Error(`TwinCAT on ${netId} answers${route.viaRouter ? ' (through this computer\'s route to it)' : ''}, but nothing is on ADS port ${adsPort}: ${sys === 'Config' ? 'TwinCAT there is in Config mode, so no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.' : `TwinCAT there is in ${sys ?? 'an unknown state'}. Is the PLC on another ADS port (852, 853...), or not started?`}`);
+          const via = !!route.viaRouter || viaLocalRouter;
+          const sys = await systemState(makeClient(via, 10000));
+          // (the PLC runtimes it has: on which ports, in which state)
+          const ports = [];
+          if (sys && sys !== 'Config') {
+            for (const port of PLC_PORTS.filter((x) => x !== adsPort)) {
+              const st = await systemState(makeClient(via, port));
+              if (st) ports.push({ port, state: st });
+            }
+          }
+          const where = `TwinCAT on ${netId} answers${route.viaRouter ? ' (through this computer\'s route to it)' : ''}, but nothing is on ADS port ${adsPort}`;
+          const e = new Error(sys === 'Config'
+            ? `${where}: TwinCAT there is in Config mode, so no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.`
+            : ports.length
+              ? `${where}: its PLC ${ports.length > 1 ? 'runtimes are' : 'runs'} on port ${ports.map((x) => `${x.port} (${x.state})`).join(', ')}. Go live on ${ports.length > 1 ? 'one of them' : 'it'}: its port as the Target's.`
+              : `${where}: TwinCAT there is in ${sys ?? 'an unknown state'}, and no PLC runs on ports 851-854. Is the PLC application loaded (a boot project, or XAE's Login)?`);
+          e.ports = ports;
+          throw e;
         }
         throw new Error(`The PLC did not answer on ADS port ${adsPort}: ${ads.adsErrorText(err)}. Without a route for this computer (AMS NetId ${route.localNetId}, IP ${localIp}) the PLC does not answer.`);
       }
@@ -219,7 +250,7 @@ function createLiveSession(hooks = {}) {
       const message = err instanceof Error ? err.message : String(err);
       await release(s);
       if (session === s) session = null;
-      if (message !== 'stopped') status('error', message, { instances: found, route });
+      if (message !== 'stopped') status('error', message, { instances: found, route, ...(err?.ports?.length ? { ports: err.ports } : {}) });
       return null;
     }
   }
@@ -410,12 +441,12 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcStartResult', requestId, ...(await startPlc(s.client)) });
   }
 
-  /** Close the XAE kept open for builds now (plcBuildClose → plcBuildClosed { closed }) */
+  /** Close the XAE kept open for builds now (plcBuildClose { key? }: one project's, else every one → plcBuildClosed { closed }) */
   function closeBuild(send, req) {
-    send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae() });
+    send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
   return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
-module.exports = { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId };
+module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

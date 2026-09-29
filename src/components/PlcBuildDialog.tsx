@@ -56,8 +56,8 @@ export const PlcBuildDialog: React.FC<{
   onClose: () => void;
   /** XAE edition: its own Login / Activate Configuration write it (no write here) */
   canWrite?: boolean;
-  /** Close the XAE kept open for the next build now */
-  onCloseXae?: () => Promise<boolean>;
+  /** Close the XAE kept open for the next build now: one project's (key), or every one */
+  onCloseXae?: (key?: string) => Promise<boolean>;
   /** Online change from the user's XAE (its Automation Interface makes none): the PLC's state and online change count */
   onReadAppInfo?: () => Promise<PlcAppInfo>;
   /** The edits put where the user's XAE reads them (the project's file, or a copy to put in): an error text, or null */
@@ -93,6 +93,8 @@ export const PlcBuildDialog: React.FC<{
     setGuide((g) => (g ? { ...g, check } : g));
   };
   const [xaeClosed, setXaeClosed] = useState(false);
+  // (the projects' XAEs closed one by one: their keys)
+  const [closedKeys, setClosedKeys] = useState<string[]>([]);
   const [confirming, setConfirming] = useState<PlcWrite | null>(null);
   const [safe, setSafe] = useState(false);
   const [showWarnings, setShowWarnings] = useState(false);
@@ -108,6 +110,7 @@ export const PlcBuildDialog: React.FC<{
     setConfirming(null);
     setSafe(false);
     setXaeClosed(false);
+    setClosedKeys([]);
     setGuide(null);
     setStarting(null);
   }, [state.result]);
@@ -252,6 +255,18 @@ export const PlcBuildDialog: React.FC<{
             </button>
           )}
         </div>
+      )}
+      {!running && !xaeClosed && onCloseXae && (r?.xaeOpen?.filter((x) => !closedKeys.includes(x.key)).length ?? 0) > 1 && (
+        <ul id="plc-build-xae-list" className="px-3 pb-2 -mt-1 space-y-0.5 text-slate-400">
+          {r!.xaeOpen!.filter((x) => !closedKeys.includes(x.key)).map((x) => (
+            <li key={x.key} className="plc-build-xae-project flex items-center gap-2" data-key={x.key}>
+              <span className="min-w-0 truncate">{x.name}: until {new Date(x.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <button type="button" className="plc-build-xae-close-one px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" onClick={() => void onCloseXae(x.key).then(() => setClosedKeys((k) => [...k, x.key]))}>
+                Close
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
       {!running && xaeClosed && (
         <div id="plc-build-xae-closed" className="px-3 pb-2 -mt-1 text-slate-500">XAE closed: the next build opens the project again.</div>

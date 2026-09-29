@@ -33,7 +33,7 @@ interface DesktopLiveApi {
   /** The PLC project's sources as the PLC keeps them (read-only, its boot folder) */
   sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
   checkConnection?: (req: import('./connectionCheck.ts').CheckRequest) => Promise<import('./connectionCheck.ts').CheckResult>;
-  closeBuild?: (req: { requestId: number }) => Promise<{ closed: boolean }>;
+  closeBuild?: (req: { requestId: number; key?: string }) => Promise<{ closed: boolean }>;
   projectBuild?: (req: { requestId: number; file: string; edits: { file: string; content: string }[]; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   license?: (req: { requestId: number }) => Promise<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }>;
   /** The PLC application's state and online change count (did an online change from XAE take?) */
