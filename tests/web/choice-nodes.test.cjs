@@ -46,6 +46,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   // (the view on CLAMPED: Go to State zooms in; its choice is by it)
   await p.evaluate(() => [...document.getElementById('state-list-item-TABLEMANAGER_CLAMPED').querySelectorAll('button')].find((b) => /Go to State/.test(b.textContent))?.click());
   await h.sleep(1500);
+  // (the zoom settled: the diamond at the same place on screen for a few reads, on a busy machine too)
+  for (let i = 0, last = '', same = 0; i < 40 && same < 3; i++) {
+    const at = await p.evaluate((id) => { const r = document.getElementById(id)?.getBoundingClientRect(); return r ? `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}` : ''; }, clamped.id);
+    same = at && at === last ? same + 1 : 0;
+    last = at;
+    await h.sleep(150);
+  }
   const choiceGaps = () => p.evaluate(() => {
     const out = [];
     for (const n of document.querySelectorAll('#mermaid-canvas-area g.node')) {
@@ -112,6 +119,20 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(800);
   const sideways = (await choiceGaps()).find((g) => /^AUTOFEED_IDLE_/.test(g[0]));
   expect(!!sideways && sideways[2] <= 6,`AUTOFEED_IDLE's choice moved sideways: its transitions on its sides (${sideways?.[2]} units off, ${sideways?.[3]})`);
+  // ... and further to the left, in steps: the transition from its state (a straight route of two points, drawn a
+  // pixel or two off vertical) still ends on the diamond, square to it
+  const leftGaps = [];
+  for (let i = 0; i < 4; i++) {
+    const at = await p.evaluate((id) => { const r = document.getElementById(id).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, idleChoice.id);
+    await p.mouse.move(at.x, at.y);
+    await p.mouse.down();
+    await p.mouse.move(at.x - 10, at.y, { steps: 4 });
+    await p.mouse.up();
+    await h.sleep(600);
+    leftGaps.push((await choiceGaps()).find((g) => /^AUTOFEED_IDLE_/.test(g[0]))?.[2] ?? 99);
+  }
+  const leftEdges = await edgesOf(idleChoice.id);
+  expect(Math.max(...leftGaps) <= 6 && leftEdges.diag.length === 0, `AUTOFEED_IDLE's choice moved left in steps: on its diamond (${leftGaps.join(', ')} units off), orthogonal (${leftEdges.diag.slice(0, 2).join(' | ') || 'no diagonal'})`);
   // A moved badge hovered: it grows where it is (no jump back to where it was: no flicker)
   const badge = await p.evaluate((sid) => {
     const b = [...document.querySelectorAll('#mermaid-canvas-area .tc-priority-badge')].find((x) => x.getAttribute('data-from') === sid && x.getAttribute('transform'));

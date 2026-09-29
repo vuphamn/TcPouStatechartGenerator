@@ -96,7 +96,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   // 2. An error put in (the state's code), built: listed with its place, opened at it
   // (its menu: right-click again while the canvas is still being drawn)
   const openStateCode = async () => {
-    for (let i = 0; i < 4 && !(await a.$('textarea#text-prompt-input')); i++) {
+    for (let i = 0; i < 8 && !(await a.$('textarea#text-prompt-input')); i++) {
       // (the canvas shown, the state where it is now: the diagram may have been drawn again)
       await a.evaluate(() => document.getElementById('dock-tab-diagram')?.click());
       await sleep(300);
@@ -110,7 +110,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const node = await a.evaluate(() => { const r = document.querySelector('#mermaid-canvas-area g.node[data-state-id="CONVEYOR_RUNNING"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
   await openStateCode();
   const original = await a.$eval('#text-prompt-input', (e) => e.value).catch(() => '');
-  await a.evaluate(() => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(t, t.value + '\nnoSuchVar := 1;'); t.dispatchEvent(new Event('input', { bubbles: true })); });
+  await a.evaluate(() => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(t), 'value').set.call(t, t.value + '\nnoSuchVar := 1;'); t.dispatchEvent(new Event('input', { bubbles: true })); });
   await sleep(200);
   // (not declared: its Declare box, if offered, left off)
   await a.evaluate(() => document.querySelectorAll('#text-prompt-dialog input[type="checkbox"]').forEach((c) => c.checked && c.click()));
@@ -167,7 +167,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
 
   // 3. Fixed (the state's code as it was), built again, written to the PLC after its confirmation
   await openStateCode();
-  await a.evaluate((v) => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(t, v); t.dispatchEvent(new Event('input', { bubbles: true })); }, original);
+  await a.evaluate((v) => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(t), 'value').set.call(t, v); t.dispatchEvent(new Event('input', { bubbles: true })); }, original);
   await sleep(200);
   await a.click('#text-prompt-submit');
   await sleep(600);
@@ -225,7 +225,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.click('#dock-tab-diagram').catch(() => {});
   await sleep(500);
   await openStateCode();
-  await a.evaluate(() => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(t, t.value + '\n// kept for the build'); t.dispatchEvent(new Event('input', { bubbles: true })); });
+  await a.evaluate(() => { const t = document.getElementById('text-prompt-input'); Object.getOwnPropertyDescriptor(Object.getPrototypeOf(t), 'value').set.call(t, t.value + '\n// kept for the build'); t.dispatchEvent(new Event('input', { bubbles: true })); });
   await a.click('#text-prompt-submit').catch(() => {});
   await sleep(500);
   const openFromPlc = async (name) => {

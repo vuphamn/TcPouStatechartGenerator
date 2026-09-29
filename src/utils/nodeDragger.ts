@@ -1408,12 +1408,11 @@ function rerouteElkOrthogonal(
   // Start / end handle drags move that endpoint on top of any node movement
   srcOffset = { x: srcOffset.x + (edgeOffset.startDx || 0), y: srcOffset.y + (edgeOffset.startDy || 0) };
   tgtOffset = { x: tgtOffset.x + (edgeOffset.endDx || 0), y: tgtOffset.y + (edgeOffset.endDy || 0) };
-  const route = readMermaidRoutePoints(path);
-  if (!route) return null;
-
-  // Mermaid shortens the drawn path for the arrow head: use the drawn start / end, ELK's interior bends
+  // Mermaid shortens the drawn path for the arrow head: use the drawn start / end, ELK's interior bends (a path
+  // without ELK's route on it: the drawn points, squared below)
   const drawn = extractCoordinatePoints(parseSvgPathCommands(origD));
   if (drawn.length < 2) return null;
+  const route = readMermaidRoutePoints(path) ?? drawn;
   const orig: Point[] = [drawn[0], ...route.slice(1, -1), drawn[drawn.length - 1]].map((p) => ({ x: p.x, y: p.y }));
 
   // A diamond's end (a Choice) sits on a slanted side: its first / last bit is squared to the next segment's axis
@@ -1428,14 +1427,47 @@ function rerouteElkOrthogonal(
     if (boxes.srcDiamond) square(0, 1);
     if (boxes.tgtDiamond) square(orig.length - 1, orig.length - 2);
   }
-  // Only handle routes that are orthogonal to begin with
+  // Mermaid's drawn ends (shortened for the arrow head, or put on a diamond's side) can sit a pixel or two off the
+  // route's axis, even on a straight route of two points (a state straight above its choice): squared onto it, the
+  // end that is on a diamond first (it is put back on the diamond's corner below)
+  const NEAR = 4;
+  const nearSquare = (end: number, next: number) => {
+    const a = orig[end];
+    const b = orig[next];
+    const dx = Math.abs(b.x - a.x);
+    const dy = Math.abs(b.y - a.y);
+    if (dx >= ORTHO_EPS && dx <= NEAR && dy > 2 * NEAR) a.x = b.x;
+    else if (dy >= ORTHO_EPS && dy <= NEAR && dx > 2 * NEAR) a.y = b.y;
+  };
+  const last = orig.length - 1;
+  if (boxes.srcDiamond && !boxes.tgtDiamond) {
+    nearSquare(0, 1);
+    nearSquare(last, last - 1);
+  } else {
+    nearSquare(last, last - 1);
+    nearSquare(0, 1);
+  }
+  // A segment still slanted (ELK routes orthogonally): a right-angle jog at its middle, so a move keeps the route
+  // orthogonal instead of falling back to a drawn line
+  const ortho: Point[] = [orig[0]];
   for (let i = 1; i < orig.length; i++) {
-    if (!isVerticalSeg(orig[i - 1], orig[i]) && !isHorizontalSeg(orig[i - 1], orig[i])) return null;
+    const a = ortho[ortho.length - 1];
+    const b = orig[i];
+    if (!isVerticalSeg(a, b) && !isHorizontalSeg(a, b)) {
+      if (Math.abs(b.y - a.y) >= Math.abs(b.x - a.x)) {
+        const midY = (a.y + b.y) / 2;
+        ortho.push({ x: a.x, y: midY }, { x: b.x, y: midY });
+      } else {
+        const midX = (a.x + b.x) / 2;
+        ortho.push({ x: midX, y: a.y }, { x: midX, y: b.y });
+      }
+    }
+    ortho.push(b);
   }
   // Drop collinear / duplicate points so every inner point is a real bend
-  const simplified: Point[] = [orig[0]];
-  for (let i = 1; i < orig.length; i++) {
-    const p = orig[i];
+  const simplified: Point[] = [ortho[0]];
+  for (let i = 1; i < ortho.length; i++) {
+    const p = ortho[i];
     const last = simplified[simplified.length - 1];
     if (Math.hypot(p.x - last.x, p.y - last.y) < ORTHO_EPS) continue;
     if (simplified.length >= 2) {
