@@ -63,6 +63,8 @@ import {
   FindOptions,
   highlightHtmlWithFindMatches,
   buildSearchRegex,
+  highlightWordOccurrences,
+  wordAtCaret,
 } from '../utils/stFindHighlight.ts';
 
 /**
@@ -293,9 +295,13 @@ export const StructuredTextCodeEditor = forwardRef<
     // The Input Assistant (F2): the selection it inserts at
     const [assistant, setAssistant] = useState<{ start: number; end: number; catalog: ReturnType<SymbolScope['catalog']> } | null>(null);
     const [focused, setFocused] = useState(false);
+    // The identifier at the caret: its other uses marked (while the editor has the focus, Find not on)
+    const [caretWord, setCaretWord] = useState('');
     const updateCaretLine = useCallback(() => {
       const ta = textareaRef.current;
       if (!ta) return;
+      const word = wordAtCaret(ta.value, ta.selectionStart, ta.selectionEnd);
+      setCaretWord((prev) => (prev === word ? prev : word));
       // The end the caret is at (a selection made upwards has it at its start)
       const pos = ta.selectionDirection === 'backward' ? ta.selectionStart : ta.selectionEnd;
       let line = 0;
@@ -321,7 +327,7 @@ export const StructuredTextCodeEditor = forwardRef<
     const highlightedHtml = useMemo(() => {
       const rawPrism = highlightStructuredText(activeViewCode);
       if (!findQuery || !findQuery.trim()) {
-        return rawPrism;
+        return focused && caretWord ? highlightWordOccurrences(rawPrism, caretWord).html : rawPrism;
       }
       const { html } = highlightHtmlWithFindMatches(
         rawPrism,
@@ -330,7 +336,7 @@ export const StructuredTextCodeEditor = forwardRef<
         activeFindMatchIndex ?? -1
       );
       return html;
-    }, [activeViewCode, findQuery, findOptions, activeFindMatchIndex]);
+    }, [activeViewCode, findQuery, findOptions, activeFindMatchIndex, focused, caretWord]);
 
     // View line indices containing search query matches for gutter indicators
     const matchingViewLines = useMemo(() => {

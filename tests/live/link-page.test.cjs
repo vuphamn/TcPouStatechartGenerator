@@ -42,6 +42,8 @@ const pair = (code) =>
   expect(page.status === 200 && /Kval StateScope Link/.test(page.body) && /Pairing code/.test(page.body) && page.headers['x-frame-options'] === 'DENY', 'the page (not framed by other sites)');
   let status = JSON.parse((await request('GET', '/status')).body);
   expect(status.code === code && status.clients.length === 0 && status.port === PORT, `status: the code, no pages yet`);
+  // Which code it runs: run from source, its stamp computed (the same as the app build's)
+  expect(status.build?.from === 'source' && status.build.stamp === require('../../scripts/link-code-stamp.cjs').linkCodeStamp() && status.build.built === null, `its build: ${JSON.stringify(status.build)}`);
   expect(!page.headers['access-control-allow-origin'] && !(await request('GET', '/status', { origin: 'https://evil.example' })).headers['access-control-allow-origin'], 'no CORS: other sites cannot read the code');
   expect((await request('GET', '/status', { host: `evil.example:${PORT}` })).status === 421, 'another host name (DNS rebinding): refused');
 

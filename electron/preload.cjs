@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     sources: (req) => ipcRenderer.invoke('tc:live-sources', req),
     /** Rebuild the PLC's project with edits, write it back: { requestId, edits, write? } -> plcBuildResult (progress: plcBuildProgress) */
     build: (req) => ipcRenderer.invoke('tc:live-build', req),
+    /** Close the XAE kept open for builds now -> plcBuildClosed { closed } */
+    closeBuild: (req) => ipcRenderer.invoke('tc:live-build-close', req),
+    /** The Live tab's Check: why a PLC does not answer, { steps, verdict, suggest? } */
+    checkConnection: (req) => ipcRenderer.invoke('tc:check-connection', req),
     /** The Live tab's Browse: the TwinCAT devices on the network, { devices, errors } */
     discoverPlcs: (options) => ipcRenderer.invoke('tc:discover-plcs', options),
     /** Add Route on a PLC to this computer: { plcIp, user, password, routeName?, localNetId? } -> { ok, message } */

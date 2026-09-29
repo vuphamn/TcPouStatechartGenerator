@@ -4,7 +4,9 @@
  */
 
 /** Online change (the PLC keeps running), or the whole configuration activated (TwinCAT restarts) */
-export type PlcWrite = 'online' | 'activate';
+/** Online change (the PLC keeps running); download (its application stops and starts again, TwinCAT keeps running:
+ * when an online change is not possible); the whole configuration activated (TwinCAT restarts) */
+export type PlcWrite = 'online' | 'download' | 'activate';
 
 export interface PlcBuildItem {
   level: 'error' | 'warning';
@@ -29,6 +31,8 @@ export interface PlcBuildResult {
   plcState?: string;
   plcProject?: string;
   applied?: string[];
+  /** XAE kept open for the next build until then (ms since 1970) */
+  xaeOpenUntil?: number;
   /** After a write: the PLC read again (its code the one written?) */
   verified?: { ok: boolean; text: string };
 }

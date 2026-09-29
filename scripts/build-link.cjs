@@ -20,6 +20,8 @@ require('esbuild').buildSync({
   outfile: bundle,
   external: ['bufferutil', 'utf-8-validate'],
   logLevel: 'warning',
+  // Its code stamp and build time (Link's page and the web app tell a Link from another version)
+  define: { __LINK_STAMP__: JSON.stringify(require('./link-code-stamp.cjs').linkCodeStamp(root)), __LINK_BUILT__: JSON.stringify(new Date().toISOString()) },
 });
 
 // 2. Single executable: the bundle as a blob injected into a copy of this node.exe

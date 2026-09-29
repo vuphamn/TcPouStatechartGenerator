@@ -21,7 +21,7 @@ namespace KvalStateScope.Xae
     ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch, discoverPlcs
     ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars, plcList
     /// </summary>
-    internal sealed partial class StateScopeControl : UserControl
+    internal sealed partial class StateScopeControl : UserControl, ISaveAllTab
     {
         private const string AppHost = "statescope.example";
 
@@ -170,6 +170,8 @@ namespace KvalStateScope.Xae
                 core.Settings.IsStatusBarEnabled = false;
                 core.Settings.AreDevToolsEnabled = true; // prototype: F12 for diagnostics
                 core.WebMessageReceived += OnWebMessage;
+                // Save All from another StateScope tab reaches this one (and its answer goes back)
+                SaveAllRelay.Register(this);
                 core.NewWindowRequested += (s, e) =>
                 {
                     // A tab moved to a window of its own (the app's window.html): WebView2's popup window, the page fills it
@@ -264,6 +266,13 @@ namespace KvalStateScope.Xae
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             _web.CoreWebView2?.PostWebMessageAsJson(_json.Serialize(message));
+        }
+
+        // (SaveAllRelay: every tool window is on the UI thread)
+        void ISaveAllTab.PostToApp(object message)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (_appReady) Post(message);
         }
 
         private void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -368,6 +377,16 @@ namespace KvalStateScope.Xae
                         break;
                     case "buildProject":
                         HandleBuildProject(msg);
+                        break;
+                    // Save All: to the other StateScope tabs; their answers back (the app matches them by id)
+                    case "saveAllRelay":
+                    case "saveAllDoneRelay":
+                        {
+                            var id = msg.TryGetValue("id", out var i) ? i as string : null;
+                            var name = msg.TryGetValue("name", out var n) ? n as string : null;
+                            var count = msg.TryGetValue("count", out var c) && c is int k ? k : 0;
+                            SaveAllRelay.Relay(this, type == "saveAllRelay" ? "saveAll" : "saveAllDone", id, name, count);
+                        }
                         break;
                 }
             }
@@ -1203,6 +1222,7 @@ namespace KvalStateScope.Xae
         internal void Shutdown()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+            SaveAllRelay.Unregister(this);
             StopLive(false);
             ResetWatchers();
             _caretTimer?.Stop();

@@ -12,7 +12,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 (async () => {
   const finder = spawn(process.execPath, [path.join(h.FAKES, 'fake-discovery.cjs'), '48998'], { stdio: 'ignore' });
   const env = (() => {
-    const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN, KSS_DISCOVERY_PORT: '48998', KSS_DISCOVERY_BROADCAST: '0' };
+    const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN, KSS_DISCOVERY_PORT: '48998', KSS_DISCOVERY_BROADCAST: '0', KSS_LOCAL_TWINCAT_NETID: 'none' };
     delete e.ELECTRON_RUN_AS_NODE;
     return e;
   })();

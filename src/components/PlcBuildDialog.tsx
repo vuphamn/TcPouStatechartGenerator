@@ -26,6 +26,11 @@ const WRITE_TEXT: Record<PlcWrite, { title: string; label: string; warning: stri
     label: 'Online change',
     warning: 'The PLC takes the new code while it runs (an online change). Variables keep their values. The machine may behave differently at once: make sure it is safe.',
   },
+  download: {
+    title: 'Write to the PLC: download',
+    label: 'Download',
+    warning: 'The online change was not possible, so the PLC application stops, takes the new code and starts again (TwinCAT keeps running). Variables not persistent start from their initial values, and the outputs of this PLC stop while it restarts. Only when the machine may stop.',
+  },
   activate: {
     title: 'Write to the PLC: activate the configuration',
     label: 'Activate configuration',
@@ -47,7 +52,10 @@ export const PlcBuildDialog: React.FC<{
   onClose: () => void;
   /** XAE edition: its own Login / Activate Configuration write it (no write here) */
   canWrite?: boolean;
-}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true }) => {
+  /** Close the XAE kept open for the next build now */
+  onCloseXae?: () => Promise<boolean>;
+}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae }) => {
+  const [xaeClosed, setXaeClosed] = useState(false);
   const [confirming, setConfirming] = useState<PlcWrite | null>(null);
   const [safe, setSafe] = useState(false);
   const [showWarnings, setShowWarnings] = useState(false);
@@ -62,6 +70,7 @@ export const PlcBuildDialog: React.FC<{
   useEffect(() => {
     setConfirming(null);
     setSafe(false);
+    setXaeClosed(false);
   }, [state.result]);
   const r = state.result;
   const items = r?.items ?? [];
@@ -69,6 +78,8 @@ export const PlcBuildDialog: React.FC<{
   const warnings = items.filter((i) => i.level === 'warning');
   const built = !!r && !r.fatal && errors.length === 0 && r.ok;
   const written = !!r?.written && r.ok;
+  // (an online change refused, no build error: the download offered, with its own confirmation)
+  const onlineRefused = !running && state.write === 'online' && !!r?.fatal && !r.written && errors.length === 0;
   const row = (i: PlcBuildItem, k: number) => {
     const open = canOpen(i);
     return (
@@ -145,6 +156,21 @@ export const PlcBuildDialog: React.FC<{
           </>
         )}
       </div>
+      {!running && r?.xaeOpenUntil && !xaeClosed && (
+        <div id="plc-build-xae" className="px-3 pb-2 -mt-1 flex items-center gap-2 text-slate-400">
+          <span>
+            XAE stays open with the project until {new Date(r.xaeOpenUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, so the next build is quicker.
+          </span>
+          {onCloseXae && (
+            <button type="button" id="plc-build-xae-close" onClick={() => void onCloseXae().then(() => setXaeClosed(true))} className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">
+              Close XAE now
+            </button>
+          )}
+        </div>
+      )}
+      {!running && xaeClosed && (
+        <div id="plc-build-xae-closed" className="px-3 pb-2 -mt-1 text-slate-500">XAE closed: the next build opens the project again.</div>
+      )}
       {items.length > 0 && (
         <div className="overflow-y-auto px-2 pb-2 space-y-1 min-h-0">
           {errors.length > 0 && (
@@ -217,6 +243,16 @@ export const PlcBuildDialog: React.FC<{
           <button type="button" id="plc-build-again" disabled={running} onClick={onRebuild} className="px-3 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40">
             Build again
           </button>
+          {onlineRefused && canWrite && (
+            <>
+              <button type="button" id="plc-build-activate" onClick={() => setConfirming('activate')} className="px-3 py-1 rounded border border-rose-800 text-rose-200 hover:bg-slate-800" title="Activate the configuration: TwinCAT restarts (the PLC stops)">
+                Activate configuration…
+              </button>
+              <button type="button" id="plc-build-download" onClick={() => setConfirming('download')} className="flex items-center gap-1 px-3 py-1 rounded bg-rose-800 hover:bg-rose-700 text-white" title="Download: the PLC application stops, takes the new code and starts again">
+                <Upload className="w-3.5 h-3.5" /> Download…
+              </button>
+            </>
+          )}
           {built && !written && canWrite && (
             <>
               <button type="button" id="plc-build-activate" onClick={() => setConfirming('activate')} className="px-3 py-1 rounded border border-rose-800 text-rose-200 hover:bg-slate-800" title="Activate the configuration: TwinCAT restarts (the PLC stops)">

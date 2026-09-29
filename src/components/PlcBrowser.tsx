@@ -1,11 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
-import type { AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
+import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
 
 export interface PickedPlc {
   name: string;
   netId: string;
   ip: string;
+  /** Found on the network: its TwinCAT and OS (kept when it is remembered) */
+  twincat?: string;
+  os?: string;
   port?: string;
   localNetId?: string;
 }
@@ -16,12 +19,14 @@ interface PlcBrowserProps {
   remembered: RememberedPlc[];
   currentNetId: string;
   onPick: (plc: PickedPlc) => void;
+  /** A search's result (the remembered PLCs are kept up to date with it) */
+  onFound?: (r: PlcScanResult) => void;
   onForget: (netId: string) => void;
   onClose: () => void;
   /** Searches the network (absent: only the remembered PLCs are listed) */
   scan?: (addresses: string[]) => Promise<PlcScanResult>;
   /** Add Route to a found PLC with its user name and password (absent: not offered) */
-  addRoute?: (plc: FoundPlc, user: string, password: string) => Promise<AddRouteResult>;
+  addRoute?: (plc: FoundPlc, user: string, password: string, both?: AddRouteBoth) => Promise<AddRouteResult>;
   /** Renames a remembered PLC */
   onRename?: (netId: string, name: string) => void;
 }
@@ -30,7 +35,7 @@ const rowClass = (current: boolean) =>
   `w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 ${current ? 'bg-sky-950/60' : ''}`;
 
 /** The Live tab's Browse: the remembered PLCs and the TwinCAT devices found on the network; a click picks one */
-export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onForget, onClose, scan, addRoute, onRename }) => {
+export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename }) => {
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<PlcScanResult | null>(null);
   const [addresses, setAddresses] = useState('');
@@ -40,6 +45,10 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   const [routePassword, setRoutePassword] = useState('');
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeResult, setRouteResult] = useState<AddRouteResult | null>(null);
+  // TwinCAT on this computer too: the route both ways (XAE's pair), with this computer's Windows user
+  const [routeBoth, setRouteBoth] = useState(true);
+  const [localUser, setLocalUser] = useState('');
+  const [localPassword, setLocalPassword] = useState('');
   const [renaming, setRenaming] = useState<{ netId: string; name: string } | null>(null);
 
   const run = useCallback(() => {
@@ -48,8 +57,9 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
     void scan(addresses.split(/[\s,;]+/).filter(Boolean)).then((r) => {
       setResult(r);
       setScanning(false);
+      onFound?.(r);
     });
-  }, [scan, addresses]);
+  }, [scan, addresses, onFound]);
   // Searches once when opened
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => run(), []);
@@ -110,6 +120,11 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                     <span className="truncate text-slate-200">{p.name}</span>
                     <span className="ml-auto shrink-0 font-mono text-slate-400">{p.netId}{p.port ? `:${p.port}` : ''}</span>
                     {p.ip && <span className="shrink-0 font-mono text-slate-500">{p.ip}</span>}
+                    {(p.twincat || p.seen) && (
+                      <span className="live-plc-remembered-seen shrink-0 text-[10px] text-slate-500" title={[p.twincat && `TwinCAT ${p.twincat}`, p.os, p.seen && `last found ${new Date(p.seen).toLocaleString()}`].filter(Boolean).join(', ')}>
+                        {p.twincat ? `TC ${p.twincat}` : ''}{p.twincat && p.seen ? ' · ' : ''}{p.seen ? `seen ${new Date(p.seen).toLocaleDateString() === new Date().toLocaleDateString() ? new Date(p.seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date(p.seen).toLocaleDateString()}` : ''}
+                      </span>
+                    )}
                   </button>
                 )}
                 {onRename && renaming?.netId !== p.netId && (
@@ -142,7 +157,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
               return (
                 <div key={d.netId} className="live-plc-found-row">
                   <div className="flex items-center">
-                    <button className={`live-plc-found ${rowClass(d.netId === currentNetId)}`} data-netid={d.netId} onClick={() => onPick({ name: d.name || d.ip || d.netId, netId: d.netId, ip: d.ip })} title={[d.os, d.twincat && `TwinCAT ${d.twincat}`].filter(Boolean).join(', ') || 'Use this PLC'}>
+                    <button className={`live-plc-found ${rowClass(d.netId === currentNetId)}`} data-netid={d.netId} onClick={() => onPick({ name: d.name || d.ip || d.netId, netId: d.netId, ip: d.ip, twincat: d.twincat, os: d.os })} title={[d.os, d.twincat && `TwinCAT ${d.twincat}`].filter(Boolean).join(', ') || 'Use this PLC'}>
                       <span className="truncate text-slate-200">{d.name || '(no name)'}</span>
                       <span className="ml-auto shrink-0 font-mono text-slate-400">{d.netId}</span>
                       {d.ip && <span className="shrink-0 font-mono text-slate-500">{d.ip}</span>}
@@ -171,16 +186,35 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       <div className="flex items-center gap-1">
                         <input id="live-route-user" value={routeUser} onChange={(e) => setRouteUser(e.target.value)} placeholder="user" autoComplete="off" className="w-28 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-200" />
                         <input id="live-route-password" type="password" value={routePassword} onChange={(e) => setRoutePassword(e.target.value)} placeholder="password" autoComplete="off" className="w-28 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-200" />
+                      </div>
+                      {result?.localTwinCat && mode !== 'xae' && (
+                        <div className="space-y-1">
+                          <label className="flex items-center gap-1.5 text-slate-300" title={`TwinCAT runs on this PC too (${result.localTwinCat}): the route pair XAE's Add Route makes, so XAE and StateScope both reach the PLC`}>
+                            <input id="live-route-both" type="checkbox" checked={routeBoth} onChange={(e) => setRouteBoth(e.target.checked)} />
+                            Both ways, for this PC's TwinCAT too (XAE)
+                          </label>
+                          {routeBoth && (
+                            <div className="flex items-center gap-1">
+                              <span className="text-slate-400">This PC:</span>
+                              <input id="live-route-local-user" value={localUser} onChange={(e) => setLocalUser(e.target.value)} placeholder="its Windows user" autoComplete="off" className="w-28 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-200" />
+                              <input id="live-route-local-password" type="password" value={localPassword} onChange={(e) => setLocalPassword(e.target.value)} placeholder="password" autoComplete="off" className="w-28 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] text-slate-200" />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1">
                         <button
                           id="live-route-add"
-                          disabled={routeBusy || !routeUser.trim()}
+                          disabled={routeBusy || !routeUser.trim() || (!!result?.localTwinCat && mode !== 'xae' && routeBoth && !localUser.trim())}
                           onClick={() => {
                             setRouteBusy(true);
-                            void addRoute!(d, routeUser.trim(), routePassword).then((r) => {
+                            const both = result?.localTwinCat && mode !== 'xae' && routeBoth ? { both: true, localUser: localUser.trim(), localPassword } : undefined;
+                            void addRoute!(d, routeUser.trim(), routePassword, both).then((r) => {
                               setRouteBusy(false);
                               setRouteResult(r);
                               if (r.ok) {
                                 setRoutePassword('');
+                                setLocalPassword('');
                                 if (mode === 'xae') run();
                               }
                             });

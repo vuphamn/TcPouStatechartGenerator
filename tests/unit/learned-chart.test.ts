@@ -2,7 +2,7 @@
 // A diagram learned live: the PLC's states (enum names and values) and the transitions seen, as a POU and enum the
 // generator draws; drawn again as more are seen; the POU marked as learned (no source)
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from '../../src/utils/learnedChart.ts';
-import { addSeen, candidatesOf, forgetSeen } from '../../src/utils/seenTransitions.ts';
+import { addSeen, candidatesOf, forgetSeen, setSeenCondition } from '../../src/utils/seenTransitions.ts';
 import { generateStatechartModel } from '../../src/generator.ts';
 
 let fails = 0;
@@ -49,6 +49,20 @@ const forgot = forgetSeen(seen2, 'DOOR_DASHER_ENABLING', 'DOOR_DASHER_ERROR');
 expect(Object.keys(forgot).join() === 'DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING' && forgetSeen(forgot, 'X', 'Y') === forgot, 'forgotten: gone (an unknown one: nothing changes)');
 const src = learnedAsSource(withC.pou);
 expect(!isLearnedPou(src) && !/seenLive/.test(src) && /IF FALSE \(\* its condition: write it \*\) THEN/.test(src) && /changed just before: bEnable/.test(src), 'as source: not learned, its conditions FALSE to write, the candidates kept in its comments');
+
+// 6. A candidate chosen as its condition: drawn and declared; kept when seen again; not known again
+let chosen = setSeenCondition(seen2, 'DOOR_DASHER_DISABLED', 'DOOR_DASHER_ENABLING', 'bEnable');
+chosen = addSeen(chosen, [{ from: 'DOOR_DASHER_DISABLED', to: 'DOOR_DASHER_ENABLING', t: 4 }]);
+const drawn = learnedSources({ ...input, seen: chosen })!;
+expect(chosen['DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING'].condition === 'bEnable' && chosen['DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING'].n === 3, 'chosen, and kept when seen again');
+expect(/IF bEnable THEN\s+machineState := E_DoorDasher_States\.DOOR_DASHER_ENABLING/.test(drawn.pou) && /\tbEnable : BOOL;/.test(drawn.pou) && /IF seenLive THEN\s+machineState := E_DoorDasher_States\.DOOR_DASHER_ERROR/.test(drawn.pou), 'drawn as IF bEnable THEN (declared); the other still unknown');
+const edgeOf = generateStatechartModel(drawn.dut, drawn.pou, {}).edges.find((e) => e.from === 'DOOR_DASHER_DISABLED' && e.to === 'DOOR_DASHER_ENABLING');
+expect(!!edgeOf, 'the diagram still has the transition');
+const kept = learnedAsSource(drawn.pou);
+expect(/IF bEnable THEN/.test(kept) && /IF FALSE \(\* its condition: write it \*\) THEN/.test(kept), 'as source: the chosen condition kept, the unknown one to write');
+const member = learnedSources({ ...input, seen: setSeenCondition(seen2, 'DOOR_DASHER_DISABLED', 'DOOR_DASHER_ENABLING', 'fbStart.Q') })!;
+expect(/IF fbStart\.Q THEN/.test(member.pou) && !/fbStart\.Q : BOOL/.test(member.pou), 'a member (fbStart.Q): drawn, not declared');
+expect(!/IF 1 \+ 1/.test(learnedSources({ ...input, seen: setSeenCondition(seen2, 'DOOR_DASHER_DISABLED', 'DOOR_DASHER_ENABLING', '1 + 1; x := 2') })!.pou) && setSeenCondition(chosen, 'DOOR_DASHER_DISABLED', 'DOOR_DASHER_ENABLING', null)['DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING'].condition === undefined, 'not a name: not drawn (no code put in); cleared: not known again');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

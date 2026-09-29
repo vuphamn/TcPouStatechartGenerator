@@ -39,7 +39,9 @@ export type LintRuleId =
   | 'trigger-constant'
   | 'empty-if'
   | 'output-never-set'
-  | 'no-description';
+  | 'no-description'
+  | 'build-error'
+  | 'build-warning';
 
 export type LintFix =
   | { kind: 'add-enum-member'; name: string }
@@ -200,6 +202,16 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'info',
     title: 'Output never set',
     description: 'A VAR_OUTPUT that no code of the POU writes: whoever reads it always gets its initial value. (Not removed for you: other POUs may read it.)',
+  },
+  'build-error': {
+    severity: 'error',
+    title: 'Build error',
+    description: 'The last Build for the PLC: TwinCAT XAE did not compile this. Fix it, then Build again (the Live tab).',
+  },
+  'build-warning': {
+    severity: 'warning',
+    title: 'Build warning',
+    description: 'The last Build for the PLC: TwinCAT XAE compiled it with this warning.',
   },
   'no-description': {
     severity: 'info',

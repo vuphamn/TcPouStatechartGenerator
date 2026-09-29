@@ -61,7 +61,11 @@ function usedNames(code: string[], lines: string[]): Map<string, { name: string;
  * The findings. project: the PLC project's types, when the host read them (the undeclared check needs them: GVLs
  * and base classes are elsewhere); states: the state names.
  */
-export function lintVariables(pouXml: string, project: ProjectSymbols | null, fromProject: boolean, states: string[]): LintFinding[] {
+/**
+ * readElsewhere: does another file of the project read this member (instance.name)? Known only with the project's
+ * files: then an output that nothing sets or reads can be removed
+ */
+export function lintVariables(pouXml: string, project: ProjectSymbols | null, fromProject: boolean, states: string[], readElsewhere?: (name: string) => boolean): LintFinding[] {
   if (!pouXml?.trim()) return [];
   const findings: LintFinding[] = [];
   const add = (f: Omit<LintFinding, 'severity'> & { severity?: LintFinding['severity'] }) => findings.push({ severity: LINT_RULES[f.rule].severity, ...f });
@@ -257,7 +261,11 @@ export function lintVariables(pouXml: string, project: ProjectSymbols | null, fr
     if (!/^VAR_OUTPUT$/i.test(v.scope)) continue;
     const n = v.name;
     const written = new RegExp(`\\b${n}\\b(\\s*\\[[^\\]]*\\])?(\\s*\\.\\s*\\w+)*\\s*(:=|S=|R=|REF=)|=>\\s*${n}\\b|\\(\\s*[^()]*\\b${n}\\b[^()]*\\)|\\bADR\\s*\\(\\s*${n}\\b`, 'i').test(bodyCode);
-    if (!written) add({ key: `output-never-set:${n.toLowerCase()}`, rule: 'output-never-set', message: `${n} : ${v.type} is an output that no code of the POU sets: it keeps its initial value`, mark: v.line ? { line: v.line, declaration: true, name: n } : undefined });
+    if (!written) {
+      // (nothing in the project reads it either, nor this POU: it can go)
+      const unread = !!readElsewhere && !readElsewhere(n) && uses(allCode, n) === 0;
+      add({ key: `output-never-set:${n.toLowerCase()}`, rule: 'output-never-set', message: `${n} : ${v.type} is an output that no code of the POU sets: it keeps its initial value${unread ? '; nothing in the project reads it' : ''}`, mark: v.line ? { line: v.line, declaration: true, name: n } : undefined, ...(unread ? { fix: { kind: 'remove-variable' as const, name: n } } : {}) });
+    }
   }
 
   // Not declared (the project known, the base class too)

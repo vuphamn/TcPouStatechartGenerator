@@ -32,6 +32,8 @@ interface DesktopLiveApi {
   browse?: (req: { requestId: number; path: string; stateVar: string }) => Promise<void>;
   /** The PLC project's sources as the PLC keeps them (read-only, its boot folder) */
   sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
+  checkConnection?: (req: import('./connectionCheck.ts').CheckRequest) => Promise<import('./connectionCheck.ts').CheckResult>;
+  closeBuild?: (req: { requestId: number }) => Promise<{ closed: boolean }>;
   build?: (req: { requestId: number; edits: import('./plcBuild.ts').PlcEdit[]; plcProject?: string; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }

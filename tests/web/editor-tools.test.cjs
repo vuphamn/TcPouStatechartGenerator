@@ -248,6 +248,36 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   const onTimers = await p.evaluate(() => /fbDelay\(PT := T#1S/.test(document.getElementById('method-implementation-editor')?.value ?? ''));
   expect(onTimers, 'its error opened: the Method Editor on timers()');
 
+  // 11. The word at the caret: its uses marked (machineState, each of its uses in doState()); a keyword: none
+  await goToSymbol('doState');
+  const occurrences = async (word) => {
+    await p.evaluate((id, w) => { const ta = document.getElementById(id); const at = ta.value.indexOf(w); ta.focus(); ta.setSelectionRange(at + 2, at + 2); ta.dispatchEvent(new Event('select')); }, ID, word);
+    await h.sleep(300);
+    return p.evaluate((id) => {
+      const ta = document.getElementById(id);
+      const marks = [...(ta?.parentElement?.querySelectorAll('mark.word-occurrence') ?? [])].map((m) => m.textContent);
+      return { marks, uses: ((ta?.value ?? '').match(/\bmachineState\b/gi) ?? []).length };
+    }, ID);
+  };
+  const onState = await occurrences('machineState := E_S.S_RUN');
+  const onKeyword = await occurrences('THEN');
+  expect(onState.uses >= 3 && onState.marks.length === onState.uses && onState.marks.every((t) => /^machineState$/i.test(t)) && onKeyword.marks.length === 0, `the caret in machineState: ${onState.marks.length} of its ${onState.uses} uses marked; in THEN: ${onKeyword.marks.length}`);
+
+
+  // 12. Save All between XAE tabs, relayed by the extension: another tab's request answered once (it may come on
+  // the browser channel too), and this tab's Save All sent to the extension as well
+  const before12 = sent.length;
+  await toApp({ type: 'saveAll', id: 'relay-1', relayed: true });
+  await toApp({ type: 'saveAll', id: 'relay-1', relayed: true });
+  await h.sleep(500);
+  const answers = sent.slice(before12).filter((m) => m.type === 'saveAllDoneRelay');
+  expect(answers.length === 1 && answers[0].id === 'relay-1' && answers[0].name === 'SM_X.TcPOU' && typeof answers[0].count === 'number', `a relayed Save All: answered once (${JSON.stringify(answers)})`);
+  const before12b = sent.length;
+  await p.click('#header-save-all-btn').catch(() => {});
+  await h.sleep(500);
+  const asked = sent.slice(before12b).find((m) => m.type === 'saveAllRelay');
+  expect(!!asked && /^\d+-\w+$/.test(asked.id), `this tab's Save All: to the other tabs through the extension too (${JSON.stringify(asked)})`);
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

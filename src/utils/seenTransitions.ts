@@ -13,6 +13,8 @@ export interface SeenTransition {
   /** The watched values that changed just before it (within a second), and how many times: candidates for its
    * condition (a learned diagram's) */
   before?: Record<string, number>;
+  /** Its condition, as chosen from the candidates (a learned diagram draws it instead of an unknown one) */
+  condition?: string;
 }
 
 export type SeenMap = Record<string, SeenTransition>;
@@ -48,7 +50,7 @@ export function addSeen(seen: SeenMap, transitions: { from: string; to: string; 
     const was = next[k];
     const before = { ...(was?.before ?? {}) };
     for (const id of tr.before ?? []) before[id] = (before[id] ?? 0) + 1;
-    next[k] = { n: (was?.n ?? 0) + 1, last: Math.max(was?.last ?? 0, tr.t), ...(Object.keys(before).length ? { before } : {}) };
+    next[k] = { ...(was?.condition ? { condition: was.condition } : {}), n: (was?.n ?? 0) + 1, last: Math.max(was?.last ?? 0, tr.t), ...(Object.keys(before).length ? { before } : {}) };
   }
   return next;
 }
@@ -60,6 +62,17 @@ export function forgetSeen(seen: SeenMap, from: string, to: string): SeenMap {
   const next = { ...seen };
   delete next[k];
   return next;
+}
+
+/** seen with a transition's condition chosen (null: not known again) */
+export function setSeenCondition(seen: SeenMap, from: string, to: string, condition: string | null): SeenMap {
+  const k = seenKey(from, to);
+  const was = seen[k];
+  if (!was) return seen;
+  const next = { ...was };
+  if (condition) next.condition = condition;
+  else delete next.condition;
+  return { ...seen, [k]: next };
 }
 
 /** A transition's candidates for its condition: the values that changed just before it, the most often first */

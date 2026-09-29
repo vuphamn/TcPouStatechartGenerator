@@ -13,6 +13,8 @@ export const isLearnedPou = (pou: string) => pou.includes(LEARNED_MARK);
 
 const cdata = (s: string) => `<![CDATA[${s}]]>`;
 const ident = (s: string) => /^[A-Za-z_]\w*$/.test(s);
+/** A chosen condition drawn as it is: a variable, or a member of one (fbStart.Q, aDoors[1].bOpen) */
+const conditionOf = (s: SeenTransition) => (s.condition && /^[A-Za-z_][\w.[\]]*$/.test(s.condition) ? s.condition : null);
 
 export interface LearnedInput {
   /** The FB type (SM_DoorDasher) */
@@ -62,12 +64,14 @@ export function learnedSources({ typeName, stateVar, enumType, names, seen }: Le
   const branches = members.map((m) => {
     const arms = (out.get(m.n) ?? []).sort((a, b) => b.n - a.n);
     const body = arms.length
-      ? arms.map((a) => `\t\t// seen ${a.n}×${candidateText(a.s)}\n\t\tIF seenLive THEN\n\t\t\t${stateVar} := ${enumType}.${a.to};\n\t\tEND_IF`).join('\n')
+      ? arms.map((a) => `\t\t// seen ${a.n}×${candidateText(a.s)}\n\t\tIF ${conditionOf(a.s) ?? 'seenLive'} THEN\n\t\t\t${stateVar} := ${enumType}.${a.to};\n\t\tEND_IF`).join('\n')
       : '\t\t; // no transition out of it seen yet';
     return `\t${enumType}.${m.n}:\n${body}`;
   });
   const doState = [`CASE ${stateVar} OF`, ...branches, 'END_CASE'].join('\n');
-  const decl = [LEARNED_MARK, `FUNCTION_BLOCK ${typeName}`, 'VAR', `\t${stateVar} : ${enumType};`, '\tseenLive : BOOL; // (a transition seen on the PLC: its condition is not known)', 'END_VAR'].join('\n');
+  // (a chosen condition that is a plain name: declared, as the PLC's watched value; its type taken as BOOL)
+  const chosen = [...new Set([...out.values()].flat().map((a) => conditionOf(a.s)).filter((c): c is string => !!c && ident(c) && c !== stateVar && c !== 'seenLive'))].sort();
+  const decl = [LEARNED_MARK, `FUNCTION_BLOCK ${typeName}`, 'VAR', `\t${stateVar} : ${enumType};`, '\tseenLive : BOOL; // (a transition seen on the PLC: its condition is not known)', ...chosen.map((c) => `\t${c} : BOOL; // (on the PLC: it changed just before its transitions)`), 'END_VAR'].join('\n');
   const pou = [
     '<?xml version="1.0" encoding="utf-8"?>',
     '<TcPlcObject Version="1.1.0.1">',

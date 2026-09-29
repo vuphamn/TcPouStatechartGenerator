@@ -19,7 +19,7 @@ const { Client } = require('ads-client');
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
 const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
-const { buildFromPlc, checkEdits } = require(`${sharedDir}/tcBuild.cjs`);
+const { buildFromPlc, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -709,6 +709,10 @@ function start() {
       // off with symbol browsing (config.allowBrowse: false) or on its own (config.allowSources: false)
       // Rebuild the PLC's project with the page's edits (TwinCAT XAE on the gateway's computer), write it back: only
       // when the gateway allows it (allowBuild; writing: allowWrite too), logged in the audit
+      if (m.type === 'plcBuildClose') {
+        if (config.allowBuild !== true) return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: false });
+        return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: closeXae() });
+      }
       if (m.type === 'plcBuild') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBuild !== true) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Building the PLC\'s project is turned off on this gateway (allowBuild)', items: [] });

@@ -368,6 +368,21 @@ The desktop app's **Live** tab follows a state machine in a PLC on another compu
 
 **One-time setup:**
 1. **Add an ADS route on the PLC** for the laptop. The Live tab shows exactly what to add after the first Go live: the laptop's IP and the AMS NetId it uses (the laptop's IP + `.1.1`, or `.1.2` when TwinCAT on the laptop already uses that NetId). Add it with the PLC's TwinCAT router settings (*Router > Edit Routes*) or from an XAE connected to the PLC.
+   - **TwinCAT on the laptop too:** StateScope first tries the laptop's own TwinCAT router. If that router already has a route to the PLC (made with XAE's *Add Route*), StateScope uses it and needs no route of its own. Otherwise the router refuses at once and StateScope connects directly, with the NetId above.
+   - **The laptop's address** is the one on the PLC's network. A PLC behind a gateway gets a real adapter's address, never a virtual switch's (Hyper-V, WSL, VirtualBox, VMware).
+   - **The PLC's NetId need not match its IP.** A PC whose TwinCAT was set up on another network keeps its old NetId, for example 192.168.1.15.1.1 at 10.0.0.75. Enter both, or pick it in **Browse**, which reads them from the PLC. With the wrong NetId the PLC never answers, even with a route.
+   - **Nothing answers at all** (no ping, TCP 48898 and UDP 48899 closed): the PLC computer's firewall. Windows' *Public* network profile blocks them. Set that network to *Private*, and allow TCP 48898 and UDP 48899 in.
+   - **Check** (desktop app, web edition through Link), next to Browse, runs these checks and says which step fails. It only reads; nothing is changed.
+     - **This computer:** its address towards the PLC, and its Windows network profile. A Public profile gets a warning: it doesn't stop StateScope, but it does stop XAE's routes.
+     - **The PLC:** ping, TwinCAT's search (its name, TwinCAT version and AMS NetId), and the ADS port.
+     - **The NetId:** the one entered, against the PLC's own. When they differ, **Use** puts in the PLC's.
+     - **The routes:** this computer's TwinCAT router (does it reach the PLC?), then an ADS read with this computer's NetId (is there a route on the PLC?).
+   - **Add route both ways:** when TwinCAT runs on this computer too, Add Route offers *Both ways, for this PC's TwinCAT too*, on by default. It adds the route pair XAE's Add Route makes:
+     - on the PLC, for this computer's TwinCAT router;
+     - in that router, for the PLC. This needs this computer's Windows user; the password goes only to this computer's own TwinCAT.
+
+     XAE and StateScope then both reach the PLC through the router.
+   - **Remembered PLCs** keep what Browse found: their TwinCAT version, OS and when they were last seen. Each search updates them, including an address changed by DHCP. Names you gave them and addresses you typed on purpose (a host name, `host:port`) are kept.
 2. **Network:** the laptop must reach the PLC on TCP 48898.
 
 **Going live:**
@@ -462,9 +477,18 @@ The **PLC Symbols** tab, right after Machine Overview (or **Symbols** in the Liv
 The POU is a copy of the PLC's source: **Save As** keeps it on this computer. A PLC on this computer: its address `127.0.0.1` (or `localhost`) with no local NetId goes through this computer's TwinCAT router.
 
 **Build and write back** (desktop app, web edition through Link or a gateway): after editing a POU opened from the PLC, **Build…** in the Live tab rebuilds the PLC's whole project with your changes.
-- **Where it builds:** on the computer that talks to the PLC (the desktop app's, Link's or the gateway's), which needs **TwinCAT XAE**. StateScope reads the project as the PLC keeps it (`CurrentConfig.tszip`, the TwinCAT project, plus each PLC and safety project's archive) into a temporary folder and puts in the POU and its enum as edited here. XAE then builds it through its Automation Interface, in a TcXaeShell of its own that stays hidden. Your open XAE windows are not touched. Opening a large project takes a few minutes.
+- **Where it builds:** on the computer that talks to the PLC (the desktop app's, Link's or the gateway's), which needs **TwinCAT XAE**. StateScope reads the project as the PLC keeps it (`CurrentConfig.tszip`, the TwinCAT project, plus each PLC and safety project's archive) into a temporary folder and puts in the POU and its enum as edited here. XAE then builds it through its Automation Interface, in a TcXaeShell of its own that stays hidden. Your open XAE windows are not touched, and the settings the hidden XAE saves when it quits are put back as they were. Opening a large project takes a few minutes the first time. XAE then stays open with it for 10 minutes (`KSS_BUILD_KEEP_MINUTES`), so the next build only takes in the changed files and builds again: about 20–60 s instead of 2–3 minutes. When the PLC's project changes, for example after a write, it is opened afresh. The hidden XAE is closed when the app, Link or the gateway stops.
 - **Errors and warnings** are listed with their POU, method and line. A message in this POU opens the Method Editor (or POU Editor) at its line. Fix it, then **Build again**.
-- **Write to PLC…** (only without errors): an **online change**, so the PLC takes the new code while it runs. **Activate configuration…** writes the whole configuration instead: TwinCAT restarts on the target, so the PLC stops and starts again. Each asks you to confirm, with what it does and the target, and a box to tick that the machine is safe for it. After an online change, the PLC's **boot project** is updated too, as XAE's *Activate Boot Project* does, so a restart keeps the new code. That also rewrites the PLC's source archive (when the project saves its sources, as a downloaded project does), so From PLC then shows the new code. If XAE doesn't log in, nothing is written, and the dialog says so. The POU counts as saved.
+- **Write to PLC…** (only without errors) tries an **online change**, so the PLC takes the new code while it runs. Each write asks you to confirm, with what it does and the target, and a box to tick that the machine is safe for it.
+- **When an online change is refused:** TwinCAT computes an online change from the compile information of the running code, kept in the engineering project that last downloaded it. A project rebuilt from the PLC's copy doesn't have it. So from a POU opened from the PLC, TwinCAT refuses the online change and nothing is written. The dialog then offers two writes, each with its own warning and confirmation:
+  - **Download…**: the PLC application stops, takes the new code and starts again, while TwinCAT keeps running.
+  - **Activate configuration…**: TwinCAT restarts on the target.
+- **After a write:**
+  - The PLC's **boot project** is updated, as XAE's *Activate Boot Project* does, so a restart keeps the new code. That also rewrites the PLC's source archive (when the project saves its sources, as a downloaded project does), so From PLC then shows the new code.
+  - The PLC is read again to confirm it runs the code written.
+  - The POU counts as saved.
+- **The TwinCAT license** is checked by the target whenever an application starts. On a trial license that has run out, a download or restart leaves the PLC in Stop, or TwinCAT in Config mode, until the license is renewed (XAE: *SYSTEM > License > 7 Days Trial License*).
+- **XAE stays open** after a build, until the time the dialog shows, so the next build is quicker. **Close XAE now** in the dialog closes it at once.
 - **Several POUs at once:** after you edit a POU from the PLC, opening another from the PLC (From PLC, Here) keeps your edits for the session instead of discarding them. Opening that POU again brings them back. **Build** sends every one edited, with their enums, and a successful write clears the list.
 - **Before writing,** the confirmation lists what changes on the PLC: each file sent against the PLC's own version, part by part, with its changed lines.
 - **After writing,** StateScope reads the PLC's sources again and compares them with its running code. If they don't match, the dialog says the write did not take (as far as it can tell).

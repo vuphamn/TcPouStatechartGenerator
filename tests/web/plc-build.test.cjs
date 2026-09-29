@@ -14,7 +14,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48966', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-build.txt'), 'w'), 'ignore'] });
   const linkOut = path.join(h.OUT, 'link-build-run.txt');
   const out = fs.openSync(linkOut, 'w');
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48967'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-build-appdata'), KSS_BUILD_DRYRUN: '1' }, stdio: ['ignore', out, out] });
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48967'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-build-appdata'), KSS_BUILD_DRYRUN: '1', KSS_BUILD_REFUSE_ONLINE: '1' }, stdio: ['ignore', out, out] });
   const code = (await h.waitForText(linkOut, /Pairing code:\s+(\S+)/))?.[1];
   if (!code) throw new Error('Link did not start (no pairing code)');
   const browser = await h.launchBrowser({ defaultViewport: { width: 1600, height: 1000 } });
@@ -70,7 +70,11 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const files = await a.$eval('#plc-build-dialog', (e) => e.innerText).catch(() => '');
   let s = await waitDone();
   expect(s.ok === 'true' && /Built: no errors, 1 warning/.test(s.text) && /SM_Conveyor\.TcPOU/.test(files) && !!(await a.$('#plc-build-online')), `as it is: "${s.text}"`);
-  await a.click('#dock-tab-live').catch(() => {});
+  // XAE kept open for the next build: until when; closed on request
+  const keep = await a.$eval('#plc-build-xae', (e) => e.textContent).catch(() => '');
+  await a.click('#plc-build-xae-close').catch(() => {});
+  await a.waitForSelector('#plc-build-xae-closed', { timeout: 5000 }).catch(() => {});
+  expect(/XAE stays open with the project until \d{1,2}:\d{2}/.test(keep) && !!(await a.$('#plc-build-xae-closed')), `XAE kept open: "${keep.slice(0, 70)}", then closed`);  await a.click('#dock-tab-live').catch(() => {});
   await a.evaluate(() => document.querySelector('#plc-build-dialog button[title^="Close"]')?.click());
   await sleep(300);
 
@@ -104,6 +108,15 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const errs = await a.$$eval('#plc-build-errors .plc-build-item', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim())).catch(() => []);
   expect(s.ok === 'false' && /1 error/.test(s.text) && errs.length === 1 && /Identifier 'noSuchVar' not defined/.test(errs[0]) && /SM_Conveyor\.doState\(\) line \d+/.test(errs[0]) && !(await a.$('#plc-build-online')), `with the error: "${s.text}" ${errs.join(' | ')}`);
   await a.screenshot({ path: h.out('plc-build-error.png') });
+  // The Problems tab lists the build's messages too; Open code there opens the error at its line
+  await a.evaluate(() => document.getElementById('dock-tab-problems')?.click());
+  await sleep(500);
+  const problems = await a.$$eval('#problems-panel [data-problem-key^="build:"]', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim())).catch(() => []);
+  expect(problems.some((t) => /Build error/.test(t) && /noSuchVar/.test(t) && /SM_Conveyor\.doState\(\) line \d+/.test(t)) && problems.some((t) => /Build warning/.test(t)), `the Problems tab: ${problems.length} from the build (${problems[0] ?? '-'})`);
+  await a.evaluate(() => document.querySelector('#problems-panel [data-problem-key^="build:error"] .problems-go-to-code')?.click());
+  await sleep(1000);
+  const fromProblems = await a.evaluate(() => { const t = document.getElementById('method-implementation-editor'); return t ? t.value : ''; });
+  expect(/noSuchVar/.test(fromProblems), 'Open code from the Problems tab: the Method Editor on doState()');
   // Closed: the last build kept, the Live tab reopens it
   await a.evaluate(() => document.querySelector('#plc-build-dialog button[title^="Close"]')?.click());
   await a.click('#dock-tab-live').catch(() => {});
@@ -155,10 +168,22 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.click('#plc-build-safe');
   await a.click('#plc-build-confirm-btn');
   s = await waitDone();
-  expect(s.ok === 'true' && /Written to the PLC \(online change\)/.test(s.text), `written: "${s.text}"`);
+  // (from the PLC's copy of the project TwinCAT refuses an online change, as the stand-in does: nothing written,
+  // the download offered, with its own warning and confirmation)
+  const refusedOnline = s.text;
+  const offered = !!(await a.$('#plc-build-download')) && !!(await a.$('#plc-build-activate')) && !(await a.$('#plc-build-online'));
+  expect(s.ok === 'false' && /No online change was made, nothing was written/.test(refusedOnline) && offered, `online change refused: "${refusedOnline.slice(0, 70)}", Download offered: ${offered}`);
+  await a.click('#plc-build-download');
+  const dlWarning = await a.$eval('#plc-build-confirm', (e) => e.innerText).catch(() => '');
+  const dlOff = await a.$eval('#plc-build-confirm-btn', (e) => e.disabled).catch(() => null);
+  expect(dlOff === true && /application stops, takes the new code and starts again/.test(dlWarning), `Download's confirmation: "${dlWarning.split('\n')[1]?.slice(0, 80)}", off until checked`);
+  await a.click('#plc-build-safe');
+  await a.click('#plc-build-confirm-btn');
+  s = await waitDone();
+  expect(s.ok === 'true' && /Written to the PLC \(download\)/.test(s.text), `written: "${s.text}"`);
   const log = fs.readFileSync(linkOut, 'utf8');
   // (the POU and its enum, one of the PLC's)
-  expect(/build: .* rebuilds the PLC's project \(2 edited file\(s\)\), then online/.test(log) && /SM_Conveyor\.TcPOU, E_Conveyor_States\.TcDUT/.test(files), 'Link: the build and the write logged (the POU and its enum)');
+  expect(/build: .* rebuilds the PLC's project \(2 edited file\(s\)\), then online/.test(log) && /then download/.test(log) && /SM_Conveyor\.TcPOU, E_Conveyor_States\.TcDUT/.test(files), 'Link: the build and the write logged (the POU and its enum)');
   const dirty = await a.evaluate(() => /Save \(\d/.test(document.getElementById('save-sources-btn')?.textContent ?? ''));
   expect(!dirty, 'on the PLC now: nothing to save');
   await a.screenshot({ path: h.out('plc-build-written.png') });

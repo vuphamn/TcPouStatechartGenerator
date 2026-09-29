@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
 import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
-import { ipFieldFor, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
+import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
+import type { CheckResult } from '../utils/connectionCheck.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { formatLimit, parseDuration } from '../utils/stateLimits.ts';
@@ -120,12 +121,18 @@ interface LivePanelProps {
   onNotifyChange?: (on: boolean) => void;
   /** The PLCs remembered in this app (any POU), newest first; Remember adds the target (name: from Browse) */
   rememberedPlcs?: RememberedPlc[];
-  onRememberPlc?: (remember: boolean, name?: string) => void;
+  onRememberPlc?: (remember: boolean, name?: string, found?: { twincat?: string; os?: string }) => void;
+  /** A Browse search's result: the remembered PLCs kept up to date */
+  onPlcsFound?: (r: PlcScanResult) => void;
   onForgetPlc?: (netId: string) => void;
   /** Browse: searches the network for PLCs (desktop, XAE) */
   onScanPlcs?: (addresses: string[]) => Promise<PlcScanResult>;
+  /** Link on this computer is another version than this page: what to do */
+  linkNotice?: string | null;
+  /** Check: why the PLC does not answer, step by step (desktop, Link) */
+  onCheckConnection?: () => Promise<CheckResult>;
   /** Browse: Add Route to a found PLC (desktop, Link, XAE) */
-  onAddRoute?: (plc: FoundPlc, user: string, password: string) => Promise<AddRouteResult>;
+  onAddRoute?: (plc: FoundPlc, user: string, password: string, both?: AddRouteBoth) => Promise<AddRouteResult>;
   onRenamePlc?: (netId: string, name: string) => void;
   /** The PLC switcher while live: stop, then go live on that remembered PLC */
   onSwitchPlc?: (plc: RememberedPlc) => void;
@@ -275,9 +282,12 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onNotifyChange,
   rememberedPlcs = [],
   onRememberPlc,
+  onPlcsFound,
   onForgetPlc,
   onScanPlcs,
   onAddRoute,
+  onCheckConnection,
+  linkNotice,
   onRenamePlc,
   onSwitchPlc,
   canSaveRecording = false,
@@ -305,7 +315,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const [timesOpen, setTimesOpen] = useState(true);
   // Browse: the list of PLCs, and the name of the one picked from it (for Remember)
   const [browsing, setBrowsing] = useState(false);
-  const [pickedName, setPickedName] = useState<{ netId: string; name: string } | null>(null);
+  // The connection check: running (no result yet) or its steps
+  const [checking, setChecking] = useState<{ result: CheckResult | null } | null>(null);
+  const [pickedName, setPickedName] = useState<{ netId: string; name: string; twincat?: string; os?: string } | null>(null);
   const netIdNow = settings.netId.trim();
   const remembered = rememberedPlcs.some((p) => p.netId === netIdNow);
   const canBrowse = !viaGateway && (!!onScanPlcs || rememberedPlcs.length > 0);
@@ -317,7 +329,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       port: p.port ?? settings.port,
       localNetId: p.localNetId ?? settings.localNetId,
     });
-    setPickedName({ netId: p.netId, name: p.name });
+    setPickedName({ netId: p.netId, name: p.name, twincat: p.twincat, os: p.os });
     setBrowsing(false);
   };
   // Time in the current state ticks while connected
@@ -642,6 +654,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   Open Link
                 </a>
               </div>
+              {linkNotice && (
+                <div id="live-link-outdated" className="col-span-2 text-[11px] leading-snug text-amber-300">
+                  {linkNotice}
+                </div>
+              )}
             </>
           )}
           <label htmlFor="live-instance-input" className="text-slate-400">
@@ -780,6 +797,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 This PC
               </button>
             )}
+            {onCheckConnection && !running && (
+              <button
+                id="live-plc-check"
+                type="button"
+                onClick={() => {
+                  const run = { result: null as CheckResult | null };
+                  setChecking(run);
+                  void onCheckConnection()
+                    .catch((err: unknown) => ({ steps: [], verdict: err instanceof Error ? err.message : String(err) }) as CheckResult)
+                    .then((result) => setChecking((c) => (c === run ? { result } : c)));
+                }}
+                className="shrink-0 flex items-center gap-1 px-1.5 rounded border border-slate-700 text-[11px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
+                title="Why doesn't the PLC answer? Checks this computer's network, the PLC's ports, its AMS NetId and the routes, step by step (nothing is changed)"
+              >
+                <Stethoscope className="w-3 h-3" /> Check
+              </button>
+            )}
             {canBrowse && (
               <button
                 id="live-plc-browse"
@@ -798,7 +832,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   type="checkbox"
                   checked={remembered}
                   disabled={!/^[0-9]+([.][0-9]+){5}$/.test(netIdNow)}
-                  onChange={(e) => onRememberPlc(e.target.checked, pickedName?.netId === netIdNow ? pickedName.name : undefined)}
+                  onChange={(e) => onRememberPlc(e.target.checked, pickedName?.netId === netIdNow ? pickedName.name : undefined, pickedName?.netId === netIdNow ? { twincat: pickedName.twincat, os: pickedName.os } : undefined)}
                 />
                 Remember
               </label>
@@ -833,12 +867,56 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           )}
         </div>
         )}
+        {checking && !running && (
+          <div id="live-check-panel" className="rounded border border-slate-700 bg-slate-900/80 p-2 text-[11px] space-y-1" data-state={checking.result ? 'done' : 'running'}>
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-200">Connection check</span>
+              <button type="button" onClick={() => setChecking(null)} className="text-slate-500 hover:text-slate-200" title="Close">
+                ×
+              </button>
+            </div>
+            {!checking.result ? (
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <Loader2 className="w-3 h-3 animate-spin" /> Checking this computer, the network, TwinCAT and the routes…
+              </div>
+            ) : (
+              <>
+                {checking.result.steps.map((s) => (
+                  <div key={s.id} className="live-check-step flex items-start gap-1.5" data-step={s.id} data-ok={String(s.ok)}>
+                    <span className={`mt-px shrink-0 font-mono ${s.ok === true ? 'text-emerald-400' : s.ok === false ? 'text-rose-400' : 'text-amber-300'}`}>{s.ok === true ? '✓' : s.ok === false ? '✗' : '!'}</span>
+                    <span className="min-w-0">
+                      <span className={s.ok === false ? 'text-rose-200' : 'text-slate-200'}>{s.title}</span>
+                      {s.detail && s.ok !== true && <span className="block text-slate-400">{s.detail}</span>}
+                    </span>
+                  </div>
+                ))}
+                <div id="live-check-verdict" className={`pt-1 border-t border-slate-800 ${checking.result.steps.some((s) => s.ok === false) ? 'text-rose-200' : 'text-emerald-200'}`}>
+                  {checking.result.verdict}
+                </div>
+                {checking.result.suggest && checking.result.suggest.netId !== settings.netId && (
+                  <button
+                    type="button"
+                    id="live-check-fix"
+                    onClick={() => {
+                      onSettingsChange({ ...settings, netId: checking.result!.suggest!.netId });
+                      setChecking(null);
+                    }}
+                    className="px-2 py-0.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-50"
+                  >
+                    Use {checking.result.suggest.netId}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {browsing && !running && canBrowse && (
           <PlcBrowser
             mode={mode}
             remembered={rememberedPlcs}
             currentNetId={netIdNow}
             onPick={pickPlc}
+            onFound={onPlcsFound}
             onForget={(netId) => onForgetPlc?.(netId)}
             onClose={() => setBrowsing(false)}
             scan={onScanPlcs}

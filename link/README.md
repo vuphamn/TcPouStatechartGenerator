@@ -25,6 +25,7 @@ This builds `release/link/Kval StateScope Link.exe`. It's a single file that nee
    - the **paired pages**: each web app page connected to Link, since when, and the variable it follows;
    - **Make a new code**: pages paired with the old code have to enter the new one;
    - **Start when I sign in**: a shortcut in your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) starts Link minimized, without its page, each time you sign in to Windows. It's per user and needs no administrator. *Don't start when I sign in* removes the shortcut.
+   - **Its version:** when it was built and its code stamp, a short hash of the code it runs. If the installed Link (in Program Files) is not the one running, the page says so, because the Start menu starts that copy. The web app compares Link's stamp with its own and says, in the Live tab, when Link is another version.
 
    The code is also in Link's window. Started again while it runs, Link opens the page of the running one and exits. In the web app, **Open Link** (Live tab, next to *Remember*) opens the page too.
 2. **Set up the Live tab** in the web app:

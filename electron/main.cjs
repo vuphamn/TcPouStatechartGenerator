@@ -317,6 +317,7 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
 // Rebuild the PLC's project with the edits (TwinCAT XAE on this computer), and write it back when asked: progress on
 // 'tc:live' (plcBuildProgress), the result returned
+ipcMain.handle('tc:live-build-close', (event, req) => new Promise((resolve) => liveFor(event.sender).closeBuild(resolve, req)));
 ipcMain.handle('tc:live-build', (event, req) => {
   const contents = event.sender;
   return new Promise((resolve) => liveFor(contents).build((m) => {
@@ -327,31 +328,33 @@ ipcMain.handle('tc:live-build', (event, req) => {
 // The Live tab's Browse: the TwinCAT devices on the network (UDP 48899 search; read-only). KSS_DISCOVERY_PORT and
 // KSS_DISCOVERY_BROADCAST=0 are for the tests (a simulated device on another port, no broadcast)
 ipcMain.handle('tc:discover-plcs', (_event, options) => {
-  const { discover, localNetworks } = require('../shared/tcDiscovery.cjs');
+  const { discover } = require('../shared/tcDiscovery.cjs');
+  const { localIpTowards, defaultLocalNetId } = require('../shared/liveSession.cjs');
   const addresses = (Array.isArray(options?.addresses) ? options.addresses : [])
     .map((a) => String(a).trim())
     .filter((a) => /^[A-Za-z0-9.-]{1,253}$/.test(a))
     .slice(0, 64);
-  const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : localNetworks()[0]?.netId;
-  return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
+  // (the adapter towards the PLC asked for, else a real network one: not a virtual switch)
+  const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : defaultLocalNetId(localIpTowards(addresses[0] ?? ''));
+  return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 }).then((r) => ({ ...r, localTwinCat: require('../shared/liveSession.cjs').localTwinCatNetId() }));
+});
+// The Live tab's Check: why a PLC does not answer (all read-only)
+ipcMain.handle('tc:check-connection', (_event, req) => {
+  const { checkConnection } = require('../shared/tcCheck.cjs');
+  const netId = String(req?.netId ?? '').trim();
+  const ip = String(req?.ip ?? '').trim();
+  if ((netId && !/^\d{1,3}(\.\d{1,3}){5}$/.test(netId)) || (ip && !/^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(ip))) return { steps: [], verdict: 'Check the PLC address and AMS NetIds' };
+  return checkConnection({ netId, ip, adsPort: Number.isInteger(req?.port) && req.port > 0 ? req.port : 851, localNetId: /^\d{1,3}(\.\d{1,3}){5}$/.test(req?.localNetId ?? '') ? req.localNetId : '', discoveryPort: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
 });
 ipcMain.handle('tc:app-info', () => ({ version: app.getVersion() }));
 // The PLC switcher: which remembered PLCs answer (a TCP connect to their ADS router port, nothing sent)
 ipcMain.handle('tc:probe-plcs', (_event, targets) => require('../shared/tcDiscovery.cjs').probeAll(Array.isArray(targets) ? targets.slice(0, 50) : []));
 // Add Route: a route on the PLC to this computer (its IP towards the PLC and the AMS NetId the live view uses), with
 // the PLC's user name and password as entered (never stored)
-ipcMain.handle('tc:add-route', (_event, options) => {
-  const { addRoute } = require('../shared/tcDiscovery.cjs');
-  const { localIpTowards, defaultLocalNetId } = require('../shared/liveSession.cjs');
-  const plcIp = String(options?.plcIp ?? '').trim().split(':')[0];
-  if (!/^[A-Za-z0-9.-]{1,253}$/.test(plcIp)) return { ok: false, message: 'The PLC\'s IP address is needed' };
-  const hostAddress = localIpTowards(plcIp);
-  const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : defaultLocalNetId(hostAddress);
-  return addRoute({
-    plcIp, localNetId, hostAddress, routeName: String(options?.routeName || require('os').hostname()).slice(0, 60),
-    user: String(options?.user ?? ''), password: String(options?.password ?? ''), port: Number(process.env.KSS_DISCOVERY_PORT) || 48899,
-  });
-});
+ipcMain.handle('tc:add-route', (_event, options) => require('../shared/tcRoutes.cjs').addRoutes({
+  plcIp: options?.plcIp, plcNetId: options?.plcNetId, plcName: options?.plcName, user: options?.user, password: options?.password, localNetId: options?.localNetId,
+  routeName: options?.routeName, both: options?.both === true, localUser: options?.localUser, localPassword: options?.localPassword,
+}));
 ipcMain.handle('tc:live-stop', (event) => {
   const contents = event.sender;
   return liveFor(contents).stop(true, (m) => {

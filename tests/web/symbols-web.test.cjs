@@ -102,6 +102,8 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   const offer = await a.$eval('#text-prompt-dialog', (e) => e.innerText).catch(() => '');
   expect(/Learn it live/.test(offer) && /Choose SM_DoorDasher\.TcPOU/.test(offer) && /3 states from the PLC/.test(offer) && /SM_DoorDasher is in the library Tc3_Doors/.test(offer), `Open SM_DoorDasher (no source): choose its .TcPOU or learn it live (${offer.replace(/\s+/g, ' ').slice(0, 90)})`);
   const before = (await pages()).length;
+  // (seen before, with what changed just before it: bEnable twice; a candidate for its condition)
+  await a.evaluate(() => localStorage.setItem('kss.seen.SM_DoorDasher', JSON.stringify({ 'DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING': { n: 2, last: 1, before: { bEnable: 2 } } })));
   await a.click('#text-prompt-learn-btn');
   let c;
   for (let i = 0; i < 40 && !c; i++) { await sleep(300); const all = await pages(); if (all.length > before) c = all[all.length - 1]; }
@@ -130,6 +132,27 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   expect(!dirty, 'drawn again as they come: not an edit (nothing to save)');
   const notIn = c ? await c.evaluate(() => { document.getElementById('dock-tab-live')?.click(); return new Promise((r) => setTimeout(() => r(/d+ not in diagram/.test(document.body.innerText)), 600)); }) : true;
   expect(!notIn, 'the Live tab: its transitions are in the diagram (none "not in diagram")');
+  // What changed just before a transition, as its condition: chosen from the state's menu, drawn on the diagram
+  if (c) {
+    await c.bringToFront();
+    const chose = await c.evaluate(async () => {
+      const node = document.querySelector('#mermaid-canvas-area g.node[data-state-id="DOOR_DASHER_DISABLED"]');
+      const r = node.getBoundingClientRect();
+      node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.max(50, Math.min(innerWidth - 50, r.x + r.width / 2)), clientY: Math.max(50, Math.min(innerHeight - 50, r.y + r.height / 2)), button: 2 }));
+      await new Promise((res) => setTimeout(res, 400));
+      const btn = document.getElementById('context-menu-use-candidate-DOOR_DASHER_ENABLING-0-btn');
+      const label = btn?.textContent.trim() ?? '';
+      btn?.click();
+      return label;
+    });
+    let drawn = false;
+    for (let i = 0; i < 20 && !drawn; i++) {
+      await sleep(300);
+      drawn = await c.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area .edgeLabel')].some((l) => /\bbEnable\b/.test(l.textContent)));
+    }
+    const kept = await c.evaluate(() => JSON.parse(localStorage.getItem('kss.seen.SM_DoorDasher') || '{}')['DOOR_DASHER_DISABLED->DOOR_DASHER_ENABLING']?.condition);
+    expect(/Its condition \(→ DOOR_DASHER_ENABLING\): bEnable/.test(chose) && drawn && kept === 'bEnable', `its condition chosen: "${chose}", on the diagram: ${drawn}, kept: ${kept}`);
+  }
   // A transition seen by mistake: Forget (its menu); the learned diagram as a source to finish: Save as source
   if (c) {
     await c.bringToFront();

@@ -20,6 +20,8 @@ export interface FoundPlc {
 export interface PlcScanResult {
   devices: FoundPlc[];
   errors: string[];
+  /** TwinCAT runs on this computer too: its router's AMS NetId (Add Route can then add the route both ways) */
+  localTwinCat?: string | null;
 }
 
 export interface RememberedPlc {
@@ -30,11 +32,17 @@ export interface RememberedPlc {
   localNetId: string;
   /** Last used (ms): the list is newest first, and the newest fills in a POU without a target */
   used: number;
+  /** What Browse last found about it: its TwinCAT and OS, and when (ms) */
+  twincat?: string;
+  os?: string;
+  seen?: number;
 }
+
+export { refreshRemembered } from './rememberedPlcs.ts';
 
 interface DesktopDiscoveryApi {
   discoverPlcs?: (options: { addresses: string[]; localNetId?: string }) => Promise<PlcScanResult>;
-  addRoute?: (options: { plcIp: string; user: string; password: string; localNetId?: string }) => Promise<AddRouteResult>;
+  addRoute?: (options: { plcIp: string; plcNetId?: string; plcName?: string; user: string; password: string; localNetId?: string; both?: boolean; localUser?: string; localPassword?: string }) => Promise<AddRouteResult>;
 }
 
 const desktopApi = (): DesktopDiscoveryApi | null =>
@@ -82,11 +90,24 @@ export interface AddRouteRequest {
   password: string;
   /** This computer's AMS NetId towards the PLC (desktop, Link; empty: the live view's default) */
   localNetId?: string;
+  both?: boolean;
+  localUser?: string;
+  localPassword?: string;
 }
 
 export interface AddRouteResult {
   ok: boolean;
   message: string;
+  /** Added (or tried) both ways: on the PLC for this computer's TwinCAT, and in its router for the PLC */
+  both?: boolean;
+  localTwinCat?: string;
+}
+
+/** Add Route both ways (TwinCAT on this computer too): this computer's Windows user for its own router */
+export interface AddRouteBoth {
+  both: boolean;
+  localUser?: string;
+  localPassword?: string;
 }
 
 /**
@@ -112,7 +133,7 @@ export function addRouteOnPlc(req: AddRouteRequest): Promise<AddRouteResult> {
   }
   const api = desktopApi();
   if (!api?.addRoute) return Promise.resolve({ ok: false, message: 'Adding routes is not available in this edition' });
-  return api.addRoute({ plcIp: req.plcIp, user: req.user, password: req.password, localNetId: req.localNetId || undefined }).catch((err: Error) => ({ ok: false, message: err.message }));
+  return api.addRoute({ plcIp: req.plcIp, plcNetId: req.netId, plcName: req.name, user: req.user, password: req.password, localNetId: req.localNetId || undefined, both: req.both, localUser: req.localUser, localPassword: req.localPassword }).catch((err: Error) => ({ ok: false, message: err.message }));
 }
 
 /** Which PLCs answer (desktop, XAE; Link: the App asks Link): [{ key, ip }] -> { key: boolean } */

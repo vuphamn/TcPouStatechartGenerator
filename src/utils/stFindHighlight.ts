@@ -228,3 +228,39 @@ export function collectSearchVariables(
   const order = { state: 0, method: 1, pou: 2, code: 3 };
   return [...byName.values()].sort((a, b) => order[a.source] - order[b.source] || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
+
+/** Is it a Structured Text keyword (IF, THEN, TRUE...)? Not an identifier to show the uses of */
+export const isStKeyword = (word: string) => ST_KEYWORDS.has(word.toUpperCase()) || /^(VAR\w*|END_VAR|METHOD|END_METHOD|FUNCTION_BLOCK|PROGRAM|PROPERTY|ACTION|AT)$/i.test(word);
+
+/** The identifier the caret is in or next to (none inside a selection) */
+export function wordAtCaret(text: string, start: number, end: number): string {
+  if (start !== end) return '';
+  let a = start;
+  let b = start;
+  while (a > 0 && /\w/.test(text[a - 1])) a--;
+  while (b < text.length && /\w/.test(text[b])) b++;
+  const word = text.slice(a, b);
+  return /^[A-Za-z_]\w*$/.test(word) && !isStKeyword(word) ? word : '';
+}
+
+/**
+ * The uses of the word under the caret marked (whole word, any case: ST is case-insensitive), when it occurs more than
+ * once; in the text of Prism's HTML only, as Find's marks are
+ */
+export function highlightWordOccurrences(prismHtml: string, word: string): { html: string; count: number } {
+  const rx = word ? buildSearchRegex(word, false, true) : null;
+  if (!prismHtml || !rx) return { html: prismHtml, count: 0 };
+  let count = 0;
+  prismHtml.replace(/(<[^>]+>)|([^<]+)/g, (_full, tag, textNode) => {
+    if (!tag) count += (textNode.match(new RegExp(rx.source, rx.flags.includes('g') ? rx.flags : `${rx.flags}g`)) ?? []).length;
+    return '';
+  });
+  if (count < 2) return { html: prismHtml, count };
+  const style = 'background-color:rgba(56,189,248,0.2);outline:1px solid rgba(56,189,248,0.5);outline-offset:0px;border-radius:2px;display:inline;';
+  const html = prismHtml.replace(/(<[^>]+>)|([^<]+)/g, (_full, tag, textNode) => {
+    if (tag) return tag;
+    rx.lastIndex = 0;
+    return textNode.replace(rx, (m: string) => `<mark class="word-occurrence" style="${style}">${m}</mark>`);
+  });
+  return { html, count };
+}

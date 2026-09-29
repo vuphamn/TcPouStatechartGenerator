@@ -2,9 +2,10 @@
 // it (its boot folder: CurrentConfig.tszip, the TwinCAT project; CurrentConfig/<name>.tpzip / .tfzip, its PLC and
 // safety projects, downloaded with their sources) unpacked into a work folder, the POUs edited here put in, then
 // built by TwinCAT XAE through its Automation Interface (an invisible TcXaeShell of its own: the user's XAE windows
-// are not touched). The build's errors and warnings come back with the POU and line. Writing back: PLC login with
-// online change (the PLC keeps running), or, after its own confirmation, a download (the PLC stops and starts
-// again); the sources downloaded with it, so the PLC's archive matches the running code.
+// are not touched; kept open for the next build: KSS_BUILD_KEEP_MINUTES, default 10). The build's errors and warnings
+// come back with the POU and line. Writing back: PLC login with online change (the PLC keeps running) and the boot project updated (a restart
+// keeps the new code; the PLC's archive gets its sources), or, after its own confirmation, the configuration activated
+// (TwinCAT restarts). The PLC is read again after a write: its code the one written?
 // Used by the desktop app and Link (shared/liveSession.cjs) and the gateway.
 // KSS_BUILD_DRYRUN=1: XAE is not started; the work folder is made and the script returned (the tests).
 const fs = require('fs');
@@ -171,181 +172,428 @@ public static class KssErrorList {
 "@
 `;
 
+// The PLC project's online interface (ITcPlcOnline, TwinCAT's automation assembly in the GAC): its Login takes flags,
+// so an online change is asked for (FORCEONLINECHANGE) with no question shown (SILENT); XML LoginCmd cannot
+const PLC_ONLINE = `
+$tcsm = [Reflection.Assembly]::LoadWithPartialName('TCatSysManagerLib')
+if (-not $tcsm) { throw 'The automation assembly of TwinCAT XAE (TCatSysManagerLib) is not installed' }
+Add-Type -ReferencedAssemblies $tcsm.Location -TypeDefinition @"
+public static class KssPlcOnline {
+  static TCatSysManagerLib.ITcPlcOnline Of(object item) { return (TCatSysManagerLib.ITcPlcOnline)item; }
+  public static bool Login(object item, int flags) { var o = Of(item); o.Login((TCatSysManagerLib.PLC_LOGIN_FLAGS)flags); return o.IsLoggedIn; }
+  public static void Start(object item) { Of(item).Start(); }
+  public static void Logoff(object item) { Of(item).Logoff(); }
+}
+"@
+`;
+
 const MODES = {
   // Login: the PLC takes the new code as an online change (it keeps running); XAE's own answers (SuppressUI)
   online: 'Online change',
+  // Login with download: the PLC application stops, takes the new code and starts again (TwinCAT keeps running);
+  // when an online change is not possible
+  download: 'Download',
   // The whole configuration: TwinCAT restarts (the PLC stops, then starts again); its sources stored with it
   activate: 'Activate configuration',
 };
 
-/**
- * The PowerShell script for XAE: open the work folder's project in a new solution, build it, report the Error List
- * (JSON lines on stdout: {"kind":"item",...}, then {"kind":"done",...}). write: 'online' (PLC login: online change)
- * or 'activate' (activate the configuration: TwinCAT restarts); only when the build has no errors
- */
-function buildScript({ dir, tsproj, plcProject, write = null, netId = '', progId = 'TcXaeShell.DTE.17.0' }) {
-  if (write && !MODES[write]) throw new Error(`Unknown write: ${write}`);
-  const plcItem = `TIPC^${plcProject}^${plcProject} Project`;
-  const writeStep = write === 'online'
-    ? `  $plc = $sm.LookupTreeItem(${ps(plcItem)})
-  $plc.ConsumeXml('<TreeItem><IECProjectDef><OnlineSettings><Commands><LoginCmd>true</LoginCmd><StartCmd>true</StartCmd></Commands></OnlineSettings></IECProjectDef></TreeItem>')
-  # (logged in a moment later: waited for)
-  for ($w = 0; $w -lt 60; $w++) {
-    $online = ([xml]$plc.ProduceXml($false)).TreeItem.IECProjectDef.OnlineSettings
-    if ($online.LoggedIn -eq 'true') { break }
-    Start-Sleep -Milliseconds 500
-  }
-  Say @{ kind = 'online'; loggedIn = [string]$online.LoggedIn; app = [string]$online.PlcAppState; op = [string]$online.PlcOpState; info = [string]$online.OnlineAppInfo.InnerXml }
-  if ($online.LoggedIn -ne 'true') { Say @{ kind = 'done'; ok = $false; errors = 0; fatal = 'XAE did not log in to the PLC (the online change was not made): nothing was written' }; exit 0 }
-  # The boot project too (as XAE's Activate Boot Project): a restart keeps the new code, and the PLC's archive gets
-  # its sources
-  $boot = ''
-  try { Say @{ kind = 'step'; text = 'Updating the boot project' }; $sm.LookupTreeItem(${ps(`TIPC^${plcProject}`)}).GenerateBootProject($true) } catch { $boot = $_.Exception.Message }
-  try { $plc.ConsumeXml('<TreeItem><IECProjectDef><OnlineSettings><Commands><LogoutCmd>true</LogoutCmd></Commands></OnlineSettings></IECProjectDef></TreeItem>') } catch { }
-  if ($boot) { Say @{ kind = 'item'; level = 'warning'; text = ('The boot project was not updated (a restart brings the old code back): ' + $boot); file = ''; line = 0; column = 0; project = '' } }
-  Say @{ kind = 'done'; ok = ($online.LoggedIn -eq 'true' -or $online.PlcAppState -eq 'Run'); errors = 0; written = 'online'; plcState = [string]$online.PlcAppState; loggedIn = [string]$online.LoggedIn; bootProject = ($boot -eq '') }`
-    : write === 'activate'
-      ? `  $sm.ActivateConfiguration()
-  $sm.StartRestartTwinCAT()
-  Say @{ kind = 'done'; ok = $true; errors = 0; written = 'activate' }`
-      : '';
-  return `$ErrorActionPreference = 'Stop'
-${MESSAGE_FILTER}
-function Say($o) { [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress -Depth 4)) }
-$dte = $null
-# (the TcXaeShell this script starts: the ones already running, the user's, are left alone)
-$before = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-# XAE's user settings: this instance saves them when it quits (window layout, options). Kept as they are: copied
-# now, put back after (the ones it changed; the ones it made removed). Not the private registry hive (open in the
-# user's own XAE)
+// XAE's user settings: the hidden instance saves them when it quits (window layout, options). Copied when it starts,
+// put back when it has quit: only the files that existed and changed; a file made meanwhile is left (it may be the
+// user's own XAE's). Not the private registry hive (open in the user's own XAE)
+const SETTINGS = `
 $kssSettings = @(
   (Join-Path $env:LOCALAPPDATA 'Beckhoff\\TcXaeShell'),
   (Join-Path $env:APPDATA 'Beckhoff\\TcXaeShell'),
   (Join-Path $env:LOCALAPPDATA 'Beckhoff\\TwinCAT\\PlcEngineering\\Options')
 ) | Where-Object { Test-Path $_ }
-$kssKeep = Join-Path ${ps(dir)} 'xae-settings'
+$kssSettingsRx = '^\\.(vssettings|opt|prf|dat|winprf|xml|json|txt)$'
+$kssKeep = Join-Path $env:TEMP ('kss-xae-settings-' + $PID)
 $kssFiles = @{}
-foreach ($root in $kssSettings) {
-  foreach ($f in Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(vssettings|opt|prf|dat|winprf|xml|json|txt)$' -and $_.Length -lt 5MB }) {
-    $copy = Join-Path $kssKeep ([guid]::NewGuid().ToString('N'))
-    try { New-Item -ItemType Directory -Force -Path $kssKeep | Out-Null; Copy-Item -LiteralPath $f.FullName -Destination $copy -ErrorAction Stop; $kssFiles[$f.FullName] = @{ copy = $copy; time = $f.LastWriteTimeUtc } } catch { }
-  }
-}
-function Restore-KssSettings {
+function Save-KssSettings {
   foreach ($root in $kssSettings) {
-    foreach ($f in Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match '^\\.(vssettings|opt|prf|dat|winprf|xml|json|txt)$' }) {
-      $was = $kssFiles[$f.FullName]
-      try {
-        if (-not $was) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop }
-        elseif ($f.LastWriteTimeUtc -ne $was.time) { Copy-Item -LiteralPath $was.copy -Destination $f.FullName -Force -ErrorAction Stop; (Get-Item -LiteralPath $f.FullName).LastWriteTimeUtc = $was.time }
-      } catch { }
+    foreach ($f in Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -match $kssSettingsRx -and $_.Length -lt 5MB }) {
+      $copy = Join-Path $kssKeep ([guid]::NewGuid().ToString('N'))
+      try { New-Item -ItemType Directory -Force -Path $kssKeep | Out-Null; Copy-Item -LiteralPath $f.FullName -Destination $copy -ErrorAction Stop; $kssFiles[$f.FullName] = @{ copy = $copy; time = $f.LastWriteTimeUtc } } catch { }
     }
   }
 }
-$mine = @()
-try {
+function Restore-KssSettings {
+  foreach ($path in @($kssFiles.Keys)) {
+    $was = $kssFiles[$path]
+    try {
+      $now = Get-Item -LiteralPath $path -ErrorAction Stop
+      if ($now.LastWriteTimeUtc -ne $was.time) { Copy-Item -LiteralPath $was.copy -Destination $path -Force -ErrorAction Stop; (Get-Item -LiteralPath $path).LastWriteTimeUtc = $was.time }
+    } catch { }
+  }
+  Remove-Item -LiteralPath $kssKeep -Recurse -Force -ErrorAction SilentlyContinue
+}
+`;
+
+/**
+ * The PowerShell for XAE: Start-Kss (a hidden TcXaeShell of its own), Build-Kss $r (open the work folder's project,
+ * or keep the one open; build; report the Error List as JSON lines on stdout: {"kind":"item",...}, then
+ * {"kind":"done",...}; write when asked: 'online', PLC login, the online change and the boot project; 'activate', the
+ * configuration activated: TwinCAT restarts; only when the build has no errors), Stop-Kss. $r: { dir, tsproj,
+ * plcProject, netId, write, changed: files rewritten while the project is open }
+ */
+function xaeFunctions(progId) {
+  return `$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.Encoding]::UTF8
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+${MESSAGE_FILTER}
+function Say($o) { [Console]::Out.WriteLine(($o | ConvertTo-Json -Compress -Depth 4)); [Console]::Out.Flush() }
+${SETTINGS}
+$script:dte = $null
+$script:sln = $null
+$script:sm = $null
+$script:openTsproj = $null
+# (the TcXaeShell this script starts: the ones already running, the user's, are left alone)
+$script:before = @()
+$script:mine = @()
+function Start-Kss {
   # XAE's folder (its interop assembly): from its registered automation server
   $clsid = (Get-ItemProperty ('Registry::HKEY_CLASSES_ROOT\\' + ${ps(progId)} + '\\CLSID')).'(default)'
   $server = (Get-ItemProperty ('Registry::HKEY_CLASSES_ROOT\\CLSID\\' + $clsid + '\\LocalServer32')).'(default)'
   $exe = if ($server.StartsWith('"')) { $server.Substring(1, $server.IndexOf('"', 1) - 1) } else { $server.Substring(0, $server.ToLower().IndexOf('.exe') + 4) }
   $interop = Join-Path (Split-Path $exe) 'PublicAssemblies\\Microsoft.VisualStudio.Interop.dll'
 ${ERROR_LIST}
+${PLC_ONLINE}
   Say @{ kind = 'step'; text = 'Starting TwinCAT XAE (in the background)' }
-  $dte = New-Object -ComObject ${ps(progId)}
-  $mine = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object { $_.Id })
+  $script:before = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  Save-KssSettings
+  $script:dte = New-Object -ComObject ${ps(progId)}
+  $script:mine = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | Where-Object { $script:before -notcontains $_.Id } | ForEach-Object { $_.Id })
+  Say @{ kind = 'xae'; pids = $script:mine }
   # (the Error List fills only with the UI on; the window stays hidden)
-  $dte.SuppressUI = $false
-  $dte.MainWindow.Visible = $false
-  $dte.UserControl = $false
-  $sln = $dte.Solution
-  $sln.Create(${ps(dir)}, 'StateScopeBuild')
-  $proj = $sln.AddFromFile(${ps(tsproj)})
-  $sm = $proj.Object
-  ${netId ? `$sm.SetTargetNetId(${ps(netId)})` : ''}
-  try { $dte.ExecuteCommand('View.ErrorList') } catch { }
-  Say @{ kind = 'step'; text = 'Building' }
-  $sln.SolutionBuild.Build($true)
-  $failed = $sln.SolutionBuild.LastBuildInfo
-  $list = [KssErrorList]::List($dte)
-  $counts = @{}
-  foreach ($level in 'error', 'warning') {
-    $list.ShowErrors = ($level -eq 'error'); $list.ShowWarnings = ($level -eq 'warning'); $list.ShowMessages = $false
-    $found = [KssErrorList]::Settled($dte, $(if ($level -eq 'error' -and $failed -gt 0) { 30 } else { 8 }))
-    $counts[$level] = $found.Count
-    $n = 0
-    foreach ($e in $found) {
-      if ($n++ -ge 500) { break }
-      Say @{ kind = 'item'; level = $level; file = $e[0]; line = [int]$e[1]; column = [int]$e[2]; project = $e[3]; text = $e[4] }
-    }
-  }
-  $list.ShowErrors = $true; $list.ShowWarnings = $true
-  if ($counts['error'] -gt 0 -or $failed -gt 0) { Say @{ kind = 'done'; ok = $false; errors = $counts['error']; warnings = $counts['warning']; failedProjects = $failed }; exit 0 }
-${write ? `  Say @{ kind = 'step'; text = ${ps(MODES[write])} }
-  # (from here XAE answers its own questions: no hidden dialog waits)
-  $dte.SuppressUI = $true
-${writeStep}` : `  Say @{ kind = 'done'; ok = $true; errors = 0; warnings = $counts['warning'] }`}
-} catch {
-  Say @{ kind = 'done'; ok = $false; fatal = $_.Exception.Message }
-} finally {
-  if ($dte) { try { $dte.Quit() } catch { } }
+  $script:dte.SuppressUI = $false
+  $script:dte.MainWindow.Visible = $false
+  $script:dte.UserControl = $false
+  $script:sln = $script:dte.Solution
+}
+function Stop-Kss {
+  if ($script:dte) { try { $script:dte.Quit() } catch { } }
   [KssMessageFilter]::Revoke()
   # (still running: stopped, only this script's own)
   Start-Sleep -Seconds 2
-  foreach ($id in $mine) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  foreach ($id in $script:mine) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
   # (only when the user's own XAE did not quit meanwhile: then the changes may be its own)
   $still = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-  if (@($before | Where-Object { $still -notcontains $_ }).Count -eq 0) { Restore-KssSettings }
+  if (@($script:before | Where-Object { $still -notcontains $_ }).Count -eq 0) { Restore-KssSettings }
+}
+function Open-Kss($r) {
+  if ($script:openTsproj -eq $r.tsproj) { return $false }
+  if ($script:openTsproj) { try { $script:sln.Close($false) } catch { } }
+  $script:openTsproj = $null
+  Say @{ kind = 'step'; text = 'Opening the project in XAE' }
+  $script:sln.Create($r.dir, 'StateScopeBuild')
+  $proj = $script:sln.AddFromFile($r.tsproj)
+  $script:sm = $proj.Object
+  $script:openTsproj = $r.tsproj
+  try { $script:dte.ExecuteCommand('View.ErrorList') } catch { }
+  return $true
+}
+function Build-Kss($r) {
+  $opened = Open-Kss $r
+  if ($r.netId) { $script:sm.SetTargetNetId($r.netId) }
+  if (-not $opened -and $r.changed) {
+    # Files rewritten while the project is open: XAE reloads them (its question answered itself), given a moment
+    Say @{ kind = 'step'; text = 'Taking in the changed files' }
+    $script:dte.SuppressUI = $true
+    Start-Sleep -Seconds 5
+    $script:dte.SuppressUI = $false
+  }
+  Say @{ kind = 'step'; text = 'Building' }
+  $script:sln.SolutionBuild.Build($true)
+  $failed = $script:sln.SolutionBuild.LastBuildInfo
+  $list = [KssErrorList]::List($script:dte)
+  $counts = @{}
+  foreach ($level in 'error', 'warning') {
+    $list.ShowErrors = ($level -eq 'error'); $list.ShowWarnings = ($level -eq 'warning'); $list.ShowMessages = $false
+    $found = [KssErrorList]::Settled($script:dte, $(if ($level -eq 'error' -and $failed -gt 0) { 30 } else { 8 }))
+    # (the same message listed more than once: once)
+    $seen = @{}
+    $n = 0
+    foreach ($e in $found) {
+      $key = $e[0] + '|' + $e[1] + '|' + $e[4]
+      if ($seen.ContainsKey($key)) { continue }
+      $seen[$key] = 1
+      if ($n++ -ge 500) { continue }
+      Say @{ kind = 'item'; level = $level; file = $e[0]; line = [int]$e[1]; column = [int]$e[2]; project = $e[3]; text = $e[4] }
+    }
+    $counts[$level] = $seen.Count
+  }
+  $list.ShowErrors = $true; $list.ShowWarnings = $true
+  if ($counts['error'] -gt 0 -or $failed -gt 0) { Say @{ kind = 'done'; ok = $false; errors = $counts['error']; warnings = $counts['warning']; failedProjects = $failed }; return }
+  if (-not $r.write) { Say @{ kind = 'done'; ok = $true; errors = 0; warnings = $counts['warning'] }; return }
+  Say @{ kind = 'step'; text = [string]$r.writeText }
+  # (from here XAE answers its own questions: no hidden dialog waits)
+  $script:dte.SuppressUI = $true
+  try {
+    if ($r.write -eq 'online') {
+      $plc = $script:sm.LookupTreeItem('TIPC^' + $r.plcProject + '^' + $r.plcProject + ' Project')
+      # Login with an online change, asking nothing (ITcPlcOnline: PLC_LOGIN_FLAGS_FORCEONLINECHANGE | SILENT): the PLC
+      # takes the new code while it runs; when an online change is not possible the login fails, nothing is downloaded
+      $loginError = ''
+      try { [KssPlcOnline]::Login($plc, 2 + 256) | Out-Null } catch { $loginError = $_.Exception.InnerException.Message; if (-not $loginError) { $loginError = $_.Exception.Message } }
+      # (logged in a moment later: waited for)
+      for ($w = 0; $w -lt 60; $w++) {
+        $online = ([xml]$plc.ProduceXml($false)).TreeItem.IECProjectDef.OnlineSettings
+        if ($online.LoggedIn -eq 'true') { break }
+        Start-Sleep -Milliseconds 500
+      }
+      Say @{ kind = 'online'; loggedIn = [string]$online.LoggedIn; app = [string]$online.PlcAppState; op = [string]$online.PlcOpState; info = [string]$online.OnlineAppInfo.InnerXml; error = $loginError }
+      if ($online.LoggedIn -ne 'true') { Say @{ kind = 'done'; ok = $false; errors = 0; fatal = ('No online change was made, nothing was written' + $(if ($loginError) { ': ' + $loginError } else { ' (XAE did not log in to the PLC)' }) + '. From the PLC''s copy of the project XAE cannot compute an online change; Download writes it (the PLC application stops and starts again).') }; return }
+      if ($online.PlcAppState -ne 'Run') { try { [KssPlcOnline]::Start($plc) } catch { } }
+      # The boot project too (as XAE's Activate Boot Project): a restart keeps the new code, and the PLC's archive
+      # gets its sources
+      $boot = ''
+      try { Say @{ kind = 'step'; text = 'Updating the boot project' }; $script:sm.LookupTreeItem('TIPC^' + $r.plcProject).GenerateBootProject($true) } catch { $boot = $_.Exception.Message }
+      try { [KssPlcOnline]::Logoff($plc) } catch { }
+      if ($boot) { Say @{ kind = 'item'; level = 'warning'; text = ('The boot project was not updated (a restart brings the old code back): ' + $boot); file = ''; line = 0; column = 0; project = '' } }
+      Say @{ kind = 'done'; ok = $true; errors = 0; written = 'online'; plcState = [string]$online.PlcAppState; loggedIn = [string]$online.LoggedIn; bootProject = ($boot -eq '') }
+    } elseif ($r.write -eq 'download') {
+      # Login with download, asking nothing (FORCEDOWNLOAD | SILENT): the application stops, the new code in, started
+      $plc = $script:sm.LookupTreeItem('TIPC^' + $r.plcProject + '^' + $r.plcProject + ' Project')
+      $loginError = ''
+      try { [KssPlcOnline]::Login($plc, 4 + 256) | Out-Null } catch { $loginError = $_.Exception.InnerException.Message; if (-not $loginError) { $loginError = $_.Exception.Message } }
+      for ($w = 0; $w -lt 60; $w++) {
+        $online = ([xml]$plc.ProduceXml($false)).TreeItem.IECProjectDef.OnlineSettings
+        if ($online.LoggedIn -eq 'true') { break }
+        Start-Sleep -Milliseconds 500
+      }
+      Say @{ kind = 'online'; loggedIn = [string]$online.LoggedIn; app = [string]$online.PlcAppState; op = [string]$online.PlcOpState; error = $loginError }
+      if ($online.LoggedIn -ne 'true') { Say @{ kind = 'done'; ok = $false; errors = 0; fatal = ('The download was not made, nothing was written' + $(if ($loginError) { ': ' + $loginError } else { ' (XAE did not log in to the PLC)' })) }; return }
+      # (after a download the application waits: started)
+      try { [KssPlcOnline]::Start($plc) } catch { }
+      Start-Sleep -Seconds 1
+      $online = ([xml]$plc.ProduceXml($false)).TreeItem.IECProjectDef.OnlineSettings
+      $boot = ''
+      try { Say @{ kind = 'step'; text = 'Updating the boot project' }; $script:sm.LookupTreeItem('TIPC^' + $r.plcProject).GenerateBootProject($true) } catch { $boot = $_.Exception.Message }
+      try { [KssPlcOnline]::Logoff($plc) } catch { }
+      if ($boot) { Say @{ kind = 'item'; level = 'warning'; text = ('The boot project was not updated (a restart brings the old code back): ' + $boot); file = ''; line = 0; column = 0; project = '' } }
+      Say @{ kind = 'done'; ok = $true; errors = 0; written = 'download'; plcState = [string]$online.PlcAppState; loggedIn = 'true'; bootProject = ($boot -eq '') }
+    } elseif ($r.write -eq 'activate') {
+      $script:sm.ActivateConfiguration()
+      $script:sm.StartRestartTwinCAT()
+      Say @{ kind = 'done'; ok = $true; errors = 0; written = 'activate' }
+    }
+  } finally {
+    $script:dte.SuppressUI = $false
+  }
 }
 `;
 }
 
-/** Runs the script (JSON lines: progress as they come) → { ok, items, errors, fatal, written } */
-/** The TcXaeShell processes running now (their ids) */
-function xaeProcesses() {
-  try {
-    const out = require('child_process').execFileSync('tasklist', ['/FI', 'IMAGENAME eq TcXaeShell.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true });
-    return new Set([...out.matchAll(/^"TcXaeShell\.exe","(\d+)"/gim)].map((m) => Number(m[1])));
-  } catch {
-    return new Set();
-  }
+/** A build request for Build-Kss (checked: the write mode) */
+function xaeRequest({ dir, tsproj, plcProject, write = null, netId = '', changed = false }) {
+  if (write && !MODES[write]) throw new Error(`Unknown write: ${write}`);
+  return { dir, tsproj, plcProject, netId, write: write ?? null, writeText: write ? MODES[write] : '', changed: !!changed };
 }
 
+/**
+ * One build as a script of its own: XAE started, the project opened, built (and written), XAE quit. The
+ * KSS_BUILD_DRYRUN stand-in writes it for a look
+ */
+function buildScript({ dir, tsproj, plcProject, write = null, netId = '', progId = 'TcXaeShell.DTE.17.0' }) {
+  const req = xaeRequest({ dir, tsproj, plcProject, write, netId });
+  return `${xaeFunctions(progId)}
+try {
+  Start-Kss
+  Build-Kss (${ps(JSON.stringify(req))} | ConvertFrom-Json)
+} catch {
+  Say @{ kind = 'done'; ok = $false; fatal = $_.Exception.Message }
+} finally {
+  Stop-Kss
+}
+`;
+}
+
+/**
+ * XAE kept open between builds: this script reads one request per line on stdin (JSON: a build, or {"cmd":"quit"}),
+ * answers each as a build does; XAE started with the first, quit at "quit" or when stdin closes
+ */
+function serverScript(progId = 'TcXaeShell.DTE.17.0') {
+  return `${xaeFunctions(progId)}
+try {
+  while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($null -eq $line) { break }
+    $r = $line | ConvertFrom-Json
+    if ($r.cmd -eq 'quit') { break }
+    try {
+      if (-not $script:dte) { Start-Kss }
+      Build-Kss $r
+    } catch {
+      Say @{ kind = 'done'; ok = $false; fatal = $_.Exception.Message; broken = $true }
+    }
+  }
+} finally {
+  Stop-Kss
+}
+`;
+}
+
+/** The script's JSON lines, as they come: items, steps; the done line ends a build */
+function lineReader(onMessage) {
+  let rest = '';
+  return (d) => {
+    rest += d;
+    const lines = rest.split(/\r?\n/);
+    rest = lines.pop();
+    for (const l of lines) {
+      let m;
+      try {
+        m = JSON.parse(l);
+      } catch {
+        continue;
+      }
+      if (m.kind === 'online' && process.env.KSS_BUILD_DEBUG) console.log('online', JSON.stringify(m));
+      onMessage(m);
+    }
+  };
+}
+const itemOf = (m) => ({ level: m.level, text: m.text, file: m.file, line: m.line, column: m.column, project: m.project });
+
+/** Runs one build's script (JSON lines: progress as they come) → { ok, items, errors, fatal, written } */
 function runScript(script, { dir, onStep, timeoutMs = 15 * 60 * 1000 }) {
   const file = path.join(dir, 'kss-build.ps1');
   // (UTF-8 with its BOM: Windows PowerShell 5.1 reads the file as such)
   fs.writeFileSync(file, '﻿' + script);
   if (dry()) return Promise.resolve({ ok: true, items: [], errors: 0, dry: file });
-  // (the XAE this build starts: stopped when the script cannot, a timeout; the user's are left alone)
-  const before = xaeProcesses();
+  // (the XAE this build starts, as the script reports it: stopped when the script cannot, a timeout)
+  let mine = [];
   return new Promise((resolve) => {
     const items = [];
     let done = null;
-    let rest = '';
     const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA', '-File', file], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (error, _stdout, stderr) => {
-      if (error?.killed) for (const id of xaeProcesses()) if (!before.has(id)) try { process.kill(id); } catch { /* gone */ }
+      if (error?.killed) for (const id of mine) try { process.kill(id); } catch { /* gone */ }
       if (done) return resolve({ ...done, items });
       if (error?.killed) return resolve({ ok: false, items, errors: items.filter((i) => i.level === 'error').length, fatal: `XAE did not finish in ${Math.round(timeoutMs / 60000)} minutes (a dialog waiting?): stopped, nothing written` });
       resolve({ ok: false, items, errors: items.filter((i) => i.level === 'error').length, fatal: (String(stderr).trim().split('\n')[0] || error?.message || 'XAE stopped').slice(0, 500) });
     });
-    child.stdout.on('data', (d) => {
-      rest += d;
-      const lines = rest.split(/\r?\n/);
-      rest = lines.pop();
-      for (const l of lines) {
-        let m;
-        try {
-          m = JSON.parse(l);
-        } catch {
-          continue;
-        }
-        if (m.kind === 'item') items.push({ level: m.level, text: m.text, file: m.file, line: m.line, column: m.column, project: m.project });
-        else if (m.kind === 'step') onStep?.(m.text);
-        else if (m.kind === 'online' && process.env.KSS_BUILD_DEBUG) console.log('online', JSON.stringify(m));
-        
-        else if (m.kind === 'done') done = m;
-      }
-    });
+    child.stdout.on('data', lineReader((m) => {
+      if (m.kind === 'item') items.push(itemOf(m));
+      else if (m.kind === 'step') onStep?.(m.text);
+      else if (m.kind === 'done') done = m;
+      else if (m.kind === 'xae') mine = (m.pids ?? []).map(Number);
+    }));
   });
+}
+
+/** Minutes XAE stays open after a build (the next one skips opening the project); KSS_BUILD_KEEP_MINUTES */
+const keepMinutes = () => {
+  const v = Number(process.env.KSS_BUILD_KEEP_MINUTES);
+  return Number.isFinite(v) && v >= 0 ? v : 10;
+};
+
+/**
+ * XAE kept open: one PowerShell running serverScript, one build at a time (queued); quit after keepMinutes() idle,
+ * when a build breaks it or times out, or with this process
+ */
+class XaeWorker {
+  constructor(progId = 'TcXaeShell.DTE.17.0') {
+    this.progId = progId;
+    this.child = null;
+    this.queue = Promise.resolve();
+    this.idle = null;
+    this.current = null;
+    /** The project open in XAE (its .tsproj), as far as this side knows */
+    this.openTsproj = null;
+  }
+  get running() {
+    return !!this.child && this.child.exitCode === null;
+  }
+  start() {
+    const file = path.join(os.tmpdir(), `kss-xae-server-${process.pid}.ps1`);
+    fs.writeFileSync(file, '﻿' + serverScript(this.progId));
+    const child = execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA', '-File', file], { windowsHide: true, maxBuffer: 256 * 1024 * 1024 });
+    this.child = child;
+    this.openTsproj = null;
+    // (this process ends, the app quits: its XAE stopped with it; a script ended from outside cannot close it)
+    if (!this.exitHook) {
+      this.exitHook = () => this.stop(true);
+      process.once('exit', this.exitHook);
+    }
+    this.mine = [];
+    child.stdout.on('data', lineReader((m) => (m.kind === 'xae' ? (this.mine = (m.pids ?? []).map(Number)) : this.current?.(m))));
+    child.on('exit', () => {
+      if (this.child === child) {
+        this.child = null;
+        this.openTsproj = null;
+      }
+      this.current?.({ kind: 'done', ok: false, fatal: 'XAE stopped', broken: true });
+    });
+  }
+  /** A build: the result when its done line comes; the request as xaeRequest makes it */
+  build(req, { onStep, timeoutMs = 15 * 60 * 1000 } = {}) {
+    const run = () => new Promise((resolve) => {
+      clearTimeout(this.idle);
+      if (!this.running) this.start();
+      const items = [];
+      const timer = setTimeout(() => {
+        this.stop(true);
+        finish({ ok: false, fatal: `XAE did not finish in ${Math.round(timeoutMs / 60000)} minutes (a dialog waiting?): stopped, nothing written` });
+      }, timeoutMs);
+      const finish = (done) => {
+        clearTimeout(timer);
+        this.current = null;
+        if (done.broken) this.stop(true);
+        else this.openTsproj = req.tsproj;
+        if (this.running) {
+          this.until = Date.now() + keepMinutes() * 60000;
+          this.idle = setTimeout(() => this.stop(false), keepMinutes() * 60000);
+        }
+        resolve({ ...done, items, errors: done.errors ?? items.filter((i) => i.level === 'error').length });
+      };
+      this.current = (m) => {
+        if (m.kind === 'item') items.push(itemOf(m));
+        else if (m.kind === 'step') onStep?.(m.text);
+        else if (m.kind === 'done') finish(m);
+      };
+      this.child.stdin.write(`${JSON.stringify(req)}\n`);
+    });
+    const p = this.queue.then(run, run);
+    this.queue = p.catch(() => {});
+    return p;
+  }
+  /** Quit XAE (force: the process and this build's XAE stopped at once) */
+  stop(force) {
+    clearTimeout(this.idle);
+    this.until = null;
+    const child = this.child;
+    if (!child) return;
+    this.child = null;
+    this.openTsproj = null;
+    if (!force) {
+      try {
+        child.stdin.end(`${JSON.stringify({ cmd: 'quit' })}\n`);
+        return;
+      } catch {
+        // gone: stopped below
+      }
+    }
+    try {
+      child.kill();
+    } catch {
+      // gone
+    }
+    // (its own XAE only, as the script reported it)
+    for (const id of this.mine ?? []) try { process.kill(id); } catch { /* gone */ }
+  }
+}
+let worker = null;
+const xaeWorker = () => (worker ??= new XaeWorker());
+/** Until when XAE is kept open for the next build (ms since 1970), or null (not open) */
+const xaeOpenUntil = () => (worker?.running && worker.until ? worker.until : null);
+/** Close the XAE kept open now (the next build opens the project again); true when one was open */
+function closeXae() {
+  const open = !!worker?.running;
+  worker?.stop(false);
+  if (warmWorkspace) {
+    fs.rm(warmWorkspace.dir, { recursive: true, force: true }, () => {});
+    warmWorkspace = null;
+  }
+  return open;
 }
 
 /** An error's place in the edited sources: the PLC project's path of its file (null: another file) */
@@ -371,22 +619,89 @@ function xaeAvailable(progId = 'TcXaeShell.DTE.17.0') {
   return new Promise((resolve) => execFile('reg', ['query', `HKCR\\${progId}`], { windowsHide: true }, (err) => resolve(!err)));
 }
 
+/** The archives' fingerprint: the same, the work folder already open in XAE can be used again */
+function archivesHash(archives) {
+  const h = require('crypto').createHash('sha1');
+  h.update(archives.system);
+  for (const n of archives.nested) h.update(`|${n.name}|`).update(n.data ?? '');
+  return h.digest('hex');
+}
+
+/**
+ * The work folder of the last build, used again (its project open in XAE): the files an earlier build put in and
+ * this one does not, back as the PLC has them; this build's edits put in. true when a file changed
+ */
+function reuseWorkspace(ws, edits) {
+  let changed = false;
+  const want = new Map();
+  for (const e of edits) {
+    const plc = ws.plcProjects.find((p) => p.name.toLowerCase() === String(e.plcProject ?? '').toLowerCase()) ?? (ws.plcProjects.length === 1 ? ws.plcProjects[0] : null);
+    if (!plc) throw new Error(`No PLC project ${e.plcProject} in the PLC's TwinCAT project`);
+    const p = inside(plc.dir, e.path);
+    if (!ws.originals.has(p)) {
+      if (!fs.existsSync(p)) throw new Error(`${e.path} is not in ${plc.name}`);
+      ws.originals.set(p, fs.readFileSync(p));
+    }
+    want.set(p, Buffer.from(String(e.content).replace(/\r?\n/g, '\r\n'), 'utf8'));
+  }
+  for (const [p, original] of ws.originals) {
+    const next = want.get(p) ?? original;
+    if (!fs.readFileSync(p).equals(next)) {
+      fs.writeFileSync(p, next);
+      changed = true;
+    }
+  }
+  ws.applied = edits.map((e) => `${e.plcProject ?? ws.plcProjects[0]?.name}/${e.path}`);
+  return changed;
+}
+
+/** The work folder kept with XAE's open project: { key, hash, ...workspace, originals } */
+let warmWorkspace = null;
+
 /**
  * Build (and write back): read the project from the PLC (client: its ADS connection), put the edits in, build with
- * XAE. write: null (build only), 'online', 'download'. → { ok, items: [{ level, text, file, line, place }], ... }
+ * XAE (kept open for the next build: the same PLC's project, unchanged on the PLC, is not opened again). write: null
+ * (build only), 'online', 'activate'. → { ok, items: [{ level, text, file, line, place }], ... }
  */
 async function buildFromPlc(client, { edits = [], plcProject = '', write = null, netId = '', adsPort = 851, onStep } = {}) {
   if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
   onStep?.('Reading the project from the PLC');
   const archives = await fetchProjectArchives((rel) => readBootFile(client, rel));
-  const ws = writeWorkspace(archives, edits);
+  const key = `${netId}|${archives.info?.project?.name ?? ''}`;
+  const hash = archivesHash(archives);
+  const w = xaeWorker();
+  let ws;
+  let changed = false;
+  if (!dry() && warmWorkspace && warmWorkspace.key === key && warmWorkspace.hash === hash && w.running && w.openTsproj === warmWorkspace.tsproj && fs.existsSync(warmWorkspace.tsproj)) {
+    ws = warmWorkspace;
+    changed = reuseWorkspace(ws, edits);
+  } else {
+    // (another project, or the PLC's changed: a new folder; the old one removed once XAE has closed it)
+    ws = writeWorkspace(archives, edits);
+    ws.originals = new Map();
+    for (const a of ws.applied) {
+      const [plcName, ...rest] = a.split('/');
+      const plc = ws.plcProjects.find((p) => p.name === plcName);
+      const n = archives.nested.find((x) => x.name === plcName);
+      const orig = n?.data ? unzip(n.data, (p) => p === rest.join('/'))[0] : null;
+      if (plc && orig) ws.originals.set(inside(plc.dir, rest.join('/')), orig.data);
+    }
+    Object.assign(ws, { key, hash });
+  }
   const plc = ws.plcProjects.find((p) => p.name.toLowerCase() === plcProject.toLowerCase()) ?? ws.plcProjects[0];
   if (!plc) return { ok: false, fatal: 'The PLC\'s TwinCAT project has no PLC project', items: [] };
-  const r = dry()
-    ? standInBuild(ws, edits, write)
-    : await runScript(buildScript({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId }), { dir: ws.dir, onStep });
+  let r;
+  if (dry()) r = standInBuild(ws, edits, write);
+  else {
+    const previous = warmWorkspace;
+    r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed }), { onStep });
+    warmWorkspace = w.running ? ws : null;
+    for (const old of [previous, ...(w.running ? [] : [ws])]) {
+      if (old && old !== warmWorkspace) fs.rm(old.dir, { recursive: true, force: true }, () => {});
+    }
+  }
   const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
-  if (!dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
+  if (dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
   // Written: the PLC's sources read again against its running code (their types as built against the PLC's own):
   // the same, or the write did not take
   let verified;
@@ -399,8 +714,14 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
       verified = { ok: false, text: `Could not check the PLC: ${err?.message ?? err}` };
     }
     if (!verified.ok) items.push({ level: 'warning', text: `After the write: ${verified.text}`, file: '', line: 0, column: 0, project: '', place: null });
+    // (the PLC's archive changed with the write: its project opened afresh next time, this folder then removed)
+    if (warmWorkspace) warmWorkspace.hash = '';
   }
-  return { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}) };
+  // (XAE kept open for the next build: until when; the stand-in says as a real build would)
+  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : xaeOpenUntil();
+  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(openUntil ? { xaeOpenUntil: openUntil } : {}) };
+  delete result.broken;
+  return result;
 }
 
 /**
@@ -426,6 +747,9 @@ function standInBuild(ws, edits, write) {
   }
   items.push({ level: 'warning', text: 'A stand-in warning (dry run)', file: '', line: 0, column: 0, project: '' });
   const errors = items.filter((i) => i.level === 'error').length;
+  if (errors === 0 && write === 'online' && process.env.KSS_BUILD_REFUSE_ONLINE === '1') {
+    return { ok: false, items, errors: 0, warnings: 1, dry: script, fatal: 'No online change was made, nothing was written (XAE did not log in to the PLC). From the PLC\'s copy of the project XAE cannot compute an online change; Download writes it (the PLC application stops and starts again).' };
+  }
   return { ok: errors === 0, items, errors, warnings: 1, dry: script, ...(errors === 0 && write ? { written: write } : {}) };
 }
 
@@ -438,8 +762,8 @@ function checkEdits(req) {
     if (typeof e.content !== 'string' || e.content.length > 8 * 1024 * 1024) return `${e.path}: its content is missing or too large`;
     if (e.plcProject != null && (typeof e.plcProject !== 'string' || !SAFE_NAME.test(e.plcProject))) return 'Not a PLC project name';
   }
-  if (req?.write != null && req.write !== 'online' && req.write !== 'activate') return 'write: online or activate';
+  if (req?.write != null && !Object.hasOwn(MODES, req.write)) return 'write: online, download or activate';
   return null;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, MODES };
+module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, closeXae };

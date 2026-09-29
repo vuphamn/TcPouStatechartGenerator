@@ -140,7 +140,8 @@ import { armState } from './utils/choiceArms.ts';
 import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
 import { editionOf, editionVersion } from './utils/releaseNotes.ts';
 import { PlcBuildDialog, type PlcBuildState } from './components/PlcBuildDialog.tsx';
-import { itemInPou, placeOfXaeFile, plcEdits, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
+import type { CheckResult } from './utils/connectionCheck.ts';
+import { buildItemWhere, itemInPou, placeOfXaeFile, plcEdits, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
@@ -203,9 +204,9 @@ import {
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
 import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
-import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen } from './utils/seenTransitions.ts';
-import { probePlcs, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
-import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl } from './utils/liveGateway.ts';
+import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen, setSeenCondition, candidatesOf } from './utils/seenTransitions.ts';
+import { probePlcs, refreshRemembered, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
+import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl, type HelperBuild } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
 import { InstanceLaunch, connectionOf, putHandoff, sameInstance, takeHandoff } from './utils/instanceLaunch.ts';
 import { DEFAULT_SYMBOL_ROOT, SymbolBrowserWindow, symbolWatchId } from './components/SymbolBrowserWindow.tsx';
@@ -1925,19 +1926,28 @@ export const App: React.FC = () => {
       if (isXaeHost()) handleSaveToProjectRef.current();
       else void saveSourcesRef.current(n ? { quiet: false } : undefined);
     }, n ? 120 : 0);
-    // Save All: the app's other windows (desktop) and tabs (XAE, web) save theirs too, and say what they saved
+    // Save All: the app's other windows (desktop) and tabs (XAE, web) save theirs too, and say what they saved. XAE:
+    // also through the extension (a tab with a WebView2 profile of its own is not on the channel)
     const ch = saveAllChannelRef.current;
-    if (which !== 'all' || fromOtherWindow || !ch) return had;
+    const relay = isXaeHost();
+    if (which !== 'all' || fromOtherWindow || (!ch && !relay)) return had;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const saved: string[] = [];
     const onDone = (e: MessageEvent) => {
       const m = e.data as { type?: string; id?: string; name?: string; count?: number } | null;
       if (m?.type === 'saveAllDone' && m.id === id && (m.count ?? 0) > 0) saved.push(m.name || 'another window');
     };
-    ch.addEventListener('message', onDone);
-    ch.postMessage({ type: 'saveAll', id });
+    ch?.addEventListener('message', onDone);
+    ch?.postMessage({ type: 'saveAll', id });
+    const offHost = relay
+      ? onHostMessage((m) => {
+          if (m.type === 'saveAllDone' && m.id === id && (m.count ?? 0) > 0) saved.push(m.name || 'another tab');
+        })
+      : null;
+    if (relay) postToHost({ type: 'saveAllRelay', id });
     window.setTimeout(() => {
-      ch.removeEventListener('message', onDone);
+      offHost?.();
+      ch?.removeEventListener('message', onDone);
       if (saved.length) showCopyToast(`Save All: also saved in ${saved.length} other window${saved.length === 1 ? '' : 's'} (${saved.join(', ')})`, 'success', 5000);
     }, 900);
     return had;
@@ -1952,7 +1962,8 @@ export const App: React.FC = () => {
     saveAllChannelRef.current = ch;
     ch.onmessage = (e: MessageEvent) => {
       const m = e.data as { type?: string; id?: string } | null;
-      if (m?.type !== 'saveAll') return;
+      if (m?.type !== 'saveAll' || !m.id || answeredSaveAllRef.current.has(m.id)) return;
+      answeredSaveAllRef.current.add(m.id);
       const count = handleHeaderSaveRef.current('all', true);
       ch.postMessage({ type: 'saveAllDone', id: m.id, name: pouFileNameRef.current, count });
     };
@@ -1960,6 +1971,17 @@ export const App: React.FC = () => {
       ch.close();
       saveAllChannelRef.current = null;
     };
+  }, []);
+  // XAE: Save All from another tab, relayed by the extension (answered once: it may come on the channel too)
+  const answeredSaveAllRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!isXaeHost()) return;
+    return onHostMessage((m) => {
+      if (m.type !== 'saveAll' || !m.id || answeredSaveAllRef.current.has(m.id)) return;
+      answeredSaveAllRef.current.add(m.id);
+      const count = handleHeaderSaveRef.current('all', true);
+      postToHost({ type: 'saveAllDoneRelay', id: m.id, name: pouFileNameRef.current, count });
+    });
   }, []);
 
   /** Opens TwinCAT's editor at a state's CASE branch or a transition's assignment (POU loaded from the project) */
@@ -2152,14 +2174,24 @@ export const App: React.FC = () => {
     const files = projectFiles ?? plcCodeFiles;
     setProjectSymbols(buildProjectSymbols(files?.files ?? [], loaded, files?.project), !!files);
   }, [projectFiles, plcCodeFiles, pouContent, dutContent, pouFileName, dutFileName]);
+  // Does another file of the project read a member of this POU (instance.name)? Only with the project's files
+  const readElsewhere = useMemo(() => {
+    const files = (projectFiles ?? plcCodeFiles)?.files;
+    if (!files?.length) return undefined;
+    const others = files.filter((f) => f.name.toLowerCase() !== (pouFileName || '').toLowerCase()).map((f) => f.content);
+    return (name: string) => {
+      const rx = new RegExp(`\\.\\s*${name.replace(/[^\w]/g, '')}\\b`, 'i');
+      return others.some((c) => rx.test(c));
+    };
+  }, [projectFiles, plcCodeFiles, pouFileName]);
   const lintFindings = useMemo(
     () => [
       ...lintStateMachine(pouContent, dutContent, availableEdges),
-      ...lintVariables(pouContent, getProjectSymbols(), hasProjectSymbols(), identifiedStatesResult.states.map((s) => s.id)),
+      ...lintVariables(pouContent, getProjectSymbols(), hasProjectSymbols(), identifiedStatesResult.states.map((s) => s.id), readElsewhere),
       ...pathCheckFindings(pathCheckResults),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouContent, dutContent, availableEdges, pathCheckResults, symbolsVersion, identifiedStatesResult]
+    [pouContent, dutContent, availableEdges, pathCheckResults, symbolsVersion, identifiedStatesResult, readElsewhere]
   );
   const stateProblems = useMemo(() => {
     const out: Record<string, { messages: string[]; names: string[] }> = {};
@@ -3549,7 +3581,7 @@ export const App: React.FC = () => {
             setSavedSources((b) => ({ ...b, pou: pouContent, dut: dutContent }));
             setPlcSessionEdits({});
             plcSourcesRef.current = new Map();
-            showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : 'configuration activated'})`, 'success', 7000);
+            showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : r.written === 'download' ? 'downloaded' : 'configuration activated'})`, 'success', 7000);
           }
         });
     },
@@ -3575,6 +3607,14 @@ export const App: React.FC = () => {
       setPlcBuild((b) => (b ? { ...b, phase: 'done', result: { ok: m.ok, fatal: m.fatal, errors: m.errors, warnings: m.warnings, items } } : b));
     });
   }, []);
+  // Close the XAE kept open for builds now (the desktop app, Link, the gateway: where the build ran)
+  const handleCloseXae = useCallback(async (): Promise<boolean> => {
+    const desktop = desktopLive();
+    if (desktop?.closeBuild) return (await desktop.closeBuild({ requestId: Date.now() % 1e9 })).closed;
+    if (!gatewayRef.current) return false;
+    const r = await gatewayRef.current.request<{ closed: boolean }>({ type: 'plcBuildClose' }, 'plcBuildClosed', 30000).catch(() => ({ closed: false }));
+    return r.closed;
+  }, []);
   const openPlcBuildItem = useCallback(
     (i: PlcBuildItem) => {
       const p = i.place;
@@ -3585,6 +3625,18 @@ export const App: React.FC = () => {
     },
     [plcOrigin, handleOpenReference, pouPath]
   );
+  // The last build's messages in the Problems tab too (until the next build): a click opens those in this POU
+  const buildItemsRef = useRef(new Map<string, PlcBuildItem>());
+  const buildFindings = useMemo<LintFinding[]>(() => {
+    buildItemsRef.current = new Map();
+    const items = plcBuild?.phase === 'done' ? plcBuild.result?.items ?? [] : [];
+    return items.map((i, n) => {
+      const key = `build:${i.level}:${buildItemWhere(i)}:${i.text.trim()}:${n}`;
+      buildItemsRef.current.set(key, i);
+      const inPou = isXaeHost() && pouPath ? !!i.place : itemInPou(i, plcOrigin);
+      return { key, rule: i.level === 'error' ? 'build-error' : 'build-warning', severity: i.level === 'error' ? 'error' : 'warning', message: `${i.text.trim()} (${buildItemWhere(i)})`, ...(inPou ? { method: i.place?.member ?? '(body)', line: i.place?.line ?? 1 } : {}) } as LintFinding;
+    });
+  }, [plcBuild, plcOrigin, pouPath]);
   const handleOpenType = useCallback(
     async (type: string, where: OpenTypeWhere, member?: string) => {
       const info = getProjectSymbols()?.types.get(type.toLowerCase());
@@ -4111,11 +4163,37 @@ export const App: React.FC = () => {
           items.push({ id: 'edit-state-code-btn', label: `Edit the state's code…${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}`, icon: <Code2 className="w-3.5 h-3.5" />, title: "Its CASE branch in doState(), as written: actions and transitions", onSelect: () => handleEditStateCode(target.id) });
         }
       }
+      // Learned: what changed just before a transition seen, offered as its condition (drawn instead of an unknown one;
+      // idTag: the transition's, in a state's menu)
+      const conditionItems = (from: string, to: string, idTag = '') => {
+        const seenHere = seen[seenKey(from, to)];
+        if (!learnedPou || !seenHere) return;
+        const instance = (liveStatus.instance ?? windowInstance ?? '').toLowerCase();
+        const nameOf = (id: string) => {
+          if (!id.startsWith('sym:')) return id;
+          const p = id.slice(4);
+          return instance && p.startsWith(`${instance}.`) ? p.slice(instance.length + 1) : p;
+        };
+        const setCondition = (c: string | null) => {
+          const next = setSeenCondition(seen, from, to, c);
+          saveSeen(seenPouType, next);
+          setSeen(next);
+        };
+        const where = idTag ? ` (→ ${to})` : '';
+        candidatesOf(seenHere).forEach((c, i) => {
+          const name = nameOf(c.id);
+          if (!/^[A-Za-z_][\w.[\]]*$/.test(name) || seenHere.condition === name) return;
+          items.push({ id: `use-candidate-${idTag}${i}-btn`, label: `Its condition${where}: ${name}`, icon: <Pencil className="w-3.5 h-3.5" />, title: `${name} changed just before ${from} → ${to} ${c.n} of the ${seenHere.n} times it was seen: drawn as IF ${name} THEN (kept with the transitions seen)`, onSelect: () => setCondition(name) });
+        });
+        if (seenHere.condition)
+          items.push({ id: `clear-candidate-${idTag}btn`, label: `Its condition${where}: not known`, icon: <Pencil className="w-3.5 h-3.5" />, title: `${seenHere.condition} no longer taken as the condition of ${from} → ${to}`, onSelect: () => setCondition(null) });
+      };
       // A learned diagram: each transition seen from the state can be forgotten (seen by mistake)
       if (target.type === 'node' && learnedPou)
         for (const [k, s] of Object.entries(seen)) {
           const [from, to] = k.split('->');
           if (from !== target.id) continue;
+          conditionItems(from, to, `${to}-`);
           items.push({
             id: `forget-seen-${to}-btn`,
             label: `Forget ${from} → ${to} (seen ${s.n}×)`,
@@ -4196,6 +4274,8 @@ export const App: React.FC = () => {
                 return next;
               }),
           });
+        // Learned: what changed just before it, offered as its condition
+        conditionItems(edge.from, edge.to);
         if (edge.from !== '[*]' && !learnedPou)
           items.push({ id: 'edit-condition-btn', label: 'Edit condition…', icon: <Pencil className="w-3.5 h-3.5" />, title: 'F2: its condition, with the variables of the POU', onSelect: () => handleEditCondition(edge) });
         if (edge.from !== '[*]')
@@ -4228,7 +4308,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected]
+    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance]
   );
   // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
   const symbolCommands = (): PaletteCommand[] => {
@@ -4353,6 +4433,9 @@ export const App: React.FC = () => {
   const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number } | null>(null);
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
+      // (a build's message: opened as the build dialog opens it)
+      const built = buildItemsRef.current.get(finding.key);
+      if (built) return void openPlcBuildItem(built);
       if (!finding.method || !finding.line) return;
       if (finding.stateId) handleJumpToState(finding.stateId);
       if (canNavigateInXae && pouPath) {
@@ -4362,7 +4445,7 @@ export const App: React.FC = () => {
         setCodeJump({ method: finding.method, line: finding.line, nonce: Date.now() });
       }
     },
-    [canNavigateInXae, pouPath, handleJumpToState, handleOpenInspectorPanel]
+    [canNavigateInXae, pouPath, handleJumpToState, handleOpenInspectorPanel, openPlcBuildItem]
   );
   // The Problems tab's quick fixes for variables: Declare… (its method, or the POU), Remove (after a look)
   const [declareFix, setDeclareFix] = useState<{ name: string; method?: string } | null>(null);
@@ -4745,17 +4828,19 @@ export const App: React.FC = () => {
     });
   }, []);
   const handleRememberPlc = useCallback(
-    (remember: boolean, name?: string) => {
+    (remember: boolean, name?: string, found?: { twincat?: string; os?: string }) => {
       const netId = liveSettings.netId.trim();
       updateRememberedPlcs((list) => {
         const rest = list.filter((p) => p.netId !== netId);
         if (!remember) return rest;
         const known = list.find((p) => p.netId === netId);
-        return [{ name: name || known?.name || netId, netId, ip: liveSettings.ip.trim(), port: liveSettings.port, localNetId: liveSettings.localNetId.trim(), used: Date.now() }, ...rest];
+        return [{ ...(known ?? {}), name: name || known?.name || netId, netId, ip: liveSettings.ip.trim(), port: liveSettings.port, localNetId: liveSettings.localNetId.trim(), used: Date.now(), ...(found?.twincat ? { twincat: found.twincat, seen: Date.now() } : {}), ...(found?.os ? { os: found.os } : {}) }, ...rest];
       });
     },
     [liveSettings, updateRememberedPlcs]
   );
+  // Each Browse search keeps the remembered PLCs up to date (their TwinCAT, OS, when seen; a changed DHCP address)
+  const handlePlcsFound = useCallback((r: PlcScanResult) => updateRememberedPlcs((list) => refreshRemembered(list, r.devices, Date.now())), [updateRememberedPlcs]);
   const handleLiveStart = useCallback(() => {
     const port = parseInt(liveSettings.port, 10);
     const stateVar = identifiedStatesResult.stateVarName || 'machineState';
@@ -4798,6 +4883,10 @@ export const App: React.FC = () => {
       const connection = gatewayConnection();
       connection
         .connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode)
+        .then((w) => {
+          setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
+          return w;
+        })
         .then(() =>
           connection.start({
             stateVar,
@@ -5364,12 +5453,21 @@ export const App: React.FC = () => {
     setSwitchPending(false);
     handleLiveStart();
   }, [switchPending, handleLiveStart]);
+  // Which code Link runs (from its welcome): another stamp than this page's: another version of Link, said in the
+  // Live tab (a Link started from an old install, as the Start menu's)
+  const [linkBuild, setLinkBuild] = useState<HelperBuild | null>(null);
+  const linkNotice = linkBuild && linkBuild.stamp !== __KSS_LINK_STAMP__
+    ? linkBuild.from === 'old'
+      ? 'The Link on this computer is an older version (from before it said which). Update it: npm run build:link, or the installer, then start Link again.'
+      : `The Link on this computer is another version than this page (${linkBuild.from === 'source' ? 'run from source' : `built ${linkBuild.built ? new Date(linkBuild.built).toLocaleString() : '?'}`}, code ${linkBuild.stamp}; this page: ${__KSS_LINK_STAMP__}). Update it: npm run build:link, or the installer, then start Link again.`
+    : null;
   // Browse through Link (web edition): the search and Add Route run in Link, on this computer
   const linkRequest = useCallback(
     async <T,>(message: Record<string, unknown>, replyType: string): Promise<T> => {
       if (!linkCode) throw new Error('Enter the pairing code shown by Kval StateScope Link first');
       const c = gatewayConnection();
-      await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
+      const w = await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
+      setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
       return c.request<T>(message, replyType);
     },
     [linkCode, gatewayConnection, liveSettings.linkPort]
@@ -5384,11 +5482,18 @@ export const App: React.FC = () => {
   const handleAddRoute = useMemo(() => {
     const localNetId = liveSettings.localNetId.trim() || undefined;
     if (viaLink) {
-      return (d: FoundPlc, user: string, password: string) =>
-        linkRequest<AddRouteResult>({ type: 'addRoute', plcIp: d.ip, user, password, localNetId }, 'addRouteResult').catch((err: Error) => ({ ok: false, message: err.message }));
+      return (d: FoundPlc, user: string, password: string, both?: AddRouteBoth) =>
+        linkRequest<AddRouteResult>({ type: 'addRoute', plcIp: d.ip, plcNetId: d.netId, plcName: d.name, user, password, localNetId, ...(both ?? {}) }, 'addRouteResult').catch((err: Error) => ({ ok: false, message: err.message }));
     }
-    return canScanPlcs() ? (d: FoundPlc, user: string, password: string) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId }) : undefined;
+    return canScanPlcs() ? (d: FoundPlc, user: string, password: string, both?: AddRouteBoth) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId, ...(both ?? {}) }) : undefined;
   }, [viaLink, linkRequest, liveSettings.localNetId]);
+  // The Live tab's Check: why the PLC does not answer, from the computer that talks to it (desktop app, Link)
+  const handleCheckConnection = useMemo(() => {
+    const req = () => ({ netId: liveSettings.netId.trim(), ip: liveSettings.ip.trim(), port: parseInt(liveSettings.port, 10) || undefined, localNetId: liveSettings.localNetId.trim() || undefined });
+    if (viaLink) return () => linkRequest<CheckResult>({ type: 'checkConnection', ...req() }, 'checkConnectionResult');
+    const api = desktopLive();
+    return api?.checkConnection ? () => api.checkConnection!(req()) : undefined;
+  }, [viaLink, linkRequest, liveSettings.netId, liveSettings.ip, liveSettings.port, liveSettings.localNetId]);
   // Machine Overview, other PLCs: how they are reached in this edition (XAE: not), and which can be added
   const sideVia = useMemo<SideVia | null>(() => {
     if (liveMode === 'desktop') return { kind: 'desktop' };
@@ -7328,9 +7433,12 @@ export const App: React.FC = () => {
             onDefaultLimitChange={setDefaultLimit}
             rememberedPlcs={rememberedPlcs}
             onRememberPlc={handleRememberPlc}
+            onPlcsFound={handlePlcsFound}
             onForgetPlc={(netId) => updateRememberedPlcs((list) => list.filter((p) => p.netId !== netId))}
             onScanPlcs={handleScanPlcs}
             onAddRoute={handleAddRoute}
+            onCheckConnection={handleCheckConnection}
+            linkNotice={viaLink ? linkNotice : null}
             onRenamePlc={(netId, name) => updateRememberedPlcs((list) => list.map((p) => (p.netId === netId ? { ...p, name } : p)))}
             onSwitchPlc={handleSwitchPlc}
             sso={ssoHere && gatewaySso ? { provider: gatewaySso.provider, user: gatewaySso.user, name: gatewaySso.name, tokens: gatewaySso.tokens } : undefined}
@@ -7437,7 +7545,7 @@ export const App: React.FC = () => {
       {isDockTabMounted('problems') &&
         createPortal(
           <ProblemsPanel
-            findings={lintFindings}
+            findings={buildFindings.length ? [...buildFindings, ...lintFindings] : lintFindings}
             ignoredKeys={lintIgnored}
             onToggleIgnore={handleToggleLintIgnore}
             onSelectState={(id) => handleJumpToState(id)}
@@ -7560,6 +7668,7 @@ export const App: React.FC = () => {
           onRebuild={() => (isXaeHost() ? runXaeBuild() : runPlcBuild(null))}
           onWrite={(w) => runPlcBuild(w)}
           onClose={() => setPlcBuildShown(false)}
+          onCloseXae={isXaeHost() ? undefined : handleCloseXae}
         />
       )}
       {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}

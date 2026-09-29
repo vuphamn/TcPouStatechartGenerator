@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchProjectArchives, writeWorkspace, buildScript, placeOf, checkEdits } = require('../../shared/tcBuild.cjs');
+const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc } = require('../../shared/tcBuild.cjs');
 const { writeZip } = require('../lib/zip.cjs');
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { buildItemWhere, itemInPou, plcEdits } from '../../src/utils/plcBuild.ts';
@@ -66,7 +66,7 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   // 3. The requests checked: paths inside the project, sources only, write modes
   expect(checkEdits({ edits: [{ path: 'POUs/A.TcPOU', content: 'x' }], write: 'online' }) === null, 'a POU and online: fine');
   expect(/Not a PLC source path/.test(checkEdits({ edits: [{ path: '../../Windows/x.TcPOU', content: 'x' }] }) ?? '') && /Not a PLC source path/.test(checkEdits({ edits: [{ path: 'C:/x.TcPOU', content: 'x' }] }) ?? '') && /Not a PLC source path/.test(checkEdits({ edits: [{ path: 'run.cmd', content: 'x' }] }) ?? ''), 'outside the project, absolute, not a source: refused');
-  expect(/online or activate/.test(checkEdits({ edits: [], write: 'download' }) ?? ''), 'an unknown write: refused');
+  expect(/online, download or activate/.test(checkEdits({ edits: [], write: 'erase' }) ?? '') && checkEdits({ edits: [], write: 'download' }) === null, 'an unknown write: refused; download: fine');
 
   // 4. XAE's message places: the file in the project, its member and part, the line
   const place = placeOf({ file: `${path.join(dir, 'LinePlc', 'POUs', 'SM_Line.TcPOU')}@doState (Impl)`, line: 12 }, ws);
@@ -77,11 +77,76 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   // 5. The script: builds, reads the Error List; writes only when asked, after the build had no errors
   const build = buildScript({ dir, tsproj: ws.tsproj, plcProject: 'LinePlc' });
   const online = buildScript({ dir, tsproj: ws.tsproj, plcProject: 'LinePlc', write: 'online', netId: '5.1.2.3.1.1' });
-  const activate = buildScript({ dir, tsproj: ws.tsproj, plcProject: 'LinePlc', write: 'activate' });
-  expect(/SolutionBuild\.Build\(\$true\)/.test(build) && /KssErrorList/.test(build) && !/LoginCmd|ActivateConfiguration/.test(build), 'build only: no login, no activation');
-  expect(/SetTargetNetId\('5\.1\.2\.3\.1\.1'\)/.test(online) && /<LoginCmd>true<\/LoginCmd>/.test(online) && !/ActivateConfiguration/.test(online) && online.indexOf('LoginCmd') > online.indexOf("exit 0"), 'online: login after the error check, on the connection\'s NetId');
-  expect(/ActivateConfiguration\(\)/.test(activate) && /StartRestartTwinCAT\(\)/.test(activate) && !/LoginCmd/.test(activate), 'activate: the configuration, TwinCAT restarted');
-  expect(/\$before -notcontains \$_\.Id/.test(build) && /Stop-Process -Id \$id/.test(build), 'only its own XAE stopped at the end');
+  // (a PowerShell function of the script, up to the next: "function Name {" or "function Name($r) {")
+  const fn = (s: string, name: string) => {
+    const at = s.search(new RegExp(`function ${name}[ (]`));
+    const end = s.indexOf('\nfunction ', at + 1);
+    return at < 0 ? '' : s.slice(at, end < 0 ? undefined : end);
+  };
+  const buildFn = fn(build, 'Build-Kss');
+  expect(/SolutionBuild\.Build\(\$true\)/.test(buildFn) && /KssErrorList/.test(buildFn) && /if \(-not \$r\.write\) \{ Say @\{ kind = 'done'; ok = \$true/.test(buildFn), 'build: the Error List read; without a write it ends there');
+  expect(buildFn.indexOf('[KssPlcOnline]::Login($plc, 2 + 256)') > buildFn.indexOf("failedProjects = $failed }; return }") && buildFn.indexOf('[KssPlcOnline]::Login($plc, 4 + 256)') > buildFn.indexOf("failedProjects = $failed }; return }") && buildFn.indexOf('ActivateConfiguration') > buildFn.indexOf("failedProjects = $failed }; return }"), 'login (online change, download) and activation only after the error check');
+  expect(/"netId":"5\.1\.2\.3\.1\.1"/.test(online) && /"write":"online"/.test(online) && /"writeText":"Online change"/.test(online) && /"write":null/.test(build), 'the request: the connection\'s NetId, the write asked for (none for a build)');
+  expect(/GenerateBootProject\(\$true\)/.test(buildFn) && /StartRestartTwinCAT\(\)/.test(buildFn), 'online: the boot project updated too; activate: TwinCAT restarted');
+  let refused = '';
+  try {
+    buildScript({ dir, tsproj: ws.tsproj, plcProject: 'LinePlc', write: 'erase' as never });
+  } catch (e) {
+    refused = (e as Error).message;
+  }
+  expect(/Unknown write/.test(refused), 'an unknown write: refused');
+  const stopFn = fn(build, 'Stop-Kss');
+  expect(/\$script:before -notcontains \$_\.Id/.test(fn(build, 'Start-Kss')) && /Stop-Process -Id \$id/.test(stopFn) && /Say @\{ kind = 'xae'; pids = \$script:mine \}/.test(build), 'only its own XAE stopped at the end (its id reported)');
+  // XAE's settings: put back only the files that existed and changed; one made meanwhile is left
+  const restoreFn = fn(build, 'Restore-KssSettings');
+  expect(/foreach \(\$path in @\(\$kssFiles\.Keys\)\)/.test(restoreFn) && !/Remove-Item -LiteralPath \$f/.test(restoreFn) && /if \(@\(\$script:before \| Where-Object \{ \$still -notcontains \$_ \}\)\.Count -eq 0\) \{ Restore-KssSettings \}/.test(stopFn), 'settings: changed ones put back, none removed; not when the user\'s XAE quit meanwhile');
+  // XAE kept open: one request per line; the changed files taken in when the project stays open
+  const server = serverScript();
+  expect(/\[Console\]::In\.ReadLine\(\)/.test(server) && /if \(\$r\.cmd -eq 'quit'\) \{ break \}/.test(server) && /if \(-not \$script:dte\) \{ Start-Kss \}/.test(server) && /if \(-not \$opened -and \$r\.changed\)/.test(server), 'the server: requests on stdin, XAE started once, changed files taken in');
+
+  // 5b. The work folder used again: this build's edits in, an earlier build's edits back as the PLC has them
+  const reused = { ...ws, originals: new Map<string, Buffer>() };
+  const pouFile = path.join(dir, 'LinePlc', 'POUs', 'SM_Line.TcPOU');
+  const dutFile = path.join(dir, 'LinePlc', 'POUs', 'E_Line.TcDUT');
+  reused.originals.set(pouFile, Buffer.from('<POU Name="SM_Line"/>'));
+  let changed = reuseWorkspace(reused, [{ plcProject: 'LinePlc', path: 'POUs/E_Line.TcDUT', content: '<DUT>x</DUT>' }]);
+  expect(changed && fs.readFileSync(pouFile, 'utf8') === '<POU Name="SM_Line"/>' && fs.readFileSync(dutFile, 'utf8') === '<DUT>x</DUT>', 'reused: the earlier edit put back, the new one in');
+  changed = reuseWorkspace(reused, [{ plcProject: 'LinePlc', path: 'POUs/E_Line.TcDUT', content: '<DUT>x</DUT>' }]);
+  expect(!changed, 'the same edit again: nothing rewritten (XAE not asked to take in files)');
+  expect(archivesHash(a) === archivesHash(a) && archivesHash(a) !== archivesHash({ ...a, system: writeZip({ 'Line.tsproj': '<TcSmProject x="1"/>' }) }), 'the archives\' fingerprint: another project, another fingerprint');
+
+  // 5c. A write (the stand-in compiler): the PLC read again after it, the result says so
+  process.env.KSS_BUILD_DRYRUN = '1';
+  const ads = boot; // (the stand-in PLC: the same boot folder; no data types, so nothing to compare)
+  const open = new Map<number, { data: Buffer; at: number }>();
+  let next = 1;
+  const client = {
+    async readWriteRaw(ig: number, io: number, size: number, value: Buffer, target?: { adsPort?: number }) {
+      if (target?.adsPort !== 10000) throw Object.assign(new Error('no types'), { adsError: { errorCode: 0x710, errorStr: 'Symbol not found' } });
+      if (ig === 120) {
+        const name = value.toString('latin1').replace(/\0+$/, '');
+        if (!ads[name]) throw Object.assign(new Error('Not found'), { adsError: { errorCode: 1804, errorStr: 'Not found (files, ...)' } });
+        const b = Buffer.alloc(4);
+        b.writeUInt32LE(next);
+        open.set(next++, { data: ads[name], at: 0 });
+        return b;
+      }
+      const f = open.get(io)!;
+      if (ig === 121) {
+        open.delete(io);
+        return Buffer.alloc(0);
+      }
+      const chunk = f.data.subarray(f.at, f.at + size);
+      f.at += chunk.length;
+      return chunk;
+    },
+  };
+  boot['CurrentConfig/LinePlc.tpzip'] = writeZip({ 'LinePlc.plcproj': '<Project/>', 'POUs/SM_Line.TcPOU': '<POU Name="SM_Line"/>', 'POUs/E_Line.TcDUT': '<DUT/>' });
+  const written = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[x := 1;]]></ST></Implementation></POU>' }], write: 'online' });
+  expect(written.ok && written.written === 'online' && written.verified?.ok === true && /runs the code written/.test(written.verified.text), `after the write: ${JSON.stringify(written.verified ?? written.fatal)}`);
+  const failing = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[noSuchVar := 1;]]></ST></Implementation></POU>' }], write: 'online' });
+  expect(!failing.ok && !failing.written && !failing.verified && failing.errors === 1, 'with an error: not written, not checked');
+  delete process.env.KSS_BUILD_DRYRUN;
 
   // 6. The app: the edits (the POU, its enum when one of the PLC's), where a message is
   const origin = { plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', dutPaths: { 'e_line.tcdut': 'POUs/E_Line.TcDUT' } };

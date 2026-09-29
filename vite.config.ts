@@ -31,6 +31,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), releaseNotes()],
   define: {
     __KSS_VERSIONS__: JSON.stringify(require('./scripts/release-plan.cjs').versions()),
+    // Link's code stamp for this build: a Link reporting another one is from another version
+    __KSS_LINK_STAMP__: JSON.stringify(require('./scripts/link-code-stamp.cjs').linkCodeStamp()),
   },
   server: {
     host: '0.0.0.0',

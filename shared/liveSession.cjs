@@ -8,24 +8,35 @@ const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources } = require('./tcSources.cjs');
-const { buildFromPlc, checkEdits } = require('./tcBuild.cjs');
+const { buildFromPlc, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
 
-/** This computer's IPv4 address towards the PLC (same subnet), else the first non-internal one */
+// Adapters that do not reach a PLC on the network: virtual switches (Hyper-V, WSL, VirtualBox, VMware), Bluetooth,
+// Wi-Fi Direct; and addresses without a network (169.254: no DHCP answer)
+const VIRTUAL_ADAPTER = /vEthernet|Hyper-V|WSL|VirtualBox|VMware|VMnet|Bluetooth|Loopback|Local Area Connection\*|Teredo|isatap/i;
+
+/**
+ * This computer's IPv4 address towards the PLC: the adapter on the PLC's subnet; else (a PLC behind a gateway) a real
+ * network adapter's, not a virtual switch's (the first adapter is often Hyper-V's)
+ */
 function localIpTowards(plcIp) {
-  const all = Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal);
+  const all = Object.entries(os.networkInterfaces()).flatMap(([iface, addrs]) => (addrs ?? []).filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => ({ ...a, iface })));
   const toInt = (ip) => ip.split('.').reduce((n, b) => (n << 8) + Number(b), 0) >>> 0;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(plcIp)) {
-    const hit = all.find((a) => (toInt(a.address) & toInt(a.netmask)) === (toInt(plcIp) & toInt(a.netmask)));
+    const hit = all.find((a) => !a.address.startsWith('169.254.') && (toInt(a.address) & toInt(a.netmask)) === (toInt(plcIp) & toInt(a.netmask)));
     if (hit) return hit.address;
   }
-  return all[0]?.address ?? '127.0.0.1';
+  const real = all.filter((a) => !a.address.startsWith('169.254.') && !VIRTUAL_ADAPTER.test(a.iface));
+  return (real[0] ?? all.find((a) => !a.address.startsWith('169.254.')) ?? all[0])?.address ?? '127.0.0.1';
 }
 
 /** This computer's TwinCAT AMS NetId, when TwinCAT is installed (its router owns that NetId) */
 function localTwinCatNetId() {
+  // (the tests: KSS_LOCAL_TWINCAT_NETID, a NetId or "none")
+  const forced = process.env.KSS_LOCAL_TWINCAT_NETID;
+  if (forced) return forced === 'none' ? null : forced;
   if (process.platform !== 'win32') return null;
   try {
     const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Beckhoff\\TwinCAT3\\System', '/v', 'AmsNetId'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
@@ -80,24 +91,47 @@ function createLiveSession(hooks = {}) {
     // which gives the connection its address and port (as any local ADS program); else straight to the PLC's router,
     // with this computer's NetId (its route on the PLC)
     const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !(options.localNetId || '').trim();
-    const client = new Client({
+    const makeClient = (router) => new Client({
       targetAmsNetId: netId,
       targetAdsPort: adsPort,
-      routerAddress: host,
-      routerTcpPort: tcpPort,
-      ...(viaLocalRouter ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
+      routerAddress: router ? '127.0.0.1' : host,
+      routerTcpPort: router ? 48898 : tcpPort,
+      ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
       rawClient: true,
       autoReconnect: false,
       timeoutDelay: 3000,
       hideConsoleWarnings: true,
     });
+    // TwinCAT on this computer, a PLC elsewhere (no local NetId given): through this computer's TwinCAT router first,
+    // so a route it already has (XAE's Add Route) serves here too; it refuses at once when it has none: then straight
+    // to the PLC, with this computer's own NetId
+    let client = null;
+    let preconnected = false;
+    const routerNetId = !viaLocalRouter && tcpPort === 48898 && !(options.localNetId || '').trim() ? localTwinCatNetId() : null;
+    if (routerNetId) {
+      const c = makeClient(true);
+      try {
+        await c.connect();
+        await c.readState();
+        client = c;
+        preconnected = true;
+        Object.assign(route, { localNetId: routerNetId, viaRouter: true });
+      } catch {
+        await c.disconnect().catch(() => {});
+      }
+      if (id !== sessionId) {
+        await client?.disconnect().catch(() => {});
+        return;
+      }
+    }
+    client ??= makeClient(viaLocalRouter);
     // desired: guard variables asked for before the connection was made (liveWatch)
     const s = { id, client, adsPort, netId, handle: 0, subscription: null, queue: [], timer: null, stateTimer: null, vars: null, desired: null, dtCache: new Map(), connected: false, sources: null };
     session = s;
     const found = [];
     try {
       try {
-        await client.connect();
+        if (!preconnected) await client.connect();
       } catch (err) {
         throw new Error(`${host}:${tcpPort} did not accept the connection (${ads.adsErrorText(err)}). Is there an ADS route on the PLC for this computer (AMS NetId ${localNetId}, IP ${localIp})?`);
       }
@@ -288,7 +322,12 @@ function createLiveSession(hooks = {}) {
     if (notify && send) send({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
   }
 
-  return { start, stop, watch, browse, sources, build };
+  /** Close the XAE kept open for builds now (plcBuildClose → plcBuildClosed { closed }) */
+  function closeBuild(send, req) {
+    send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae() });
+  }
+
+  return { start, stop, watch, browse, sources, build, closeBuild };
 }
 
-module.exports = { createLiveSession, localIpTowards, defaultLocalNetId };
+module.exports = { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId };

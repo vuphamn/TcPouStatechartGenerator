@@ -17,7 +17,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const finder = spawn(process.execPath, [path.join(h.FAKES, 'fake-discovery.cjs'), '48995'], { stdio: 'ignore' });
   const linkOut = h.out('link-multi-run.txt');
   const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48969', '--no-open'], {
-    env: { ...process.env, APPDATA: h.out('link-appdata-multi'), KSS_DISCOVERY_PORT: '48995', KSS_DISCOVERY_BROADCAST: '0' },
+    env: { ...process.env, APPDATA: h.out('link-appdata-multi'), KSS_DISCOVERY_PORT: '48995', KSS_DISCOVERY_BROADCAST: '0', KSS_LOCAL_TWINCAT_NETID: 'none' },
     stdio: ['ignore', fs.openSync(linkOut, 'w'), fs.openSync(linkOut, 'a')],
   });
   const code = (await h.waitForText(linkOut, /Pairing code:\s+(\S+)/))?.[1];

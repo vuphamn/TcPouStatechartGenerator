@@ -50,6 +50,14 @@ const outs = of('output-never-set').map((x) => x.message.split(' ')[0]);
 expect(outs.length === 0, `every output set somewhere: ${outs.join(', ') || 'none flagged'}`);
 const f2 = lintVariables(POU.replace('\tstatus_bReady := TRUE;', '\t;'), null, false, []);
 expect(f2.filter((x) => x.rule === 'output-never-set').map((x) => x.message.split(' ')[0]).join() === 'status_bReady', 'status_bReady no longer set: flagged');
+const never = (fs: typeof f) => fs.find((x) => x.rule === 'output-never-set');
+expect(!never(f2)?.fix, 'without the project: not removed for you (another POU may read it)');
+// The project known: nothing else reads it: Remove offered; another POU reads it: not
+const unread = POU.replace('\tstatus_bReady := TRUE;', '\t;').replace('rtAlways(CLK := bIn);', 'rtAlways(CLK := FALSE OR bIn);');
+const f3 = lintVariables(unread, null, false, [], () => false);
+expect(never(f3)?.fix?.kind === 'remove-variable' && (never(f3)?.fix as { name?: string })?.name === 'status_bReady' && /nothing in the project reads it/.test(never(f3)?.message ?? ''), `nothing reads it: Remove offered (${never(f3)?.message})`);
+const f4 = lintVariables(unread, null, false, [], (n) => n === 'status_bReady');
+expect(!never(f4)?.fix, 'another POU reads it: not removed');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);
