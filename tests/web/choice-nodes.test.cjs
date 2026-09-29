@@ -15,6 +15,23 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(800);
   const choices = () => p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node')].filter((n) => /choice_/.test(n.id)).map((n) => ({ id: n.id, state: n.getAttribute('data-state-id'), diamond: !!n.querySelector('polygon'), size: (() => { const b = n.querySelector('polygon')?.getBBox(); return b ? Math.round(b.width) : 0; })() })));
   expect((await choices()).length === 0, 'off: no choices');
+  // The priority badges: none on top of another (two transitions leaving a state side by side: the second further
+  // along its edge), in the diagram's own units (the minimap's copy left out)
+  const crowded = await p.evaluate(() => {
+    const svg = document.querySelector('#mermaid-canvas-area g.node')?.ownerSVGElement;
+    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => ({ x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')), id: c.parentElement.getAttribute('data-edge-id') }));
+    const close = [];
+    for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) if (Math.hypot(at[i].x - at[j].x, at[i].y - at[j].y) < 18) close.push(`${at[i].id} / ${at[j].id}`);
+    return { n: at.length, close };
+  });
+  expect(crowded.n > 20 && crowded.close.length === 0, `the ${crowded.n} priority badges: none on top of another (${crowded.close.slice(0, 2).join('; ') || 'none'})`);
+  const crowdedNow = () => p.evaluate(() => {
+    const svg = document.querySelector('#mermaid-canvas-area g.node')?.ownerSVGElement;
+    const at = [...(svg?.querySelectorAll('.tc-priority-badge circle') ?? [])].map((c) => ({ x: Number(c.getAttribute('cx')), y: Number(c.getAttribute('cy')), id: c.parentElement.getAttribute('data-edge-id') }));
+    const close = [];
+    for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) if (Math.hypot(at[i].x - at[j].x, at[i].y - at[j].y) < 18) close.push(`${at[i].id} / ${at[j].id}`);
+    return { n: at.length, close };
+  });
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   const on = await choices();
@@ -22,6 +39,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(clamped?.size >= 40, `a diamond you can see and grab: ${clamped?.size} wide (SVG units)`);
   expect(on.length > 0 && !!clamped && clamped.diamond, `on: ${on.length} choices drawn as diamonds (CLAMPED's: ${clamped?.id.replace(/^.*?(choice_)/, '$1')})`);
   expect(!(await p.evaluate(() => /Mermaid Render Error/.test(document.body.innerText))), 'no render error');
+  // (a choice's arms leave its corners close together: their badges apart too)
+  const crowdedOn = await crowdedNow();
+  expect(crowdedOn.n > 20 && crowdedOn.close.length === 0, `choices on: the ${crowdedOn.n} priority badges, none on top of another (${crowdedOn.close.slice(0, 2).join('; ') || 'none'})`);
   expect(await p.evaluate(() => localStorage.getItem('kss.choiceNodes')) === 'true', 'kept per viewer');
   // A choice dragged (ELK): its transitions stay orthogonal, their ends on the diamond's border
   const edgesOf = (id) => p.evaluate((id) => {
@@ -234,6 +254,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.click('#choice-nodes-checkbox');
   await h.sleep(2500);
   expect((await choices()).length === 0, 'off again: gone');
+  // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)
+  const slantedLeft = await h.reroutedSlanted(p);
+  expect(slantedLeft.length === 0, `the moved edges on the canvas orthogonal (${slantedLeft.slice(0, 3).join(" | ") || "none slanted"})`);
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

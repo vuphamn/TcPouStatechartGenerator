@@ -1286,6 +1286,8 @@ function enhanceSvgWithPriorityCircles(
       clusterBadgeLayer.setAttribute('class', 'priority-badges-cluster');
 
       const usedPathIndices = new Set<number>();
+      // (the badges placed so far in this cluster: another one on top of one moves further along its own edge)
+      const placedBadges: { x: number; y: number }[] = [];
 
       for (let i = 0; i < labels.length; i++) {
         const labelEl = labels[i];
@@ -1449,8 +1451,23 @@ function enhanceSvgWithPriorityCircles(
 
         // Position badge 20px from edge start endpoint along direction vector to ensure clean clearance from state border
         const offset = 20;
-        const cx = parsed.startX + parsed.dirX * offset;
-        const cy = parsed.startY + parsed.dirY * offset;
+        let cx = parsed.startX + parsed.dirX * offset;
+        let cy = parsed.startY + parsed.dirY * offset;
+        // Another badge there (two transitions leaving the state side by side): further along this edge, until clear
+        const BADGE_GAP = 19;
+        const clear = (x: number, y: number) => placedBadges.every((b) => Math.hypot(b.x - x, b.y - y) >= BADGE_GAP);
+        if (!clear(cx, cy) && typeof (pathEl as SVGPathElement).getPointAtLength === 'function') {
+          const len = (pathEl as SVGPathElement).getTotalLength();
+          for (let d = offset + 12; d <= Math.min(len * 0.6, offset + 96); d += 12) {
+            const q = (pathEl as SVGPathElement).getPointAtLength(d);
+            if (clear(q.x, q.y)) {
+              cx = q.x;
+              cy = q.y;
+              break;
+            }
+          }
+        }
+        placedBadges.push({ x: cx, y: cy });
 
         // TwinCAT XAE UML Statechart style circular badge
         const badgeG = doc.createElementNS('http://www.w3.org/2000/svg', 'g');

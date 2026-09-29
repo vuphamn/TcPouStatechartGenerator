@@ -19,10 +19,11 @@ const { Client } = require('ads-client');
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
 const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
-const { buildFromPlc, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
+const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
+const { ProjectMirror } = require(`${sharedDir}/projectMirror.cjs`);
 const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
 const { checkConnection } = require(`${sharedDir}/tcCheck.cjs`);
-const { plcAppInfo } = require(`${sharedDir}/tcAppInfo.cjs`);
+const { plcAppInfo, startPlc } = require(`${sharedDir}/tcAppInfo.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -519,6 +520,8 @@ function start() {
     const boardViewer = {};
     let user = null;
     let session = null; // { conn, entry, vars }
+    // (Build from the page's project folder: its files mirrored on this computer, only with allowBuild)
+    const mirror = new ProjectMirror();
     // Guard variables asked for before the session was connected
     let desiredVars = null;
     // Raised by every start / stop / close: a start still connecting for an older request is dropped
@@ -575,7 +578,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -601,7 +604,7 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}`);
         audit.add(user, 'sign-in', { ip, how: 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })) });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
       }
 
       // Operator board: the machines of these PLCs (default: all), once a second
@@ -727,20 +730,88 @@ function start() {
         if (!session?.conn.client) return send({ type: 'plcAppInfoResult', requestId, state: null, onlineChanges: null, error: 'Not connected' });
         return send({ type: 'plcAppInfoResult', requestId, ...(await plcAppInfo(session.conn.client)) });
       }
+      // The PLC application started (after a write left it in Stop): a write, so allowWrite and writeUsers apply
+      if (m.type === 'plcStart') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const writers = Array.isArray(config.writeUsers) ? config.writeUsers.map((u) => String(u).toLowerCase()) : null;
+        if (config.allowWrite !== true || (writers && !writers.includes(String(user ?? '').toLowerCase()))) return send({ type: 'plcStartResult', requestId, state: null, ok: false, error: config.allowWrite !== true ? 'Writing to the PLC is turned off on this gateway (allowWrite)' : `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)` });
+        if (!session?.conn.client) return send({ type: 'plcStartResult', requestId, state: null, ok: false, error: 'Not connected' });
+        audit.add(user, 'plc.start', { plc: session.conn.plc.id });
+        const r = await startPlc(session.conn.client);
+        log(`plc: ${user} started ${session.conn.plc.id}: ${r.ok ? 'Run' : r.error}`);
+        return send({ type: 'plcStartResult', requestId, ...r });
+      }
       if (m.type === 'plcBuildClose') {
         if (config.allowBuild !== true) return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: false });
         return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: closeXae() });
       }
-      if (m.type === 'plcBuild') {
-        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
-        if (config.allowBuild !== true) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Building the PLC\'s project is turned off on this gateway (allowBuild)', items: [] });
-        if (m.write && config.allowWrite !== true) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Writing to the PLC is turned off on this gateway (allowWrite)', items: [] });
+      // A build, or a write, refused: turned off on this gateway (allowBuild, allowWrite), or not this user's (writeUsers)
+      const buildRefused = (write) => {
+        if (config.allowBuild !== true) return 'Building the PLC\'s project is turned off on this gateway (allowBuild)';
+        if (write && config.allowWrite !== true) return 'Writing to the PLC is turned off on this gateway (allowWrite)';
         // (writeUsers: only these may write; builds stay open to everyone signed in)
         const writers = Array.isArray(config.writeUsers) ? config.writeUsers.map((u) => String(u).toLowerCase()) : null;
-        if (m.write && writers && !writers.includes(String(user ?? '').toLowerCase())) {
+        if (write && writers && !writers.includes(String(user ?? '').toLowerCase())) {
           audit.add(user, 'plc.write.refused', { plc: session?.conn.plc?.id ?? null });
-          return send({ type: 'plcBuildResult', requestId, ok: false, fatal: `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)`, items: [] });
+          return `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)`;
         }
+        return null;
+      };
+      // Build from the page's project folder: its file list (which ones are needed), the files in pieces, the build
+      if (m.type === 'projectSync' || m.type === 'projectPut') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const reply = m.type === 'projectSync' ? 'projectSyncResult' : 'projectPutResult';
+        const refused = buildRefused(false);
+        if (refused) return send({ type: reply, requestId, error: refused });
+        let r;
+        try {
+          r = m.type === 'projectSync' ? mirror.sync(m.project, m.files) : mirror.put(String(m.uploadId ?? ''), m);
+        } catch (err) {
+          r = { error: err.message };
+        }
+        return send({ type: reply, requestId, ...r });
+      }
+      if (m.type === 'projectBuild') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const refused = buildRefused(!!m.write);
+        if (refused) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: refused, items: [] });
+        if (m.write != null && !['online', 'download', 'activate'].includes(m.write)) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'write: online, download or activate', items: [] });
+        if (!session?.conn.client) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Not connected', items: [] });
+        const uploadId = String(m.uploadId ?? '');
+        const fileAt = mirror.fullPath(uploadId, m.file);
+        if (!fileAt) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'The project is not on the gateway yet: build again', items: [] });
+        const edits = (Array.isArray(m.edits) ? m.edits : []).slice(0, 100).map((e) => ({ file: mirror.fullPath(uploadId, e?.file), content: e?.content })).filter((e) => e.file && typeof e.content === 'string');
+        const conn = session.conn;
+        if (conn.building) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'A build for this PLC is already running', items: [] });
+        conn.building = true;
+        audit.add(user, m.write ? 'plc.write' : 'plc.build', { plc: conn.plc.id, files: (m.edits ?? []).map((e) => String(e?.file ?? '')), write: m.write ?? null, from: 'project folder' });
+        try {
+          const r = await buildFromProject(conn.client, { file: fileAt, edits, write: m.write ?? null, netId: conn.plc.netId, adsPort: Number(conn.plc?.port) || 851, onStep: (text) => send({ type: 'plcBuildProgress', requestId, text }) });
+          if (r.written) conn.sources = null;
+          // Written: the new compile information back to the page (into its project folder)
+          if (r.compileInfoFiles?.length) {
+            const root = mirror.root(uploadId);
+            r.compileInfo = r.compileInfoFiles.slice(0, 50).map((f) => {
+              try {
+                return { path: f, data: fs.readFileSync(path.join(root, f)).toString('base64') };
+              } catch {
+                return null;
+              }
+            }).filter(Boolean);
+          }
+          log(`build: ${user} ${m.write ? 'wrote to' : 'built for'} ${conn.plc.id} from a project folder: ${r.ok ? 'ok' : r.fatal ?? `${r.errors} error(s)`}`);
+          send({ type: 'plcBuildResult', requestId, ...r });
+        } catch (err) {
+          send({ type: 'plcBuildResult', requestId, ok: false, fatal: err?.message ?? String(err), items: [] });
+        } finally {
+          conn.building = false;
+        }
+        return;
+      }
+      if (m.type === 'plcBuild') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const refused = buildRefused(!!m.write);
+        if (refused) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: refused, items: [] });
         if (!session?.conn.client) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'Not connected', items: [] });
         const bad = checkEdits(m);
         if (bad) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: bad, items: [] });
@@ -871,6 +942,7 @@ function start() {
 
     ws.on('close', async () => {
       clearTimeout(helloTimer);
+      mirror.dispose();
       boardStop?.();
       alertsOff?.();
       startSeq++;

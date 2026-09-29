@@ -51,7 +51,7 @@ async function adsState(options) {
     const s = await c.readState();
     return { ok: true, state: s.adsStateStr ?? String(s.adsState) };
   } catch (err) {
-    return { ok: false, error: err?.adsError?.errorStr ?? err?.message ?? String(err) };
+    return { ok: false, error: err?.adsError?.errorStr ?? err?.parent?.adsError?.errorStr ?? err?.message ?? String(err), code: err?.adsError?.errorCode ?? err?.parent?.adsError?.errorCode ?? null };
   } finally {
     await c.disconnect().catch(() => {});
   }
@@ -119,6 +119,21 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   let viaRouter = null;
   if (routerNetId && NETID.test(target)) {
     viaRouter = await adsState({ targetAmsNetId: target, targetAdsPort: adsPort, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
+  }
+  // (the route works, TwinCAT there answers, nothing on that ADS port: TwinCAT's own state tells why)
+  let twincatAnswers = false;
+  const noPlc = async (options) => {
+    const sys = await adsState({ ...options, targetAdsPort: 10000 });
+    twincatAnswers = sys.ok;
+    add({
+      id: 'ads', ok: false, title: `Nothing on ADS port ${adsPort}: TwinCAT there is in ${sys.ok ? sys.state : 'an unknown state'}`,
+      detail: sys.ok && sys.state === 'Config' ? 'In Config mode no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.' : 'Is the PLC on another ADS port (852, 853...), or not started?',
+    });
+  };
+  if (viaRouter?.code === 6) {
+    add({ id: 'router', ok: true, title: 'This computer\'s TwinCAT router reaches it: StateScope uses its route', detail: '' });
+    await noPlc({ targetAmsNetId: target, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
+  } else if (viaRouter) {
     add({
       id: 'router', ok: viaRouter.ok ? true : null,
       title: viaRouter.ok ? `This computer's TwinCAT router reaches it (${viaRouter.state}): StateScope uses its route` : 'This computer\'s TwinCAT router has no route to it',
@@ -127,19 +142,20 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   }
 
   // 5. ADS: the PLC's state, with this computer's NetId (the route on the PLC)
-  if (open && NETID.test(target) && !viaRouter?.ok) {
+  if (open && NETID.test(target) && !viaRouter?.ok && viaRouter?.code !== 6) {
     const s = await adsState({ targetAmsNetId: target, targetAdsPort: adsPort, routerAddress: host, routerTcpPort: tcpPort, localAmsNetId: myNetId, localAdsPort: 32905 });
-    add({
+    if (s.code === 6) await noPlc({ targetAmsNetId: target, routerAddress: host, routerTcpPort: tcpPort, localAmsNetId: myNetId, localAdsPort: 32905 });
+    else add({
       id: 'ads', ok: s.ok, title: s.ok ? `The PLC answers (${s.state}) on ADS port ${adsPort}` : `The PLC does not answer ADS (port ${adsPort})`,
       detail: s.ok ? '' : `It has no route for this computer, or not on this port: add one on the PLC for AMS NetId ${myNetId}, IP ${myIp} (Browse > Add route, or TwinCAT's Router > Edit Routes there). ${s.error ? `(${s.error})` : ''}`.trim(),
     });
   }
   // (the PLC answers ADS: a search that went unanswered is not the problem, only Browse and Add Route need it)
-  const adsOk = steps.some((s) => (s.id === 'ads' || s.id === 'router') && s.ok === true);
+  const adsOk = twincatAnswers || steps.some((s) => (s.id === 'ads' || s.id === 'router') && s.ok === true);
   const search = steps.find((s) => s.id === 'search');
   if (adsOk && search && search.ok === false) {
     search.ok = null;
-    search.detail = 'The PLC answers ADS, so going live works; only Browse (it will not list it) and Add Route need UDP 48899.';
+    search.detail = 'TwinCAT there answers ADS, so the way to it works; only Browse (it will not list it) and Add Route need UDP 48899.';
   }
   const failing = steps.find((s) => s.ok === false);
   const verdict = failing ? `${failing.title}. ${failing.detail}`.trim() : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';

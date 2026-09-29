@@ -49,4 +49,16 @@ async function waitForRun(client, { timeoutMs = 20000, pollMs = 1000 } = {}) {
   return { state, ok: state === 'Run', waitedMs: Date.now() - started };
 }
 
-module.exports = { plcAppInfo, waitForRun, ONLINE_CHANGES };
+/** The PLC application started (ADS: Run), then waited for until it runs: { state, ok } or { state, ok: false, error } */
+async function startPlc(client, { timeoutMs = 10000 } = {}) {
+  try {
+    await client.startPlc();
+  } catch (err) {
+    const why = err?.adsError?.errorStr ?? err?.parent?.adsError?.errorStr ?? err?.message ?? String(err);
+    return { state: null, ok: false, error: `The PLC did not start: ${why}` };
+  }
+  const run = await waitForRun(client, { timeoutMs });
+  return { state: run.state, ok: run.ok, ...(run.ok ? {} : { error: `The PLC is in ${run.state ?? '?'} after Start: look at TwinCAT's messages on the target (its license, an exception)` }) };
+}
+
+module.exports = { plcAppInfo, waitForRun, startPlc, ONLINE_CHANGES };

@@ -20,7 +20,7 @@ const { checkConnection } = require('../shared/tcCheck.cjs');
 const { addRoutes } = require('../shared/tcRoutes.cjs');
 const update = require('./update.cjs');
 const { createUpdater, restartWith } = require('./selfUpdate.cjs');
-const { ProjectMirror } = require('./projectMirror.cjs');
+const { ProjectMirror } = require('../shared/projectMirror.cjs');
 const { openXae } = require('../shared/tcBuild.cjs');
 
 const VERSION = '1.0.0';
@@ -250,7 +250,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -266,6 +266,11 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'plcLicense') return void session.license(send, m);
     // The PLC application's state and online change count (did an online change from XAE take?)
     if (m.type === 'plcAppInfo') return void session.appInfo(send, m);
+    // The PLC application started (after a write left it in Stop; the page asked first)
+    if (m.type === 'plcStart') {
+      log(`plc: ${origin} starts the PLC application`);
+      return void session.startPlc(send, m);
+    }
     // TwinCAT XAE opened on this computer (its license page renews a trial license)
     if (m.type === 'openXae') {
       const r = await openXae();

@@ -96,6 +96,9 @@ const MIME = 'application/x-kss-statechart-element';
   await drag(b, { x: c.left - 60, y: c.top - 40 }, true);
   dut = await enumText();
   expect(!/\{region "Clamp"\}[\s\S]*TABLEMANAGER_UNCLAMP_START[\s\S]*\{endregion\}/.test(dut) && /TABLEMANAGER_UNCLAMP_START/.test(dut), 'with Alt out of it: out of the region');
+  // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)
+  const slantedLeft = await h.reroutedSlanted(p);
+  expect(slantedLeft.length === 0, `the moved edges on the canvas orthogonal (${slantedLeft.slice(0, 3).join(" | ") || "none slanted"})`);
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

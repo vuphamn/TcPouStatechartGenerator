@@ -102,7 +102,7 @@ const hello = (token) =>
   await setField(2, 'ip', '127.0.0.1:48987');
   await p.click('#admin-plcs tr:nth-child(1) .admin-test');
   await p.click('#admin-plcs tr:nth-child(2) .admin-test');
-  await p.waitForFunction(() => [...document.querySelectorAll('#admin-plcs .status')].every((s) => !/Testing/.test(s.textContent) && s.textContent), { timeout: 10000 }).catch(() => {});
+  await p.waitForFunction(() => [...document.querySelectorAll('#admin-plcs .status')].every((s) => !/Testing/.test(s.textContent) && s.textContent), { timeout: 25000 }).catch(() => {});
   const statuses = await p.$$eval('#admin-plcs .status', (s) => s.map((x) => `${x.className}: ${x.textContent}`));
   expect(/ok: OK: PLC on port 851 Run, TwinCAT Run \(FakePlc 3\.1\.4026\)/.test(statuses[0]), `test, the PLC: ${statuses[0]}`);
   expect(/bad: No TwinCAT router at 127\.0\.0\.1:48987/.test(statuses[1]), `test, nothing there: ${statuses[1]}`);

@@ -1,7 +1,8 @@
-// The web edition's TwinCAT project folder, mirrored on this computer for a build (Build from the project, through
-// Link): the page lists its files (path, size, time), Link answers which it needs (new or changed), the page sends
-// those in pieces (a message stays under Link's 256 KB); files the page no longer lists are removed. A folder per
-// project and page, used again for the next build (only the changed files come again), removed when the page goes.
+// A web page's TwinCAT project folder, mirrored on the computer that builds it (Build from the project, through Link
+// or the gateway): the page lists its files (path, size, time), the mirror answers which it needs (new or changed), the
+// page sends those in pieces (a message stays under 256 KB; gzip-compressed when it saves), files the page no longer
+// lists are removed. A folder per project and page, used again for the next build (only the changed files come again),
+// removed when the page goes.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -73,8 +74,11 @@ class ProjectMirror {
     return { uploadId, need };
   }
 
-  /** A piece of a file (data: base64 at offset); done: the file complete (its size and time set). → { ok } or { error } */
-  put(uploadId, { path: p, offset = 0, data = '', size, mtime, done }) {
+  /**
+   * A piece of a file (data: base64 at offset; encoding 'gzip': the pieces are the file compressed, unpacked when it is
+   * complete); done: the file complete (its size, unpacked, checked, its time set). → { ok } or { error }
+   */
+  put(uploadId, { path: p, offset = 0, data = '', size, mtime, done, encoding }) {
     const m = this.mirrors.get(uploadId);
     const rel = relPath(p);
     if (!m || !rel) return { error: 'Not a file of the mirrored project' };
@@ -89,6 +93,16 @@ class ProjectMirror {
       fs.appendFileSync(part, buf);
     }
     if (done) {
+      if (encoding === 'gzip') {
+        let unpacked;
+        try {
+          unpacked = require('zlib').gunzipSync(fs.readFileSync(part), { maxOutputLength: LIMITS.file });
+        } catch (err) {
+          fs.rmSync(part, { force: true });
+          return { error: `${p}: not a gzip file (${err.message})` };
+        }
+        fs.writeFileSync(part, unpacked);
+      }
       if (Number.isFinite(size) && fs.statSync(part).size !== size) return { error: `${p}: not complete` };
       fs.renameSync(part, file);
       if (Number.isFinite(mtime)) fs.utimesSync(file, new Date(), new Date(mtime));

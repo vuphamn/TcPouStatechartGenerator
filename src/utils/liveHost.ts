@@ -38,8 +38,13 @@ interface DesktopLiveApi {
   license?: (req: { requestId: number }) => Promise<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }>;
   /** The PLC application's state and online change count (did an online change from XAE take?) */
   appInfo?: (req: { requestId: number }) => Promise<import('./plcBuild.ts').PlcAppInfo>;
+  /** The PLC application started (after a write left it in Stop) */
+  startPlc?: (req: { requestId: number }) => Promise<{ state: string | null; ok: boolean; error?: string }>;
   /** TwinCAT XAE opened for the user */
   openXae?: () => Promise<{ ok: boolean; message: string }>;
+  /** The engineering project for a POU from the PLC: its folder chosen, a file saved into it */
+  pickProjectFolder?: () => Promise<{ path?: string; canceled?: boolean; error?: string }>;
+  saveIntoProject?: (req: { root: string; plcProject?: string; path: string; content: string }) => Promise<{ file?: string; error?: string }>;
   build?: (req: { requestId: number; edits: import('./plcBuild.ts').PlcEdit[]; plcProject?: string; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }

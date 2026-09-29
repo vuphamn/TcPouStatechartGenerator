@@ -26,12 +26,18 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   };
   const a = await browser.newPage();
   a.on('pageerror', (e) => errors.push(e.message));
+  // (the browser's notifications: a stand-in that records them)
+  await a.evaluateOnNewDocument(() => {
+    window.__notes = [];
+    window.Notification = class { static permission = 'granted'; static requestPermission() { return Promise.resolve('granted'); } constructor(title, o) { window.__notes.push(title + ' | ' + (o?.body ?? '')); } };
+  });
   await a.goto(h.APP_URL, { waitUntil: 'load' });
   // A remembered PLC (the fake one, on its own port); Check all every 3 s (0.05 min)
   await a.evaluate(() => {
     localStorage.clear();
     localStorage.setItem('kss.live.plcs', JSON.stringify([{ name: 'Fake line', netId: '127.0.0.2.1.1', ip: '127.0.0.1:48976', port: '851', localNetId: '', used: Date.now() }]));
     localStorage.setItem('kss.plcCheckEvery', '0.05');
+    localStorage.setItem('kss.limits.notify', 'true');
   });
   await a.reload({ waitUntil: 'load' });
   await a.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
@@ -50,13 +56,18 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
 
   // The PLC stops answering: the next check (by itself) marks it; Browse closed, its button says so
   plc.kill();
-  await a.waitForFunction((sel) => document.querySelector(sel)?.getAttribute('data-lost') === 'true', { timeout: 40000 }, row).catch(() => {});
-  const lost = await a.$eval(row, (e) => e.getAttribute('data-ok') + '|' + e.textContent + '|' + e.getAttribute('title')).catch(() => '');
+  // (read as it is marked: the timer checks it again every 3 s, "Checking…" meanwhile)
+  const lost = await a.waitForFunction((sel) => {
+    const e = document.querySelector(sel);
+    return e?.getAttribute('data-lost') === 'true' && e.getAttribute('data-ok') === 'false' ? e.getAttribute('data-ok') + '|' + e.textContent + '|' + e.getAttribute('title') : false;
+  }, { timeout: 40000, polling: 100 }, row).then((x) => x.jsonValue()).catch(() => '');
   expect(/^false\|✗since \d{1,2}:\d{2}/.test(lost) && /Stopped answering at /.test(lost), `stopped answering: "${lost.slice(0, 100)}"`);
   await a.click('#live-plc-browser-close').catch(() => {});
   await sleep(300);
   const badge = await a.$eval('#live-plc-lost', (e) => e.textContent + '|' + e.getAttribute('title')).catch(() => '');
   expect(/^1 down\|Stopped answering: Fake line/.test(badge), `Browse closed, its button: "${badge.slice(0, 80)}"`);
+  const notes = await a.evaluate(() => window.__notes);
+  expect(notes.length === 1 && /^Kval StateScope: Fake line stopped answering \| Since /.test(notes[0]), `Notify on: a notification (${notes.join(' / ') || 'none'})`);
   await a.screenshot({ path: h.out('plc-check-timer.png') });
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

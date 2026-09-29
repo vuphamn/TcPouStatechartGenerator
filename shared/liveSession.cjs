@@ -10,7 +10,7 @@ const ads = require('./tcAds.cjs');
 const { readPlcSources } = require('./tcSources.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
-const { plcAppInfo } = require('./tcAppInfo.cjs');
+const { plcAppInfo, startPlc } = require('./tcAppInfo.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
@@ -32,6 +32,21 @@ function localIpTowards(plcIp) {
   }
   const real = all.filter((a) => !a.address.startsWith('169.254.') && !VIRTUAL_ADAPTER.test(a.iface));
   return (real[0] ?? all.find((a) => !a.address.startsWith('169.254.')) ?? all[0])?.address ?? '127.0.0.1';
+}
+
+// ADS: the target's router answered, but nothing is on that port (no PLC runtime there)
+const ADS_PORT_NOT_FOUND = 6;
+const adsCode = (err) => err?.adsError?.errorCode ?? err?.parent?.adsError?.errorCode ?? null;
+/** TwinCAT's own state on the target (its system service, port 10000): Run, Config, ...; null when not read */
+async function systemState(client) {
+  try {
+    await client.connect();
+    return ads.ADS_STATES[(await client.readState()).adsState] ?? 'unknown';
+  } catch {
+    return null;
+  } finally {
+    await client.disconnect().catch(() => {});
+  }
 }
 
 /** This computer's TwinCAT AMS NetId, when TwinCAT is installed (its router owns that NetId) */
@@ -93,9 +108,9 @@ function createLiveSession(hooks = {}) {
     // which gives the connection its address and port (as any local ADS program); else straight to the PLC's router,
     // with this computer's NetId (its route on the PLC)
     const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !(options.localNetId || '').trim();
-    const makeClient = (router) => new Client({
+    const makeClient = (router, port = adsPort) => new Client({
       targetAmsNetId: netId,
-      targetAdsPort: adsPort,
+      targetAdsPort: port,
       routerAddress: router ? '127.0.0.1' : host,
       routerTcpPort: router ? 48898 : tcpPort,
       ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
@@ -118,8 +133,14 @@ function createLiveSession(hooks = {}) {
         client = c;
         preconnected = true;
         Object.assign(route, { localNetId: routerNetId, viaRouter: true });
-      } catch {
+      } catch (err) {
         await c.disconnect().catch(() => {});
+        // (the route works, the PLC's TwinCAT answers, but nothing is on that ADS port: kept through the router, so
+        // the reason is told, not a route that is not missing)
+        if (adsCode(err) === ADS_PORT_NOT_FOUND) {
+          client = makeClient(true);
+          Object.assign(route, { localNetId: routerNetId, viaRouter: true });
+        }
       }
       if (id !== sessionId) {
         await client?.disconnect().catch(() => {});
@@ -141,7 +162,12 @@ function createLiveSession(hooks = {}) {
       try {
         plcState = ads.ADS_STATES[(await client.readState()).adsState] ?? 'unknown';
       } catch (err) {
-        throw new Error(`The PLC did not answer on ADS port ${adsPort}: ${ads.adsErrorText(err)}. Without a route for this computer (AMS NetId ${localNetId}, IP ${localIp}) the PLC does not answer.`);
+        // TwinCAT there answers, nothing on this port: its own state says why (Config mode: no PLC runs)
+        if (adsCode(err) === ADS_PORT_NOT_FOUND) {
+          const sys = await systemState(makeClient(!!route.viaRouter || viaLocalRouter, 10000));
+          throw new Error(`TwinCAT on ${netId} answers${route.viaRouter ? ' (through this computer\'s route to it)' : ''}, but nothing is on ADS port ${adsPort}: ${sys === 'Config' ? 'TwinCAT there is in Config mode, so no PLC runs. Activate a configuration with its PLC project (XAE: Activate Configuration), and set TwinCAT to Run.' : `TwinCAT there is in ${sys ?? 'an unknown state'}. Is the PLC on another ADS port (852, 853...), or not started?`}`);
+        }
+        throw new Error(`The PLC did not answer on ADS port ${adsPort}: ${ads.adsErrorText(err)}. Without a route for this computer (AMS NetId ${route.localNetId}, IP ${localIp}) the PLC does not answer.`);
       }
       // Monitor (another PLC in the Machine Overview): connected for browsing and watched values, no state variable
       if (options.monitor === true) {
@@ -376,12 +402,20 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /** The PLC application started (plcStart → plcStartResult { state, ok, error }): after a write left it in Stop */
+  async function start_(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcStartResult', requestId, state: null, ok: false, error: 'Not connected' });
+    send({ type: 'plcStartResult', requestId, ...(await startPlc(s.client)) });
+  }
+
   /** Close the XAE kept open for builds now (plcBuildClose → plcBuildClosed { closed }) */
   function closeBuild(send, req) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae() });
   }
 
-  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license, appInfo };
+  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId };

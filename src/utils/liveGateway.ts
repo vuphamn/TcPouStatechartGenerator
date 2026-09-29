@@ -95,7 +95,7 @@ export async function gatewaySignOut(origin: string): Promise<void> {
 
 export class GatewayConnection {
   private ws: WebSocket | null = null;
-  private welcomed: Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild }> | null = null;
+  private welcomed: Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild; features: string[] }> | null = null;
   private url = '';
   private sso = false;
   // Requests answered by a message with the same requestId (Link's discover / addRoute)
@@ -108,7 +108,7 @@ export class GatewayConnection {
    * Opens the connection and signs in (reuses an open one to the same gateway). sso: signed in with the company
    * account on the gateway (its session cookie goes with the connection), no token
    */
-  connect(address: string, token: string, sso = false): Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild }> {
+  connect(address: string, token: string, sso = false): Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild; features: string[] }> {
     const url = gatewaySocketUrl(address);
     if (this.ws && this.welcomed && this.url === url && this.sso === sso && this.ws.readyState <= WebSocket.OPEN) return this.welcomed;
     this.close();
@@ -137,7 +137,7 @@ export class GatewayConnection {
         if (m.type === 'welcome' && !settled) {
           settled = true;
           signedIn = true;
-          resolve({ user: m.user, plcs: m.plcs, build: m.build ? { ...m.build, features: m.features ?? [] } : undefined });
+          resolve({ user: m.user, plcs: m.plcs, build: m.build ? { ...m.build, features: m.features ?? [] } : undefined, features: m.features ?? [] });
         } else if (m.type === 'denied' && !settled) {
           settled = true;
           reject(new Error(m.message));

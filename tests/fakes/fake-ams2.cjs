@@ -100,6 +100,12 @@ function handle(sock, f) {
     b.writeUInt32LE(code);
     reply(Buffer.concat([b, rest]));
   };
+  // config.configMode: TwinCAT in Config mode (no PLC runtime): its system service (port 10000) says Config, every
+  // other port is not there (ADS 6, target port not found)
+  if (config.configMode) {
+    if (target.port !== 10000) return result(6);
+    if (cmd === 4) { const st = Buffer.alloc(4); st.writeUInt16LE(15, 0); return result(0, st); }
+  }
   const withLength = (payload) => {
     const b = Buffer.alloc(4);
     b.writeUInt32LE(payload.length);
@@ -115,6 +121,12 @@ function handle(sock, f) {
       const b = Buffer.alloc(4);
       b.writeUInt16LE(config.adsState ?? 5, 0);
       return result(0, b);
+    }
+    // WriteControl (Start: the PLC runtime's state set)
+    case 5: {
+      config.adsState = d.readUInt16LE(0);
+      log('write control: state', config.adsState);
+      return result(0);
     }
     case 9: {
       const ig = d.readUInt32LE(0);

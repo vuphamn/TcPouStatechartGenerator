@@ -55,8 +55,14 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     license: (req) => ipcRenderer.invoke('tc:live-license', req),
     /** The PLC application's state and online change count -> { state, onlineChanges } */
     appInfo: (req) => ipcRenderer.invoke('tc:live-app-info', req),
+    /** The PLC application started -> { state, ok, error } */
+    startPlc: (req) => ipcRenderer.invoke('tc:live-plc-start', req),
     /** TwinCAT XAE opened for the user -> { ok, message } */
     openXae: () => ipcRenderer.invoke('tc:open-xae'),
+    /** The engineering project's folder chosen -> { path } | { canceled } | { error } */
+    pickProjectFolder: () => ipcRenderer.invoke('tc:pick-project-folder'),
+    /** A POU saved into it: { root, plcProject, path, content } -> { file } | { error } */
+    saveIntoProject: (req) => ipcRenderer.invoke('tc:save-into-project', req),
     /** The Live tab's Check: why a PLC does not answer, { steps, verdict, suggest? } */
     checkConnection: (req) => ipcRenderer.invoke('tc:check-connection', req),
     /** The Live tab's Browse: the TwinCAT devices on the network, { devices, errors } */

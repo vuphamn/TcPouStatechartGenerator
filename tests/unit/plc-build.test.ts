@@ -5,9 +5,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree, xaeWorker, openXae } = require('../../shared/tcBuild.cjs');
+const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree, xaeWorker, openXae, saveIntoProject } = require('../../shared/tcBuild.cjs');
 const { plcAppInfo } = require('../../shared/tcAppInfo.cjs');
-const { ProjectMirror, relPath } = require('../../link/projectMirror.cjs');
+const { ProjectMirror, relPath } = require('../../shared/projectMirror.cjs');
 const selfUpdate = require('../../link/selfUpdate.cjs');
 const { writeZip } = require('../lib/zip.cjs');
 /* eslint-enable @typescript-eslint/no-require-imports */
@@ -198,6 +198,14 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(syncTree(proj, copyDir) === 3 && syncTree(proj, copyDir) === 0, 'synced: the files, then nothing (unchanged)');
   fs.writeFileSync(projPou, '<POU Name="SM_Line"/>');
   expect(syncTree(proj, copyDir) === 1, 'one file changed: one copied');
+  // Saved into the engineering project (Online change in XAE, a POU from the PLC): its file there, as XAE writes it
+  // (CRLF, its BOM kept); a file not in it, or a folder that is not a project, refused
+  fs.writeFileSync(projPou, '﻿<POU Name="SM_Line"/>');
+  const intoProj = saveIntoProject({ root: proj, plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line">\nx := 2;\n</POU>' });
+  const written2 = fs.readFileSync(projPou, 'utf8');
+  const notThere = saveIntoProject({ root: proj, plcProject: 'LinePlc', path: 'POUs/SM_New.TcPOU', content: 'x' });
+  const notProj = saveIntoProject({ root: path.join(proj, 'LinePlc'), path: 'POUs/SM_Line.TcPOU', content: 'x' });
+  expect(intoProj.file === projPou && written2 === '﻿<POU Name="SM_Line">\r\nx := 2;\r\n</POU>' && /is not in LinePlc/.test(notThere.error ?? '') && /Not a TwinCAT project folder/.test(notProj.error ?? ''), `saved into the project: ${intoProj.file ?? intoProj.error}; a new file refused, not a project refused`);
   // Open XAE (the stand-in: not started, the path it would start)
   const xae = await openXae();
   expect(xae.ok && /TcXaeShell\.exe$/.test(xae.dry ?? ''), `Open XAE: ${xae.message}`);
@@ -215,6 +223,12 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(xaeWorker('unit|one') === w1, 'a busy XAE is kept for another project');
   w1.pending = 0;
   delete process.env.KSS_BUILD_MAX_XAE;
+  // Low on memory (under 3 GB free): one XAE at a time
+  process.env.KSS_BUILD_FREE_MB = '2000';
+  const mem1 = xaeWorker('unit|mem-one');
+  xaeWorker('unit|mem-two');
+  expect(xaeWorker('unit|mem-one') !== mem1, 'low on memory: another project closes the XAE open for the last one');
+  delete process.env.KSS_BUILD_FREE_MB;
 
   // 5f. Link: the page's project folder mirrored (the files it needs, in pieces; the ones not listed removed)
   expect(relPath('Plant/POUs/A.TcPOU') === path.join('Plant', 'POUs', 'A.TcPOU') && [ '../x', '/x', 'a\\b', 'C:x', 'a//b', 'a/./b' ].every((x) => relPath(x) === null), 'mirror paths: relative, nothing outside');
@@ -233,6 +247,14 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(!!gap.error && m2.uploadId === m1.uploadId && m2.need?.length === 0 && fs.readFileSync(path.join(root, 'Plant', 'POUs', 'A.TcPOU'), 'utf8') === 'abcde', `sent in pieces (a gap refused): listed again, none needed (${m2.need})`);
   const m3 = mirror.sync('Plant', [list[0]]);
   expect(m3.need?.length === 0 && !fs.existsSync(path.join(root, 'Plant', 'POUs', 'A.TcPOU')) && mirror.fullPath(m1.uploadId, '../x') === null, 'a file no longer listed: removed');
+  // A file sent compressed (gzip, in two pieces): unpacked when complete, its size checked unpacked
+  const big = Buffer.from('<TcPlcObject>' + 'x'.repeat(5000) + '</TcPlcObject>');
+  const gz = require('zlib').gzipSync(big);
+  const m4 = mirror.sync('Plant', [list[0], { path: 'Plant/POUs/B.TcPOU', size: big.length, mtime: t }]);
+  mirror.put(m4.uploadId, { path: 'Plant/POUs/B.TcPOU', offset: 0, data: gz.subarray(0, 10).toString('base64'), encoding: 'gzip' });
+  const unpacked = mirror.put(m4.uploadId, { path: 'Plant/POUs/B.TcPOU', offset: 10, data: gz.subarray(10).toString('base64'), size: big.length, mtime: t, done: true, encoding: 'gzip' });
+  const notGz = mirror.put(m4.uploadId, { path: 'Plant/POUs/C.TcPOU', offset: 0, data: Buffer.from('plain').toString('base64'), size: 5, done: true, encoding: 'gzip' });
+  expect(unpacked.ok === true && fs.readFileSync(path.join(root, 'Plant', 'POUs', 'B.TcPOU')).equals(big) && /not a gzip file/.test(notGz.error ?? ''), `sent compressed: unpacked (${gz.length} bytes for ${big.length}); a piece that is not gzip refused`);
   mirror.dispose();
 
   // 5g. Link's updates: versions compared; the newest release with a Link found; its download checked (SHA-256)

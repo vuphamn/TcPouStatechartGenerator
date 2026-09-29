@@ -107,6 +107,11 @@ const TARGET = 'TABLEMANAGER_UNCLAMP_START';
       await p.mouse.up();
       await h.sleep(500);
     }
+    // (ELK: every edge moved on the canvas still orthogonal, not only the one checked above; Dagre draws lines)
+    if (engine === 'elk') {
+      const slanted = await h.reroutedSlanted(p);
+      expect(slanted.length === 0, `elk: the moved edges on the canvas orthogonal (${slanted.slice(0, 3).join(' | ') || 'none slanted'})`);
+    }
   }
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

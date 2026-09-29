@@ -20,6 +20,8 @@ export interface PlcBuildState {
   changes?: { file: string; parts: PartDiff[] }[];
   /** Where it was built from: the PLC's sources, the project on this computer (desktop), the page's project folder (web, through Link), XAE's solution */
   via?: 'plc' | 'project' | 'webProject' | 'xae';
+  /** The web build from a folder: where its files were sent (Link, the gateway) */
+  sentTo?: string;
 }
 
 const WRITE_TEXT: Record<PlcWrite, { title: string; label: string; warning: string }> = {
@@ -62,7 +64,11 @@ export const PlcBuildDialog: React.FC<{
   saveForXae?: { label: string; hint: string; run: () => Promise<string | null> };
   /** TwinCAT XAE opened for the user */
   onOpenXae?: () => Promise<{ ok: boolean; message: string }>;
-}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae, onReadAppInfo, saveForXae, onOpenXae }) => {
+  /** The PLC application started (after a write left it in Stop) */
+  onStartPlc?: () => Promise<{ state: string | null; ok: boolean; error?: string }>;
+}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae, onReadAppInfo, saveForXae, onOpenXae, onStartPlc }) => {
+  // Start the PLC: asked (its box ticked), running, what it did
+  const [starting, setStarting] = useState<{ phase: 'ask' | 'running' | 'done'; safe: boolean; result?: { ok: boolean; text: string } } | null>(null);
   // The online change from XAE, step by step: the count before, what Save did, what the check found
   const [guide, setGuide] = useState<{ before: PlcAppInfo | null; saved?: { ok: boolean; text: string }; check?: { ok: boolean; text: string }; xae?: string } | null>(null);
   const openGuide = () => {
@@ -103,6 +109,7 @@ export const PlcBuildDialog: React.FC<{
     setSafe(false);
     setXaeClosed(false);
     setGuide(null);
+    setStarting(null);
   }, [state.result]);
   const r = state.result;
   const items = r?.items ?? [];
@@ -147,7 +154,7 @@ export const PlcBuildDialog: React.FC<{
       <div className="px-3 py-2 border-b border-slate-800 text-slate-400">
         {canWrite ? (
           <>
-            {state.via === 'project' || state.via === 'webProject' ? 'Your TwinCAT project (a copy of its folder' + (state.via === 'webProject' ? ', sent to Link' : '') + ')' : 'The project as the PLC keeps it'}, with {state.files.length === 1 ? 'this file' : `these ${state.files.length} files`} as edited here: <span className="font-mono text-slate-300">{state.files.join(', ')}</span>. Built by TwinCAT XAE on {state.via === 'webProject' ? 'this computer (Link)' : 'this computer'}, in the background.
+            {state.via === 'project' || state.via === 'webProject' ? 'Your TwinCAT project (a copy of its folder' + (state.via === 'webProject' ? `, sent to ${state.sentTo ?? 'Link'}` : '') + ')' : 'The project as the PLC keeps it'}, with {state.files.length === 1 ? 'this file' : `these ${state.files.length} files`} as edited here: <span className="font-mono text-slate-300">{state.files.join(', ')}</span>. Built by TwinCAT XAE on {state.via === 'webProject' ? (state.sentTo === 'the gateway' ? 'the gateway\'s computer' : 'this computer (Link)') : 'this computer'}, in the background.
           </>
         ) : (
           <>The solution open in XAE, built by XAE (this POU's edits saved to the project first). To write it to the PLC: XAE's Login, or Activate Configuration.</>
@@ -172,7 +179,7 @@ export const PlcBuildDialog: React.FC<{
               Written to the PLC ({WRITE_TEXT[r!.written!].label.toLowerCase()}){r?.plcRun ? '' : r?.plcState ? `: the PLC is ${r.plcState}` : ''}.{' '}
               {r?.plcRun && (
                 <span id="plc-build-run" data-ok={String(r.plcRun.ok)} className={r.plcRun.ok ? '' : 'text-amber-200'}>
-                  {r.plcRun.ok ? 'The PLC runs. ' : `The PLC is ${r.plcRun.state ? `in ${r.plcRun.state}` : 'not answering'}, not in Run: start it from XAE. `}
+                  {r.plcRun.ok ? 'The PLC runs. ' : `The PLC is ${r.plcRun.state ? `in ${r.plcRun.state}` : 'not answering'}, not in Run: start it${onStartPlc ? '' : ' from XAE'}. `}
                 </span>
               )}
               {r?.verified ? (r.verified.ok ? `${r.verified.text}.` : <span className="text-amber-200">But: {r.verified.text}</span>) : 'From PLC reads the new sources.'}
@@ -193,6 +200,47 @@ export const PlcBuildDialog: React.FC<{
           </>
         )}
       </div>
+      {!running && written && r?.plcRun && !r.plcRun.ok && onStartPlc && canWrite && (
+        <div id="plc-build-start-panel" className="px-3 pb-2 -mt-1 space-y-1 text-slate-300" data-phase={starting?.phase ?? 'offer'}>
+          {!starting && (
+            <button type="button" id="plc-build-start" onClick={() => setStarting({ phase: 'ask', safe: false })} className="px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white">
+              Start the PLC…
+            </button>
+          )}
+          {starting?.phase === 'ask' && (
+            <>
+              <div className="text-amber-200">The PLC application starts: its outputs act on the machine at once. Target: <span className="font-mono">{state.target ?? 'the connected PLC'}</span>.</div>
+              <label className="flex items-center gap-2">
+                <input id="plc-build-start-safe" type="checkbox" checked={starting.safe} onChange={(e) => setStarting({ ...starting, safe: e.target.checked })} />
+                The machine is safe to start
+              </label>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setStarting(null)} className="px-2 py-0.5 rounded border border-slate-700 hover:bg-slate-800">Cancel</button>
+                <button
+                  type="button"
+                  id="plc-build-start-confirm"
+                  disabled={!starting.safe}
+                  onClick={() => {
+                    setStarting({ phase: 'running', safe: true });
+                    void onStartPlc()
+                      .catch((e: unknown) => ({ state: null, ok: false, error: e instanceof Error ? e.message : String(e) }))
+                      .then((x) => setStarting({ phase: 'done', safe: true, result: { ok: x.ok, text: x.ok ? 'Started: the PLC runs.' : x.error ?? `The PLC is in ${x.state ?? '?'}` } }));
+                  }}
+                  className="px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white disabled:opacity-40"
+                >
+                  Start
+                </button>
+              </div>
+            </>
+          )}
+          {starting?.phase === 'running' && <div className="flex items-center gap-1"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Starting…</div>}
+          {starting?.phase === 'done' && starting.result && (
+            <div id="plc-build-start-result" data-ok={String(starting.result.ok)} className={starting.result.ok ? 'text-emerald-300' : 'text-rose-300'}>
+              {starting.result.text}
+            </div>
+          )}
+        </div>
+      )}
       {!running && r?.xaeOpenUntil && !xaeClosed && (
         <div id="plc-build-xae" className="px-3 pb-2 -mt-1 flex items-center gap-2 text-slate-400">
           <span>

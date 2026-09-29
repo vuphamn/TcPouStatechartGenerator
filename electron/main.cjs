@@ -331,8 +331,28 @@ ipcMain.handle('tc:live-build-close', (event, req) => new Promise((resolve) => l
 ipcMain.handle('tc:live-license', (event, req) => new Promise((resolve) => liveFor(event.sender).license(resolve, req)));
 // The PLC application's state and online change count (did an online change from XAE take? read-only)
 ipcMain.handle('tc:live-app-info', (event, req) => new Promise((resolve) => liveFor(event.sender).appInfo(resolve, req)));
+// The PLC application started (after a write left it in Stop; the page confirms first)
+ipcMain.handle('tc:live-plc-start', (event, req) => new Promise((resolve) => liveFor(event.sender).startPlc(resolve, req)));
 // TwinCAT XAE opened for the user (its license page renews a trial license)
 ipcMain.handle('tc:open-xae', () => require('../shared/tcBuild.cjs').openXae());
+// The engineering project for a POU from the PLC (Online change in XAE): its folder chosen (the one with the .tsproj;
+// KSS_PICK_PROJECT: the tests' folder, no dialog), then the POU as edited saved into it (only a file already there)
+ipcMain.handle('tc:pick-project-folder', async (event) => {
+  let dir = process.env.KSS_PICK_PROJECT;
+  if (!dir) {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const r = await dialog.showOpenDialog(win, { title: 'The TwinCAT project that runs on this PLC (the folder with its .tsproj)', properties: ['openDirectory'] });
+    if (r.canceled || !r.filePaths[0]) return { canceled: true };
+    dir = r.filePaths[0];
+  }
+  try {
+    if (!fs.readdirSync(dir).some((f) => /\.tsproj$/i.test(f))) return { error: `${path.basename(dir)} has no .tsproj: choose the TwinCAT project's folder` };
+  } catch (err) {
+    return { error: err.message };
+  }
+  return { path: dir };
+});
+ipcMain.handle('tc:save-into-project', (event, req) => require('../shared/tcBuild.cjs').saveIntoProject({ root: String(req?.root ?? ''), plcProject: String(req?.plcProject ?? ''), path: req?.path, content: req?.content }));
 ipcMain.handle('tc:live-build', (event, req) => {
   const contents = event.sender;
   return new Promise((resolve) => liveFor(contents).build((m) => {

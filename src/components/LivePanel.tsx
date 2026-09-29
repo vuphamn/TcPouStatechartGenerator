@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
@@ -6,7 +6,7 @@ import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type
 import { checkAsText, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
-import { formatLimit, parseDuration } from '../utils/stateLimits.ts';
+import { formatLimit, notifyStuck, parseDuration } from '../utils/stateLimits.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
 
 export interface LiveStatus {
@@ -330,6 +330,17 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   // Check all (Browse), kept here: its timer runs while Browse is closed; the PLCs that stopped answering
   const checker = useRememberedChecks(rememberedPlcs, onCheckPlc);
   const lostPlcs = rememberedPlcs.filter((p) => p.netId in checker.lost);
+  // (Notify on: a notification too, once each time one stops answering)
+  const notifiedLost = useRef<Record<string, number>>({});
+  useEffect(() => {
+    if (!notify) return;
+    for (const p of rememberedPlcs) {
+      const since = checker.lost[p.netId];
+      if (!since || notifiedLost.current[p.netId] === since) continue;
+      notifiedLost.current[p.netId] = since;
+      void notifyStuck(`Kval StateScope: ${p.name || p.netId} stopped answering`, `Since ${new Date(since).toLocaleTimeString()}: ${checker.checks[p.netId]?.verdict ?? 'it no longer answers'}`, `kss-plc-lost-${p.netId}`);
+    }
+  }, [checker.lost, checker.checks, notify, rememberedPlcs]);
   // The license notice's Renew: the steps shown, what Open XAE said
   const [renewing, setRenewing] = useState(false);
   const [xaeOpened, setXaeOpened] = useState('');

@@ -3590,6 +3590,49 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [plcOrigin, pouContent, dutContent, dutFileName, liveStatus.target, showCopyToast, plcSessionEdits]
   );
+  // Desktop app, a POU from the PLC: the engineering project that runs on it (its folder chosen once, remembered per
+  // PLC project in this app), for XAE's own online change: the POU and its enum as edited saved into it
+  const engineeringKey = plcOrigin ? `kss.engineeringProject.${plcOrigin.project ?? ''}|${plcOrigin.plcProject ?? ''}` : '';
+  const engineeringRoot = (() => {
+    try {
+      return engineeringKey ? localStorage.getItem(engineeringKey) : null;
+    } catch {
+      return null;
+    }
+  })();
+  const saveIntoEngineering = useCallback(async (): Promise<string | null> => {
+    const api = desktopLive();
+    if (!api?.saveIntoProject || !api.pickProjectFolder || !plcOrigin) return 'Not available here';
+    let root = engineeringRoot;
+    if (!root) {
+      const picked = await api.pickProjectFolder();
+      if (picked.canceled) return 'Not saved: no project chosen';
+      if (!picked.path) return picked.error ?? 'Not a TwinCAT project folder';
+      root = picked.path;
+    }
+    const pou = await api.saveIntoProject({ root, plcProject: plcOrigin.plcProject, path: plcOrigin.path, content: pouContent });
+    // (not that project's file: chosen again next time)
+    if (pou.error) {
+      try {
+        localStorage.removeItem(engineeringKey);
+      } catch {
+        // (not kept)
+      }
+      return `${pou.error} (choose the project again next time)`;
+    }
+    try {
+      localStorage.setItem(engineeringKey, root);
+    } catch {
+      // (asked again next time)
+    }
+    const dutPath = plcOrigin.dutPaths[dutFileName.toLowerCase()];
+    if (dutPath && dutContent) {
+      const dut = await api.saveIntoProject({ root, plcProject: plcOrigin.plcProject, path: dutPath, content: dutContent });
+      if (dut.error) return `The POU is saved; its enum not: ${dut.error}`;
+    }
+    showCopyToast(`Saved into ${pou.file}${dutPath && dutContent ? ' (and its enum)' : ''}: reload it in XAE, then Login`, 'success', 7000);
+    return null;
+  }, [plcOrigin, engineeringRoot, engineeringKey, pouContent, dutContent, dutFileName, showCopyToast]);
   // Desktop app, a POU of a TwinCAT project on this computer: built from that project (a copy of it, this POU and its
   // enum as edited here); after a write the POU is saved and the project gets the new compile information
   const runProjectBuild = useCallback(
@@ -4857,6 +4900,8 @@ export const App: React.FC = () => {
   // Through the gateway when this page is served by one, else through the helper on this computer
   const liveVia: 'link' | 'gateway' = liveSettings.via || (gatewayOrigin ? 'gateway' : 'link');
   const gatewayRef = useRef<GatewayConnection | null>(null);
+  // What the gateway can do beyond going live (its welcome: projectBuild, plcStart, ...)
+  const [gatewayFeatures, setGatewayFeatures] = useState<string[]>([]);
   const gatewayConnection = useCallback(() => {
     gatewayRef.current ??= new GatewayConnection((m) => {
       if (m.type === 'liveStatus') handleLiveStatus(m);
@@ -4986,7 +5031,8 @@ export const App: React.FC = () => {
       const connection = gatewayConnection();
       connection
         .connect(address, gatewayToken, !!ssoUser)
-        .then(({ user, plcs }: { user: string; plcs: GatewayPlc[] }) => {
+        .then(({ user, plcs, features }: { user: string; plcs: GatewayPlc[]; features?: string[] }) => {
+          setGatewayFeatures(features ?? []);
           setLiveStatus((prev) => ({ ...prev, user, plcs }));
           const plc = plcs.find((p) => p.id === liveSettings.plc) ?? (plcs.length === 1 ? plcs[0] : undefined);
           if (!plc) {
@@ -5566,12 +5612,17 @@ export const App: React.FC = () => {
     if (viaLink && linkBuild?.features?.includes('openXae')) return () => linkRequest<{ ok: boolean; message: string }>({ type: 'openXae' }, 'openXaeResult').catch((e: Error) => ({ ok: false, message: e.message }));
     return undefined;
   }, [viaLink, linkBuild, linkRequest]);
-  // Web edition through Link: Build from the TwinCAT project's folder (granted once, read and write): its files sent
-  // to Link (only the new or changed ones), built there by XAE with this POU and its enum as edited here; after a
+  // Web edition through Link or the gateway: Build from the TwinCAT project's folder (granted once, read and write):
+  // its files sent there (only the new or changed ones, gzip-compressed when it saves; the list not even sent when
+  // nothing changed since the last build), built there by XAE with this POU and its enum as edited here; after a
   // write, the new compile information written into the folder and this POU saved (XAE there still matches the PLC)
+  const webProjectSyncRef = useRef<{ key: string; uploadId: string } | null>(null);
   const runWebProjectBuild = useCallback(
     async (write: PlcWrite | null) => {
-      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: [pouFileName || 'the POU', ...(dutContent && dutFileName ? [dutFileName] : [])], project: 'your TwinCAT project', target: liveStatus.target, via: 'webProject', step: 'Reading the project folder' };
+      const viaGateway = !viaLink;
+      const host = viaGateway ? 'the gateway' : 'Link';
+      const ask = viaGateway ? gatewayRequest : linkRequest;
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: [pouFileName || 'the POU', ...(dutContent && dutFileName ? [dutFileName] : [])], project: 'your TwinCAT project', target: liveStatus.target, via: 'webProject', sentTo: host, step: 'Reading the project folder' };
       setPlcBuild(base);
       setPlcBuildShown(true);
       const fail = (fatal: string) => setPlcBuild({ ...base, phase: 'done', result: { ok: false, fatal } });
@@ -5584,25 +5635,57 @@ export const App: React.FC = () => {
         return;
       }
       if (!folder.pouPath) return fail(`${pouFileName} is not in ${folder.name}: choose the folder of this POU's TwinCAT project`);
-      try {
-        const sync = await linkRequest<{ uploadId?: string; need?: string[]; error?: string }>({ type: 'projectSync', project: folder.name, files: folder.files.map(({ path, size, mtime }) => ({ path, size, mtime })) }, 'projectSyncResult');
-        if (!sync.uploadId) return fail(sync.error ?? 'Link did not take the project');
+      // (the folder as it is now: the same as at the last build, sent to the same place: nothing to send)
+      const key = `${host}|${folder.name}|${folder.files.map((f) => `${f.path}:${f.size}:${f.mtime}`).join('|')}`;
+      const send = async (): Promise<string | null> => {
+        const sync = await ask<{ uploadId?: string; need?: string[]; error?: string }>({ type: 'projectSync', project: folder.name, files: folder.files.map(({ path, size, mtime }) => ({ path, size, mtime })) }, 'projectSyncResult');
+        if (!sync.uploadId) {
+          fail(sync.error ?? `${host} did not take the project`);
+          return null;
+        }
         const need = new Set(sync.need ?? []);
         const todo = folder.files.filter((f) => need.has(f.path));
         const CHUNK = 150 * 1024;
         for (let n = 0; n < todo.length; n++) {
           const f = todo[n];
-          setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: `Sending the project to Link (${n + 1} of ${todo.length} files)` } : b));
-          const data = new Uint8Array(await f.read());
+          setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: `Sending the project to ${host} (${n + 1} of ${todo.length} files)` } : b));
+          const raw = new Uint8Array(await f.read());
+          // (compressed when that saves a tenth or more: XML sources, compile information)
+          let data = raw;
+          let encoding: string | undefined;
+          if (raw.length > 2048 && typeof CompressionStream !== 'undefined') {
+            const gz = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+            if (gz.length < raw.length * 0.9) {
+              data = gz;
+              encoding = 'gzip';
+            }
+          }
           for (let off = 0; ; off += CHUNK) {
             const done = off + CHUNK >= data.length;
-            const r = await linkRequest<{ ok?: boolean; error?: string }>({ type: 'projectPut', uploadId: sync.uploadId, path: f.path, offset: off, data: bytesToBase64(data.subarray(off, off + CHUNK)), size: data.length, mtime: f.mtime, done }, 'projectPutResult');
-            if (!r.ok) return fail(r.error ?? `Link did not take ${f.path}`);
+            const r = await ask<{ ok?: boolean; error?: string }>({ type: 'projectPut', uploadId: sync.uploadId, path: f.path, offset: off, data: bytesToBase64(data.subarray(off, off + CHUNK)), size: raw.length, mtime: f.mtime, done, ...(encoding ? { encoding } : {}) }, 'projectPutResult');
+            if (!r.ok) {
+              fail(r.error ?? `${host} did not take ${f.path}`);
+              return null;
+            }
             if (done) break;
           }
         }
+        webProjectSyncRef.current = { key, uploadId: sync.uploadId };
+        return sync.uploadId;
+      };
+      try {
         const edits = [{ file: folder.pouPath, content: pouContent }, ...(folder.dutPath && dutContent ? [{ file: folder.dutPath, content: dutContent }] : [])];
-        const r = await gatewayConnection().request<PlcBuildResult>({ type: 'projectBuild', uploadId: sync.uploadId, file: folder.pouPath, edits, write }, 'plcBuildResult', 45 * 60 * 1000);
+        const build = (uploadId: string) => gatewayConnection().request<PlcBuildResult>({ type: 'projectBuild', uploadId, file: folder.pouPath, edits, write }, 'plcBuildResult', 45 * 60 * 1000);
+        let uploadId = webProjectSyncRef.current?.key === key ? webProjectSyncRef.current.uploadId : await send();
+        if (!uploadId) return;
+        let r = await build(uploadId);
+        // (the copy there gone meanwhile: the page connected again, or the other side restarted: sent again, once)
+        if (!r.ok && /is not on (this computer|the gateway) yet/.test(r.fatal ?? '')) {
+          webProjectSyncRef.current = null;
+          uploadId = await send();
+          if (!uploadId) return;
+          r = await build(uploadId);
+        }
         if (r.ok && r.written) {
           // The new compile information into the project folder; this POU saved
           const problems: string[] = [];
@@ -5611,6 +5694,8 @@ export const App: React.FC = () => {
             if (err) problems.push(err);
           }
           if (problems.length) r.items = [...(r.items ?? []), { level: 'warning', text: `The new compile information did not go into the project folder (XAE's next login may not match): ${problems.join('; ')}`, file: '', line: 0 }];
+          // (the folder changed: listed and sent again next time)
+          webProjectSyncRef.current = null;
           void saveSourcesRef.current({ quiet: true, checked: true });
           showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : r.written === 'download' ? 'downloaded' : 'configuration activated'})${r.compileInfo?.length && !problems.length ? ', the project\'s compile information updated' : ''}`, 'success', 7000);
         }
@@ -5621,8 +5706,16 @@ export const App: React.FC = () => {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouFileName, pouContent, dutFileName, dutContent, liveStatus.target, linkRequest, gatewayConnection, showCopyToast]
+    [pouFileName, pouContent, dutFileName, dutContent, liveStatus.target, linkRequest, gatewayRequest, gatewayConnection, viaLink, showCopyToast]
   );
+  // The PLC application started (after a write left it in Stop): the desktop app, Link or the gateway
+  const handleStartPlc = useMemo(() => {
+    const api = desktopLive();
+    if (api?.startPlc) return () => api.startPlc!({ requestId: Date.now() % 1e9 });
+    const can = viaLink ? linkBuild?.features?.includes('plcStart') : liveMode === 'web' && gatewayFeatures.includes('plcStart');
+    if (!can) return undefined;
+    return () => gatewayConnection().request<{ state: string | null; ok: boolean; error?: string }>({ type: 'plcStart' }, 'plcStartResult', 30000);
+  }, [viaLink, linkBuild, liveMode, gatewayFeatures, gatewayConnection]);
   // The Live tab's Check: why the PLC does not answer, from the computer that talks to it (desktop app, Link)
   // (any PLC: the target's by default; Browse's Check all asks each remembered one)
   const handleCheckPlc = useMemo(() => {
@@ -7562,7 +7655,7 @@ export const App: React.FC = () => {
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
             onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
-            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : viaLink && pouContent && !replay && linkBuild?.features?.includes('projectBuild') ? () => void runWebProjectBuild(null) : undefined}
+            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : liveMode === 'web' && pouContent && !replay && (viaLink ? linkBuild?.features?.includes('projectBuild') : gatewayFeatures.includes('projectBuild')) ? () => void runWebProjectBuild(null) : undefined}
             buildOffline={isXaeHost()}
             lastBuild={plcBuild && !plcBuildShown && plcBuild.phase === 'done' && plcBuild.result ? { text: plcBuild.result.fatal ? 'failed' : plcBuild.result.written ? 'written' : `${plcBuild.result.errors ?? plcBuild.result.items?.filter((i) => i.level === 'error').length ?? 0} error${(plcBuild.result.errors ?? 0) === 1 ? '' : 's'}`, ok: !!plcBuild.result.ok, onOpen: () => setPlcBuildShown(true) } : undefined}
             onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
@@ -7815,8 +7908,15 @@ export const App: React.FC = () => {
           onCloseXae={isXaeHost() ? undefined : handleCloseXae}
           onReadAppInfo={isXaeHost() ? undefined : handleReadAppInfo}
           onOpenXae={handleOpenXae}
+          onStartPlc={handleStartPlc}
           saveForXae={
-            plcBuild.via === 'plc'
+            plcBuild.via === 'plc' && desktopLive()?.saveIntoProject
+              ? {
+                  label: 'Save into your engineering project',
+                  hint: engineeringRoot ? `(${engineeringRoot}: XAE reads it from there)` : '(its folder chosen once: the one with the .tsproj that runs on this PLC)',
+                  run: saveIntoEngineering,
+                }
+              : plcBuild.via === 'plc'
               ? {
                   label: 'Download the POU',
                   hint: '(as edited here: put it into your engineering project in place of its file)',

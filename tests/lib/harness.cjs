@@ -154,7 +154,32 @@ async function waitForText(file, rx, ms = 20000) {
   return null;
 }
 
+/**
+ * The canvas's re-routed edges (moved with a state or a handle: their path is no longer the one Mermaid drew) with a
+ * slanted segment: ELK draws orthogonally, and a move must keep that. ['from->to: (x,y)-(x,y)'] (none: [])
+ */
+function reroutedSlanted(page) {
+  return page.evaluate(() => {
+    const out = [];
+    for (const e of document.querySelectorAll('#mermaid-canvas-area path[data-edge-id][data-orig-d]')) {
+      const d = e.getAttribute('d') || '';
+      if (!e.id || d === e.getAttribute('data-orig-d')) continue;
+      const cmds = [...d.matchAll(/([MLQC])([^MLQCZ]*)/gi)].map((m) => ({ c: m[1].toUpperCase(), n: m[2].trim().split(/[\s,]+/).map(Number) }));
+      let last = null;
+      for (const k of cmds) {
+        const end = { x: k.n[k.n.length - 2], y: k.n[k.n.length - 1] };
+        if (k.c === 'C' || (k.c === 'L' && last && Math.abs(end.x - last.x) > 1 && Math.abs(end.y - last.y) > 1)) {
+          out.push(`${e.getAttribute('data-source-id')}->${e.getAttribute('data-target-id')}: (${last?.x.toFixed(0)},${last?.y.toFixed(0)})-(${end.x.toFixed(0)},${end.y.toFixed(0)})`);
+          break;
+        }
+        last = end;
+      }
+    }
+    return out;
+  });
+}
+
 const out = (name) => path.join(OUT, name);
 const fixture = (...parts) => path.join(FIXTURES, ...parts);
 
-module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture };
+module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted };

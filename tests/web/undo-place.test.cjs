@@ -49,6 +49,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const a2 = await at();
   expect(!!a2 && Math.hypot(a2.x - a1.x, a2.y - a1.y) < 4, `Ctrl+Z: ${S} back where it was moved to (${a2 ? `${(a2.x - a1.x).toFixed(1)},${(a2.y - a1.y).toFixed(1)} off` : 'not back'})`);
 
+  // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)
+  const slantedLeft = await h.reroutedSlanted(p);
+  expect(slantedLeft.length === 0, `the moved edges on the canvas orthogonal (${slantedLeft.slice(0, 3).join(" | ") || "none slanted"})`);
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

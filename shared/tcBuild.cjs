@@ -590,11 +590,14 @@ class XaeWorker {
   }
 }
 // One XAE per project (going back and forth between two projects keeps both open): at most KSS_BUILD_MAX_XAE
-// (default 2, each XAE takes about 1 GB); for another one, the one used longest ago quits (not while it builds).
+// (default 2, each XAE takes about 1 GB; 1 when under 3 GB is free); for another one, the one used longest ago quits (not while it builds).
 // Each worker keeps its work folder (ws: the project open in its XAE)
 const maxXae = () => {
   const v = Number(process.env.KSS_BUILD_MAX_XAE);
-  return Number.isInteger(v) && v >= 1 ? v : 2;
+  if (Number.isInteger(v) && v >= 1) return v;
+  // (low on memory, under 3 GB free: one at a time; KSS_BUILD_FREE_MB: the free memory, for the tests)
+  const freeMb = Number(process.env.KSS_BUILD_FREE_MB) || os.freemem() / 1048576;
+  return freeMb < 3072 ? 1 : 2;
 };
 const workers = new Map();
 const dropWorkspace = (w) => {
@@ -923,6 +926,32 @@ function plcProjectsIn(root, depth = 0, out = []) {
 }
 
 /**
+ * A POU (or its enum) edited here saved into the engineering project on this computer (for XAE's own online change):
+ * root, the TwinCAT project's folder (the one with the .tsproj); plcProject, its PLC project (by name; the only one
+ * when it has one); path, the file's path in that PLC project (as the PLC's sources name it). Only a file that is
+ * already there (a POU is not added to a project this way), as XAE writes it (CRLF, its BOM kept).
+ * → { file } or { error }
+ */
+function saveIntoProject({ root, plcProject = '', path: rel, content }) {
+  if (!root || !fs.existsSync(root) || !fs.readdirSync(root).some((f) => /\.tsproj$/i.test(f))) return { error: 'Not a TwinCAT project folder (no .tsproj in it)' };
+  if (typeof rel !== 'string' || !/\.(TcPOU|TcDUT|TcGVL|TcIO)$/i.test(rel) || typeof content !== 'string') return { error: 'Not a PLC source' };
+  const plcs = plcProjectsIn(root);
+  const plc = plcs.find((p) => p.name.toLowerCase() === String(plcProject).toLowerCase()) ?? (plcs.length === 1 ? plcs[0] : null);
+  if (!plc) return { error: `No PLC project ${plcProject || ''} in ${path.basename(root)}`.replace('  ', ' ') };
+  let file;
+  try {
+    file = inside(plc.dir, rel);
+  } catch {
+    return { error: 'Not a path in the PLC project' };
+  }
+  if (!fs.existsSync(file)) return { error: `${rel} is not in ${plc.name} (${path.basename(root)}): is it the project that runs on this PLC?` };
+  const had = fs.readFileSync(file);
+  const bom = had[0] === 0xef && had[1] === 0xbb && had[2] === 0xbf;
+  fs.writeFileSync(file, (bom ? '﻿' : '') + content.replace(/^﻿/, '').replace(/\r?\n/g, '\r\n'));
+  return { file };
+}
+
+/**
  * Build (and write back) from the TwinCAT project on this computer: file (a POU of it) finds the project; edits:
  * [{ file: its full path, content }] put into the copy. write: null, 'online', 'download', 'activate'. →
  * { ok, items, ..., compileInfoCopied, compileInfoFiles: their paths in the project, plcRun }
@@ -1012,4 +1041,4 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   return result;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeWorker, closeXae, openXae, xaeExecutable, buildFromProject, projectRootOf, syncTree };
+module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

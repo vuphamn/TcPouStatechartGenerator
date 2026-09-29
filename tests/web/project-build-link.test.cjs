@@ -2,14 +2,16 @@ const h = require('../lib/harness.cjs');
 // Web edition through Link: Build from the TwinCAT project's folder (a POU not from the PLC). The folder the page is
 // granted is a stand-in in the page (the File System Access API's handles, in memory): its files sent to Link (the
 // second build sends none again), built there (Link's stand-in compiler, KSS_BUILD_DRYRUN), then written (online
-// change): the new compile information written into the folder, the PLC back in Run
+// change): the new compile information written into the folder; the PLC (in Stop) not back in Run: Start the PLC,
+// after its confirmation
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
-const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-projbuild.json');
+// (the PLC's application in Stop: a write does not bring it back to Run by itself)
+const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-projbuild.json', [], { adsState: 6 });
 
 // The granted folder, in the page: { name, files: { path: text } }; window.__fakeFs: what was written, the reads
 function fakeFolder(tree) {
@@ -61,10 +63,10 @@ function fakeFolder(tree) {
 }
 
 (async () => {
-  const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48986', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-projbuild.txt'), 'w'), 'ignore'] });
+  const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48990', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-projbuild.txt'), 'w'), 'ignore'] });
   const linkOut = path.join(h.OUT, 'link-projbuild-run.txt');
   const out = fs.openSync(linkOut, 'w');
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48987'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-projbuild-appdata'), KSS_BUILD_DRYRUN: '1' }, stdio: ['ignore', out, out] });
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48991'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-projbuild-appdata'), KSS_BUILD_DRYRUN: '1', KSS_BUILD_RUN_WAIT_MS: '1500' }, stdio: ['ignore', out, out] });
   const code = (await h.waitForText(linkOut, /Pairing code:\s+(\S+)/))?.[1];
   if (!code) throw new Error('Link did not start (no pairing code)');
   const browser = await h.launchBrowser({ defaultViewport: { width: 1600, height: 1000 } });
@@ -94,9 +96,9 @@ function fakeFolder(tree) {
   await a.click('#dock-tab-live');
   await sleep(400);
   await set(a, 'live-token-input', code);
-  await set(a, 'live-link-port-input', '48987');
+  await set(a, 'live-link-port-input', '48991');
   await set(a, 'live-netid-input', '127.0.0.1.1.1');
-  await set(a, 'live-ip-input', '127.0.0.1:48986');
+  await set(a, 'live-ip-input', '127.0.0.1:48990');
   await set(a, 'live-instance-input', 'MAIN.mainStateMachine.smTable1');
   await a.click('#live-guards-off').catch(() => {});
   await a.click('#live-start-btn');
@@ -130,8 +132,16 @@ function fakeFolder(tree) {
   const written = await a.evaluate(() => window.__fakeFs.written);
   const info = Object.keys(written).filter((p) => /^Plant\/_CompileInfo\/StandIn-\d+\.compileinfo$/.test(p));
   const run = await a.$eval('#plc-build-run', (e) => e.getAttribute('data-ok')).catch(() => '');
-  expect(s.ok === 'true' && /Written to the PLC \(online change\)/.test(s.text) && info.length === 1 && written[info[0]] === 'stand-in' && run === 'true', `written: "${s.text.slice(0, 60)}"; into the folder: ${Object.keys(written).join(', ')}`);
+  expect(s.ok === 'true' && /Written to the PLC \(online change\)/.test(s.text) && info.length === 1 && written[info[0]] === 'stand-in' && run === 'false', `written: "${s.text.slice(0, 60)}"; into the folder: ${Object.keys(written).join(', ')}`);
   expect(!Object.keys(written).some((p) => /Old\.compileinfo|\.git/.test(p)), 'only the new compile information written (.git not sent, the old one left)');
+  // The PLC not back in Run: Start the PLC, off until its box is ticked, then started (the fake PLC's state set)
+  await a.click('#plc-build-start');
+  const startOff = await a.$eval('#plc-build-start-confirm', (e) => e.disabled).catch(() => null);
+  await a.click('#plc-build-start-safe');
+  await a.click('#plc-build-start-confirm');
+  await a.waitForSelector('#plc-build-start-result', { timeout: 15000 }).catch(() => {});
+  const started = await a.$eval('#plc-build-start-result', (e) => e.getAttribute('data-ok') + '|' + e.textContent).catch(() => '');
+  expect(startOff === true && /^true\|Started: the PLC runs/.test(started) && /plc: .* starts the PLC application/.test(fs.readFileSync(linkOut, 'utf8')), `Start the PLC: off until confirmed (${startOff}), then "${started}"`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close().catch(() => {});
