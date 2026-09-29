@@ -36,6 +36,10 @@ interface DesktopLiveApi {
   closeBuild?: (req: { requestId: number }) => Promise<{ closed: boolean }>;
   projectBuild?: (req: { requestId: number; file: string; edits: { file: string; content: string }[]; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   license?: (req: { requestId: number }) => Promise<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }>;
+  /** The PLC application's state and online change count (did an online change from XAE take?) */
+  appInfo?: (req: { requestId: number }) => Promise<import('./plcBuild.ts').PlcAppInfo>;
+  /** TwinCAT XAE opened for the user */
+  openXae?: () => Promise<{ ok: boolean; message: string }>;
   build?: (req: { requestId: number; edits: import('./plcBuild.ts').PlcEdit[]; plcProject?: string; write?: import('./plcBuild.ts').PlcWrite | null }) => Promise<import('./plcBuild.ts').PlcBuildResult>;
   onMessage: (handler: (message: LiveMessage) => void) => () => void;
 }

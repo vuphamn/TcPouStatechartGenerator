@@ -22,6 +22,7 @@ const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
 const { buildFromPlc, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
 const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
 const { checkConnection } = require(`${sharedDir}/tcCheck.cjs`);
+const { plcAppInfo } = require(`${sharedDir}/tcAppInfo.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -719,6 +720,12 @@ function start() {
         if (!session?.conn.client) return send({ type: 'plcLicenseResult', requestId, trial: null, state: null, error: 'Not connected' });
         const trial = await readTrialLicense(session.conn.client).catch(() => null);
         return send({ type: 'plcLicenseResult', requestId, trial, state: licenseState(trial) });
+      }
+      // The PLC application's state and online change count (did an online change from XAE take? read-only)
+      if (m.type === 'plcAppInfo') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (!session?.conn.client) return send({ type: 'plcAppInfoResult', requestId, state: null, onlineChanges: null, error: 'Not connected' });
+        return send({ type: 'plcAppInfoResult', requestId, ...(await plcAppInfo(session.conn.client)) });
       }
       if (m.type === 'plcBuildClose') {
         if (config.allowBuild !== true) return send({ type: 'plcBuildClosed', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, closed: false });

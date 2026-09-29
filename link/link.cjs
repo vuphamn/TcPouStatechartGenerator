@@ -19,6 +19,9 @@ const { createStartup } = require('./startup.cjs');
 const { checkConnection } = require('../shared/tcCheck.cjs');
 const { addRoutes } = require('../shared/tcRoutes.cjs');
 const update = require('./update.cjs');
+const { createUpdater, restartWith } = require('./selfUpdate.cjs');
+const { ProjectMirror } = require('./projectMirror.cjs');
+const { openXae } = require('../shared/tcBuild.cjs');
 
 const VERSION = '1.0.0';
 // Which code this Link runs: its stamp (link/ and shared/ hashed) and build time, baked in by build-link.cjs; run
@@ -63,6 +66,28 @@ const failures = [];
 /** The paired pages, for Link's page: origin, since, what they follow */
 const clients = new Set();
 
+// ---- Updates: the newest released Link (GitHub); by itself when no page is live ----
+// (a built Link replaces its own .exe; the tests: KSS_THIS_LINK, a file of their own, with KSS_SERVICE_DRYRUN)
+/* global __LINK_STAMP__ */
+const selfFile = typeof __LINK_STAMP__ !== 'undefined' ? process.execPath : process.env.KSS_THIS_LINK || null;
+const updater = createUpdater({
+  version: VERSION,
+  target: selfFile,
+  isIdle: () => [...clients].every((c) => !c.following),
+  log,
+  getAuto: () => settings.autoUpdate !== false,
+  setAuto: (on) => {
+    settings.autoUpdate = on === true;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(settings, null, 2));
+  },
+  restart: (exe) => restartWith(exe, args, (done) => {
+    for (const c of wss.clients) c.terminate();
+    server.closeAllConnections?.();
+    server.close(() => done());
+  }),
+});
+
 // The page opens in the default browser (Windows / macOS / Linux)
 function openPage() {
   const url = `http://127.0.0.1:${port}/`;
@@ -76,7 +101,7 @@ function openPage() {
 // From a console (the Start menu shortcut) unless --no-open; not when a program started it (the tests)
 const shouldOpen = !args.includes('--no-open') && process.stdout.isTTY;
 
-const PAGE = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Kval StateScope Link</title>\n<style>\n  :root { color-scheme: dark; --bg: #020617; --card: #0f172a; --line: #1e293b; --text: #e2e8f0; --dim: #94a3b8; --accent: #38bdf8; --ok: #34d399; }\n  * { box-sizing: border-box; }\n  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, \"Segoe UI\", sans-serif; background: var(--bg); color: var(--text); }\n  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; }\n  h1 { font-size: 18px; margin: 0 0 4px; }\n  .sub { color: var(--dim); margin: 0 0 20px; }\n  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }\n  .label { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }\n  .code { font: 600 30px/1.2 ui-monospace, \"Cascadia Mono\", Consolas, monospace; letter-spacing: .08em; color: var(--accent); word-break: break-all; }\n  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }\n  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: var(--text); cursor: pointer; }\n  button:hover { border-color: var(--accent); }\n  button.primary { background: #0369a1; border-color: #0284c7; }\n  .hint { color: var(--dim); font-size: 13px; }\n  table { width: 100%; border-collapse: collapse; font-size: 13px; }\n  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }\n  th { color: var(--dim); font-weight: 500; }\n  td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }\n  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }\n  .empty { color: var(--dim); }\n</style>\n</head>\n<body>\n<main>\n  <h1>Kval StateScope Link</h1>\n  <p class=\"sub\" id=\"version\">Gives the Kval StateScope web app's Live tab access to PLCs from this computer.</p>\n  <p class=\"hint\" id=\"build\"></p>\n  <p class=\"hint\" id=\"installed\" hidden></p>\n  <div class=\"row\"><button id=\"replace-installed\" hidden>Replace the installed Link with this one</button><span class=\"hint\" id=\"replace-state\"></span></div>\n  <div class=\"card\">\n    <div class=\"label\">Pairing code</div>\n    <div class=\"code\" id=\"code\">…</div>\n    <div class=\"row\">\n      <button class=\"primary\" id=\"copy\">Copy</button>\n      <span class=\"hint\" id=\"copied\"></span>\n    </div>\n    <p class=\"hint\">In the web app: Live tab, <b>Via: This computer</b>, then enter this code once (Remember keeps it in that browser).\n      Only pages on this computer can connect, and only with this code.</p>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">Paired pages</div>\n    <table><thead><tr><th>Page</th><th>Since</th><th>Following</th></tr></thead><tbody id=\"clients\"><tr><td colspan=\"3\" class=\"empty\">None yet</td></tr></tbody></table>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">Start with Windows</div>\n    <p class=\"hint\" id=\"startup-hint\">Link can start (minimized) each time you sign in, so the Live tab finds it without starting it first.</p>\n    <div class=\"row\"><button id=\"startup-on\">Start when I sign in</button><button id=\"startup-off\">Don't start when I sign in</button><span class=\"hint\" id=\"startup-state\"></span></div>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">New code</div>\n    <p class=\"hint\">A new code stops the pages paired with the old one from connecting again: they need the new one.</p>\n    <div class=\"row\"><button id=\"new-code\">Make a new code</button></div>\n  </div>\n  <p class=\"hint\">Keep Link running while you go live: close its window to stop it.</p>\n</main>\n<script>\n  const $ = (id) => document.getElementById(id);\n  const esc = (s) => String(s).replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' })[c]);\n  async function refresh() {\n    try {\n      const s = await (await fetch('/status', { cache: 'no-store' })).json();\n      $('code').textContent = s.code;\n      const st = s.startup || {};\n      $('startup-on').hidden = !st.supported || st.on;\n      $('startup-off').hidden = !st.supported || !st.on;\n      if (!st.supported) $('startup-hint').textContent = st.message || '';\n      else if (!$('startup-state').textContent) $('startup-state').textContent = st.on ? 'On: Link starts when you sign in' : '';\n      $('version').textContent = 'Version ' + s.version + ' on port ' + s.port + ': gives the Kval StateScope web app\\'s Live tab access to PLCs from this computer.';\n      const b = s.build || {};\n      $('build').textContent = (b.from === 'source' ? 'Run from source' : 'Built ' + (b.built ? new Date(b.built).toLocaleString() : '?')) + ', code ' + (b.stamp || '?');\n      const inst = s.installed;\n      $('installed').hidden = !inst;\n      if (inst) $('installed').textContent = 'The installed Link (' + inst.path + ', ' + new Date(inst.modified).toLocaleString() + ') is not this one: the Start menu starts that copy. Keep the newer one.';\n      $('replace-installed').hidden = !s.canReplace;\n      $('clients').innerHTML = s.clients.length\n        ? s.clients.map((c) => '<tr><td class=\"mono\"><span class=\"dot\"></span>' + esc(c.origin) + '</td><td>' + esc(new Date(c.since).toLocaleTimeString()) + '</td><td class=\"mono\">' + esc(c.following || '(not live)') + '</td></tr>').join('')\n        : '<tr><td colspan=\"3\" class=\"empty\">None yet</td></tr>';\n    } catch {\n      $('code').textContent = 'Link is not running';\n    }\n  }\n  $('copy').onclick = async () => {\n    try { await navigator.clipboard.writeText($('code').textContent); $('copied').textContent = 'Copied'; }\n    catch { const r = document.createRange(); r.selectNodeContents($('code')); getSelection().removeAllRanges(); getSelection().addRange(r); $('copied').textContent = 'Selected: press Ctrl+C'; }\n    setTimeout(() => ($('copied').textContent = ''), 2500);\n  };\n  $('new-code').onclick = async () => {\n    if (!confirm('Make a new pairing code? Pages paired with the old one have to enter the new one.')) return;\n    await fetch('/new-code', { method: 'POST' });\n    refresh();\n  };\n  async function startup(on) {\n    try {\n      const r = await fetch('/startup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });\n      const s = await r.json();\n      $('startup-state').textContent = s.message || s.error || '';\n    } catch { $('startup-state').textContent = 'Link is not running'; }\n    refresh();\n  }\n  $('replace-installed').onclick = async () => {\n    if (!confirm('Replace the installed Link with this one? The Start menu then starts this version. (Program Files: Windows asks for an administrator.)')) return;\n    try {\n      const r = await (await fetch('/replace-installed', { method: 'POST' })).json();\n      $('replace-state').textContent = r.message || '';\n    } catch { $('replace-state').textContent = 'Link is not running'; }\n    refresh();\n  };\n  $('startup-on').onclick = () => startup(true);\n  $('startup-off').onclick = () => startup(false);\n  refresh();\n  setInterval(refresh, 2000);\n</script>\n</body>\n</html>\n";
+const PAGE = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Kval StateScope Link</title>\n<style>\n  :root { color-scheme: dark; --bg: #020617; --card: #0f172a; --line: #1e293b; --text: #e2e8f0; --dim: #94a3b8; --accent: #38bdf8; --ok: #34d399; }\n  * { box-sizing: border-box; }\n  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, \"Segoe UI\", sans-serif; background: var(--bg); color: var(--text); }\n  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; }\n  h1 { font-size: 18px; margin: 0 0 4px; }\n  .sub { color: var(--dim); margin: 0 0 20px; }\n  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }\n  .label { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 8px; }\n  .code { font: 600 30px/1.2 ui-monospace, \"Cascadia Mono\", Consolas, monospace; letter-spacing: .08em; color: var(--accent); word-break: break-all; }\n  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }\n  button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: var(--text); cursor: pointer; }\n  button:hover { border-color: var(--accent); }\n  button.primary { background: #0369a1; border-color: #0284c7; }\n  .hint { color: var(--dim); font-size: 13px; }\n  table { width: 100%; border-collapse: collapse; font-size: 13px; }\n  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }\n  th { color: var(--dim); font-weight: 500; }\n  td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }\n  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }\n  .empty { color: var(--dim); }\n</style>\n</head>\n<body>\n<main>\n  <h1>Kval StateScope Link</h1>\n  <p class=\"sub\" id=\"version\">Gives the Kval StateScope web app's Live tab access to PLCs from this computer.</p>\n  <p class=\"hint\" id=\"build\"></p>\n  <p class=\"hint\" id=\"installed\" hidden></p>\n  <div class=\"row\"><button id=\"replace-installed\" hidden>Replace the installed Link with this one</button><span class=\"hint\" id=\"replace-state\"></span></div>\n  <div class=\"card\">\n    <div class=\"label\">Pairing code</div>\n    <div class=\"code\" id=\"code\">…</div>\n    <div class=\"row\">\n      <button class=\"primary\" id=\"copy\">Copy</button>\n      <span class=\"hint\" id=\"copied\"></span>\n    </div>\n    <p class=\"hint\">In the web app: Live tab, <b>Via: This computer</b>, then enter this code once (Remember keeps it in that browser).\n      Only pages on this computer can connect, and only with this code.</p>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">Paired pages</div>\n    <table><thead><tr><th>Page</th><th>Since</th><th>Following</th></tr></thead><tbody id=\"clients\"><tr><td colspan=\"3\" class=\"empty\">None yet</td></tr></tbody></table>\n  </div>\n  <div class=\"card\" id=\"updates\">\n    <div class=\"label\">Updates</div>\n    <p class=\"hint\" id=\"update-state\">…</p>\n    <div class=\"row\"><button id=\"update-check\">Check now</button><button class=\"primary\" id=\"update-install\" hidden>Update now</button><label class=\"hint\"><input type=\"checkbox\" id=\"update-auto\"> Update by itself (when no page is live through Link)</label></div>\n    <p class=\"hint\">From the web edition's releases on GitHub, checked against the SHA-256 GitHub gives. Link starts again with the new version; pages go live again.</p>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">Start with Windows</div>\n    <p class=\"hint\" id=\"startup-hint\">Link can start (minimized) each time you sign in, so the Live tab finds it without starting it first.</p>\n    <div class=\"row\"><button id=\"startup-on\">Start when I sign in</button><button id=\"startup-off\">Don't start when I sign in</button><span class=\"hint\" id=\"startup-state\"></span></div>\n  </div>\n  <div class=\"card\">\n    <div class=\"label\">New code</div>\n    <p class=\"hint\">A new code stops the pages paired with the old one from connecting again: they need the new one.</p>\n    <div class=\"row\"><button id=\"new-code\">Make a new code</button></div>\n  </div>\n  <p class=\"hint\">Keep Link running while you go live: close its window to stop it.</p>\n</main>\n<script>\n  const $ = (id) => document.getElementById(id);\n  const esc = (s) => String(s).replace(/[&<>\"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' })[c]);\n  async function refresh() {\n    try {\n      const s = await (await fetch('/status', { cache: 'no-store' })).json();\n      $('code').textContent = s.code;\n      const st = s.startup || {};\n      $('startup-on').hidden = !st.supported || st.on;\n      $('startup-off').hidden = !st.supported || !st.on;\n      if (!st.supported) $('startup-hint').textContent = st.message || '';\n      else if (!$('startup-state').textContent) $('startup-state').textContent = st.on ? 'On: Link starts when you sign in' : '';\n      $('version').textContent = 'Version ' + s.version + ' on port ' + s.port + ': gives the Kval StateScope web app\\'s Live tab access to PLCs from this computer.';\n      const b = s.build || {};\n      $('build').textContent = (b.from === 'source' ? 'Run from source' : 'Built ' + (b.built ? new Date(b.built).toLocaleString() : '?')) + ', code ' + (b.stamp || '?');\n      const inst = s.installed;\n      $('installed').hidden = !inst;\n      if (inst) $('installed').textContent = 'The installed Link (' + inst.path + ', ' + new Date(inst.modified).toLocaleString() + ') is not this one: the Start menu starts that copy. Keep the newer one.';\n      $('replace-installed').hidden = !s.canReplace;\n      showUpdates(s.updates);\n      $('clients').innerHTML = s.clients.length\n        ? s.clients.map((c) => '<tr><td class=\"mono\"><span class=\"dot\"></span>' + esc(c.origin) + '</td><td>' + esc(new Date(c.since).toLocaleTimeString()) + '</td><td class=\"mono\">' + esc(c.following || '(not live)') + '</td></tr>').join('')\n        : '<tr><td colspan=\"3\" class=\"empty\">None yet</td></tr>';\n    } catch {\n      $('code').textContent = 'Link is not running';\n    }\n  }\n  $('copy').onclick = async () => {\n    try { await navigator.clipboard.writeText($('code').textContent); $('copied').textContent = 'Copied'; }\n    catch { const r = document.createRange(); r.selectNodeContents($('code')); getSelection().removeAllRanges(); getSelection().addRange(r); $('copied').textContent = 'Selected: press Ctrl+C'; }\n    setTimeout(() => ($('copied').textContent = ''), 2500);\n  };\n  $('new-code').onclick = async () => {\n    if (!confirm('Make a new pairing code? Pages paired with the old one have to enter the new one.')) return;\n    await fetch('/new-code', { method: 'POST' });\n    refresh();\n  };\n  async function startup(on) {\n    try {\n      const r = await fetch('/startup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on }) });\n      const s = await r.json();\n      $('startup-state').textContent = s.message || s.error || '';\n    } catch { $('startup-state').textContent = 'Link is not running'; }\n    refresh();\n  }\n  $('replace-installed').onclick = async () => {\n    if (!confirm('Replace the installed Link with this one? The Start menu then starts this version. (Program Files: Windows asks for an administrator.)')) return;\n    try {\n      const r = await (await fetch('/replace-installed', { method: 'POST' })).json();\n      $('replace-state').textContent = r.message || '';\n    } catch { $('replace-state').textContent = 'Link is not running'; }\n    refresh();\n  };\n  function showUpdates(u) {\n    if (!u) return;\n    const when = u.checkedAt ? ' (checked ' + new Date(u.checkedAt).toLocaleTimeString() + ')' : '';\n    $('update-state').textContent = u.busy ? (u.message || 'Updating…')\n      : u.error ? 'Could not check: ' + u.error + when\n      : u.newer ? 'Link ' + u.latest.version + ' is available: this is ' + u.version + '.' + (u.canUpdate ? '' : ' (Run from source: update it from the repository.)') + when\n      : u.checkedAt ? 'Up to date: ' + u.version + (u.latest ? '' : ' (no released Link found)') + when + (u.message ? '. ' + u.message : '')\n      : 'Not checked yet: this is ' + u.version + '.';\n    $('update-install').hidden = !(u.newer && u.canUpdate) || u.busy;\n    $('update-auto').checked = !!u.auto;\n    $('update-auto').disabled = !u.canUpdate;\n  }\n  async function post(path, body) {\n    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });\n    return r.json();\n  }\n  $('update-check').onclick = async () => { $('update-state').textContent = 'Checking…'; try { showUpdates(await post('/update/check')); } catch { $('update-state').textContent = 'Link is not running'; } };\n  $('update-install').onclick = async () => {\n    if (!confirm('Update Link now? It starts again with the new version (pages live through it go live again).')) return;\n    $('update-install').hidden = true;\n    $('update-state').textContent = 'Downloading…';\n    try { const r = await post('/update/install'); $('update-state').textContent = r.message || ''; } catch { $('update-state').textContent = 'Link is starting again…'; }\n  };\n  $('update-auto').onchange = async (e) => { try { showUpdates(await post('/update/auto', { on: e.target.checked })); } catch { } };\n  $('startup-on').onclick = () => startup(true);\n  $('startup-off').onclick = () => startup(false);\n  refresh();\n  setInterval(refresh, 2000);\n</script>\n</body>\n</html>\n";
 
 // ---- Server: 127.0.0.1 only ----
 const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
@@ -94,7 +119,31 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/status') {
     res.writeHead(200, { ...secure, 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ version: VERSION, port, code: settings.code, clients: [...clients].map(({ origin, since, following }) => ({ origin, since, following })), startup: startup.status(), build: BUILD, installed: update.installedLink(), canReplace: update.canReplace(BUILD) }));
+    return res.end(JSON.stringify({ version: VERSION, port, code: settings.code, clients: [...clients].map(({ origin, since, following }) => ({ origin, since, following })), startup: startup.status(), build: BUILD, installed: update.installedLink(), canReplace: update.canReplace(BUILD), updates: updater.status() }));
+  }
+  // Updates: check, update now, by itself on / off (only from Link's own page)
+  if (req.method === 'POST' && url.pathname.startsWith('/update/')) {
+    if (!allowedHosts.has(String(req.headers.origin || '').replace(/^http:\/\//, ''))) {
+      res.writeHead(403, secure);
+      return res.end();
+    }
+    let body = '';
+    req.on('data', (d) => (body += d).length > 1000 && req.destroy());
+    req.on('end', async () => {
+      let on = false;
+      try {
+        on = JSON.parse(body || '{}').on === true;
+      } catch {
+        // not JSON: off
+      }
+      const r = url.pathname === '/update/check' ? await updater.check()
+        : url.pathname === '/update/install' ? await updater.install()
+          : url.pathname === '/update/auto' ? (updater.setAuto(on), updater.status())
+            : null;
+      res.writeHead(r ? 200 : 404, { ...secure, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(r ?? { error: 'Not found' }));
+    });
+    return;
   }
   // The installed Link replaced by this one: only from Link's own page
   if (req.method === 'POST' && url.pathname === '/replace-installed') {
@@ -168,6 +217,8 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', (ws, req) => {
   const origin = req.headers.origin || '(no origin)';
   const session = createLiveSession();
+  // (Build from the web page's project folder: its files mirrored here)
+  const mirror = new ProjectMirror();
   let paired = false;
   const client = { origin, since: Date.now(), following: null };
   const send = (m) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
@@ -199,7 +250,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -213,6 +264,50 @@ wss.on('connection', (ws, req) => {
     // Rebuild the PLC's project with the page's edits (XAE on this computer), and write it back when asked
     if (m.type === 'plcBuildClose') return void session.closeBuild(send, m);
     if (m.type === 'plcLicense') return void session.license(send, m);
+    // The PLC application's state and online change count (did an online change from XAE take?)
+    if (m.type === 'plcAppInfo') return void session.appInfo(send, m);
+    // TwinCAT XAE opened on this computer (its license page renews a trial license)
+    if (m.type === 'openXae') {
+      const r = await openXae();
+      log(`xae: ${origin} opened TwinCAT XAE: ${r.message}`);
+      return send({ type: 'openXaeResult', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, ...r });
+    }
+    // Build from the page's project folder: its file list (which ones Link needs), the files in pieces, then the build
+    if (m.type === 'projectSync') {
+      const r = mirror.sync(m.project, m.files);
+      return send({ type: 'projectSyncResult', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, ...r });
+    }
+    if (m.type === 'projectPut') {
+      let r;
+      try {
+        r = mirror.put(String(m.uploadId ?? ''), m);
+      } catch (err) {
+        r = { error: err.message };
+      }
+      return send({ type: 'projectPutResult', requestId: Number.isInteger(m.requestId) ? m.requestId : 0, ...r });
+    }
+    if (m.type === 'projectBuild') {
+      const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+      const uploadId = String(m.uploadId ?? '');
+      const fileAt = mirror.fullPath(uploadId, m.file);
+      const edits = (Array.isArray(m.edits) ? m.edits : []).slice(0, 100).map((e) => ({ file: mirror.fullPath(uploadId, e?.file), content: e?.content })).filter((e) => e.file && typeof e.content === 'string');
+      if (!fileAt) return send({ type: 'plcBuildResult', requestId, ok: false, fatal: 'The project is not on this computer yet: build again', items: [] });
+      log(`build: ${origin} builds its project folder (${edits.length} edited file(s))${m.write ? `, then ${m.write}` : ''}`);
+      return void session.projectBuild((r) => {
+        // Written: the new compile information back to the page (into its project folder, so XAE there matches)
+        if (r.type === 'plcBuildResult' && r.compileInfoFiles?.length) {
+          const root = mirror.root(uploadId);
+          r.compileInfo = r.compileInfoFiles.slice(0, 50).map((f) => {
+            try {
+              return { path: f, data: fs.readFileSync(path.join(root, f)).toString('base64') };
+            } catch {
+              return null;
+            }
+          }).filter(Boolean);
+        }
+        send(r);
+      }, { requestId, file: fileAt, edits, write: m.write ?? null });
+    }
     if (m.type === 'plcBuild') {
       log(`build: ${origin} rebuilds the PLC's project (${Array.isArray(m.edits) ? m.edits.length : 0} edited file(s))${m.write ? `, then ${m.write}` : ''}`);
       return void session.build(send, m);
@@ -271,6 +366,7 @@ wss.on('connection', (ws, req) => {
     clearTimeout(helloTimer);
     clients.delete(client);
     session.stop(false);
+    mirror.dispose();
     if (paired) log(`disconnected: ${origin}`);
   });
 });
@@ -305,4 +401,6 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`Link's page (the code, the paired pages): http://127.0.0.1:${port}/`);
   console.log('');
   if (shouldOpen) openPage();
+  // (a built Link, or the tests' stand-in releases; KSS_LINK_UPDATES=off: never by itself)
+  if ((selfFile || process.env.KSS_LINK_RELEASES) && process.env.KSS_LINK_UPDATES !== 'off') updater.start();
 });

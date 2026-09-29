@@ -14,6 +14,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { readBootFile, unzip, readPlcSources } = require('./tcSources.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
+const { waitForRun } = require('./tcAppInfo.cjs');
 
 const dry = () => process.env.KSS_BUILD_DRYRUN === '1';
 const text = (b) => b.toString('utf8').replace(/^﻿/, '');
@@ -526,7 +527,12 @@ class XaeWorker {
     });
   }
   /** A build: the result when its done line comes; the request as xaeRequest makes it */
+  /** Builds queued or running: this XAE is not closed for another project meanwhile */
+  get busy() {
+    return (this.pending ?? 0) > 0;
+  }
   build(req, { onStep, timeoutMs = 15 * 60 * 1000 } = {}) {
+    this.pending = (this.pending ?? 0) + 1;
     const run = () => new Promise((resolve) => {
       clearTimeout(this.idle);
       if (!this.running) this.start();
@@ -538,6 +544,7 @@ class XaeWorker {
       const finish = (done) => {
         clearTimeout(timer);
         this.current = null;
+        this.pending--;
         if (done.broken) this.stop(true);
         else this.openTsproj = req.tsproj;
         if (this.running) {
@@ -582,18 +589,53 @@ class XaeWorker {
     for (const id of this.mine ?? []) try { process.kill(id); } catch { /* gone */ }
   }
 }
-let worker = null;
-const xaeWorker = () => (worker ??= new XaeWorker());
-/** Until when XAE is kept open for the next build (ms since 1970), or null (not open) */
-const xaeOpenUntil = () => (worker?.running && worker.until ? worker.until : null);
-/** Close the XAE kept open now (the next build opens the project again); true when one was open */
-function closeXae() {
-  const open = !!worker?.running;
-  worker?.stop(false);
-  if (warmWorkspace) {
-    fs.rm(warmWorkspace.dir, { recursive: true, force: true }, () => {});
-    warmWorkspace = null;
+// One XAE per project (going back and forth between two projects keeps both open): at most KSS_BUILD_MAX_XAE
+// (default 2, each XAE takes about 1 GB); for another one, the one used longest ago quits (not while it builds).
+// Each worker keeps its work folder (ws: the project open in its XAE)
+const maxXae = () => {
+  const v = Number(process.env.KSS_BUILD_MAX_XAE);
+  return Number.isInteger(v) && v >= 1 ? v : 2;
+};
+const workers = new Map();
+const dropWorkspace = (w) => {
+  if (w.ws) fs.rm(w.ws.dir, { recursive: true, force: true }, () => {});
+  w.ws = null;
+};
+function xaeWorker(key) {
+  let w = workers.get(key);
+  if (w) {
+    // (the most recently used last)
+    workers.delete(key);
+    workers.set(key, w);
+    return w;
   }
+  while (workers.size >= maxXae()) {
+    const oldest = [...workers.entries()].find(([, x]) => !x.busy);
+    if (!oldest) break;
+    oldest[1].stop(false);
+    dropWorkspace(oldest[1]);
+    workers.delete(oldest[0]);
+  }
+  w = new XaeWorker();
+  w.ws = null;
+  workers.set(key, w);
+  return w;
+}
+/** Until when this worker's XAE is kept open for the next build (ms since 1970), or null (not open) */
+const openUntilOf = (w) => (w?.running && w.until ? w.until : null);
+/** Until when an XAE is kept open for a next build (the latest), or null (none open) */
+const xaeOpenUntil = () => Math.max(0, ...[...workers.values()].map((w) => openUntilOf(w) ?? 0)) || null;
+/** The projects open in XAE now (their XAE kept open for the next build) */
+const xaeOpenCount = () => [...workers.values()].filter((w) => w.running).length;
+/** Close every XAE kept open now (the next build opens its project again); true when one was open */
+function closeXae() {
+  let open = false;
+  for (const w of workers.values()) {
+    open ||= w.running;
+    w.stop(false);
+    dropWorkspace(w);
+  }
+  workers.clear();
   return open;
 }
 
@@ -618,6 +660,33 @@ function xaeAvailable(progId = 'TcXaeShell.DTE.17.0') {
   if (process.platform !== 'win32') return Promise.resolve(false);
   if (dry()) return Promise.resolve(true);
   return new Promise((resolve) => execFile('reg', ['query', `HKCR\\${progId}`], { windowsHide: true }, (err) => resolve(!err)));
+}
+
+/** TcXaeShell.exe: from its registered automation server (as Start-Kss finds it), or null */
+function xaeExecutable(progId = 'TcXaeShell.DTE.17.0') {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  const query = (key) => new Promise((resolve) => execFile('reg', ['query', key, '/ve'], { windowsHide: true }, (err, out) => resolve(err ? null : /REG_\w+\s+(.+)$/m.exec(String(out))?.[1]?.trim() ?? null)));
+  return query(`HKCR\\${progId}\\CLSID`).then((clsid) => (clsid ? query(`HKCR\\CLSID\\${clsid}\\LocalServer32`) : null)).then((server) => {
+    if (!server) return null;
+    const exe = server.startsWith('"') ? server.slice(1, server.indexOf('"', 1)) : server.slice(0, server.toLowerCase().indexOf('.exe') + 4);
+    return exe || null;
+  });
+}
+
+/**
+ * TwinCAT XAE opened for the user (a window of its own, as from the Start menu: theirs to use and close; its
+ * license page renews a trial license). KSS_BUILD_DRYRUN: not started, said which. → { ok, message, dry? }
+ */
+async function openXae() {
+  const exe = dry() ? 'C:\\TwinCAT\\3.1\\Components\\TcXaeShell\\Common7\\IDE\\TcXaeShell.exe' : await xaeExecutable();
+  if (!exe) return { ok: false, message: 'TwinCAT XAE is not installed on this computer' };
+  if (dry()) return { ok: true, dry: exe, message: 'TwinCAT XAE is starting' };
+  try {
+    require('child_process').spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
+    return { ok: true, message: 'TwinCAT XAE is starting' };
+  } catch (err) {
+    return { ok: false, message: `Could not start TwinCAT XAE: ${err.message}` };
+  }
 }
 
 /** The archives' fingerprint: the same, the work folder already open in XAE can be used again */
@@ -656,8 +725,22 @@ function reuseWorkspace(ws, edits) {
   return changed;
 }
 
-/** The work folder kept with XAE's open project: { key, hash, ...workspace, originals } */
-let warmWorkspace = null;
+/**
+ * After a write: is the PLC application back in Run (a download starts it within seconds; activating restarts TwinCAT
+ * first)? Not in Run: a warning that says so, and why when its trial license ran out. → { state, ok }
+ * KSS_BUILD_RUN_WAIT_MS: how long to wait (the tests)
+ */
+async function afterWrite(client, written, items, onStep) {
+  onStep?.('Waiting for the PLC to run');
+  const timeoutMs = Number(process.env.KSS_BUILD_RUN_WAIT_MS) || (written === 'activate' ? 45000 : 20000);
+  const run = await waitForRun(client, { timeoutMs });
+  if (!run.ok) {
+    const lic = licenseState(await readTrialLicense(client).catch(() => null));
+    const why = lic?.state === 'expired' ? ` ${lic.text}` : '';
+    items.push({ level: 'warning', text: `After the ${MODES[written].toLowerCase()} the PLC is ${run.state ? `in ${run.state}` : 'not answering'}, not in Run: start it from XAE (PLC > Start), or look at TwinCAT's messages on the target.${why}`, file: '', line: 0, column: 0, project: '', place: null });
+  }
+  return { state: run.state, ok: run.ok };
+}
 
 /**
  * Build (and write back): read the project from the PLC (client: its ADS connection), put the edits in, build with
@@ -678,11 +761,11 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   const archives = await fetchProjectArchives((rel) => readBootFile(client, rel));
   const key = `${netId}|${archives.info?.project?.name ?? ''}`;
   const hash = archivesHash(archives);
-  const w = xaeWorker();
+  const w = xaeWorker(`plc|${key}`);
   let ws;
   let changed = false;
-  if (!dry() && warmWorkspace && warmWorkspace.key === key && warmWorkspace.hash === hash && w.running && w.openTsproj === warmWorkspace.tsproj && fs.existsSync(warmWorkspace.tsproj)) {
-    ws = warmWorkspace;
+  if (!dry() && w.ws && w.ws.hash === hash && w.running && w.openTsproj === w.ws.tsproj && fs.existsSync(w.ws.tsproj)) {
+    ws = w.ws;
     changed = reuseWorkspace(ws, edits);
   } else {
     // (another project, or the PLC's changed: a new folder; the old one removed once XAE has closed it)
@@ -702,11 +785,11 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   let r;
   if (dry()) r = standInBuild(ws, edits, write);
   else {
-    const previous = warmWorkspace;
+    const previous = w.ws;
     r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed }), { onStep });
-    warmWorkspace = w.running ? ws : null;
+    w.ws = w.running ? ws : null;
     for (const old of [previous, ...(w.running ? [] : [ws])]) {
-      if (old && old !== warmWorkspace) fs.rm(old.dir, { recursive: true, force: true }, () => {});
+      if (old && old !== w.ws) fs.rm(old.dir, { recursive: true, force: true }, () => {});
     }
   }
   const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
@@ -724,12 +807,13 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
     }
     if (!verified.ok) items.push({ level: 'warning', text: `After the write: ${verified.text}`, file: '', line: 0, column: 0, project: '', place: null });
     // (the PLC's archive changed with the write: its project opened afresh next time, this folder then removed)
-    if (warmWorkspace) warmWorkspace.hash = '';
+    if (w.ws) w.ws.hash = '';
   }
+  const plcRun = r.ok && r.written ? await afterWrite(client, r.written, items, onStep) : undefined;
   // (XAE kept open for the next build: until when; the stand-in says as a real build would)
-  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : xaeOpenUntil();
+  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : openUntilOf(w);
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
-  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(openUntil ? { xaeOpenUntil: openUntil } : {}) };
+  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: dry() ? 1 : xaeOpenCount() } : {}) };
   delete result.broken;
   return result;
 }
@@ -838,12 +922,10 @@ function plcProjectsIn(root, depth = 0, out = []) {
   return out;
 }
 
-let projectWorkspace = null;
-
 /**
  * Build (and write back) from the TwinCAT project on this computer: file (a POU of it) finds the project; edits:
  * [{ file: its full path, content }] put into the copy. write: null, 'online', 'download', 'activate'. →
- * { ok, items, ..., compileInfoCopied }
+ * { ok, items, ..., compileInfoCopied, compileInfoFiles: their paths in the project, plcRun }
  */
 async function buildFromProject(client, { file, edits = [], plcProject = '', write = null, netId = '', adsPort = 851, syncCompileInfo = true, onStep } = {}) {
   if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
@@ -855,13 +937,13 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
     if (lic?.state === 'expired' && write !== 'online') return { ok: false, fatal: `Nothing was written: ${lic.text}`, items: [], license: lic };
     if (lic && lic.state !== 'ok') licenseNote = lic;
   }
-  const w = xaeWorker();
+  const w = xaeWorker(`project|${root.toLowerCase()}`);
   onStep?.('Copying the project');
   // (the same project, its copy still open in XAE: only the changed files copied again)
   let ws;
   let changed = false;
-  if (!dry() && projectWorkspace && projectWorkspace.root === root && w.running && w.openTsproj === projectWorkspace.tsproj) {
-    ws = projectWorkspace;
+  if (!dry() && w.ws && w.ws.root === root && w.running && w.openTsproj === w.ws.tsproj) {
+    ws = w.ws;
     changed = syncTree(root, ws.dir) > 0;
   } else {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-project-'));
@@ -887,16 +969,24 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   let r;
   if (dry()) r = standInBuild(ws, edits.map((e) => ({ plcProject: plc.name, path: path.relative(path.join(root, path.relative(ws.dir, plc.dir)), path.resolve(e.file)).replace(/\\/g, '/'), content: e.content })), write);
   else {
-    const previous = projectWorkspace;
+    const previous = w.ws;
     r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed }), { onStep });
-    projectWorkspace = w.running ? ws : null;
-    if (previous && previous !== projectWorkspace) fs.rm(previous.dir, { recursive: true, force: true }, () => {});
+    w.ws = w.running ? ws : null;
+    for (const old of [previous, ...(w.running ? [] : [ws])]) {
+      if (old && old !== w.ws) fs.rm(old.dir, { recursive: true, force: true }, () => {});
+    }
   }
   const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
   // Written: the new compile information into the project (XAE's next login matches the running code)
   let compileInfoCopied = 0;
-  if (r.ok && r.written && syncCompileInfo && !dry()) {
+  const compileInfoFiles = [];
+  // (the stand-in: compile information as a build that wrote makes it)
+  if (dry() && r.ok && r.written) {
+    fs.mkdirSync(path.join(plc.dir, '_CompileInfo'), { recursive: true });
+    fs.writeFileSync(path.join(plc.dir, '_CompileInfo', `StandIn-${Date.now()}.compileinfo`), 'stand-in');
+  }
+  if (r.ok && r.written && syncCompileInfo) {
     for (const p of ws.plcProjects) {
       const from = path.join(p.dir, '_CompileInfo');
       const to = path.join(root, path.relative(ws.dir, p.dir), '_CompileInfo');
@@ -906,6 +996,7 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
           if (!fs.existsSync(path.join(to, f))) {
             fs.copyFileSync(path.join(from, f), path.join(to, f));
             compileInfoCopied++;
+            compileInfoFiles.push(path.relative(root, path.join(to, f)).replace(/\\/g, '/'));
           }
         }
       } catch {
@@ -913,11 +1004,12 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
       }
     }
   }
-  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : xaeOpenUntil();
-  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, ...(openUntil ? { xaeOpenUntil: openUntil } : {}) };
+  const plcRun = r.ok && r.written && client ? await afterWrite(client, r.written, items, onStep) : undefined;
+  const openUntil = dry() ? Date.now() + keepMinutes() * 60000 : openUntilOf(w);
+  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, compileInfoFiles, ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: dry() ? 1 : xaeOpenCount() } : {}) };
   delete result.broken;
   if (dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
   return result;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, closeXae, buildFromProject, projectRootOf, syncTree };
+module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeWorker, closeXae, openXae, xaeExecutable, buildFromProject, projectRootOf, syncTree };

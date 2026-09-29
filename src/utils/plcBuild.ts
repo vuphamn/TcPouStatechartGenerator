@@ -33,10 +33,23 @@ export interface PlcBuildResult {
   applied?: string[];
   /** A project build (desktop): the compile information files copied back into the project after the write */
   compileInfoCopied?: number;
-  /** XAE kept open for the next build until then (ms since 1970) */
+  /** Its paths in the project (Link: the files themselves, compileInfo, to write into the page's project folder) */
+  compileInfoFiles?: string[];
+  compileInfo?: { path: string; data: string }[];
+  /** XAE kept open for the next build until then (ms since 1970); the projects open in XAE */
   xaeOpenUntil?: number;
+  xaeOpenProjects?: number;
+  /** After a write: the PLC application's state (ok: back in Run) */
+  plcRun?: { state: string | null; ok: boolean };
   /** After a write: the PLC read again (its code the one written?) */
   verified?: { ok: boolean; text: string };
+}
+
+/** The PLC application's state and how many online changes it took (TwinCAT's OnlineChangeCnt; null: not read) */
+export interface PlcAppInfo {
+  state: string | null;
+  onlineChanges: number | null;
+  error?: string;
 }
 
 export interface PlcEdit {
@@ -86,3 +99,18 @@ export function buildItemWhere(i: PlcBuildItem): string {
 
 /** Is the message in this POU (its path in the PLC project)? */
 export const itemInPou = (i: PlcBuildItem, origin: PlcOrigin | null) => !!origin && !!i.place && i.place.path.toLowerCase() === origin.path.toLowerCase();
+
+/** Bytes as base64 (a project file's piece sent to Link), in slices so a large piece does not overflow the stack */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/** base64 as bytes (the compile information Link sends back) */
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}

@@ -1,6 +1,8 @@
 // Fake remote PLC speaking AMS/TCP with several typed symbols (BOOL, INT, REAL, STRING, ...), changed by a script.
 // Usage: node fake-ams2.cjs <tcpPort> <config.json>
-//   config: { symbols: { name: { type, dataType, size, value } }, script: [{ hold: ms, set: { name: value } }] }
+//   config: { symbols: { name: { type, dataType, size, value } }, script: [{ hold: ms, set: { name: value } }],
+//     adsState (ReadState: 5 Run, 6 Stop), countOnRead: [names] (their value goes up by one after each read: an online
+//     change counter seen changing) }
 const net = require('net');
 const fs = require('fs');
 const [, , tcpPortArg, configFile] = process.argv;
@@ -111,7 +113,7 @@ function handle(sock, f) {
     }
     case 4: {
       const b = Buffer.alloc(4);
-      b.writeUInt16LE(5, 0);
+      b.writeUInt16LE(config.adsState ?? 5, 0);
       return result(0, b);
     }
     case 9: {
@@ -222,7 +224,10 @@ function handle(sock, f) {
         return result(0, withLength(info));
       }
       if (ig !== 0xf005 || !byHandle.has(io)) return result(0x703);
-      return result(0, withLength(encode(byHandle.get(io))));
+      const read = byHandle.get(io);
+      const value = withLength(encode(read));
+      if ((config.countOnRead || []).includes(read.name)) read.value++;
+      return result(0, value);
     }
     case 3:
       if (d.readUInt32LE(0) === 0xf006) {

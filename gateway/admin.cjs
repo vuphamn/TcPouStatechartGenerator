@@ -460,19 +460,21 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     });
   }
 
-  // Check: the steps in a row under the PLC's
-  async function checkRow(p) {
+  // Check: the steps in a row under the PLC's (a listed PLC, or one the search found, before it is added)
+  function checkRow(p) {
     const tr = document.querySelector('tr[data-plc="' + CSS.escape(p.id) + '"]');
-    if (!tr) return;
+    if (tr) return checkInto(tr, p.id, p);
+  }
+  async function checkInto(tr, key, p) {
     let out = tr.nextElementSibling;
     if (!out || !out.classList.contains('admin-check-row')) {
-      out = el('tr', { class: 'admin-check-row', 'data-check': p.id }, el('td', { colspan: '7' }));
+      out = el('tr', { class: 'admin-check-row', 'data-check': key }, el('td', { colspan: '7' }));
       tr.after(out);
     }
     const cell = out.firstChild;
     cell.textContent = 'Checking...';
     try {
-      const r = await call('check', { id: p.id, name: p.name, netId: String(p.netId).trim(), ip: String(p.ip).trim(), port: Number(p.port) || 851, localNetId: p.localNetId || $('admin-local-netid').value.trim() });
+      const r = await call('check', { id: p.id || 'check', name: p.name || 'The PLC', netId: String(p.netId).trim(), ip: String(p.ip).trim(), port: Number(p.port) || 851, localNetId: p.localNetId || $('admin-local-netid').value.trim() });
       cell.textContent = '';
       for (const s of r.steps) cell.append(el('div', { class: 'admin-check-step ' + (s.ok === true ? 'ok' : s.ok === false ? 'bad' : 'warn'), 'data-step': s.id, 'data-ok': String(s.ok) }, (s.ok === true ? '✓ ' : s.ok === false ? '✗ ' : '! ') + s.title + (s.detail && s.ok !== true ? ' — ' + s.detail : '')));
       cell.append(el('div', { class: 'admin-check-verdict' }, r.verdict));
@@ -505,7 +507,10 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
       d.box = box;
       body.append(el('tr', { 'data-netid': d.netId },
         el('td', {}, box), el('td', {}, d.name || '(no name)'), el('td', { class: 'mono' }, d.netId), el('td', { class: 'mono' }, d.ip),
-        el('td', { class: 'hide-sm' }, d.twincat), el('td', { class: 'hide-sm' }, d.os), el('td', {}, have ? el('span', { class: 'tag' }, 'in the list') : '')));
+        el('td', { class: 'hide-sm' }, d.twincat), el('td', { class: 'hide-sm' }, d.os),
+        el('td', {}, el('div', { class: 'row nowrap' },
+          have ? el('span', { class: 'tag' }, 'in the list') : null,
+          el('button', { class: 'admin-found-check', title: 'Check it before adding it: the network, TwinCAT, its NetId, the route from this gateway (nothing is changed)', on: { click: (e) => checkInto(e.target.closest('tr'), 'found:' + d.netId, { name: d.name, netId: d.netId, ip: d.ip, port: 851 }) } }, 'Check')))));
     }
     updateAdd();
   }

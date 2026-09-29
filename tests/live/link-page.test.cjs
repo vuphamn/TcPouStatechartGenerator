@@ -1,6 +1,7 @@
 // Kval StateScope Link's page (http://127.0.0.1:<port>/): the pairing code, the paired pages; a new code only from
 // its own page; another host name refused; started again while it runs: it points at the running one; Start when I
-// sign in (a shortcut in the Startup folder: its command only, KSS_SERVICE_DRYRUN)
+// sign in (a shortcut in the Startup folder: its command only, KSS_SERVICE_DRYRUN); updates: a newer released Link
+// (a stand-in release list here) found at start, updated by itself (dry run: nothing replaced), Update now, auto off
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -40,7 +41,17 @@ const pair = (code) =>
   fs.writeFileSync(installedExe, 'old');
   fs.writeFileSync(thisExe, 'new');
   fs.utimesSync(installedExe, new Date(Date.now() - 86400000), new Date(Date.now() - 86400000));
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata, KSS_SERVICE_DRYRUN: '1', KSS_INSTALLED_LINK: installedExe, KSS_THIS_LINK: thisExe }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
+  // The releases (GitHub's list, a stand-in): Link 9.9.9, its SHA-256
+  const newLink = Buffer.from('Link 9.9.9');
+  const releases = http.createServer((req, res) => {
+    if (req.url === '/releases') {
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify([{ tag_name: 'web-v9.9.9', html_url: 'https://example.invalid/web-v9.9.9', assets: [{ name: 'KvalStateScope-Link-9.9.9.exe', browser_download_url: `http://127.0.0.1:${releases.address().port}/link.exe`, size: newLink.length, digest: `sha256:${require('crypto').createHash('sha256').update(newLink).digest('hex')}` }] }]));
+    }
+    res.end(newLink);
+  });
+  await new Promise((r) => releases.listen(0, '127.0.0.1', r));
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', String(PORT), '--no-open'], { env: { ...process.env, APPDATA: appdata, KSS_SERVICE_DRYRUN: '1', KSS_INSTALLED_LINK: installedExe, KSS_THIS_LINK: thisExe, KSS_LINK_RELEASES: `http://127.0.0.1:${releases.address().port}/releases`, KSS_LINK_UPDATE_DELAY_MS: '300' }, stdio: ['ignore', fs.openSync(outFile, 'w'), fs.openSync(outFile, 'a')] });
   const code = (await h.waitForText(outFile, /Pairing code:\s+(\S+)/))?.[1];
   expect(!!code && /http:\/\/127\.0\.0\.1:48985\//.test(fs.readFileSync(outFile, 'utf8')), `started: code ${code}, its page announced`);
 
@@ -104,6 +115,20 @@ const pair = (code) =>
   const replaced = await bp.$eval('#replace-state', (e) => e.textContent);
   expect(/Replaced: the Start menu now starts this Link/.test(replaced) && fs.readFileSync(installedExe, 'utf8') === 'old', `replaced (dry run, nothing copied): "${replaced}"`);
   expect((await request('POST', '/replace-installed', { origin: 'https://evil.example' })).status === 403, 'replace: refused from another origin');
+  // Updates: 9.9.9 found at start and taken by itself (no page live: dry run, this Link's file left as it is)
+  const logged = fs.readFileSync(outFile, 'utf8');
+  const up = await bp.evaluate(() => ({ state: document.getElementById('update-state').textContent, install: !document.getElementById('update-install').hidden, auto: document.getElementById('update-auto').checked }));
+  expect(/update: Link 9\.9\.9 is available/.test(logged) && /update: Link 1\.0\.0 -> 9\.9\.9/.test(logged) && fs.readFileSync(thisExe, 'utf8') === 'new', `updated by itself at start (dry run): ${logged.split('\n').filter((l) => /update:/.test(l)).join(' | ')}`);
+  expect(/Link 9\.9\.9 is available: this is 1\.0\.0/.test(up.state) && up.install && up.auto, `the page: "${up.state}" (Update now: ${up.install}, by itself: ${up.auto})`);
+  bp.once('dialog', (d) => d.accept());
+  await bp.click('#update-install');
+  await bp.waitForFunction(() => /Updated/.test(document.getElementById('update-state').textContent), { timeout: 8000 }).catch(() => {});
+  const updated = await bp.$eval('#update-state', (e) => e.textContent);
+  expect(/Updated \(dry run: nothing replaced\)/.test(updated), `Update now: "${updated}"`);
+  await bp.click('#update-auto');
+  await h.sleep(600);
+  expect(JSON.parse((await request('GET', '/status')).body).updates.auto === false && JSON.parse(fs.readFileSync(path.join(appdata, 'KvalStateScope', 'link.json'), 'utf8')).autoUpdate === false, 'by itself: turned off, kept in the profile');
+  expect((await request('POST', '/update/install', { origin: 'https://evil.example' })).status === 403 && (await request('POST', '/update/check')).status === 403, 'updates: refused from another origin (or none)');
   await bp.click('#startup-off');
   await h.sleep(800);
   expect((await vis()).on && JSON.parse((await request('GET', '/status')).body).startup.on === false, `turned off: "${(await vis()).state}"`);
@@ -118,6 +143,8 @@ const pair = (code) =>
   expect(code2 === 0 && /already running: its page is http:\/\/127\.0\.0\.1:48985\//.test(out), `started again: "${out.trim()}" (exit ${code2})`);
 
   link.kill();
+  releases.closeAllConnections();
+  releases.close();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(2); });

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Hammer, Loader2, Upload, X, XCircle } from 'lucide-react';
-import type { PlcBuildItem, PlcBuildResult, PlcWrite } from '../utils/plcBuild.ts';
+import { AlertTriangle, CheckCircle2, Hammer, Loader2, MonitorUp, Upload, X, XCircle } from 'lucide-react';
+import type { PlcAppInfo, PlcBuildItem, PlcBuildResult, PlcWrite } from '../utils/plcBuild.ts';
 import { buildItemWhere } from '../utils/plcBuild.ts';
 import type { PartDiff } from '../utils/pouDiff.ts';
 
@@ -18,6 +18,8 @@ export interface PlcBuildState {
   target?: string;
   /** What a write changes on the PLC: each file sent against the PLC's own, part by part */
   changes?: { file: string; parts: PartDiff[] }[];
+  /** Where it was built from: the PLC's sources, the project on this computer (desktop), the page's project folder (web, through Link), XAE's solution */
+  via?: 'plc' | 'project' | 'webProject' | 'xae';
 }
 
 const WRITE_TEXT: Record<PlcWrite, { title: string; label: string; warning: string }> = {
@@ -54,7 +56,36 @@ export const PlcBuildDialog: React.FC<{
   canWrite?: boolean;
   /** Close the XAE kept open for the next build now */
   onCloseXae?: () => Promise<boolean>;
-}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae }) => {
+  /** Online change from the user's XAE (its Automation Interface makes none): the PLC's state and online change count */
+  onReadAppInfo?: () => Promise<PlcAppInfo>;
+  /** The edits put where the user's XAE reads them (the project's file, or a copy to put in): an error text, or null */
+  saveForXae?: { label: string; hint: string; run: () => Promise<string | null> };
+  /** TwinCAT XAE opened for the user */
+  onOpenXae?: () => Promise<{ ok: boolean; message: string }>;
+}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae, onReadAppInfo, saveForXae, onOpenXae }) => {
+  // The online change from XAE, step by step: the count before, what Save did, what the check found
+  const [guide, setGuide] = useState<{ before: PlcAppInfo | null; saved?: { ok: boolean; text: string }; check?: { ok: boolean; text: string }; xae?: string } | null>(null);
+  const openGuide = () => {
+    setGuide({ before: null });
+    void onReadAppInfo?.().then((before) => setGuide((g) => (g ? { ...g, before } : g))).catch(() => {});
+  };
+  const checkGuide = async () => {
+    if (!onReadAppInfo) return;
+    const now = await onReadAppInfo().catch((e: unknown) => ({ state: null, onlineChanges: null, error: e instanceof Error ? e.message : String(e) }) as PlcAppInfo);
+    const was = guide?.before?.onlineChanges;
+    const n = now.onlineChanges;
+    const inState = now.state ? `; it is in ${now.state}` : '';
+    const check = now.error && n == null
+      ? { ok: false, text: `Could not read the PLC: ${now.error}` }
+      : n != null && was != null && n > was
+        ? { ok: now.state === 'Run', text: `The PLC took the online change (online changes: ${was} → ${n})${now.state === 'Run' ? ' and runs' : inState}.` }
+        : n != null && was != null && n < was
+          ? { ok: false, text: `The PLC's online change count went back (${was} → ${n}): it was downloaded instead (the application started again)${inState}.` }
+          : n == null
+            ? { ok: false, text: `The PLC does not say how many online changes it took (TwinCAT_SystemInfoVarList)${inState}.` }
+            : { ok: false, text: `No online change yet (online changes: ${n}). Log in from XAE, then check again.` };
+    setGuide((g) => (g ? { ...g, check } : g));
+  };
   const [xaeClosed, setXaeClosed] = useState(false);
   const [confirming, setConfirming] = useState<PlcWrite | null>(null);
   const [safe, setSafe] = useState(false);
@@ -71,6 +102,7 @@ export const PlcBuildDialog: React.FC<{
     setConfirming(null);
     setSafe(false);
     setXaeClosed(false);
+    setGuide(null);
   }, [state.result]);
   const r = state.result;
   const items = r?.items ?? [];
@@ -115,7 +147,7 @@ export const PlcBuildDialog: React.FC<{
       <div className="px-3 py-2 border-b border-slate-800 text-slate-400">
         {canWrite ? (
           <>
-            The project as the PLC keeps it, with {state.files.length === 1 ? 'this file' : `these ${state.files.length} files`} as edited here: <span className="font-mono text-slate-300">{state.files.join(', ')}</span>. Built by TwinCAT XAE on this computer, in the background.
+            {state.via === 'project' || state.via === 'webProject' ? 'Your TwinCAT project (a copy of its folder' + (state.via === 'webProject' ? ', sent to Link' : '') + ')' : 'The project as the PLC keeps it'}, with {state.files.length === 1 ? 'this file' : `these ${state.files.length} files`} as edited here: <span className="font-mono text-slate-300">{state.files.join(', ')}</span>. Built by TwinCAT XAE on {state.via === 'webProject' ? 'this computer (Link)' : 'this computer'}, in the background.
           </>
         ) : (
           <>The solution open in XAE, built by XAE (this POU's edits saved to the project first). To write it to the PLC: XAE's Login, or Activate Configuration.</>
@@ -137,7 +169,12 @@ export const PlcBuildDialog: React.FC<{
           <>
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span className="text-emerald-200">
-              Written to the PLC ({WRITE_TEXT[r!.written!].label.toLowerCase()}){r?.plcState ? `: the PLC is ${r.plcState}` : ''}.{' '}
+              Written to the PLC ({WRITE_TEXT[r!.written!].label.toLowerCase()}){r?.plcRun ? '' : r?.plcState ? `: the PLC is ${r.plcState}` : ''}.{' '}
+              {r?.plcRun && (
+                <span id="plc-build-run" data-ok={String(r.plcRun.ok)} className={r.plcRun.ok ? '' : 'text-amber-200'}>
+                  {r.plcRun.ok ? 'The PLC runs. ' : `The PLC is ${r.plcRun.state ? `in ${r.plcRun.state}` : 'not answering'}, not in Run: start it from XAE. `}
+                </span>
+              )}
               {r?.verified ? (r.verified.ok ? `${r.verified.text}.` : <span className="text-amber-200">But: {r.verified.text}</span>) : 'From PLC reads the new sources.'}
             </span>
           </>
@@ -159,11 +196,11 @@ export const PlcBuildDialog: React.FC<{
       {!running && r?.xaeOpenUntil && !xaeClosed && (
         <div id="plc-build-xae" className="px-3 pb-2 -mt-1 flex items-center gap-2 text-slate-400">
           <span>
-            XAE stays open with the project until {new Date(r.xaeOpenUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, so the next build is quicker.
+            XAE stays open with the project until {new Date(r.xaeOpenUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, so the next build is quicker{r.xaeOpenProjects && r.xaeOpenProjects > 1 ? ` (${r.xaeOpenProjects} projects open, one XAE each)` : ''}.
           </span>
           {onCloseXae && (
             <button type="button" id="plc-build-xae-close" onClick={() => void onCloseXae().then(() => setXaeClosed(true))} className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">
-              Close XAE now
+              {r.xaeOpenProjects && r.xaeOpenProjects > 1 ? 'Close them now' : 'Close XAE now'}
             </button>
           )}
         </div>
@@ -189,7 +226,48 @@ export const PlcBuildDialog: React.FC<{
           )}
         </div>
       )}
-      {confirming ? (
+      {guide && !confirming ? (
+        <div id="plc-build-guide-panel" className="px-3 py-2 border-t border-slate-800 space-y-2 text-slate-300">
+          <div className="font-semibold text-slate-100">Online change from your XAE</div>
+          <div className="text-slate-400">
+            TwinCAT makes an online change only from XAE's own Login, not through its Automation Interface. In your XAE, with the project that last wrote to this PLC
+            {guide.before?.onlineChanges != null ? <> (the PLC has taken <span id="plc-build-guide-before">{guide.before.onlineChanges}</span> online changes so far)</> : null}:
+          </div>
+          <ol className="list-decimal pl-5 space-y-1.5">
+            {saveForXae && (
+              <li>
+                <button type="button" id="plc-build-guide-save" onClick={() => void saveForXae.run().then((err) => setGuide((g) => (g ? { ...g, saved: err ? { ok: false, text: err } : { ok: true, text: 'Done.' } } : g)))} className="px-2 py-0.5 rounded border border-slate-600 text-slate-200 hover:bg-slate-800">
+                  {saveForXae.label}
+                </button>{' '}
+                <span className="text-slate-500">{saveForXae.hint}</span>
+                {guide.saved && <span id="plc-build-guide-saved" data-ok={String(guide.saved.ok)} className={`ml-1 ${guide.saved.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{guide.saved.text}</span>}
+              </li>
+            )}
+            <li>XAE says the file changed outside it: reload it (Yes).</li>
+            <li>
+              <b>PLC › Login</b>, and choose <b>Login with online change</b>. Then, so a restart keeps it: the PLC project's menu › <b>Activate Boot Project</b>.
+            </li>
+            <li>
+              <button type="button" id="plc-build-guide-check" disabled={!onReadAppInfo} onClick={() => void checkGuide()} className="px-2 py-0.5 rounded border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40">
+                Check the PLC
+              </button>{' '}
+              <span className="text-slate-500">did it take the online change?</span>
+              {guide.check && <div id="plc-build-guide-result" data-ok={String(guide.check.ok)} className={guide.check.ok ? 'text-emerald-300' : 'text-amber-200'}>{guide.check.text}</div>}
+            </li>
+          </ol>
+          <div className="flex items-center justify-end gap-2">
+            {guide.xae && <span id="plc-build-guide-xae" className="text-slate-400 mr-auto">{guide.xae}</span>}
+            {onOpenXae && (
+              <button type="button" id="plc-build-guide-open-xae" onClick={() => void onOpenXae().then((x) => setGuide((g) => (g ? { ...g, xae: x.message } : g)))} className="px-3 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="Start TwinCAT XAE on this computer (a window of your own)">
+                Open XAE
+              </button>
+            )}
+            <button type="button" id="plc-build-guide-close" onClick={() => setGuide(null)} className="px-3 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">
+              Back
+            </button>
+          </div>
+        </div>
+      ) : confirming ? (
         <div id="plc-build-confirm" className="px-3 py-2 border-t border-slate-800 space-y-2" data-write={confirming}>
           <div className="font-semibold text-slate-100">{WRITE_TEXT[confirming].title}</div>
           <div className={`flex gap-2 ${confirming === 'activate' ? 'text-rose-200' : 'text-amber-200'}`}>
@@ -243,6 +321,11 @@ export const PlcBuildDialog: React.FC<{
           <button type="button" id="plc-build-again" disabled={running} onClick={onRebuild} className="px-3 py-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40">
             Build again
           </button>
+          {(onlineRefused || (built && !written)) && canWrite && (onReadAppInfo || saveForXae) && (
+            <button type="button" id="plc-build-guide" onClick={openGuide} className="flex items-center gap-1 px-3 py-1 rounded border border-sky-800 text-sky-200 hover:bg-slate-800" title="An online change from your own XAE (Login): the PLC keeps running; step by step, checked from here">
+              <MonitorUp className="w-3.5 h-3.5" /> Online change in XAE…
+            </button>
+          )}
           {onlineRefused && canWrite && (
             <>
               <button type="button" id="plc-build-activate" onClick={() => setConfirming('activate')} className="px-3 py-1 rounded border border-rose-800 text-rose-200 hover:bg-slate-800" title="Activate the configuration: TwinCAT restarts (the PLC stops)">

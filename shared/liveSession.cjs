@@ -10,6 +10,7 @@ const ads = require('./tcAds.cjs');
 const { readPlcSources } = require('./tcSources.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
+const { plcAppInfo } = require('./tcAppInfo.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
@@ -360,12 +361,27 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /**
+   * The PLC application's state and its online change count (plcAppInfo → plcAppInfoResult { state, onlineChanges }):
+   * did an online change made from XAE take? Read-only
+   */
+  async function appInfo(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcAppInfoResult', requestId, state: null, onlineChanges: null, error: 'Not connected' });
+    try {
+      send({ type: 'plcAppInfoResult', requestId, ...(await plcAppInfo(s.client)) });
+    } catch (err) {
+      send({ type: 'plcAppInfoResult', requestId, state: null, onlineChanges: null, error: err?.message ?? String(err) });
+    }
+  }
+
   /** Close the XAE kept open for builds now (plcBuildClose → plcBuildClosed { closed }) */
   function closeBuild(send, req) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae() });
   }
 
-  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license };
+  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license, appInfo };
 }
 
 module.exports = { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId };

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
-import { PlcBrowser, type PickedPlc } from './PlcBrowser.tsx';
+import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
 import { checkAsText, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
@@ -129,6 +129,10 @@ interface LivePanelProps {
   onScanPlcs?: (addresses: string[]) => Promise<PlcScanResult>;
   /** The PLC's TwinCAT trial license ran out, or runs out soon */
   licenseNotice?: { state: 'expired' | 'soon'; text: string } | null;
+  /** The license read again (after renewing it) */
+  onRecheckLicense?: () => void;
+  /** TwinCAT XAE opened on this computer (desktop, Link): its license page renews a trial */
+  onOpenXae?: () => Promise<{ ok: boolean; message: string }>;
   /** Link on this computer is another version than this page: what to do */
   linkNotice?: string | null;
   /** Check any PLC (Browse: Check all, the remembered ones) */
@@ -294,6 +298,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onCheckPlc,
   linkNotice,
   licenseNotice,
+  onRecheckLicense,
+  onOpenXae,
   onRenamePlc,
   onSwitchPlc,
   canSaveRecording = false,
@@ -321,6 +327,12 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const [timesOpen, setTimesOpen] = useState(true);
   // Browse: the list of PLCs, and the name of the one picked from it (for Remember)
   const [browsing, setBrowsing] = useState(false);
+  // Check all (Browse), kept here: its timer runs while Browse is closed; the PLCs that stopped answering
+  const checker = useRememberedChecks(rememberedPlcs, onCheckPlc);
+  const lostPlcs = rememberedPlcs.filter((p) => p.netId in checker.lost);
+  // The license notice's Renew: the steps shown, what Open XAE said
+  const [renewing, setRenewing] = useState(false);
+  const [xaeOpened, setXaeOpened] = useState('');
   // The connection check: running (no result yet) or its steps
   const [checking, setChecking] = useState<{ result: CheckResult | null } | null>(null);
   const [checkCopied, setCheckCopied] = useState('');
@@ -830,6 +842,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 title={onScanPlcs ? 'Find the PLCs on the network, or pick a remembered one' : 'Pick a remembered PLC'}
               >
                 <Search className="w-3 h-3" /> Browse
+                {lostPlcs.length > 0 && (
+                  <span id="live-plc-lost" className="ml-0.5 px-1 rounded bg-rose-900/70 text-rose-200 text-[10px]" title={`Stopped answering: ${lostPlcs.map((p) => `${p.name || p.netId} (since ${new Date(checker.lost[p.netId]).toLocaleTimeString()})`).join(', ')}`}>
+                    {lostPlcs.length} down
+                  </span>
+                )}
               </button>
             )}
             {onRememberPlc && (
@@ -876,7 +893,32 @@ export const LivePanel: React.FC<LivePanelProps> = ({
         )}
         {licenseNotice && (
           <div id="live-license-notice" data-state={licenseNotice.state} className={`rounded border px-2 py-1 text-[11px] leading-snug ${licenseNotice.state === 'expired' ? 'border-rose-800 bg-rose-950/40 text-rose-200' : 'border-amber-800 bg-amber-950/30 text-amber-200'}`}>
-            {licenseNotice.text}
+            {licenseNotice.text}{' '}
+            <button type="button" id="live-license-renew" onClick={() => setRenewing((r) => !r)} className="underline hover:text-white" aria-expanded={renewing}>
+              {renewing ? 'Hide' : 'Renew…'}
+            </button>
+            {renewing && (
+              <div id="live-license-steps" className="mt-1 space-y-1 text-slate-300">
+                <ol className="list-decimal pl-4 space-y-0.5">
+                  <li>In TwinCAT XAE, with this PLC chosen as the target: Solution Explorer › <b>SYSTEM › License</b>.</li>
+                  <li><b>7 Days Trial License…</b>, and type the characters it shows (TwinCAT asks a person, so StateScope cannot do it).</li>
+                  <li>Activate the configuration, or restart TwinCAT on the target, so the PLC takes the new license.</li>
+                </ol>
+                <div className="flex items-center gap-2">
+                  {onOpenXae && (
+                    <button type="button" id="live-license-open-xae" onClick={() => void onOpenXae().then((r) => setXaeOpened(r.message))} className="px-1.5 rounded border border-slate-600 hover:bg-slate-800">
+                      Open XAE
+                    </button>
+                  )}
+                  {onRecheckLicense && (
+                    <button type="button" id="live-license-recheck" onClick={onRecheckLicense} className="px-1.5 rounded border border-slate-600 hover:bg-slate-800" title="Read the PLC's license again">
+                      Check again
+                    </button>
+                  )}
+                  {xaeOpened && <span id="live-license-xae">{xaeOpened}</span>}
+                </div>
+              </div>
+            )}
           </div>
         )}
         {checking && !running && (
@@ -947,6 +989,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             onPick={pickPlc}
             onFound={onPlcsFound}
             checkPlc={onCheckPlc}
+            checker={checker}
             onForget={(netId) => onForgetPlc?.(netId)}
             onClose={() => setBrowsing(false)}
             scan={onScanPlcs}

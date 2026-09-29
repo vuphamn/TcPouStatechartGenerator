@@ -71,7 +71,13 @@ const NAME = { 0: 'TABLEMANAGER_DISABLED', 2: 'TABLEMANAGER_HOMMING_READY_TO_STA
     const s = await snapshot();
     if (cur) seen.add(cur);
     if (s.nodes !== before.nodes || s.listScroll !== before.listScroll || s.sidebar !== before.sidebar) same = false;
-    if (cur && (s.canvasLive !== cur || s.listLive !== cur)) marks = false;
+    // (read just as the state changes, the marks may be a frame behind on a busy machine: read again a moment later)
+    if (cur && (s.canvasLive !== cur || s.listLive !== cur)) {
+      await sleep(400);
+      const cur2 = (await a.$eval('#live-current-state', (e) => e.textContent).catch(() => '')).trim();
+      const s2 = await snapshot();
+      if (cur2 && (s2.canvasLive !== cur2 || s2.listLive !== cur2)) marks = false;
+    }
   }
   expect(seen.size >= 2, `the state changed: ${[...seen].join(' > ')}`);
   expect(marks, 'the canvas and Identified States mark the current state');

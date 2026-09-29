@@ -45,8 +45,8 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.click('#live-guards-off').catch(() => {});
   await a.click('#live-start-btn');
   await a.waitForSelector('#live-open-from-plc-btn', { timeout: 20000 }).catch(() => {});
-  // A sample (not from the PLC): no Build
-  expect(!(await a.$('#live-build-btn')), 'a POU not from the PLC: no Build');
+  // A sample (not from the PLC): Build from its TwinCAT project's folder, through Link (web-project-build tests it)
+  expect(!!(await a.$('#live-build-btn')), 'a POU not from the PLC: Build offered (from its project folder, through Link)');
 
   // From PLC: SM_Conveyor, live on MAIN.conveyor
   await a.click('#live-open-from-plc-btn');
@@ -64,6 +64,17 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.waitForSelector('#live-license-notice', { timeout: 8000 }).catch(() => {});
   const lic = await a.$eval('#live-license-notice', (e) => e.getAttribute('data-state') + '|' + e.textContent).catch(() => '');
   expect(/^soon\|The PLC's TwinCAT trial license runs out in [45] h/.test(lic), `the trial license running out: "${lic.slice(0, 90)}"`);
+  // Renew: the steps (XAE's license page), Open XAE through Link (its stand-in: not started), Check again
+  await a.click('#live-license-renew').catch(() => {});
+  await a.waitForSelector('#live-license-steps', { timeout: 3000 }).catch(() => {});
+  const steps = await a.$eval('#live-license-steps', (e) => e.innerText).catch(() => '');
+  await a.click('#live-license-open-xae').catch(() => {});
+  await a.waitForSelector('#live-license-xae', { timeout: 5000 }).catch(() => {});
+  const opened = await a.$eval('#live-license-xae', (e) => e.textContent).catch(() => '');
+  await a.click('#live-license-recheck').catch(() => {});
+  await a.waitForSelector('#live-license-notice', { timeout: 8000 }).catch(() => {});
+  const again = await a.$eval('#live-license-notice', (e) => e.getAttribute('data-state')).catch(() => '');
+  expect(/SYSTEM › License/.test(steps) && /7 Days Trial License/.test(steps) && /TwinCAT XAE is starting/.test(opened) && again === 'soon', `Renew: the steps, Open XAE ("${opened}"), read again (${again})`);
 
   const status = () => a.$eval('#plc-build-status', (e) => ({ phase: e.getAttribute('data-phase'), ok: e.getAttribute('data-ok'), text: e.textContent.trim() })).catch(() => ({ phase: '', ok: '', text: '' }));
   const waitDone = async () => { let s = await status(); for (let i = 0; i < 100 && s.phase !== 'done'; i++) { await sleep(200); s = await status(); } return s; };
@@ -177,6 +188,16 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const refusedOnline = s.text;
   const offered = !!(await a.$('#plc-build-download')) && !!(await a.$('#plc-build-activate')) && !(await a.$('#plc-build-online'));
   expect(s.ok === 'false' && /No online change was made, nothing was written/.test(refusedOnline) && offered, `online change refused: "${refusedOnline.slice(0, 70)}", Download offered: ${offered}`);
+  // Online change in XAE: the steps; the PLC's online change count before, then checked (the fake PLC's goes up)
+  await a.click('#plc-build-guide');
+  await a.waitForSelector('#plc-build-guide-before', { timeout: 8000 }).catch(() => {});
+  const guide = await a.$eval('#plc-build-guide-panel', (e) => e.innerText).catch(() => '');
+  const before = await a.$eval('#plc-build-guide-before', (e) => e.textContent).catch(() => '');
+  await a.click('#plc-build-guide-check');
+  await a.waitForSelector('#plc-build-guide-result', { timeout: 8000 }).catch(() => {});
+  const took = await a.$eval('#plc-build-guide-result', (e) => e.getAttribute('data-ok') + '|' + e.textContent).catch(() => '');
+  expect(/Login with online change/.test(guide) && /Download the POU/.test(guide) && /^\d+$/.test(before) && new RegExp(`^true\\|The PLC took the online change \\(online changes: ${before} → ${Number(before) + 1}\\) and runs`).test(took), `in XAE: the steps (count ${before}), then "${took.slice(0, 90)}"`);
+  await a.click('#plc-build-guide-close');
   await a.click('#plc-build-download');
   const dlWarning = await a.$eval('#plc-build-confirm', (e) => e.innerText).catch(() => '');
   const dlOff = await a.$eval('#plc-build-confirm-btn', (e) => e.disabled).catch(() => null);
@@ -185,6 +206,9 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.click('#plc-build-confirm-btn');
   s = await waitDone();
   expect(s.ok === 'true' && /Written to the PLC \(download\)/.test(s.text), `written: "${s.text}"`);
+  // After the download: the PLC back in Run (the fake PLC's state)
+  const run = await a.$eval('#plc-build-run', (e) => e.getAttribute('data-ok') + '|' + e.textContent).catch(() => '');
+  expect(/^true\|The PLC runs/.test(run), `after the download: "${run}"`);
   await a.click('#plc-build-warnings-toggle').catch(() => {});
   const warned = await a.$$eval('#plc-build-warnings .plc-build-item', (r) => r.map((x) => x.innerText)).catch(() => []);
   expect(warned.some((t) => /trial license runs out/.test(t)), `the download warned of the trial license (${warned.length} warnings)`);

@@ -5,7 +5,10 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree } = require('../../shared/tcBuild.cjs');
+const { fetchProjectArchives, writeWorkspace, buildScript, serverScript, placeOf, checkEdits, reuseWorkspace, archivesHash, buildFromPlc, buildFromProject, projectRootOf, syncTree, xaeWorker, openXae } = require('../../shared/tcBuild.cjs');
+const { plcAppInfo } = require('../../shared/tcAppInfo.cjs');
+const { ProjectMirror, relPath } = require('../../link/projectMirror.cjs');
+const selfUpdate = require('../../link/selfUpdate.cjs');
 const { writeZip } = require('../lib/zip.cjs');
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { buildItemWhere, itemInPou, plcEdits } from '../../src/utils/plcBuild.ts';
@@ -120,7 +123,12 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const ads = boot; // (the stand-in PLC: the same boot folder; no data types, so nothing to compare)
   const open = new Map<number, { data: Buffer; at: number }>();
   let next = 1;
+  // (the PLC runtime's state: 5 Run, 6 Stop)
+  let adsState = 5;
   const client = {
+    async readState() {
+      return { adsState };
+    },
     async readWriteRaw(ig: number, io: number, size: number, value: Buffer, target?: { adsPort?: number }) {
       if (target?.adsPort !== 10000) throw Object.assign(new Error('no types'), { adsError: { errorCode: 0x710, errorStr: 'Symbol not found' } });
       if (ig === 120) {
@@ -144,6 +152,17 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   boot['CurrentConfig/LinePlc.tpzip'] = writeZip({ 'LinePlc.plcproj': '<Project/>', 'POUs/SM_Line.TcPOU': '<POU Name="SM_Line"/>', 'POUs/E_Line.TcDUT': '<DUT/>' });
   const written = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[x := 1;]]></ST></Implementation></POU>' }], write: 'online' });
   expect(written.ok && written.written === 'online' && written.verified?.ok === true && /runs the code written/.test(written.verified.text), `after the write: ${JSON.stringify(written.verified ?? written.fatal)}`);
+  expect(written.plcRun?.ok === true && written.plcRun.state === 'Run', `after the write, the PLC in Run: ${JSON.stringify(written.plcRun)}`);
+  // Not back in Run (the application stopped): said, with the time waited set short
+  adsState = 6;
+  process.env.KSS_BUILD_RUN_WAIT_MS = '300';
+  const stopped = await buildFromPlc(client, { edits: [], write: 'download' });
+  expect(stopped.ok && stopped.plcRun?.ok === false && stopped.plcRun.state === 'Stop' && stopped.items.some((i: { text: string }) => /After the download the PLC is in Stop, not in Run: start it from XAE/.test(i.text)), `not back in Run: ${JSON.stringify(stopped.plcRun)}`);
+  adsState = 5;
+  delete process.env.KSS_BUILD_RUN_WAIT_MS;
+  // The PLC's state and online change count (a runtime without the counter: null)
+  const info = await plcAppInfo(client);
+  expect(info.state === 'Run' && info.onlineChanges === null, `the PLC's app info: ${JSON.stringify(info)}`);
   const failing = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[noSuchVar := 1;]]></ST></Implementation></POU>' }], write: 'online' });
   expect(!failing.ok && !failing.written && !failing.verified && failing.errors === 1, 'with an error: not written, not checked');
   // A trial license that ran out: a download (the application would not start again) refused before anything is built
@@ -168,13 +187,84 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(projectRootOf(projPou) === proj && projectRootOf(path.join(os.tmpdir(), 'nowhere.TcPOU')) === null, 'the project found from its POU (none elsewhere)');
   const fromProj = await buildFromProject(client, { file: projPou, edits: [{ file: projPou, content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[noSuchVar := 1;]]></ST></Implementation></POU>' }] });
   expect(!fromProj.ok && fromProj.errors === 1 && fromProj.items[0].place?.path === 'POUs/SM_Line.TcPOU' && fromProj.items[0].place?.plcProject === 'LinePlc' && /x := 1/.test(fs.readFileSync(projPou, 'utf8')), `built from a copy: the error in ${JSON.stringify(fromProj.items[0]?.place)}; the project's file unchanged`);
+  // Written from the project: the new compile information copied into it, its paths said (Link sends them back)
+  const projWritten = await buildFromProject(client, { file: projPou, edits: [], write: 'online' });
+  const infoFile = projWritten.compileInfoFiles?.[0] ?? '';
+  expect(projWritten.ok && projWritten.compileInfoCopied === 1 && /^LinePlc\/_CompileInfo\/StandIn-\d+\.compileinfo$/.test(infoFile) && fs.existsSync(path.join(proj, infoFile)) && projWritten.plcRun?.ok === true, `written from the project: ${infoFile} (${projWritten.compileInfoCopied} copied), in Run`);
+  fs.rmSync(path.join(proj, 'LinePlc', '_CompileInfo'), { recursive: true, force: true });
   const outside = await buildFromProject(client, { file: projPou, edits: [{ file: path.join(os.tmpdir(), 'x.TcPOU'), content: 'x' }] });
   expect(/Not a source of this project/.test(outside.fatal ?? ''), `a file outside the project: "${outside.fatal}"`);
   const copyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-unit-sync-'));
   expect(syncTree(proj, copyDir) === 3 && syncTree(proj, copyDir) === 0, 'synced: the files, then nothing (unchanged)');
   fs.writeFileSync(projPou, '<POU Name="SM_Line"/>');
   expect(syncTree(proj, copyDir) === 1, 'one file changed: one copied');
+  // Open XAE (the stand-in: not started, the path it would start)
+  const xae = await openXae();
+  expect(xae.ok && /TcXaeShell\.exe$/.test(xae.dry ?? ''), `Open XAE: ${xae.message}`);
   delete process.env.KSS_BUILD_DRYRUN;
+
+  // 5e. One XAE per project: at most KSS_BUILD_MAX_XAE; for another, the one used longest ago goes (not a busy one)
+  process.env.KSS_BUILD_MAX_XAE = '2';
+  const w1 = xaeWorker('unit|one');
+  const w2 = xaeWorker('unit|two');
+  const w1again = xaeWorker('unit|one');
+  const w3 = xaeWorker('unit|three');
+  expect(w1again === w1 && w3 !== w1 && xaeWorker('unit|one') === w1 && xaeWorker('unit|two') !== w2, 'one XAE per project: the same one again; a third project closes the one used longest ago');
+  w1.pending = 1;
+  xaeWorker('unit|four');
+  expect(xaeWorker('unit|one') === w1, 'a busy XAE is kept for another project');
+  w1.pending = 0;
+  delete process.env.KSS_BUILD_MAX_XAE;
+
+  // 5f. Link: the page's project folder mirrored (the files it needs, in pieces; the ones not listed removed)
+  expect(relPath('Plant/POUs/A.TcPOU') === path.join('Plant', 'POUs', 'A.TcPOU') && [ '../x', '/x', 'a\\b', 'C:x', 'a//b', 'a/./b' ].every((x) => relPath(x) === null), 'mirror paths: relative, nothing outside');
+  const mirror = new ProjectMirror();
+  const t = Date.now() - 10000;
+  const list = [{ path: 'Plant.tsproj', size: 3, mtime: t }, { path: 'Plant/POUs/A.TcPOU', size: 5, mtime: t }];
+  expect(!!mirror.sync('Plant', [{ path: 'Plant/A.TcPOU', size: 1, mtime: t }]).error, 'a folder without a .tsproj: refused');
+  const m1 = mirror.sync('Plant', list);
+  expect(!!m1.uploadId && m1.need?.length === 2, `the first list: both needed (${m1.need})`);
+  mirror.put(m1.uploadId, { path: 'Plant.tsproj', offset: 0, data: Buffer.from('<x>').toString('base64'), size: 3, mtime: t, done: true });
+  mirror.put(m1.uploadId, { path: 'Plant/POUs/A.TcPOU', offset: 0, data: Buffer.from('ab').toString('base64') });
+  const gap = mirror.put(m1.uploadId, { path: 'Plant/POUs/A.TcPOU', offset: 3, data: Buffer.from('cde').toString('base64') });
+  mirror.put(m1.uploadId, { path: 'Plant/POUs/A.TcPOU', offset: 2, data: Buffer.from('cde').toString('base64'), size: 5, mtime: t, done: true });
+  const m2 = mirror.sync('Plant', list);
+  const root = mirror.root(m1.uploadId);
+  expect(!!gap.error && m2.uploadId === m1.uploadId && m2.need?.length === 0 && fs.readFileSync(path.join(root, 'Plant', 'POUs', 'A.TcPOU'), 'utf8') === 'abcde', `sent in pieces (a gap refused): listed again, none needed (${m2.need})`);
+  const m3 = mirror.sync('Plant', [list[0]]);
+  expect(m3.need?.length === 0 && !fs.existsSync(path.join(root, 'Plant', 'POUs', 'A.TcPOU')) && mirror.fullPath(m1.uploadId, '../x') === null, 'a file no longer listed: removed');
+  mirror.dispose();
+
+  // 5g. Link's updates: versions compared; the newest release with a Link found; its download checked (SHA-256)
+  expect(selfUpdate.compareVersions('1.2.10', '1.2.9') > 0 && selfUpdate.compareVersions('1.0.0', '1.0.0') === 0 && selfUpdate.compareVersions('0.9.9', '1.0.0') < 0, 'versions compared');
+  const exe = Buffer.from('a Link');
+  const sha = require('crypto').createHash('sha256').update(exe).digest('hex');
+  const srv = require('http').createServer((req, res) => {
+    if (req.url === '/releases') {
+      res.setHeader('Content-Type', 'application/json');
+      const asset = (v: string, digest: string) => ({ name: `KvalStateScope-Link-${v}.exe`, browser_download_url: `http://127.0.0.1:${(srv.address() as { port: number }).port}/link-${v}.exe`, size: exe.length, digest });
+      return res.end(JSON.stringify([
+        { tag_name: 'web-v1.0.2', assets: [asset('1.0.2', `sha256:${sha}`)] },
+        { tag_name: 'web-v1.1.0', draft: true, assets: [asset('1.1.0', `sha256:${sha}`)] },
+        { tag_name: 'desktop-v9.0.0', assets: [] },
+        { tag_name: 'web-v1.0.10', assets: [asset('1.0.10', `sha256:${'0'.repeat(64)}`)] },
+      ]));
+    }
+    res.end(exe);
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+  process.env.KSS_LINK_RELEASES = `http://127.0.0.1:${(srv.address() as { port: number }).port}/releases`;
+  const latest = await selfUpdate.latestRelease();
+  let badSha = '';
+  await selfUpdate.download(latest).catch((e: Error) => (badSha = e.message));
+  const good = await selfUpdate.download({ ...latest, sha256: sha });
+  expect(latest?.version === '1.0.10' && /does not match the release's SHA-256/.test(badSha) && fs.readFileSync(good, 'utf8') === 'a Link', `the newest Link: ${latest?.version} (drafts, other editions left out); a download not matching its SHA-256 refused, one matching kept`);
+  fs.rmSync(good, { force: true });
+  // (fetch's kept-alive connections closed first: ending with them open trips libuv on Windows)
+  srv.closeAllConnections();
+  await new Promise((r) => srv.close(r));
+  await new Promise((r) => setTimeout(r, 100));
+  delete process.env.KSS_LINK_RELEASES;
 
   // 6. The app: the edits (the POU, its enum when one of the PLC's), where a message is
   const origin = { plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', dutPaths: { 'e_line.tcdut': 'POUs/E_Line.TcDUT' } };

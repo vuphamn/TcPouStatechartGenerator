@@ -33,7 +33,10 @@ const config = ({
     'MAIN.conveyor': sym('SM_Conveyor', 65, 4, 0),
     'MAIN.conveyor.machineState': sym('E_Conveyor_States', 2, 2, 1),
     'MAIN.conveyor.bStart': sym('BOOL', 33, 1, 1),
+    // TwinCAT's count of the online changes the application took (up by one after each read: one seen)
+    'TwinCAT_SystemInfoVarList._AppInfo.OnlineChangeCnt': sym('UDINT', 19, 4, 3),
   },
+  countOnRead: ['TwinCAT_SystemInfoVarList._AppInfo.OnlineChangeCnt'],
   types: {
     FB_MainStateMachine: { size: 400, dataType: 65, type: '', subItems: [
       { name: 'machineState', type: 'E_Main', size: 2, dataType: 2 },
@@ -109,9 +112,10 @@ function plantBootFiles() {
 const trialLicense = (hours) => { const t = (d) => d.toISOString().slice(0, 19); return Buffer.from(`<?xml version="1.0"?><TcLicenseInfo><LicenseInfo><IssueTime>${t(new Date(Date.now() - 86400000))}</IssueTime><ExpireTime>${t(new Date(Date.now() + hours * 3600000))}</ExpireTime><License><OrderNo>TC1200</OrderNo></License></LicenseInfo></TcLicenseInfo>`).toString('base64'); };
 
 /** Writes the config for fake-ams2.cjs (license: the trial's hours left, when there is one); returns its path */
-function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = [], { sources = false, license = null } = {}) {
+// (adsState: the PLC runtime's state, 5 Run by default, 6 Stop)
+function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = [], { sources = false, license = null, adsState } = {}) {
   const file = path.join(h.OUT, name);
-  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(sources || license !== null ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}) } } : {}) }));
+  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(adsState ? { adsState } : {}), ...(sources || license !== null ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}) } } : {}) }));
   return file;
 }
 

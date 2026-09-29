@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
 import type { CheckRequest, CheckResult } from '../utils/connectionCheck.ts';
@@ -14,6 +14,70 @@ export interface PickedPlc {
   localNetId?: string;
 }
 
+/** A check's verdict: true (all steps pass), false (one fails), null (none yet) */
+const checkOk = (r: CheckResult | null | undefined) => (r ? r.steps.length > 0 && !r.steps.some((s) => s.ok === false) : null);
+const EVERY_KEY = 'kss.plcCheckEvery';
+
+/**
+ * Check all, kept by the Live tab (so it runs again while Browse is closed): each remembered PLC in turn; again every
+ * few minutes when chosen (minutes, 0: off; remembered in this browser); a PLC that answered and then no longer does
+ * is marked with the time it stopped (until it answers again)
+ */
+export function useRememberedChecks(remembered: RememberedPlc[], checkPlc?: (req: CheckRequest) => Promise<CheckResult>) {
+  // (NetId: its last result; while running: null)
+  const [checks, setChecks] = useState<Record<string, CheckResult | null>>({});
+  const [checkingAll, setCheckingAll] = useState(false);
+  const [lost, setLost] = useState<Record<string, number>>({});
+  const [every, setEveryState] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem(EVERY_KEY)) || 0;
+    } catch {
+      return 0;
+    }
+  });
+  const setEvery = (minutes: number) => {
+    setEveryState(minutes);
+    try {
+      localStorage.setItem(EVERY_KEY, String(minutes));
+    } catch {
+      // (not kept)
+    }
+  };
+  const last = useRef<Record<string, CheckResult | null>>({});
+  const running = useRef(false);
+  const checkAll = useCallback(async () => {
+    if (!checkPlc || running.current) return;
+    running.current = true;
+    setCheckingAll(true);
+    for (const p of remembered) {
+      setChecks((c) => ({ ...c, [p.netId]: null }));
+      const r = await checkPlc({ netId: p.netId, ip: p.ip, port: parseInt(p.port, 10) || undefined, localNetId: p.localNetId || undefined }).catch((e: unknown) => ({ steps: [], verdict: e instanceof Error ? e.message : String(e) }) as CheckResult);
+      const was = checkOk(last.current[p.netId]);
+      const now = checkOk(r);
+      last.current[p.netId] = r;
+      setChecks((c) => ({ ...c, [p.netId]: r }));
+      setLost((l) => {
+        if (now === true && p.netId in l) {
+          const { [p.netId]: _gone, ...rest } = l;
+          return rest;
+        }
+        return was === true && now === false ? { ...l, [p.netId]: Date.now() } : l;
+      });
+    }
+    running.current = false;
+    setCheckingAll(false);
+  }, [checkPlc, remembered]);
+  const checkAllRef = useRef(checkAll);
+  checkAllRef.current = checkAll;
+  useEffect(() => {
+    if (!every || !checkPlc) return;
+    const t = window.setInterval(() => void checkAllRef.current(), every * 60000);
+    return () => window.clearInterval(t);
+  }, [every, checkPlc]);
+  return { checks, checkingAll, checkAll, every, setEvery, lost };
+}
+export type RememberedChecks = ReturnType<typeof useRememberedChecks>;
+
 interface PlcBrowserProps {
   /** xae: XAE goes live through this computer's TwinCAT router, so a device needs a route there */
   mode: 'xae' | 'desktop' | 'web';
@@ -22,6 +86,8 @@ interface PlcBrowserProps {
   onPick: (plc: PickedPlc) => void;
   /** Check all: each remembered PLC's connection check (desktop, Link) */
   checkPlc?: (req: CheckRequest) => Promise<CheckResult>;
+  /** Check all's results, kept by the Live tab (its timer runs while Browse is closed) */
+  checker?: RememberedChecks;
   /** A search's result (the remembered PLCs are kept up to date with it) */
   onFound?: (r: PlcScanResult) => void;
   onForget: (netId: string) => void;
@@ -38,28 +104,18 @@ const rowClass = (current: boolean) =>
   `w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 ${current ? 'bg-sky-950/60' : ''}`;
 
 /** The Live tab's Browse: the remembered PLCs and the TwinCAT devices found on the network; a click picks one */
-export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc }) => {
-  // Check all: each remembered PLC in turn (NetId: its result, while running: null)
-  const [checks, setChecks] = useState<Record<string, CheckResult | null>>({});
-  const [checkingAll, setCheckingAll] = useState(false);
-  const checkAll = async () => {
-    if (!checkPlc) return;
-    setCheckingAll(true);
-    setChecks({});
-    for (const p of remembered) {
-      setChecks((c) => ({ ...c, [p.netId]: null }));
-      const r = await checkPlc({ netId: p.netId, ip: p.ip, port: parseInt(p.port, 10) || undefined, localNetId: p.localNetId || undefined }).catch((e: unknown) => ({ steps: [], verdict: e instanceof Error ? e.message : String(e) }) as CheckResult);
-      setChecks((c) => ({ ...c, [p.netId]: r }));
-    }
-    setCheckingAll(false);
-  };
+export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc, checker }) => {
+  // Check all: each remembered PLC in turn (the Live tab's, else this list's own)
+  const own = useRememberedChecks(remembered, checker ? undefined : checkPlc);
+  const { checks, checkingAll, checkAll, every, setEvery, lost } = checker ?? own;
   const checkMark = (netId: string) => {
     if (!(netId in checks)) return null;
     const r = checks[netId];
-    const ok = r ? !r.steps.some((s) => s.ok === false) && r.steps.length > 0 : null;
+    const ok = checkOk(r);
+    const stopped = lost[netId];
     return (
-      <span className="live-plc-check-mark shrink-0 ml-1 font-mono text-[11px]" data-ok={r ? String(ok) : 'running'} title={r ? r.verdict : 'Checking…'}>
-        {r ? (ok ? <span className="text-emerald-400">✓</span> : <span className="text-rose-400">✗</span>) : <Loader2 className="inline w-3 h-3 animate-spin text-slate-400" />}
+      <span className="live-plc-check-mark shrink-0 ml-1 font-mono text-[11px]" data-ok={r ? String(ok) : 'running'} data-lost={stopped ? 'true' : undefined} title={r ? `${stopped ? `Stopped answering at ${new Date(stopped).toLocaleTimeString()}. ` : ''}${r.verdict}` : 'Checking…'}>
+        {r ? (ok ? <span className="text-emerald-400">✓</span> : <span className="text-rose-400">✗{stopped ? <span className="live-plc-lost-at ml-1 font-sans text-[10px]">since {new Date(stopped).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}</span>) : <Loader2 className="inline w-3 h-3 animate-spin text-slate-400" />}
       </span>
     );
   };
@@ -126,9 +182,24 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
             <div className="flex items-center px-2 pt-0.5">
               <span className="text-[10px] uppercase tracking-wide text-slate-500">Remembered</span>
               {checkPlc && (
-                <button id="live-plc-check-all" type="button" disabled={checkingAll} onClick={() => void checkAll()} className="ml-auto px-1.5 rounded text-[10px] text-slate-300 hover:text-sky-300 hover:bg-slate-800 disabled:opacity-50" title="Check each remembered PLC: does it answer, with the right NetId and a route (nothing is changed)">
-                  {checkingAll ? 'Checking…' : 'Check all'}
-                </button>
+                <span className="ml-auto flex items-center gap-1">
+                  <button id="live-plc-check-all" type="button" disabled={checkingAll} onClick={() => void checkAll()} className="px-1.5 rounded text-[10px] text-slate-300 hover:text-sky-300 hover:bg-slate-800 disabled:opacity-50" title="Check each remembered PLC: does it answer, with the right NetId and a route (nothing is changed)">
+                    {checkingAll ? 'Checking…' : 'Check all'}
+                  </button>
+                  <select
+                    id="live-plc-check-every"
+                    value={String(every)}
+                    onChange={(e) => setEvery(Number(e.target.value))}
+                    className="bg-slate-950 border border-slate-700 rounded text-[10px] text-slate-300 px-0.5"
+                    title="Check them all again every few minutes (while this app is open): a PLC that stops answering is marked"
+                  >
+                    <option value="0">once</option>
+                    <option value="1">every minute</option>
+                    <option value="5">every 5 min</option>
+                    <option value="15">every 15 min</option>
+                    {![0, 1, 5, 15].includes(every) && <option value={String(every)}>every {every} min</option>}
+                  </select>
+                </span>
               )}
             </div>
             {remembered.map((p) => (

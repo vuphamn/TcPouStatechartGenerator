@@ -79,6 +79,11 @@ const hello = (token) =>
   const found = await p.$$eval('#admin-found tr', (rows) => rows.map((r) => r.innerText.replace(/\s+/g, ' ').trim()));
   expect(found.length === 2 && /CX-<b>202<\/b> 127\.0\.0\.1\.1\.1 127\.0\.0\.1 3\.1\.4026 Windows 10\.0\.17763/.test(found.join(' | ')), `search: ${found.join(' | ')}`);
   expect(!(await p.$('#admin-found b')), 'a device name with markup: shown as text');
+  // Check a found one before adding it: the steps under its row (from the gateway, nothing changed)
+  await p.click('#admin-found tr .admin-found-check');
+  await p.waitForFunction(() => /\S/.test(document.querySelector('#admin-found .admin-check-row .admin-check-verdict')?.textContent || ''), { timeout: 15000 }).catch(() => {});
+  const foundCheck = await p.$eval('#admin-found .admin-check-row', (e) => e.getAttribute('data-check') + '|' + e.querySelectorAll('.admin-check-step').length + '|' + e.querySelector('.admin-check-verdict').textContent).catch(() => '');
+  expect(/^found:127\.0\.0\.1\.1\.1\|[1-9]\d*\|\S/.test(foundCheck), `Check before adding: ${foundCheck.slice(0, 100)}`);
   await p.click('#admin-add-found');
   await h.sleep(200);
   let rows = await p.$$eval('#admin-plcs tr', (r) => r.map((x) => [...x.querySelectorAll('input')].map((i) => i.value)));

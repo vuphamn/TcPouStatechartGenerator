@@ -290,3 +290,90 @@ export async function writeWebOtherPous(files: { path: string; content: string; 
   }
   return problems.length ? problems.join('; ') : null;
 }
+
+// ---- Build from the project (web, through Link): the TwinCAT project's folder (the one with the .tsproj) ----
+
+interface FsWritableDirectory {
+  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<FsDirectoryHandle & FsWritableDirectory>;
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<FsFileHandle>;
+  queryPermission?(options: { mode: 'read' | 'readwrite' }): Promise<'granted' | 'denied' | 'prompt'>;
+  requestPermission?(options: { mode: 'read' | 'readwrite' }): Promise<'granted' | 'denied' | 'prompt'>;
+}
+type ProjectDir = FsDirectoryHandle & FsWritableDirectory;
+/** The TwinCAT project's folder granted for builds (read and write: the new compile information goes back into it) */
+let projectRoot: ProjectDir | null = null;
+// (what XAE makes or keeps for itself: not sent; _CompileInfo is: the online change needs it)
+const PROJECT_SKIP = new Set(['.git', '.vs', '_boot', 'node_modules']);
+const PROJECT_MAX_FILES = 20000;
+
+export interface WebProjectFile {
+  path: string;
+  size: number;
+  mtime: number;
+  read: () => Promise<ArrayBuffer>;
+}
+
+/**
+ * Web: the TwinCAT project's folder (asked for once: the folder with the .tsproj, read and write), its files listed,
+ * this POU and its enum found in it (the file picked from inside it, else by name). { error: 'canceled' } when the
+ * user cancels
+ */
+export async function webProjectFolder(pouName: string, dutName?: string): Promise<{ name: string; files: WebProjectFile[]; pouPath: string | null; dutPath: string | null } | { error: string }> {
+  if (typeof w.showDirectoryPicker !== 'function') return { error: 'this browser cannot open a project folder (Chrome or Edge can)' };
+  if (!projectRoot) {
+    try {
+      const dir = (await w.showDirectoryPicker({ id: 'tc-project-root', mode: 'readwrite', startIn: lastPouHandle ?? undefined })) as ProjectDir;
+      let tsproj = false;
+      for await (const e of dir.values()) if (e.kind === 'file' && /\.tsproj$/i.test(e.name)) tsproj = true;
+      if (!tsproj) return { error: `${dir.name} has no .tsproj: choose the TwinCAT project's folder (the one with the .tsproj, above the PLC project)` };
+      projectRoot = dir;
+    } catch (e) {
+      return { error: isAbort(e) ? 'canceled' : String(e) };
+    }
+  }
+  const files: WebProjectFile[] = [];
+  async function walk(d: FsDirectoryHandle, prefix: string, depth: number) {
+    if (depth > 12 || files.length >= PROJECT_MAX_FILES) return;
+    for await (const entry of d.values()) {
+      if (entry.kind === 'directory') {
+        if (!PROJECT_SKIP.has(entry.name.toLowerCase())) await walk(entry, `${prefix}${entry.name}/`, depth + 1);
+      } else if (!/\.kss-part$|~$/i.test(entry.name)) {
+        const f = await entry.getFile();
+        files.push({ path: prefix + entry.name, size: f.size, mtime: f.lastModified, read: async () => (await entry.getFile()).arrayBuffer() });
+      }
+    }
+  }
+  await walk(projectRoot, '', 0);
+  const byName = (name?: string) => (name ? files.filter((f) => f.path.split('/').pop()!.toLowerCase() === name.toLowerCase()) : []);
+  let pouPath: string | null = null;
+  const inside = lastPouHandle ? await projectRoot.resolve(lastPouHandle).catch(() => null) : null;
+  if (inside?.length) pouPath = inside.join('/');
+  else pouPath = byName(pouName)[0]?.path ?? null;
+  const pouDir = pouPath ? pouPath.split('/').slice(0, -1).join('/') : '';
+  // (the enum: the one nearest the POU, by its name)
+  const duts = byName(dutName).sort((a, b) => Number(b.path.startsWith(pouDir.split('/')[0] ?? '')) - Number(a.path.startsWith(pouDir.split('/')[0] ?? '')));
+  return { name: projectRoot.name, files, pouPath, dutPath: duts[0]?.path ?? null };
+}
+
+/** Web: a file written into the granted project folder (its folders made); what went wrong, or null */
+export async function writeWebProjectFile(relPath: string, data: Uint8Array<ArrayBuffer>): Promise<string | null> {
+  if (!projectRoot) return 'No project folder granted';
+  let permission = (await projectRoot.queryPermission?.({ mode: 'readwrite' })) ?? 'prompt';
+  if (permission !== 'granted') permission = (await projectRoot.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+  if (permission !== 'granted') return `${relPath}: not allowed to write`;
+  const parts = relPath.split('/').filter(Boolean);
+  if (!parts.length || parts.some((p) => p === '..' || p === '.')) return `${relPath}: not a path in the project`;
+  let dir: ProjectDir = projectRoot;
+  for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p, { create: true });
+  const handle = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+  if (!handle.createWritable) return `${relPath}: this browser cannot write files`;
+  const writable = await handle.createWritable();
+  await writable.write(new Blob([data]));
+  await writable.close();
+  return null;
+}
+
+/** Web: the project folder asked for again next time (another project) */
+export function forgetWebProjectFolder() {
+  projectRoot = null;
+}

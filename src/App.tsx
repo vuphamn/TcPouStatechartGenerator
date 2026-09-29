@@ -110,6 +110,8 @@ import {
   writeWebSource,
   webProjectUses,
   writeWebOtherPous,
+  webProjectFolder,
+  writeWebProjectFile,
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
 import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
@@ -141,7 +143,7 @@ import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
 import { editionOf, editionVersion } from './utils/releaseNotes.ts';
 import { PlcBuildDialog, type PlcBuildState } from './components/PlcBuildDialog.tsx';
 import type { CheckRequest, CheckResult } from './utils/connectionCheck.ts';
-import { buildItemWhere, itemInPou, placeOfXaeFile, plcEdits, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
+import { base64ToBytes, buildItemWhere, bytesToBase64, itemInPou, placeOfXaeFile, plcEdits, type PlcAppInfo, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
@@ -3550,7 +3552,7 @@ export const App: React.FC = () => {
       if (!plcOrigin) return;
       const mine = plcEdits(plcOrigin, { content: pouContent }, { name: dutFileName, content: dutContent });
       const edits = [...Object.values(plcSessionEdits).filter((e) => !mine.some((m) => m.path.toLowerCase() === e.path.toLowerCase())), ...mine];
-      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.path.split('/').pop() ?? e.path), project: plcOrigin.plcProject ?? plcOrigin.project, target: liveStatus.target ?? plcOrigin.target };
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.path.split('/').pop() ?? e.path), project: plcOrigin.plcProject ?? plcOrigin.project, target: liveStatus.target ?? plcOrigin.target, via: 'plc' };
       setPlcBuild(base);
       setPlcBuildShown(true);
       const req = { requestId: Date.now() % 1e9, edits, plcProject: plcOrigin.plcProject, write };
@@ -3595,7 +3597,7 @@ export const App: React.FC = () => {
       const desktop = desktopLive();
       if (!pouPath || !desktop?.projectBuild) return;
       const edits = [{ file: pouPath, content: pouContent }, ...(dutPath && dutContent ? [{ file: dutPath, content: dutContent }] : [])];
-      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.file.split(/[\\/]/).pop() ?? e.file), project: 'this POU\'s TwinCAT project', target: liveStatus.target };
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: edits.map((e) => e.file.split(/[\\/]/).pop() ?? e.file), project: 'this POU\'s TwinCAT project', target: liveStatus.target, via: 'project' };
       setPlcBuild(base);
       setPlcBuildShown(true);
       void desktop
@@ -3619,7 +3621,7 @@ export const App: React.FC = () => {
     // (XAE builds what is saved in its project: this POU's edits saved there first; the host takes them in order)
     if (hostDirtyFiles.length) handleSaveToProjectRef.current(true);
     const requestId = ++xaeBuildIdRef.current;
-    const base: PlcBuildState = { phase: 'building', write: null, files: [], project: 'the solution open in XAE', target: 'XAE' };
+    const base: PlcBuildState = { phase: 'building', write: null, files: [], project: 'the solution open in XAE', target: 'XAE', via: 'xae' };
     setPlcBuild(base);
     setPlcBuildShown(true);
     postToHost({ type: 'buildProject', requestId });
@@ -3635,6 +3637,8 @@ export const App: React.FC = () => {
   // The connected PLC's TwinCAT trial license: read once per connection; the Live tab says so when it ran out or
   // runs out soon (the next application start would fail)
   const [licenseNotice, setLicenseNotice] = useState<{ state: 'expired' | 'soon'; text: string } | null>(null);
+  // (Renew's Check again: read once more)
+  const [licenseCheck, setLicenseCheck] = useState(0);
   useEffect(() => {
     setLicenseNotice(null);
     if (liveStatus.state !== 'connected' || isXaeHost()) return;
@@ -3653,9 +3657,16 @@ export const App: React.FC = () => {
     return () => {
       alive = false;
     };
-    // (once per connection: its target)
+    // (once per connection: its target; again on Check again)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveStatus.state === 'connected' ? liveStatus.target : null]);
+  }, [liveStatus.state === 'connected' ? liveStatus.target : null, licenseCheck]);
+  // The PLC's state and online change count (the dialog's online change from XAE: before and after)
+  const handleReadAppInfo = useCallback(async (): Promise<PlcAppInfo> => {
+    const desktop = desktopLive();
+    if (desktop?.appInfo) return desktop.appInfo({ requestId: Date.now() % 1e9 });
+    if (!gatewayRef.current) return { state: null, onlineChanges: null, error: 'Not connected' };
+    return gatewayRef.current.request<PlcAppInfo>({ type: 'plcAppInfo' }, 'plcAppInfoResult', 20000);
+  }, []);
   // Close the XAE kept open for builds now (the desktop app, Link, the gateway: where the build ran)
   const handleCloseXae = useCallback(async (): Promise<boolean> => {
     const desktop = desktopLive();
@@ -5548,6 +5559,70 @@ export const App: React.FC = () => {
     }
     return canScanPlcs() ? (d: FoundPlc, user: string, password: string, both?: AddRouteBoth) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId, ...(both ?? {}) }) : undefined;
   }, [viaLink, linkRequest, liveSettings.localNetId]);
+  // TwinCAT XAE opened on this computer (the desktop app, Link): its license page renews a trial license
+  const handleOpenXae = useMemo(() => {
+    const api = desktopLive();
+    if (api?.openXae) return () => api.openXae!();
+    if (viaLink && linkBuild?.features?.includes('openXae')) return () => linkRequest<{ ok: boolean; message: string }>({ type: 'openXae' }, 'openXaeResult').catch((e: Error) => ({ ok: false, message: e.message }));
+    return undefined;
+  }, [viaLink, linkBuild, linkRequest]);
+  // Web edition through Link: Build from the TwinCAT project's folder (granted once, read and write): its files sent
+  // to Link (only the new or changed ones), built there by XAE with this POU and its enum as edited here; after a
+  // write, the new compile information written into the folder and this POU saved (XAE there still matches the PLC)
+  const runWebProjectBuild = useCallback(
+    async (write: PlcWrite | null) => {
+      const base: PlcBuildState = { phase: write ? 'writing' : 'building', write, files: [pouFileName || 'the POU', ...(dutContent && dutFileName ? [dutFileName] : [])], project: 'your TwinCAT project', target: liveStatus.target, via: 'webProject', step: 'Reading the project folder' };
+      setPlcBuild(base);
+      setPlcBuildShown(true);
+      const fail = (fatal: string) => setPlcBuild({ ...base, phase: 'done', result: { ok: false, fatal } });
+      const folder = await webProjectFolder(pouFileName, dutFileName);
+      if ('error' in folder) {
+        if (folder.error === 'canceled') {
+          setPlcBuild(null);
+          setPlcBuildShown(false);
+        } else fail(`The project folder: ${folder.error}`);
+        return;
+      }
+      if (!folder.pouPath) return fail(`${pouFileName} is not in ${folder.name}: choose the folder of this POU's TwinCAT project`);
+      try {
+        const sync = await linkRequest<{ uploadId?: string; need?: string[]; error?: string }>({ type: 'projectSync', project: folder.name, files: folder.files.map(({ path, size, mtime }) => ({ path, size, mtime })) }, 'projectSyncResult');
+        if (!sync.uploadId) return fail(sync.error ?? 'Link did not take the project');
+        const need = new Set(sync.need ?? []);
+        const todo = folder.files.filter((f) => need.has(f.path));
+        const CHUNK = 150 * 1024;
+        for (let n = 0; n < todo.length; n++) {
+          const f = todo[n];
+          setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: `Sending the project to Link (${n + 1} of ${todo.length} files)` } : b));
+          const data = new Uint8Array(await f.read());
+          for (let off = 0; ; off += CHUNK) {
+            const done = off + CHUNK >= data.length;
+            const r = await linkRequest<{ ok?: boolean; error?: string }>({ type: 'projectPut', uploadId: sync.uploadId, path: f.path, offset: off, data: bytesToBase64(data.subarray(off, off + CHUNK)), size: data.length, mtime: f.mtime, done }, 'projectPutResult');
+            if (!r.ok) return fail(r.error ?? `Link did not take ${f.path}`);
+            if (done) break;
+          }
+        }
+        const edits = [{ file: folder.pouPath, content: pouContent }, ...(folder.dutPath && dutContent ? [{ file: folder.dutPath, content: dutContent }] : [])];
+        const r = await gatewayConnection().request<PlcBuildResult>({ type: 'projectBuild', uploadId: sync.uploadId, file: folder.pouPath, edits, write }, 'plcBuildResult', 45 * 60 * 1000);
+        if (r.ok && r.written) {
+          // The new compile information into the project folder; this POU saved
+          const problems: string[] = [];
+          for (const c of r.compileInfo ?? []) {
+            const err = await writeWebProjectFile(c.path, base64ToBytes(c.data)).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+            if (err) problems.push(err);
+          }
+          if (problems.length) r.items = [...(r.items ?? []), { level: 'warning', text: `The new compile information did not go into the project folder (XAE's next login may not match): ${problems.join('; ')}`, file: '', line: 0 }];
+          void saveSourcesRef.current({ quiet: true, checked: true });
+          showCopyToast(`Written to the PLC (${r.written === 'online' ? 'online change' : r.written === 'download' ? 'downloaded' : 'configuration activated'})${r.compileInfo?.length && !problems.length ? ', the project\'s compile information updated' : ''}`, 'success', 7000);
+        }
+        delete r.compileInfo;
+        setPlcBuild({ ...base, project: r.plcProject ?? base.project, phase: 'done', result: r });
+      } catch (e) {
+        fail(e instanceof Error ? e.message : String(e));
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouFileName, pouContent, dutFileName, dutContent, liveStatus.target, linkRequest, gatewayConnection, showCopyToast]
+  );
   // The Live tab's Check: why the PLC does not answer, from the computer that talks to it (desktop app, Link)
   // (any PLC: the target's by default; Browse's Check all asks each remembered one)
   const handleCheckPlc = useMemo(() => {
@@ -7487,7 +7562,7 @@ export const App: React.FC = () => {
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
             onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
-            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : undefined}
+            onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : viaLink && pouContent && !replay && linkBuild?.features?.includes('projectBuild') ? () => void runWebProjectBuild(null) : undefined}
             buildOffline={isXaeHost()}
             lastBuild={plcBuild && !plcBuildShown && plcBuild.phase === 'done' && plcBuild.result ? { text: plcBuild.result.fatal ? 'failed' : plcBuild.result.written ? 'written' : `${plcBuild.result.errors ?? plcBuild.result.items?.filter((i) => i.level === 'error').length ?? 0} error${(plcBuild.result.errors ?? 0) === 1 ? '' : 's'}`, ok: !!plcBuild.result.ok, onOpen: () => setPlcBuildShown(true) } : undefined}
             onOpenOverview={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'overview')) : undefined}
@@ -7506,6 +7581,8 @@ export const App: React.FC = () => {
             onCheckPlc={handleCheckPlc}
             linkNotice={viaLink ? linkNotice : null}
             licenseNotice={licenseNotice}
+            onRecheckLicense={() => setLicenseCheck((n) => n + 1)}
+            onOpenXae={handleOpenXae}
             onRenamePlc={(netId, name) => updateRememberedPlcs((list) => list.map((p) => (p.netId === netId ? { ...p, name } : p)))}
             onSwitchPlc={handleSwitchPlc}
             sso={ssoHere && gatewaySso ? { provider: gatewaySso.provider, user: gatewaySso.user, name: gatewaySso.name, tokens: gatewaySso.tokens } : undefined}
@@ -7732,10 +7809,34 @@ export const App: React.FC = () => {
           canOpen={(i) => itemInPou(i, isXaeHost() && pouPath ? { path: pouPath.replace(/\\/g, '/'), dutPaths: {} } : plcOrigin)}
           canWrite={!isXaeHost()}
           onOpenItem={openPlcBuildItem}
-          onRebuild={() => (isXaeHost() ? runXaeBuild() : plcOrigin ? runPlcBuild(null) : runProjectBuild(null))}
-          onWrite={(w) => (plcOrigin ? runPlcBuild(w) : runProjectBuild(w))}
+          onRebuild={() => (plcBuild.via === 'xae' || isXaeHost() ? runXaeBuild() : plcBuild.via === 'webProject' ? void runWebProjectBuild(null) : plcBuild.via === 'project' ? runProjectBuild(null) : runPlcBuild(null))}
+          onWrite={(w) => (plcBuild.via === 'webProject' ? void runWebProjectBuild(w) : plcBuild.via === 'project' ? runProjectBuild(w) : runPlcBuild(w))}
           onClose={() => setPlcBuildShown(false)}
           onCloseXae={isXaeHost() ? undefined : handleCloseXae}
+          onReadAppInfo={isXaeHost() ? undefined : handleReadAppInfo}
+          onOpenXae={handleOpenXae}
+          saveForXae={
+            plcBuild.via === 'plc'
+              ? {
+                  label: 'Download the POU',
+                  hint: '(as edited here: put it into your engineering project in place of its file)',
+                  run: async () => {
+                    downloadSource(pouFileName || 'POU.TcPOU', pouContent);
+                    if (dutContent && dutContent !== savedSources.dut && dutFileName) downloadSource(dutFileName, dutContent);
+                    return null;
+                  },
+                }
+              : plcBuild.via === 'project' || plcBuild.via === 'webProject'
+                ? {
+                    label: 'Save to the project',
+                    hint: '(this POU and its enum, to their files: XAE reads them from there)',
+                    run: async () => {
+                      await saveSourcesRef.current({ checked: true });
+                      return null;
+                    },
+                  }
+                : undefined
+          }
         />
       )}
       {paletteOpen && <CommandPalette commands={paletteCommands()} onClose={() => setPaletteOpen(false)} />}

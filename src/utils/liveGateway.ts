@@ -34,11 +34,13 @@ export interface HelperBuild {
   built: string | null;
   /** old: a Link from before it said which (no build in its welcome) */
   from: 'build' | 'source' | 'old';
+  /** What this Link can do beyond going live (its welcome's features: projectBuild, appInfo, openXae) */
+  features?: string[];
 }
 
 type GatewayEvent =
   | LiveMessage
-  | { type: 'welcome'; user: string; plcs: GatewayPlc[]; build?: HelperBuild }
+  | { type: 'welcome'; user: string; plcs: GatewayPlc[]; build?: HelperBuild; features?: string[] }
   | { type: 'denied'; message: string }
   | { type: 'closed'; message: string };
 
@@ -135,7 +137,7 @@ export class GatewayConnection {
         if (m.type === 'welcome' && !settled) {
           settled = true;
           signedIn = true;
-          resolve({ user: m.user, plcs: m.plcs, build: m.build });
+          resolve({ user: m.user, plcs: m.plcs, build: m.build ? { ...m.build, features: m.features ?? [] } : undefined });
         } else if (m.type === 'denied' && !settled) {
           settled = true;
           reject(new Error(m.message));

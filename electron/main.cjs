@@ -329,6 +329,10 @@ ipcMain.handle('tc:project-build', (event, req) => {
 ipcMain.handle('tc:live-build-close', (event, req) => new Promise((resolve) => liveFor(event.sender).closeBuild(resolve, req)));
 // The connected PLC's TwinCAT trial license (read-only)
 ipcMain.handle('tc:live-license', (event, req) => new Promise((resolve) => liveFor(event.sender).license(resolve, req)));
+// The PLC application's state and online change count (did an online change from XAE take? read-only)
+ipcMain.handle('tc:live-app-info', (event, req) => new Promise((resolve) => liveFor(event.sender).appInfo(resolve, req)));
+// TwinCAT XAE opened for the user (its license page renews a trial license)
+ipcMain.handle('tc:open-xae', () => require('../shared/tcBuild.cjs').openXae());
 ipcMain.handle('tc:live-build', (event, req) => {
   const contents = event.sender;
   return new Promise((resolve) => liveFor(contents).build((m) => {
