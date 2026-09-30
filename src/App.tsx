@@ -362,7 +362,7 @@ export const App: React.FC = () => {
   }, []);
 
   const [flowchartOutput, setFlowchartOutput] = useState<boolean>(SAMPLES[0].defaultFlowchart);
-  const [collapseErrorSinkEdges, setCollapseErrorSinkEdges] = useState<boolean>(true);
+  const [collapseErrorSinkEdges, setCollapseErrorSinkEdges] = useState<boolean>(false);
   // A state's IF / ELSIF / ELSE of transitions as a choice (a diamond): per viewer
   const [choiceNodes, setChoiceNodesState] = useState<boolean>(() => {
     try {
@@ -2612,13 +2612,33 @@ export const App: React.FC = () => {
   // The edge as the chart has it now (its priority changes with each edit)
   // (a choice's arm is drawn from its diamond, choice_<state>_<n>: the transition is its state's)
   const drawnEdge = useCallback((edge: EdgeInfo) => availableEdges.find((e) => e.id === edge.id) ?? edge, [availableEdges]);
+  // Each drawn edge's transitions in the code ("from->to" -> [{ from, to }]): an edge drawn from or to a composite's
+  // border stands for its states' (the only state in it, or several collapsed into one edge)
+  const edgeMembers = useMemo(() => {
+    const m = new Map<string, { from: string; to: string }[]>();
+    if (!pouContent) return m;
+    try {
+      for (const e of generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes }).edges) {
+        const k = `${e.from}->${e.to}`;
+        const all = [...(m.get(k) ?? []), ...e.members.map(({ from, to }) => ({ from, to }))];
+        m.set(k, [...new Map(all.map((x) => [`${x.from}->${x.to}`, x])).values()]);
+      }
+    } catch {
+      // (the chart is drawn without it: edits go by the drawn edge)
+    }
+    return m;
+  }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes]);
   const currentEdge = useCallback(
     (edge: EdgeInfo) => {
       const e = drawnEdge(edge);
       const from = armState(e.from);
-      return from ? { ...e, from, id: `${from}->${e.to}` } : e;
+      if (from) return { ...e, from, id: `${from}->${e.to}` };
+      // (drawn from or to a composite's border for one transition in the code: that transition, its own states)
+      const members = edgeMembers.get(`${e.from}->${e.to}`) ?? [];
+      if (members.length === 1 && (members[0].from !== e.from || members[0].to !== e.to)) return { ...e, from: members[0].from, to: members[0].to, id: `${members[0].from}->${members[0].to}` };
+      return e;
     },
-    [drawnEdge]
+    [drawnEdge, edgeMembers]
   );
   const handleTransitionPriority = useCallback(
     (edge: EdgeInfo, priority: number) => {
@@ -2652,6 +2672,12 @@ export const App: React.FC = () => {
         return;
       }
       const e = currentEdge(edge);
+      // (one edge for several transitions, from a composite's border: which one is not known)
+      const members = edgeMembers.get(`${e.from}->${e.to}`) ?? [];
+      if (!knownStates.has(e.from) && members.length > 1) {
+        showCopyToast(`This edge stands for ${members.length} transitions (from ${members.map((x) => x.from).join(', ')}): drag each from its own state (with Collapse error-sink edges off they are drawn apart)`, 'error', 8000);
+        return;
+      }
       if ((regionOfRef.current.get(e.from)?.variable ?? null) !== (regionOfRef.current.get(stateId)?.variable ?? null)) {
         showCopyToast(`${stateId} is ${regionOfRef.current.has(stateId) ? 'in another parallel region' : 'outside the parallel region'}`, 'error');
         return;
@@ -2660,7 +2686,7 @@ export const App: React.FC = () => {
       const taken = seen[seenKey(e.from, e.to)];
       if (taken) showCopyToast(`⚠ The PLC took ${e.from} → ${e.to} ${seenText(taken)}: the running machine uses it (Undo: Ctrl+Z)`, 'error', 8000);
     },
-    [pouContent, knownStates, currentEdge, drawnEdge, applyTransitionEdit, stateVarName, showCopyToast, seen]
+    [pouContent, knownStates, currentEdge, drawnEdge, edgeMembers, applyTransitionEdit, stateVarName, showCopyToast, seen]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
   // The state(s) copied (Ctrl+C: the selected one, or the several selected ones)

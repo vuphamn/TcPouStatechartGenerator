@@ -92,7 +92,9 @@ const cfg = writeSymbolsPlc();
   expect(d1?.watch && !!d2, `open an array: [1], [2] (SM_DoorDasher, with Watch)`);
   // Values follow the PLC
   const later = await waitRow(w1, `${R}.nCount`, (r) => r.value === '43');
-  expect(later?.value === '43' && (await row(w1, `${R}.bEnable`))?.value === 'FALSE', `values change live: nCount=${later?.value}`);
+  // (bEnable changes in the same step: its row a moment later)
+  const enable = await waitRow(w1, `${R}.bEnable`, (r) => r.value === 'FALSE');
+  expect(later?.value === '43' && enable?.value === 'FALSE', `values change live: nCount=${later?.value}, bEnable=${enable?.value}`);
   // Filter
   await set(w1, 'symbol-browser-filter', 'timeout');
   await sleep(300);

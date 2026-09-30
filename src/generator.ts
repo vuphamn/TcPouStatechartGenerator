@@ -98,7 +98,7 @@ interface GroupingResult {
   groupFinals?: Map<string, string[]>;
 }
 
-const DefaultCollapseErrorSinkEdges = true;
+const DefaultCollapseErrorSinkEdges = false;
 const CollapsedEdgeWarningLabel = "hasErrors [collapsed]";
 
 function cleanXmlString(xml: string): string {
@@ -1183,6 +1183,8 @@ function collapseInternalEdgesToBorder(
   groups: GroupingResult
 ) {
   const borderSources = new Set<string>();
+  // (the priorities of the transitions each collapsed edge stands for: it takes the first one checked)
+  const collapsedPriorities = new Map<string, number[]>();
   const kept: Transition[] = [];
 
   for (const t of transitions) {
@@ -1191,7 +1193,9 @@ function collapseInternalEdgesToBorder(
     const fromInside = fromG ? isSameOrDescendantGroup(fromG, composite, groups) : false;
 
     if (targetsError && fromInside && t.from !== error) {
-      borderSources.add(topLevelComposite(fromG!, groups));
+      const src = topLevelComposite(fromG!, groups);
+      borderSources.add(src);
+      if (t.priority != null && t.priority > 0) collapsedPriorities.set(src, [...(collapsedPriorities.get(src) ?? []), t.priority]);
       continue;
     }
     kept.push(t);
@@ -1203,6 +1207,9 @@ function collapseInternalEdgesToBorder(
   for (const src of borderSources) {
     const exists = transitions.some((t) => t.from === src && t.to === error);
     if (!exists) {
+      // Its priority: the transitions' it stands for (several: the lowest, the first one TwinCAT checks), so its badge
+      // shows as the composite's other edges' do
+      const prios = collapsedPriorities.get(src) ?? [];
       transitions.push({
         from: src,
         to: error,
@@ -1210,6 +1217,7 @@ function collapseInternalEdgesToBorder(
         source: 'doState',
         effectiveFrom: src,
         effectiveTo: error,
+        ...(prios.length ? { priority: Math.min(...prios) } : {}),
       });
     }
   }

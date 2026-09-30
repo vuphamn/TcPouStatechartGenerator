@@ -280,7 +280,7 @@ type DiamondCorner = 'top' | 'bottom' | 'left' | 'right';
 const diamondCorners = new Map<string, Set<DiamondCorner>>();
 export const resetDiamondCorners = () => diamondCorners.clear();
 
-function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: number): Point[] {
+function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: number, prefer?: DiamondCorner): Point[] {
   if (route.length < 2) return route;
   // (the diamond's end last)
   const pts = (atStart ? [...route].reverse() : [...route]).map((p) => ({ ...p }));
@@ -313,7 +313,8 @@ function clipToDiamond(route: Point[], box: NodeBox, atStart: boolean, gap: numb
     : F.y < box.cy ? ['top', 'bottom'] : ['bottom', 'top'];
   const key = `${Math.round(box.cx)},${Math.round(box.cy)}`;
   const used = diamondCorners.get(key) ?? new Set<DiamondCorner>();
-  const corner = [want, ...others].find((c) => !used.has(c)) ?? want;
+  // (an end dropped by a corner: that corner, taken or not)
+  const corner = prefer ?? [want, ...others].find((c) => !used.has(c)) ?? want;
   used.add(corner);
   diamondCorners.set(key, used);
   let tail: Point[];
@@ -1514,8 +1515,21 @@ function rerouteElkOrthogonal(
   }
   // A dragged end: onto the side of its state it was dropped by, square to it (the arrow head touches the border)
   let attached = routed;
-  if (boxes.tgt && (edgeOffset.endDx || edgeOffset.endDy)) attached = reattachEnd(attached, boxes.tgt, boxes.origTgt ? gapOutside(boxes.origTgt, drawn[drawn.length - 1]) : 3, false);
-  if (boxes.src && (edgeOffset.startDx || edgeOffset.startDy)) attached = reattachEnd(attached, boxes.src, boxes.origSrc ? gapOutside(boxes.origSrc, drawn[0]) : 0, true);
+  // (a choice's end: onto the diamond's corner nearest where it was dropped, not the box around it)
+  const cornerToward = (box: NodeBox, q: Point): DiamondCorner =>
+    Math.abs(q.x - box.cx) / box.hw > Math.abs(q.y - box.cy) / box.hh ? (q.x < box.cx ? 'left' : 'right') : q.y < box.cy ? 'top' : 'bottom';
+  if (boxes.tgt && (edgeOffset.endDx || edgeOffset.endDy)) {
+    const dropped = attached[attached.length - 1];
+    if (boxes.tgtDiamond) {
+      if (isAtBox(boxes.tgt, dropped)) attached = clipToDiamond(attached, boxes.tgt, false, 3, cornerToward(boxes.tgt, dropped));
+    } else attached = reattachEnd(attached, boxes.tgt, boxes.origTgt ? gapOutside(boxes.origTgt, drawn[drawn.length - 1]) : 3, false);
+  }
+  if (boxes.src && (edgeOffset.startDx || edgeOffset.startDy)) {
+    const dropped = attached[0];
+    if (boxes.srcDiamond) {
+      if (isAtBox(boxes.src, dropped)) attached = clipToDiamond(attached, boxes.src, true, 0, cornerToward(boxes.src, dropped));
+    } else attached = reattachEnd(attached, boxes.src, boxes.origSrc ? gapOutside(boxes.origSrc, drawn[0]) : 0, true);
+  }
   // A diamond's end: back on its border (the route's end moved with it, square to its segment)
   if (boxes.srcDiamond && boxes.src && !(edgeOffset.startDx || edgeOffset.startDy)) attached = clipToDiamond(attached, boxes.src, true, 0);
   if (boxes.tgtDiamond && boxes.tgt && !(edgeOffset.endDx || edgeOffset.endDy)) attached = clipToDiamond(attached, boxes.tgt, false, 3);
@@ -1962,6 +1976,8 @@ export function applyDiagramOffsetsToSvg(
       hitbox.setAttribute('d', newD);
     }
 
+    // (this edge's priority badges: placed below, marked when the edge is selected)
+    let edgeBadges: SVGGElement[] = [];
     // Update edge label position to follow rerouted midpoint
     if (edgeKey || edgeId) {
       // Parallel edges share "from->to": never take a label / badge that is linked to another path
@@ -2009,6 +2025,8 @@ export function applyDiagramOffsetsToSvg(
           `.tc-priority-badge[data-path-id="${rawPathId}"], .tc-priority-badge[data-path-id="${edgeKey}"], .tc-priority-badge[data-edge-id="${edgeId}"], .tc-priority-badge[data-edge-id="${rawPathId}"], .tc-priority-badge[data-edge-id="${edgeKey}"]`
         )
       ) as SVGGElement[]).filter(ownedBy('data-path-id'));
+      edgeBadges = badges;
+      const rerouted = newD !== (path.getAttribute('data-orig-d') || '');
       for (const badge of badges) {
         if (!badge.hasAttribute('data-orig-x')) {
           badge.setAttribute('data-orig-x', '0');
@@ -2022,6 +2040,22 @@ export function applyDiagramOffsetsToSvg(
         const dX = startPoint.x - origStart.x;
         const dY = startPoint.y - origStart.y;
         badge.setAttribute('transform', `translate(${origBx + dX}, ${origBy + dY})`);
+        // Re-routed (moved with a state, or its end dragged): back on its own edge, a little way from its start (the
+        // edge may now leave in another direction than the one it was drawn with; spreadBadges moves it on when
+        // another badge is there)
+        const circle = badge.querySelector('circle');
+        const badgeParent = badge.parentElement as unknown as SVGGraphicsElement | null;
+        if (rerouted && circle && badgeParent && typeof path.getPointAtLength === 'function') {
+          const toParent = badgeParent.getScreenCTM()?.inverse().multiply(path.getScreenCTM() ?? new DOMMatrix());
+          if (toParent) {
+            const len = path.getTotalLength();
+            const at = path.getPointAtLength(Math.min(20, len / 3));
+            const q = new DOMPoint(at.x, at.y).matrixTransform(toParent);
+            const cx = parseFloat(circle.getAttribute('cx') || '0');
+            const cy = parseFloat(circle.getAttribute('cy') || '0');
+            badge.setAttribute('transform', `translate(${(q.x - cx).toFixed(1)}, ${(q.y - cy).toFixed(1)})`);
+          }
+        }
       }
     }
 
@@ -2046,6 +2080,8 @@ export function applyDiagramOffsetsToSvg(
       }
     }
 
+    // The selected edge's priority badge: marked (amber), so its priority reads at a glance
+    for (const b of edgeBadges) b.classList.toggle('tc-priority-badge-selected', isSelected);
     if (isSelected) {
       path.classList.add('selected-edge', 'diagram-selected-edge');
       hitbox?.classList.add('selected-edge');

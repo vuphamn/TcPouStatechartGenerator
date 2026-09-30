@@ -542,8 +542,10 @@ tr.enum-row-flash {
   pointer-events: stroke;
 }
 
+/* (its label hovered too: tc-edge-hover) */
 .tc-edge-hitbox:hover + .tc-edge-path,
-.tc-edge-path:hover {
+.tc-edge-path:hover,
+.tc-edge-path.tc-edge-hover {
   stroke: #38bdf8 !important;
   stroke-width: 2.2px !important;
   filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
@@ -825,6 +827,47 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .tc-priority-badge:hover text,
 .priority-badge:hover text {
   fill: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+/* An edge's label hovered: its badge lit as when the badge itself is hovered */
+.tc-priority-badge.tc-priority-badge-hover {
+  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9)) !important;
+}
+.tc-priority-badge.tc-priority-badge-hover :is(circle, text) {
+  transform: scale(1.2);
+}
+.tc-priority-badge.tc-priority-badge-hover circle {
+  fill: #38bdf8 !important;
+  stroke: #0284c7 !important;
+  stroke-width: 2px !important;
+}
+.tc-priority-badge.tc-priority-badge-hover text {
+  fill: #ffffff !important;
+  font-weight: 800 !important;
+}
+
+/* The selected edge's badge: amber (hover is sky blue), with a light ring and a glow, larger, so its priority reads at
+   a glance; hovered, it stays amber (brighter) */
+.tc-priority-badge.tc-priority-badge-selected {
+  filter: drop-shadow(0 0 7px rgba(245, 158, 11, 0.95)) !important;
+}
+.tc-priority-badge.tc-priority-badge-selected :is(circle, text) {
+  transform: scale(1.3);
+}
+.tc-priority-badge.tc-priority-badge-selected circle,
+.tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-hover circle,
+.tc-priority-badge.tc-priority-badge-selected:hover circle {
+  fill: #f59e0b !important;
+  stroke: #fef3c7 !important;
+  stroke-width: 2.5px !important;
+}
+.tc-priority-badge.tc-priority-badge-selected:hover circle {
+  fill: #fbbf24 !important;
+}
+.tc-priority-badge.tc-priority-badge-selected text,
+.tc-priority-badge.tc-priority-badge-selected:hover text {
+  fill: #1c1917 !important;
   font-weight: 800 !important;
 }
 

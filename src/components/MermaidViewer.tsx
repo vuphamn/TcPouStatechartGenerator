@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo, useCallback, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 import mermaid from 'mermaid';
 import elkLayouts from '@mermaid-js/layout-elk';
@@ -130,6 +130,32 @@ import {
 export type LayoutEngine = 'dagre' | 'elk';
 export type FlowchartCurve = 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
 export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default';
+
+/**
+ * Composite states (and parallel regions): a sand border, dashed, with a faint tint of the same and the title in it,
+ * so the box reads as a container, apart from the grey edges and the states (sand is used for nothing else on the
+ * canvas: sky blue is hover and selection, amber the selected badge, emerald live, violet paths). In the SVG itself,
+ * so the exports (SVG, PNG) keep it; :where() keeps it below the canvas's own marks (live, search). Dark theme: light
+ * sand; the light themes: a darker one
+ */
+export function compositeStyle(theme: MermaidTheme | undefined): string {
+  const dark = !theme || theme === 'dark';
+  const line = dark ? '#c8b88a' : '#8a6d1f';
+  const tint = dark ? 'rgba(200, 184, 138, 0.06)' : 'rgba(138, 109, 31, 0.06)';
+  const title = dark ? '#d9cba0' : '#6b5416';
+  return `<style class="kss-composite-style">
+:where(.cluster) > rect, :where(.statediagram-cluster) > rect.outer, :where(.statediagram-cluster) > g:not(.cluster-label) > :is(path, rect) { stroke: ${line} !important; stroke-width: 1.5px !important; stroke-dasharray: 8 4 !important; fill: ${tint} !important; rx: 8px; ry: 8px; }
+:where(.statediagram-cluster) > rect.inner { fill: transparent !important; stroke: none !important; }
+:where(.statediagram-cluster) .divider { stroke: ${line} !important; stroke-dasharray: 8 4 !important; }
+:where(.cluster-label, .statediagram-cluster .cluster-label) :is(span, p, text, div) { color: ${title} !important; fill: ${title} !important; font-weight: 600 !important; }
+</style>`;
+}
+
+/** The composites' style put into a rendered diagram's SVG (right after its opening tag) */
+export function withCompositeStyle(svg: string, theme: MermaidTheme | undefined): string {
+  const at = svg.indexOf('>', svg.indexOf('<svg'));
+  return at < 0 ? svg : svg.slice(0, at + 1) + compositeStyle(theme) + svg.slice(at + 1);
+}
 
 let elkRegistered = false;
 function ensureElkRegistered() {
@@ -2174,7 +2200,59 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     priority?: number;
     clauses?: string[];
     hasCompound: boolean;
+    /** The hovered label's (or badge's) own path: its edge lit, even one without a badge */
+    linkedPathId?: string;
   } | null>(null);
+  // An edge's label hovered: the edge and its priority badge lit as when they are hovered themselves (its own path
+  // first: two transitions between the same states each have their own)
+  const hoveredEdge = hoveredEdgeCondition?.edge;
+  // The guard popup: placed once measured, never over its label (below it; else above; else beside it)
+  const guardPopupRef = useRef<HTMLDivElement | null>(null);
+  const [guardPopupPos, setGuardPopupPos] = useState<{ left: number; top: number; key: string } | null>(null);
+  // (which label it was placed for: another one is placed afresh, not shown where the last one was)
+  const guardPopupKey = hoveredEdgeCondition ? `${hoveredEdgeCondition.edge.id}|${hoveredEdgeCondition.edge.pathId ?? ''}|${Math.round(hoveredEdgeCondition.labelRect?.top ?? hoveredEdgeCondition.anchorY)}` : '';
+  useLayoutEffect(() => {
+    const el = guardPopupRef.current;
+    const hc = hoveredEdgeCondition;
+    if (!el || !hc) {
+      setGuardPopupPos(null);
+      return;
+    }
+    const r = hc.labelRect ?? new DOMRect(hc.anchorX, hc.anchorY, 1, 1);
+    const w = el.offsetWidth;
+    const hh = el.offsetHeight;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const M = 8;
+    let left = Math.min(W - w - M, Math.max(M, r.left + 12));
+    let top: number;
+    if (r.bottom + M + hh <= H - M) top = r.bottom + M;
+    else if (r.top - M - hh >= M) top = r.top - M - hh;
+    else {
+      top = Math.min(H - hh - M, Math.max(M, r.top + r.height / 2 - hh / 2));
+      left = r.right + M + w <= W - M ? r.right + M : Math.max(M, r.left - M - w);
+    }
+    setGuardPopupPos((prev) => (prev && prev.left === left && prev.top === top && prev.key === guardPopupKey ? prev : { left, top, key: guardPopupKey }));
+  }, [hoveredEdgeCondition, guardPopupKey]);
+  useEffect(() => {
+    const svg = getDiagramSvg();
+    if (!svg) return;
+    svg.querySelectorAll('.tc-priority-badge-hover').forEach((el) => el.classList.remove('tc-priority-badge-hover'));
+    svg.querySelectorAll('.tc-edge-hover').forEach((el) => el.classList.remove('tc-edge-hover'));
+    if (!hoveredEdge) return;
+    const linked = hoveredEdgeCondition?.linkedPathId;
+    const key = linked ? `[data-path-id="${CSS.escape(linked)}"]` : hoveredEdge.pathId ? `[data-path-id="${CSS.escape(hoveredEdge.pathId)}"]` : hoveredEdge.id ? `[data-edge-id="${CSS.escape(hoveredEdge.id)}"]` : '';
+    if (!key) return;
+    const paths = new Set<string>([linked, hoveredEdge.pathId].filter((x): x is string => !!x));
+    svg.querySelectorAll(`.tc-priority-badge${key}`).forEach((el) => {
+      el.classList.add('tc-priority-badge-hover');
+      // (its edge: the path the badge belongs to)
+      const pid = el.getAttribute('data-path-id');
+      if (pid) paths.add(pid);
+    });
+    for (const pid of paths) svg.querySelectorAll(`path.tc-edge-path[data-path-id="${CSS.escape(pid)}"]`).forEach((el) => el.classList.add('tc-edge-hover'));
+    if (!paths.size) svg.querySelectorAll(`path.tc-edge-path${key}`).forEach((el) => el.classList.add('tc-edge-hover'));
+  }, [hoveredEdge, hoveredEdgeCondition?.linkedPathId, getDiagramSvg]);
 
   const complexityHeatmapResult = useMemo<ComplexityHeatmapResult>(() => {
     return calculateStateComplexityHeatmap(
@@ -2814,7 +2892,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             complexityThreshold,
             showComplexityBadges
           );
-          setSvgContent(enhancedSvg);
+          setSvgContent(withCompositeStyle(enhancedSvg, mermaidTheme));
         }
       } catch (err: unknown) {
         if (isMounted) {
@@ -4628,6 +4706,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
         setHoveredEdgeCondition({
           edge,
+          linkedPathId: labelOrBadgeEl.getAttribute('data-linked-path-id') || labelOrBadgeEl.getAttribute('data-path-id') || undefined,
           fullCondition: fullCond,
           anchorX: e.clientX,
           anchorY: e.clientY,
@@ -6918,17 +6997,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         {hoveredEdgeCondition && !activeConditionOverlay && (
           <div
             id="edge-guard-condition-hover-badge"
+            ref={guardPopupRef}
             style={{
               position: 'fixed',
-              left: `${Math.min(
-                window.innerWidth - 380,
-                Math.max(16, (hoveredEdgeCondition.labelRect?.left ?? hoveredEdgeCondition.anchorX) + 12)
-              )}px`,
-              top: `${
-                hoveredEdgeCondition.anchorY > window.innerHeight - 240
-                  ? Math.max(16, hoveredEdgeCondition.anchorY - 170)
-                  : Math.min(window.innerHeight - 240, (hoveredEdgeCondition.labelRect?.bottom ?? hoveredEdgeCondition.anchorY) + 12)
-              }px`,
+              // (measured first, hidden until placed, next to its label; no transition: it would fly in from where it
+              // was measured. Its fade and zoom in are an animation)
+              left: `${guardPopupPos?.key === guardPopupKey ? guardPopupPos.left : (hoveredEdgeCondition.labelRect?.left ?? hoveredEdgeCondition.anchorX)}px`,
+              top: `${guardPopupPos?.key === guardPopupKey ? guardPopupPos.top : (hoveredEdgeCondition.labelRect?.bottom ?? hoveredEdgeCondition.anchorY)}px`,
+              visibility: guardPopupPos?.key === guardPopupKey ? 'visible' : 'hidden',
+              transition: 'none',
               zIndex: 60,
             }}
             className="pointer-events-none max-w-sm sm:max-w-md w-auto min-w-[280px] p-3 bg-slate-950/95 border border-sky-500/60 rounded-xl shadow-2xl shadow-sky-950/50 backdrop-blur-md text-xs animate-in fade-in zoom-in-95 duration-150 select-none"

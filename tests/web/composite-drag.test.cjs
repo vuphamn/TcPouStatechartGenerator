@@ -62,6 +62,35 @@ const MIME = 'application/x-kss-statechart-element';
   await p.keyboard.press('Enter');
   await h.sleep(1500);
   expect(!!(await cluster('Clamp')), 'the composite Clamp');
+  // Its box: sand, dashed, tinted, apart from the grey edges and the states (in the SVG itself: the exports keep it);
+  // the light themes: a darker sand
+  const look = () => p.evaluate(() => {
+    const c = [...document.querySelectorAll('#mermaid-canvas-area g.cluster')].find((x) => (x.querySelector('.cluster-label, .nodeLabel, text')?.textContent ?? '').trim() === 'Clamp');
+    const r = c?.querySelector(':scope > rect');
+    if (!r) return null;
+    const cs = getComputedStyle(r);
+    return { stroke: cs.stroke, dash: cs.strokeDasharray, fill: cs.fill, inSvg: !!r.ownerSVGElement.querySelector('style.kss-composite-style') };
+  });
+  const darkLook = await look();
+  expect(darkLook?.stroke === 'rgb(200, 184, 138)' && /^8(px)?,? 4(px)?$/.test(darkLook.dash) && /rgba\(200, 184, 138, 0\.06\)/.test(darkLook.fill) && darkLook.inSvg, `the composite's box, dark: ${JSON.stringify(darkLook)}`);
+  await p.select('#mermaid-theme-select', 'default');
+  await h.sleep(2500);
+  const lightLook = await look();
+  expect(lightLook?.stroke === 'rgb(138, 109, 31)' && lightLook.inSvg, `... light (default): ${JSON.stringify(lightLook)}`);
+  await p.select('#mermaid-theme-select', 'dark');
+  await h.sleep(2500);
+  // (stateDiagram-v2 draws a composite as an outer box and its body: the outer one sand, dashed; back to flowchart)
+  await p.click('#format-statediagram-btn');
+  await h.sleep(3000);
+  const stateLook = await p.evaluate(() => {
+    const r = document.querySelector('#mermaid-canvas-area .statediagram-cluster > rect.outer, #mermaid-canvas-area .statediagram-cluster > g:not(.cluster-label) > :is(rect.outer, path)');
+    if (!r) return null;
+    const cs = getComputedStyle(r);
+    return { stroke: cs.stroke, dash: cs.strokeDasharray };
+  });
+  expect(stateLook?.stroke === 'rgb(200, 184, 138)' && /^8(px)?,? 4(px)?$/.test(stateLook.dash), `... stateDiagram-v2: ${JSON.stringify(stateLook)}`);
+  await p.click('#format-flowchart-btn').catch(() => {});
+  await h.sleep(3000);
 
   // UNCLAMP_START into Clamp: without Alt a hint, nothing moves
   const Y = S('UNCLAMP_START');
