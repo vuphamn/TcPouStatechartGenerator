@@ -1882,6 +1882,10 @@ export function generateStatechartModel(
   // Parallel regions: their states are drawn inside their state, not in the composites
   const regions = parseParallelRegions(doStateSt, stateVarName, new Set(enumOrder));
   for (const list of regions.values()) for (const r of list) for (const s of r.states) removeStateFromGroup(s, groups);
+  // Every state of the enum drawn, one without a CASE branch or transitions too (not a parallel region's: drawn in
+  // its state)
+  const inRegions = new Set([...regions.values()].flatMap((list) => list.flatMap((r) => r.states)));
+  for (const s of enumOrder) if (!inRegions.has(s)) states.add(s);
   reorderGroupsByEnum(groups, enumOrder);
   applyEnumConventions(groups, enumOrder);
   // A declared initial value (or one set in initialize()) is the initial state

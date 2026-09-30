@@ -23,6 +23,7 @@ for (const [pouF, dutF, name, parts] of [
   const dut = read(dutF);
   const before = generateStatechartModel(dut, pou, { flowchartOutput: true });
   expect(Object.keys(before.composites).length === 0, `${name} without markers: no composites (${Object.keys(before.composites).join(', ') || 'none'})`);
+  if (name === 'TableManager') expect(/\n\s*TABLEMANAGER_RESET_DONE\["/.test(before.markdown), 'a state of the enum without transitions (RESET_DONE): drawn all the same');
   const w = writeCompositeMarkers(dut, pou);
   expect(parts.every((p) => w.written.includes(p)) && w.errors.length === 0, `${name}: written as markers: ${w.written.join(', ')}${w.errors.length ? ` (${w.errors.join('; ')})` : ''}`);
   const after = generateStatechartModel(w.dut, pou, { flowchartOutput: true });

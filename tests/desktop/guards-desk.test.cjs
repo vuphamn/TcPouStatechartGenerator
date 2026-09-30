@@ -71,7 +71,8 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-guards.json'), JSON.stringify(confi
   expect(from(list, 'TABLEMANAGER_ERROR')?.result === 'false' && from(list, 'TABLEMANAGER_IDLE_FEED_OFF')?.result === 'false' && from(list, 'TABLEMANAGER_HOMMING')?.result === 'true', 'IF / ELSIF / ELSE results on the canvas');
   const errVals = from(list, 'TABLEMANAGER_ERROR')?.values.join(' | ') ?? '';
   expect(/cmd_bHome = TRUE/.test(errVals) && /config_fHomePosition = 12\.5/.test(errVals), `values next to the condition: ${errVals}`);
-  const pre = list.find((b) => b.edge.startsWith('TableManagerEnabled->TABLEMANAGER_ERROR'));
+  // (preProcess()'s transition checks no range: from any state)
+  const pre = list.find((b) => b.edge.startsWith('AnyState->TABLEMANAGER_ERROR') && b.values.some((v) => /fbMC_MoveAbsolute/.test(v)));
   expect(pre && pre.result === 'unknown' && pre.values.some((v) => /fbMC_MoveAbsolute\.Error = \?/.test(v)), `preProcess guard with an unreadable variable: ${pre?.result} ${pre?.values.join(' | ')}`);
   expect(list.length <= 8, `only the active state's transitions (${list.length} badges)`);
   const panel = await page.$eval('#live-guard-list', (e) => e.innerText).catch(() => '');
