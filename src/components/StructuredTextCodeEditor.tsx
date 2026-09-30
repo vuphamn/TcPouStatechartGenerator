@@ -687,6 +687,7 @@ export const StructuredTextCodeEditor = forwardRef<
               <div
                 key={`line-row-${idx}`}
                 data-caret-line={isCaretLine ? (focused ? 'focused' : 'blurred') : undefined}
+                data-highlighted-line={isHighlighted ? String(entry.originalLineNumber) : undefined}
                 data-live-line={isLiveLine ? 'true' : undefined}
                 style={{ height: `${lineH}px`, lineHeight: `${lineH}px` }}
                 className={`st-gutter-row flex items-center justify-between transition-colors px-1 rounded-sm group/gutter-row ${

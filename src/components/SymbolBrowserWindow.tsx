@@ -64,6 +64,8 @@ interface SymbolBrowserWindowProps {
   openTarget: 'tab' | 'window';
   /** The loaded POU's type (SM_TableManager): the type filter starts with it */
   loadedType?: string;
+  /** false: the PLC runs another project than the loaded POU's (its type of that name is its own: opened with its POU) */
+  loadedIsLive?: boolean;
   /** Another instance of the loaded POU, followed here instead (live again on it) */
   onGoLiveHere?: (path: string) => void;
   /** The connected PLC (netId:port): the type search's results are remembered for it */
@@ -107,6 +109,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   onOpenHere,
   openTarget,
   loadedType,
+  loadedIsLive = true,
   onGoLiveHere,
   plcKey,
 }) => {
@@ -258,7 +261,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
     searchGenRef.current++;
     setSearch((s) => ({ ...s, matches: [...searchMatchesRef.current].sort((a, b) => a.path.localeCompare(b.path)), done: true, stopped: true }));
   };
-  const sameAsLoaded = (c: SymbolChild) => !!loadedType && bareType(c.type).toLowerCase() === loadedType.toLowerCase();
+  const sameAsLoaded = (c: SymbolChild) => loadedIsLive && !!loadedType && bareType(c.type).toLowerCase() === loadedType.toLowerCase();
 
   // What is on show, in tree order (filtered: matches and the members leading to them)
   const needle = filter.trim().toLowerCase();

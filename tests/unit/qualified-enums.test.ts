@@ -21,7 +21,7 @@ const cases = [
   { pou: 'SM_KServoSupplyManager.TcPOU', dut: 'E_KSupplyManager_States.TcDUT', states: ['DISABLED', 'ADD_CHILDREN', 'NO_CHILDREN', 'ENABLE_CHILDREN', 'ENABLED', 'ERROR'],
     edges: ['ADD_CHILDREN->ERROR', 'ADD_CHILDREN->NO_CHILDREN', 'ADD_CHILDREN->ENABLE_CHILDREN', 'ENABLE_CHILDREN->ENABLED'] },
   { pou: 'SM_KPowerSupplyAx86x0.TcPOU', dut: 'E_KPowerSupply_States.TcDUT', states: ['DISABLED', 'ENABLING', 'RESET', 'ENABLED', 'ERROR'],
-    edges: ['ENABLING->ERROR', 'ENABLING->KPowerSupplyEnabled', 'RESET->ENABLED', 'ENABLED->RESET', 'KPowerSupplyEnabled->ERROR'] },
+    edges: ['ENABLING->ERROR', 'ENABLING->KPowerSupplyEnabled', 'RESET->ENABLED', 'ENABLED->RESET', 'RESET->ERROR', 'ENABLED->ERROR'] },
 ];
 for (const c of cases) {
   const pou = read(c.pou);

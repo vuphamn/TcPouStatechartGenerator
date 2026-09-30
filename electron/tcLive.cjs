@@ -3,5 +3,5 @@
 const { createLiveSession } = require('../shared/liveSession.cjs');
 const { plcPort, instancePaths } = require('./tcLiveTargets.cjs');
 
-/** A new live session (each window follows its own POU) */
-module.exports = () => createLiveSession({ findInstances: instancePaths, plcPort });
+/** A new live session (each window follows its own POU); hooks: more of them (documents: the PLC projects' place) */
+module.exports = (hooks = {}) => createLiveSession({ findInstances: instancePaths, plcPort, ...hooks });

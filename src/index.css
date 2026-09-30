@@ -542,13 +542,14 @@ tr.enum-row-flash {
   pointer-events: stroke;
 }
 
-/* (its label hovered too: tc-edge-hover) */
-.tc-edge-hitbox:hover + .tc-edge-path,
+/* A hovered edge (its hit area, or its label: tc-edge-pointer-hover, tc-edge-hover): a lighter sky blue than the
+   selection's (sky-300; the selected edge: sky-400, thicker, dashed), solid, with a soft glow */
 .tc-edge-path:hover,
-.tc-edge-path.tc-edge-hover {
-  stroke: #38bdf8 !important;
-  stroke-width: 2.2px !important;
-  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.7));
+.tc-edge-path.tc-edge-hover,
+.tc-edge-path.tc-edge-pointer-hover {
+  stroke: #7dd3fc !important;
+  stroke-width: 2.6px !important;
+  filter: drop-shadow(0 0 6px rgba(125, 211, 252, 0.65));
 }
 
 /* Selected Edge State */
@@ -809,7 +810,7 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
    replace that, the badge jumping back to where it was and the hover flickering. Its circle and number grow instead) */
 .tc-priority-badge:hover,
 .priority-badge:hover {
-  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9)) !important;
+  filter: drop-shadow(0 0 8px rgba(125, 211, 252, 0.9)) !important;
 }
 .tc-priority-badge:hover :is(circle, text),
 .priority-badge:hover :is(circle, text),
@@ -819,31 +820,48 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 
 .tc-priority-badge:hover circle,
 .priority-badge:hover circle {
-  fill: #38bdf8 !important;
-  stroke: #0284c7 !important;
+  fill: #7dd3fc !important;
+  stroke: #0369a1 !important;
   stroke-width: 2px !important;
 }
 
 .tc-priority-badge:hover text,
 .priority-badge:hover text {
-  fill: #ffffff !important;
+  fill: #0c4a6e !important;
   font-weight: 800 !important;
 }
 
-/* An edge's label hovered: its badge lit as when the badge itself is hovered */
-.tc-priority-badge.tc-priority-badge-hover {
-  filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9)) !important;
+/* An edge or its label hovered: its two states (or composites) outlined in the same sky blue, so its ends are easy
+   to find */
+g.node.tc-end-hover > :is(rect, polygon, circle, ellipse, path.basic, .label-container),
+g.node.tc-end-pointer-hover > :is(rect, polygon, circle, ellipse, path.basic, .label-container),
+g.cluster.tc-end-hover > rect,
+g.cluster.tc-end-pointer-hover > rect,
+.statediagram-cluster.tc-end-hover > g > rect.outer,
+.statediagram-cluster.tc-end-pointer-hover > g > rect.outer {
+  stroke: #7dd3fc !important;
+  stroke-width: 2px !important;
+  filter: drop-shadow(0 0 6px rgba(125, 211, 252, 0.55));
 }
-.tc-priority-badge.tc-priority-badge-hover :is(circle, text) {
+
+/* An edge or its label hovered: its badge lit as when the badge itself is hovered */
+.tc-priority-badge.tc-priority-badge-hover,
+.tc-priority-badge.tc-priority-badge-pointer-hover {
+  filter: drop-shadow(0 0 8px rgba(125, 211, 252, 0.9)) !important;
+}
+.tc-priority-badge.tc-priority-badge-hover :is(circle, text),
+.tc-priority-badge.tc-priority-badge-pointer-hover :is(circle, text) {
   transform: scale(1.2);
 }
-.tc-priority-badge.tc-priority-badge-hover circle {
-  fill: #38bdf8 !important;
-  stroke: #0284c7 !important;
+.tc-priority-badge.tc-priority-badge-hover circle,
+.tc-priority-badge.tc-priority-badge-pointer-hover circle {
+  fill: #7dd3fc !important;
+  stroke: #0369a1 !important;
   stroke-width: 2px !important;
 }
-.tc-priority-badge.tc-priority-badge-hover text {
-  fill: #ffffff !important;
+.tc-priority-badge.tc-priority-badge-hover text,
+.tc-priority-badge.tc-priority-badge-pointer-hover text {
+  fill: #0c4a6e !important;
   font-weight: 800 !important;
 }
 
@@ -857,6 +875,7 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 }
 .tc-priority-badge.tc-priority-badge-selected circle,
 .tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-hover circle,
+.tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-pointer-hover circle,
 .tc-priority-badge.tc-priority-badge-selected:hover circle {
   fill: #f59e0b !important;
   stroke: #fef3c7 !important;
@@ -941,7 +960,6 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject {
   overflow: visible !important;
 }
-
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject p,
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) .nodeLabel {
   white-space: nowrap !important;

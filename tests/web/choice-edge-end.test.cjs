@@ -42,6 +42,28 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(!!arm, `an arm of ${choice.sid} on screen`);
   const fill = (sel) => p.evaluate((sel) => { const c = document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement.querySelector(sel.replace('#mermaid-canvas-area ', '')); return c ? getComputedStyle(c).fill : ''; }, sel);
   if (arm) {
+    // Hovered (not selected yet): the edge lit a lighter sky blue, and its badge with it
+    await p.mouse.move(arm.x, arm.y);
+    await h.sleep(300);
+    const hovered = await p.evaluate((pid) => {
+      const svg = document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement;
+      const e = svg.querySelector(`path.tc-edge-path[data-path-id="${pid}"]`);
+      const b = svg.querySelector(`.tc-priority-badge[data-path-id="${pid}"]`);
+      return { edge: e?.classList.contains('tc-edge-pointer-hover'), stroke: e ? getComputedStyle(e).stroke : '', badge: b ? b.classList.contains('tc-priority-badge-pointer-hover') : null, others: svg.querySelectorAll('.tc-edge-pointer-hover').length };
+    }, arm.pathId);
+    expect(hovered.edge && hovered.stroke === 'rgb(125, 211, 252)' && hovered.badge !== false && hovered.others === 1, `the edge hovered: lit (${hovered.stroke}), its badge too (${hovered.badge}), nothing else (${hovered.others})`);
+    // ... and its two ends (the choice, the state it goes to)
+    const ends = await p.evaluate((pid) => {
+      const svg = document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement;
+      const e = svg.querySelector(`path.tc-edge-path[data-path-id="${pid}"]`);
+      const lit = [...svg.querySelectorAll('.tc-end-pointer-hover')].map((n) => n.getAttribute('data-state-id') ?? n.id);
+      return { lit, want: [e.getAttribute('data-source-id'), e.getAttribute('data-target-id')] };
+    }, arm.pathId);
+    expect(ends.lit.length === 2 && ends.want.every((w) => ends.lit.includes(w)), `... and its two ends: ${ends.lit.join(', ')}`);
+    await p.mouse.move(5, 500);
+    await h.sleep(200);
+    const cleared = await p.evaluate(() => document.querySelectorAll('#mermaid-canvas-area .tc-edge-pointer-hover, #mermaid-canvas-area .tc-priority-badge-pointer-hover').length);
+    expect(cleared === 0, `the mouse away: unlit (${cleared})`);
     await p.mouse.click(arm.x, arm.y);
     await h.sleep(700);
     const marked = await p.evaluate((pid) => [...(document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement).querySelectorAll('.tc-priority-badge-selected')].map((b) => b.getAttribute('data-path-id') === pid), arm.pathId);
@@ -55,7 +77,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       hoverFill = await fill('#mermaid-canvas-area [data-test-other] circle');
       await p.mouse.move(5, 500);
     }
-    expect(marked.length === 1 && marked[0] && selectedFill === 'rgb(245, 158, 11)' && hoverFill === 'rgb(56, 189, 248)', `selected: only its badge marked (${marked.length}), amber ${selectedFill}; another hovered: ${hoverFill}`);
+    expect(marked.length === 1 && marked[0] && selectedFill === 'rgb(245, 158, 11)' && hoverFill === 'rgb(125, 211, 252)', `selected: only its badge marked (${marked.length}), amber ${selectedFill}; another hovered: ${hoverFill}`);
     await p.screenshot({ path: h.out('choice-edge-selected.png') });
 
     // Its start dragged a little, dropped by the diamond's right corner: on that corner, square to it
@@ -108,8 +130,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const lit = await p.evaluate(() => [...document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement.querySelectorAll('.tc-priority-badge-hover')].map((b) => b.getAttribute('data-path-id')));
   const litEdge = lab ? await p.evaluate((pid) => { const svg = document.querySelector('#mermaid-canvas-area g.node').ownerSVGElement; const e = [...svg.querySelectorAll('path.tc-edge-hover')]; return { n: e.length, own: e.every((x) => x.getAttribute('data-path-id') === pid), stroke: e[0] ? getComputedStyle(e[0]).stroke : '' }; }, lab.pid) : null;
   const litFill = lab ? await fill(`#mermaid-canvas-area .tc-priority-badge[data-path-id="${lab.pid}"] circle`) : '';
-  expect(!!lab && lit.length === 1 && lit[0] === lab.pid && (litFill === 'rgb(56, 189, 248)' || litFill === 'rgb(245, 158, 11)'), `a label hovered: its badge lit (${lit.length}, ${litFill})`);
-  expect(litEdge?.n === 1 && litEdge.own && litEdge.stroke === 'rgb(56, 189, 248)', `... and its edge (${litEdge?.n}, ${litEdge?.stroke})`);
+  expect(!!lab && lit.length === 1 && lit[0] === lab.pid && (litFill === 'rgb(125, 211, 252)' || litFill === 'rgb(245, 158, 11)'), `a label hovered: its badge lit (${lit.length}, ${litFill})`);
+  expect(litEdge?.n === 1 && litEdge.own && litEdge.stroke === 'rgb(125, 211, 252)', `... and its edge (${litEdge?.n}, ${litEdge?.stroke})`);
 
   // Every label on screen hovered (with a badge or without): its own edge lit, and only it
   const labels = await p.evaluate(() => {

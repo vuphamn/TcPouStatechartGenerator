@@ -1,6 +1,7 @@
 // A transition drawn from a composite's border (KAnalogMeasure: KANALOGMEASURE_READY is the only state in
 // KAnalogMeasureEnabled, so its "status_bError" transition to ERROR leaves the composite): its start dragged onto
 // KANALOGMEASURE_DISABLED moves the IF into DISABLED's branch of doState() (not "no CASE branch" for the composite).
+// (READY is marked final first: only a final state's transitions leave from the border)
 // Collapse error-sink edges is off by default
 const h = require('../lib/harness.cjs');
 let fails = 0;
@@ -36,6 +37,15 @@ const TO = 'KANALOGMEASURE_ERROR';
   const has = (b) => /IF \(?status_bError\)? THEN\s*\n\s*machineState := KANALOGMEASURE_ERROR/.test(b);
   const before = await doState();
   expect(has(branch(before, 'KANALOGMEASURE_READY')) && !has(branch(before, 'KANALOGMEASURE_DISABLED')), 'before: READY tests status_bError, DISABLED does not');
+
+  // READY marked final (its menu): its transitions out leave from the composite's border
+  const ready = await p.evaluate(() => { const r = document.querySelector('#mermaid-canvas-area g.node[data-state-id="KANALOGMEASURE_READY"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await p.mouse.click(ready.x, ready.y, { button: 'right' });
+  const fin = await p.waitForSelector('#context-menu-toggle-final-btn', { timeout: 5000 }).catch(() => null);
+  expect(!!fin, 'READY\'s menu: Mark as final state');
+  if (fin) await fin.click();
+  await p.waitForFunction((src, to) => [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].some((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to), { timeout: 15000 }, SRC, TO).catch(() => {});
+  await h.sleep(1200);
 
   // The edge from the composite, selected; its start dragged onto DISABLED
   const pt = await p.evaluate((src, to) => {

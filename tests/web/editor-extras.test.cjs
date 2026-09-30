@@ -210,6 +210,12 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.keyboard.up('Shift');
   await h.sleep(300);
   expect(band && (await marked()).join() === 'S_IDLE,S_RUN', `Shift+drag: the box, then ${await marked()}`);
+  // (offered as a composite: Just select them, the selection kept)
+  const offer = await p.waitForSelector('#text-prompt-cancel', { timeout: 3000 }).catch(() => null);
+  expect(!!offer && (await p.$eval('#text-prompt-cancel', (e) => e.textContent.trim())) === 'Just select them', 'offered as a composite: Just select them');
+  if (offer) await p.click('#text-prompt-cancel');
+  await h.sleep(300);
+  expect((await marked()).join() === 'S_IDLE,S_RUN', 'still selected');
   // Arrow keys: both move, by the same step; back again
   await p.evaluate(() => document.activeElement?.blur());
   const [i0, r0] = [await nodeAt('S_IDLE'), await nodeAt('S_RUN')];

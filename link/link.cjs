@@ -12,6 +12,27 @@ const http = require('http');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { createLiveSession, localIpTowards, defaultLocalNetId, localTwinCatNetId } = require('../shared/liveSession.cjs');
+
+// A PLC's project kept on this computer: in the user's Documents folder (where Windows keeps it, OneDrive too;
+// KSS_DOCUMENTS: the tests' folder); a folder of its own only in the user's own folders (the page asks for it)
+let documentsDir = null;
+function documents() {
+  if (process.env.KSS_DOCUMENTS) return process.env.KSS_DOCUMENTS;
+  if (documentsDir) return documentsDir;
+  try {
+    documentsDir = process.platform === 'win32'
+      ? require('child_process').execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('MyDocuments')"], { encoding: 'utf8', windowsHide: true, timeout: 10000 }).trim()
+      : '';
+  } catch {
+    documentsDir = '';
+  }
+  documentsDir ||= path.join(os.homedir(), 'Documents');
+  return documentsDir;
+}
+const inUserFolders = (dir) => [os.homedir(), documents()].some((root) => {
+  const r = path.resolve(root).toLowerCase() + path.sep;
+  return (path.resolve(dir).toLowerCase() + path.sep).startsWith(r);
+});
 const discovery = require('../shared/tcDiscovery.cjs');
 const { isSymbolPath } = require('../shared/tcAds.cjs');
 const { spawn } = require('child_process');
@@ -216,7 +237,7 @@ server.on('upgrade', (req, socket, head) => {
 
 wss.on('connection', (ws, req) => {
   const origin = req.headers.origin || '(no origin)';
-  const session = createLiveSession();
+  const session = createLiveSession({ documents, folderAllowed: inUserFolders });
   // (Build from the web page's project folder: its files mirrored here)
   const mirror = new ProjectMirror();
   let paired = false;
@@ -250,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -261,6 +282,8 @@ wss.on('connection', (ws, req) => {
     // Symbol browser: a symbol's members in the connected PLC
     if (m.type === 'liveBrowse') return void session.browse(send, m);
     if (m.type === 'plcSources') return void session.sources(send, m);
+    // The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects)
+    if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
     // Rebuild the PLC's project with the page's edits (XAE on this computer), and write it back when asked
     if (m.type === 'plcBuildClose') return void session.closeBuild(send, m);
     if (m.type === 'plcLicense') return void session.license(send, m);

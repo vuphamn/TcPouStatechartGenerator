@@ -292,7 +292,8 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
 function liveFor(contents) {
   let s = liveSessions.get(contents.id);
   if (!s) {
-    s = createLiveSession();
+    // (a PLC's project kept in Documents\Kval StateScope\PLC projects; KSS_DOCUMENTS: the tests' folder)
+    s = createLiveSession({ documents: () => process.env.KSS_DOCUMENTS || app.getPath('documents') });
     liveSessions.set(contents.id, s);
   }
   return s;
@@ -315,6 +316,15 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 });
 // The PLC project's sources as the PLC keeps them (read-only: its boot folder over ADS), for the window's session
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
+// The PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded when new, else current / differs
+ipcMain.handle('tc:live-project-copy', (event, req) => new Promise((resolve) => liveFor(event.sender).projectCopy(resolve, req)));
+// A folder for a PLC's project (Save to a different location; KSS_PICK_FOLDER: the tests' folder, no dialog)
+ipcMain.handle('tc:pick-folder', async (event, title) => {
+  if (process.env.KSS_PICK_FOLDER) return { path: process.env.KSS_PICK_FOLDER };
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const r = await dialog.showOpenDialog(win, { title: String(title || 'Choose a folder'), properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled || !r.filePaths[0] ? { canceled: true } : { path: r.filePaths[0] };
+});
 // Rebuild the PLC's project with the edits (TwinCAT XAE on this computer), and write it back when asked: progress on
 // 'tc:live' (plcBuildProgress), the result returned
 // Build (and write back) from the TwinCAT project the POU was opened from (a copy of it; the new compile

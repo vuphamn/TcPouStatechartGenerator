@@ -1,5 +1,5 @@
-// A state dragged into a {region} composite: without Alt a hint only; with Alt held on release its enum member moves
-// into the region (and the chart draws it there); Alt-dragged out again: out of the region
+// A state dragged into a {region} composite: its enum member moves into the region (and the chart draws it there);
+// dragged out again (into the composite around it): into that one
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -92,7 +92,7 @@ const MIME = 'application/x-kss-statechart-element';
   await p.click('#format-flowchart-btn').catch(() => {});
   await h.sleep(3000);
 
-  // UNCLAMP_START into Clamp: without Alt a hint, nothing moves
+  // UNCLAMPING and UNCLAMP_START dropped in Clamp (no key held): their enum lines in its region
   const Y = S('UNCLAMP_START');
   await goTo(S('CLAMPED'));
   const target = async () => {
@@ -100,31 +100,29 @@ const MIME = 'application/x-kss-statechart-element';
     const n = await box(S('CLAMPED'));
     return { x: Math.min(c.right - 6, n.x + n.w / 2 + 12), y: Math.min(c.bottom - 4, n.y + n.h / 2 + 6) };
   };
-  // (another state for the hint: the one dropped there stays drawn there, over CLAMPED)
   const Z = S('UNCLAMPING');
   b = await box(Z);
   await drag(b, await target(), false);
-  expect(/Hold Alt while dropping to move TABLEMANAGER_UNCLAMPING into Clamp/.test(await status()), `without Alt: ${await status()}`);
+  expect(/TABLEMANAGER_UNCLAMPING is in Clamp/.test(await status()), `dropped in Clamp: ${await status()}`);
   let dut = await enumText();
-  expect(!/\{region "Clamp"\}[\s\S]*TABLEMANAGER_UNCLAMPING[\s\S]*\{endregion\}/.test(dut), 'not moved');
-
-  // With Alt: into Clamp
+  expect(/\{region "Clamp"\}[\s\S]*TABLEMANAGER_UNCLAMPING[\s\S]*\{endregion\}/.test(dut), 'its enum member in the region');
   await goTo(Y);
   b = await box(Y);
-  await drag(b, await target(), true);
+  await drag(b, await target(), false);
   dut = await enumText();
-  expect(/\{region "Clamp"\}\s*\n\s*TABLEMANAGER_CLAMPED,\s*\n\s*TABLEMANAGER_UNCLAMP_START,?\s*\n\s*\{endregion\}/.test(dut), 'with Alt: its enum member in the region');
+  expect(/\{region "Clamp"\}\s*\n\s*TABLEMANAGER_CLAMPED,\s*\n\s*TABLEMANAGER_UNCLAMPING,\s*\n\s*TABLEMANAGER_UNCLAMP_START,?\s*\n\s*\{endregion\}/.test(dut), 'UNCLAMP_START too: last in the region, the commas right');
   expect(/TABLEMANAGER_UNCLAMP_START is in Clamp/.test(await status()), `status: ${await status()}`);
   const inside = async (id) => { const c = await cluster('Clamp'); const n = await box(id); return !!c && !!n && n.x > c.left && n.x < c.right && n.y > c.top && n.y < c.bottom; };
   await goTo(Y);
   expect(await inside(Y), 'the chart draws it in Clamp');
 
-  // With Alt, out again (to the empty canvas beside the composite)
+  // Out again (beside Clamp, in TableManagerEnabled around it): in TableManagerEnabled, not in Clamp
   b = await box(Y);
   const c = await cluster('Clamp');
-  await drag(b, { x: c.left - 60, y: c.top - 40 }, true);
+  await drag(b, { x: c.left - 60, y: c.top - 40 }, false);
   dut = await enumText();
-  expect(!/\{region "Clamp"\}[\s\S]*TABLEMANAGER_UNCLAMP_START[\s\S]*\{endregion\}/.test(dut) && /TABLEMANAGER_UNCLAMP_START/.test(dut), 'with Alt out of it: out of the region');
+  expect(!/\{region "Clamp"\}[^{]*TABLEMANAGER_UNCLAMP_START[^{]*\{endregion\}/.test(dut) && /TABLEMANAGER_UNCLAMP_START/.test(dut), 'dropped outside Clamp: out of its region');
+  expect(/TABLEMANAGER_UNCLAMP_START is in TableManagerEnabled/.test(await status()), `... into the one around it: ${await status()}`);
   // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)
   const slantedLeft = await h.reroutedSlanted(p);
   expect(slantedLeft.length === 0, `the moved edges on the canvas orthogonal (${slantedLeft.slice(0, 3).join(" | ") || "none slanted"})`);

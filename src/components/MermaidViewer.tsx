@@ -10,6 +10,8 @@ import {
   Minimize2,
   AlertCircle,
   Copy,
+  Pin,
+  PinOff,
   Check,
   Download,
   Search,
@@ -83,6 +85,7 @@ import {
   exportHighResSvg,
   exportHighResPng,
   copyToClipboard,
+  copyTextToClipboard,
   triggerDownload,
   ExportFormat,
   ExportScale,
@@ -126,6 +129,7 @@ import {
   CanvasNodePositionsMap,
   extractCanvasNodePositions,
 } from '../utils/canvasPositions.ts';
+import { compositeColors } from '../utils/compositeColors.ts';
 
 export type LayoutEngine = 'dagre' | 'elk';
 export type FlowchartCurve = 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
@@ -138,23 +142,63 @@ export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default';
  * so the exports (SVG, PNG) keep it; :where() keeps it below the canvas's own marks (live, search). Dark theme: light
  * sand; the light themes: a darker one
  */
-export function compositeStyle(theme: MermaidTheme | undefined): string {
+export function compositeStyle(theme: MermaidTheme | undefined, preset: string = 'sand', own: Record<string, string> = {}): string {
   const dark = !theme || theme === 'dark';
-  const line = dark ? '#c8b88a' : '#8a6d1f';
-  const tint = dark ? 'rgba(200, 184, 138, 0.06)' : 'rgba(138, 109, 31, 0.06)';
-  const title = dark ? '#d9cba0' : '#6b5416';
+  // (scope: which clusters, as the inside of a :where(); the rules for one composite come after all's, as specific)
+  const rules = (scope: string[], color: string) => {
+    const c = compositeColors(color, dark);
+    if (!c) return '';
+    const flow = scope.map((s) => `.cluster${s}`).join(', ');
+    const state = scope.map((s) => `.statediagram-cluster${s}`).join(', ');
+    return `:where(${flow}) > rect, :where(${state}) > rect.outer, :where(${state}) > g:not(.cluster-label) > :is(path, rect) { stroke: ${c.line} !important; stroke-width: 1.5px !important; stroke-dasharray: 8 4 !important; fill: ${c.tint} !important; rx: 8px; ry: 8px; }
+:where(${state}) > rect.inner { fill: transparent !important; stroke: none !important; }
+:where(${state}) .divider { stroke: ${c.line} !important; stroke-dasharray: 8 4 !important; }
+:where(${flow.split(', ').map((s) => `${s} .cluster-label`).join(', ')}, ${state.split(', ').map((s) => `${s} .cluster-label`).join(', ')}) :is(span, p, text, div) { color: ${c.title} !important; fill: ${c.title} !important; font-weight: 600 !important; }
+`;
+  };
+  // (a composite's cluster: its id is its name, after the render's id and a dash)
+  const idOf = (name: string) => name.replace(/[.\-\s]/g, '_').replace(/["\\]/g, '');
+  const ownRules = Object.entries(own)
+    .map(([name, color]) => rules([`[id="${idOf(name)}"]`, `[id$="-${idOf(name)}"]`, `[data-id="${idOf(name)}"]`], color))
+    .join('');
+  // (Forest's green states are close to sand: its composites slate)
+  const base = theme === 'forest' && preset === 'sand' ? 'slate' : preset;
   return `<style class="kss-composite-style">
-:where(.cluster) > rect, :where(.statediagram-cluster) > rect.outer, :where(.statediagram-cluster) > g:not(.cluster-label) > :is(path, rect) { stroke: ${line} !important; stroke-width: 1.5px !important; stroke-dasharray: 8 4 !important; fill: ${tint} !important; rx: 8px; ry: 8px; }
-:where(.statediagram-cluster) > rect.inner { fill: transparent !important; stroke: none !important; }
-:where(.statediagram-cluster) .divider { stroke: ${line} !important; stroke-dasharray: 8 4 !important; }
-:where(.cluster-label, .statediagram-cluster .cluster-label) :is(span, p, text, div) { color: ${title} !important; fill: ${title} !important; font-weight: 600 !important; }
-</style>`;
+${rules([''], base)}${ownRules}${dark ? '' : LIGHT_THEME_CSS}</style>`;
 }
 
+/**
+ * The light themes (default, base, forest, neutral): the canvas' marks in colours that read on white. The complexity
+ * badges' level colours darker (white text on them), a soft shadow for their glow; a state that needs refactoring
+ * outlined in rose instead of its pulsing glow; the edge labels a neutral chip (at the lowest specificity: the
+ * canvas' own label marks win); hover sky-600, the selected transition's badge amber-600 with white text
+ */
+const LIGHT_THEME_CSS = `
+.tc-complexity-badge.is-critical rect, .tc-complexity-badge.lvl-critical rect { fill: #be123c !important; stroke: #9f1239 !important; }
+.tc-complexity-badge.is-high rect, .tc-complexity-badge.lvl-high rect { fill: #b45309 !important; stroke: #92400e !important; }
+.tc-complexity-badge.is-moderate rect, .tc-complexity-badge.lvl-moderate rect { fill: #0369a1 !important; stroke: #075985 !important; }
+.tc-complexity-badge.lvl-low rect { fill: #047857 !important; stroke: #065f46 !important; }
+.tc-complexity-badge text { fill: #ffffff !important; }
+.tc-complexity-badge :is(polygon, line) { stroke: #ffffff !important; }
+.tc-complexity-badge circle { fill: #ffffff !important; }
+.tc-refactor-flag-badge, .tc-refactor-flag-badge.is-critical, .tc-refactor-flag-badge.is-high { filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.35)) !important; }
+.complexity-refactor-needed { animation: none !important; filter: none !important; }
+g.node.complexity-refactor-needed > :is(rect, polygon, path.basic, .label-container) { stroke: #e11d48 !important; stroke-width: 2px !important; }
+:where(.edgeLabel) :where(p, span, .labelBkg), :where(.edgeLabel) { background-color: rgba(255, 255, 255, 0.92) !important; color: #1e293b !important; }
+:where(.edgeLabel) :where(.labelBkg, p) { box-shadow: inset 0 0 0 1px #cbd5e1; border-radius: 2px; }
+:where(.edgeLabel) :where(rect) { fill: rgba(255, 255, 255, 0.92) !important; stroke: #cbd5e1 !important; }
+.tc-edge-path:hover, .tc-edge-path.tc-edge-hover, .tc-edge-path.tc-edge-pointer-hover { stroke: #0284c7 !important; filter: drop-shadow(0 0 3px rgba(2, 132, 199, 0.45)); }
+.tc-priority-badge:hover circle, .tc-priority-badge.tc-priority-badge-hover circle, .tc-priority-badge.tc-priority-badge-pointer-hover circle { fill: #0284c7 !important; stroke: #075985 !important; }
+.tc-priority-badge:hover text, .tc-priority-badge.tc-priority-badge-hover text, .tc-priority-badge.tc-priority-badge-pointer-hover text { fill: #ffffff !important; }
+.tc-priority-badge.tc-priority-badge-selected circle, .tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-hover circle, .tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-pointer-hover circle, .tc-priority-badge.tc-priority-badge-selected:hover circle { fill: #d97706 !important; stroke: #ffffff !important; }
+.tc-priority-badge.tc-priority-badge-selected text, .tc-priority-badge.tc-priority-badge-selected:hover text { fill: #ffffff !important; }
+g.node.tc-end-hover > :is(rect, polygon, circle, ellipse, path.basic, .label-container), g.node.tc-end-pointer-hover > :is(rect, polygon, circle, ellipse, path.basic, .label-container), g.cluster.tc-end-hover > rect, g.cluster.tc-end-pointer-hover > rect { stroke: #0284c7 !important; }
+`;
+
 /** The composites' style put into a rendered diagram's SVG (right after its opening tag) */
-export function withCompositeStyle(svg: string, theme: MermaidTheme | undefined): string {
+export function withCompositeStyle(svg: string, theme: MermaidTheme | undefined, preset?: string, own?: Record<string, string>): string {
   const at = svg.indexOf('>', svg.indexOf('<svg'));
-  return at < 0 ? svg : svg.slice(0, at + 1) + compositeStyle(theme) + svg.slice(at + 1);
+  return at < 0 ? svg : svg.slice(0, at + 1) + compositeStyle(theme, preset, own) + svg.slice(at + 1);
 }
 
 let elkRegistered = false;
@@ -228,6 +272,8 @@ export interface MermaidViewerProps {
   /** Several states selected (Ctrl+click, Shift+drag a box): marked; the app's menu acts on all of them */
   multiSelection?: string[];
   onMultiSelectionChange?: (ids: string[]) => void;
+  /** Shift + a box drawn around states: they are selected, and the app may offer to group them into a composite */
+  onBoxSelected?: (ids: string[]) => void;
   /** Live view: the PLC's current state (and the one it came from) are highlighted */
   /** stuck: longer in the state than its time limit (red) */
   liveHighlight?: { stateId: string; previousStateId?: string; stuck?: boolean; regionStates?: string[] } | null;
@@ -247,6 +293,13 @@ export interface MermaidViewerProps {
   onConnectCancel?: () => void;
   /** A transition's start or end handle dropped on another state: the app changes the code (the drag is undone) */
   onEdgeEndpointDrop?: (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => void;
+  /** The transitions of the code a drawn edge stands for, with their priorities (a composite's collapsed edge: several, listed in its guard popup) */
+  edgeMembersOf?: (from: string, to: string) => { from: string; to: string; priority?: number | null }[];
+  /** One of those picked in the guard popup: its code opened */
+  onOpenTransitionCode?: (from: string, to: string) => void;
+  /** The composites' colour (a preset: sand, slate, …, plain) and each one's own (its {region}'s // @color) */
+  compositeColor?: string;
+  compositeOwnColors?: Record<string, string>;
   /**
    * The statechart palette is shown: an element dropped on a state, in a composite or on the canvas (at: where), or
    * clicked (at: null)
@@ -1184,6 +1237,8 @@ function enhanceSvgWithPriorityCircles(
             badgeRect.setAttribute('fill', badgeBg);
             badgeRect.setAttribute('stroke', badgeBorder);
             badgeRect.setAttribute('stroke-width', '1.5');
+            // (as a style too: the theme's .node rect colours would otherwise win over the attributes)
+            badgeRect.setAttribute('style', `fill: ${badgeBg}; stroke: ${badgeBorder}`);
             badgeG.appendChild(badgeRect);
 
             // Warning triangle icon
@@ -1228,7 +1283,7 @@ function enhanceSvgWithPriorityCircles(
             node.appendChild(badgeG);
           } else {
             // Standard compact pill badge in heatmap mode
-            badgeG.setAttribute('class', 'tc-complexity-badge');
+            badgeG.setAttribute('class', `tc-complexity-badge lvl-${metric.level}`);
             badgeG.setAttribute('transform', `translate(${anchorX - 32}, ${anchorY - 9})`);
 
             const titleEl = doc.createElementNS('http://www.w3.org/2000/svg', 'title');
@@ -1243,6 +1298,7 @@ function enhanceSvgWithPriorityCircles(
             badgeRect.setAttribute('fill', metric.color.badgeBg);
             badgeRect.setAttribute('stroke', metric.color.badgeBorder);
             badgeRect.setAttribute('stroke-width', '1.5');
+            badgeRect.setAttribute('style', `fill: ${metric.color.badgeBg}; stroke: ${metric.color.badgeBorder}`);
             badgeG.appendChild(badgeRect);
 
             const badgeText = doc.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -1604,6 +1660,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     groupSnapEach,
     multiSelection,
     onMultiSelectionChange,
+    onBoxSelected,
     liveHighlight,
     stateTimes,
     pathHighlight,
@@ -1614,6 +1671,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onConnectTo,
     onConnectCancel,
     onEdgeEndpointDrop,
+    edgeMembersOf,
+    onOpenTransitionCode,
+    compositeColor = 'sand',
+    compositeOwnColors,
     onCanvasKey,
     onPaletteElement,
     onStateDropped,
@@ -2203,12 +2264,104 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     /** The hovered label's (or badge's) own path: its edge lit, even one without a badge */
     linkedPathId?: string;
   } | null>(null);
+  // An edge lit by a hover: its two states (or composites) too, so a long edge's ends are easy to find
+  const lightEnds = useCallback((svg: SVGSVGElement, paths: Element[], cls: string) => {
+    for (const path of paths) {
+      for (const id of [path.getAttribute('data-source-id'), path.getAttribute('data-target-id')]) {
+        if (!id) continue;
+        svg.querySelectorAll(`g.node[data-state-id="${CSS.escape(id)}"], g.cluster:is([id="${CSS.escape(id)}"], [id$="-${CSS.escape(id)}"]), .statediagram-cluster[data-id="${CSS.escape(id)}"]`).forEach((el) => el.classList.add(cls));
+      }
+    }
+  }, []);
+  // An edge hovered (its wider hit area, drawn on top of the line): the edge and its priority badge lit, as its label
+  // hovered lights them (not while something is dragged)
+  useEffect(() => {
+    const host = containerRef.current;
+    if (!host) return;
+    let lit: string | null = null;
+    const light = (pid: string | null) => {
+      if (pid === lit) return;
+      const svg = getDiagramSvg();
+      svg?.querySelectorAll('.tc-edge-pointer-hover').forEach((el) => el.classList.remove('tc-edge-pointer-hover'));
+      svg?.querySelectorAll('.tc-priority-badge-pointer-hover').forEach((el) => el.classList.remove('tc-priority-badge-pointer-hover'));
+      svg?.querySelectorAll('.tc-end-pointer-hover').forEach((el) => el.classList.remove('tc-end-pointer-hover'));
+      lit = pid;
+      if (!svg || !pid) return;
+      const key = `[data-path-id="${CSS.escape(pid)}"]`;
+      const paths = [...svg.querySelectorAll(`path.tc-edge-path${key}`)];
+      paths.forEach((el) => el.classList.add('tc-edge-pointer-hover'));
+      lightEnds(svg, paths, 'tc-end-pointer-hover');
+      svg.querySelectorAll(`.tc-priority-badge${key}`).forEach((el) => el.classList.add('tc-priority-badge-pointer-hover'));
+    };
+    const over = (e: PointerEvent) => {
+      const hit = (e.target as Element | null)?.closest?.('.tc-edge-hitbox, path.tc-edge-path');
+      light(hit && !isDraggingNodeRef.current && !isDraggingEdgeHandleRef.current ? hit.getAttribute('data-path-id') : null);
+    };
+    const leave = () => light(null);
+    host.addEventListener('pointerover', over);
+    host.addEventListener('pointerleave', leave);
+    return () => {
+      host.removeEventListener('pointerover', over);
+      host.removeEventListener('pointerleave', leave);
+      light(null);
+    };
+  }, [getDiagramSvg, lightEnds]);
   // An edge's label hovered: the edge and its priority badge lit as when they are hovered themselves (its own path
   // first: two transitions between the same states each have their own)
   const hoveredEdge = hoveredEdgeCondition?.edge;
   // The guard popup: placed once measured, never over its label (below it; else above; else beside it)
   const guardPopupRef = useRef<HTMLDivElement | null>(null);
+  // The composites' colours: put in the SVG when it is drawn, and changed in the drawn one (no new render)
+  const compositeColorRef = useRef({ preset: compositeColor, own: compositeOwnColors ?? {} });
+  const compositeColorKey = `${compositeColor}|${JSON.stringify(compositeOwnColors ?? {})}`;
+  useEffect(() => {
+    compositeColorRef.current = { preset: compositeColor, own: compositeOwnColors ?? {} };
+    // (each drawn copy: the canvas' and the minimap's)
+    const css = compositeStyle(mermaidTheme, compositeColor, compositeOwnColors ?? {}).replace(/^<style[^>]*>|<\/style>$/g, '');
+    containerRef.current?.querySelectorAll('svg style.kss-composite-style').forEach((style) => {
+      if (style.textContent !== css) style.textContent = css;
+    });
+  }, [compositeColorKey, mermaidTheme]); // eslint-disable-line react-hooks/exhaustive-deps
   const [guardPopupPos, setGuardPopupPos] = useState<{ left: number; top: number; key: string } | null>(null);
+  // Pinned (a click on it, or its pin): it stays open, whatever is hovered, until unpinned, Esc or a click elsewhere
+  const [guardPinned, setGuardPinned] = useState(false);
+  const [guardCopied, setGuardCopied] = useState(false);
+  const guardLeaveRef = useRef<number | null>(null);
+  const keepGuardPopup = useCallback(() => {
+    if (guardLeaveRef.current != null) {
+      clearTimeout(guardLeaveRef.current);
+      guardLeaveRef.current = null;
+    }
+  }, []);
+  // (where the mouse is on the canvas; null: off it)
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  // (the mouse off its label: a moment to reach the popup before it closes; still on a label, a badge or the popup
+  // then, as when the popup moved away from under the mouse to another label: it stays)
+  const leaveGuardPopup = useCallback(() => {
+    if (guardPinned || guardLeaveRef.current != null) return;
+    guardLeaveRef.current = window.setTimeout(() => {
+      guardLeaveRef.current = null;
+      const pt = lastPointerRef.current;
+      if (pt && document.elementsFromPoint(pt.x, pt.y).some((el) => el.closest('#edge-guard-condition-hover-badge, g.edgeLabel, .tc-priority-badge, .priority-badge'))) return;
+      setHoveredEdgeCondition(null);
+    }, 200);
+  }, [guardPinned]);
+  useEffect(() => {
+    if (hoveredEdgeCondition) return;
+    setGuardPinned(false);
+    setGuardCopied(false);
+  }, [hoveredEdgeCondition]);
+  useEffect(() => () => keepGuardPopup(), [keepGuardPopup]);
+  useEffect(() => {
+    if (!guardPinned) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setHoveredEdgeCondition(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [guardPinned]);
   // (which label it was placed for: another one is placed afresh, not shown where the last one was)
   const guardPopupKey = hoveredEdgeCondition ? `${hoveredEdgeCondition.edge.id}|${hoveredEdgeCondition.edge.pathId ?? ''}|${Math.round(hoveredEdgeCondition.labelRect?.top ?? hoveredEdgeCondition.anchorY)}` : '';
   useLayoutEffect(() => {
@@ -2239,6 +2392,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (!svg) return;
     svg.querySelectorAll('.tc-priority-badge-hover').forEach((el) => el.classList.remove('tc-priority-badge-hover'));
     svg.querySelectorAll('.tc-edge-hover').forEach((el) => el.classList.remove('tc-edge-hover'));
+    svg.querySelectorAll('.tc-end-hover').forEach((el) => el.classList.remove('tc-end-hover'));
     if (!hoveredEdge) return;
     const linked = hoveredEdgeCondition?.linkedPathId;
     const key = linked ? `[data-path-id="${CSS.escape(linked)}"]` : hoveredEdge.pathId ? `[data-path-id="${CSS.escape(hoveredEdge.pathId)}"]` : hoveredEdge.id ? `[data-edge-id="${CSS.escape(hoveredEdge.id)}"]` : '';
@@ -2252,7 +2406,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     });
     for (const pid of paths) svg.querySelectorAll(`path.tc-edge-path[data-path-id="${CSS.escape(pid)}"]`).forEach((el) => el.classList.add('tc-edge-hover'));
     if (!paths.size) svg.querySelectorAll(`path.tc-edge-path${key}`).forEach((el) => el.classList.add('tc-edge-hover'));
-  }, [hoveredEdge, hoveredEdgeCondition?.linkedPathId, getDiagramSvg]);
+    lightEnds(svg, [...svg.querySelectorAll('path.tc-edge-path.tc-edge-hover')], 'tc-end-hover');
+  }, [hoveredEdge, hoveredEdgeCondition?.linkedPathId, getDiagramSvg, lightEnds]);
 
   const complexityHeatmapResult = useMemo<ComplexityHeatmapResult>(() => {
     return calculateStateComplexityHeatmap(
@@ -2892,7 +3047,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             complexityThreshold,
             showComplexityBadges
           );
-          setSvgContent(withCompositeStyle(enhancedSvg, mermaidTheme));
+          setSvgContent(withCompositeStyle(enhancedSvg, mermaidTheme, compositeColorRef.current.preset, compositeColorRef.current.own));
         }
       } catch (err: unknown) {
         if (isMounted) {
@@ -4026,8 +4181,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             return q.width > 0 && q.right > l && q.left < r && q.bottom > tp && q.top < b;
           })
           .map((n) => n.getAttribute('data-state-id') || '')
-          .filter((x) => x && x !== '[*]');
+          // (the states: not the start / end circles, a choice, a note, the "any state" of preProcess())
+          .filter((x) => x && x !== '[*]' && x !== 'AnyState' && !/^(startNode|endNode|choice_|note_)/.test(x));
         onMultiSelectionChange([...new Set(ids)]);
+        if (ids.length) onBoxSelected?.([...new Set(ids)]);
       };
       hostWin().addEventListener('mousemove', move);
       hostWin().addEventListener('mouseup', up, true);
@@ -4086,11 +4243,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       target.closest('#transition-guard-inspector') ||
       target.closest('#complexity-heatmap-panel') ||
       target.closest('#state-machine-stats-panel') ||
-      target.closest('#diagram-search-panel')
+      target.closest('#diagram-search-panel') ||
+      target.closest('#edge-guard-condition-hover-badge')
     ) {
       return;
     }
 
+    keepGuardPopup();
     setHoveredEdgeCondition(null);
 
     // A0. Check if user clicked on a priority badge or edge label -> record pending click and do not initiate drag/pan
@@ -4675,7 +4834,23 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       return;
     }
 
-    const target = e.target as Element;
+    let target = e.target as Element;
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+
+    // (the guard popup itself: kept open while the mouse is on it, to pin it, copy, or open a transition it lists;
+    // not pinned, another label or badge under it is that one's: the popup does not hide the labels it covers)
+    if (target?.closest?.('#edge-guard-condition-hover-badge')) {
+      const beneath = guardPinned
+        ? undefined
+        : document
+            .elementsFromPoint(e.clientX, e.clientY)
+            .find((el) => !el.closest('#edge-guard-condition-hover-badge') && el.closest('g.edgeLabel, .tc-priority-badge, .priority-badge'));
+      if (!beneath) {
+        keepGuardPopup();
+        return;
+      }
+      target = beneath;
+    }
 
     // 3.5 Hover tracking for Edge Label Guard Condition Visual Badge
     const labelOrBadgeEl = (target?.closest('g.edgeLabel') ||
@@ -4684,7 +4859,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       target?.closest('.tc-priority-badge') ||
       target?.closest('.priority-badge')) as HTMLElement | SVGElement | null;
 
-    if (
+    if (guardPinned) {
+      // (pinned: it stays, whatever is hovered, until unpinned, Esc or a click elsewhere)
+    } else if (
       labelOrBadgeEl &&
       !isDraggingNodeRef.current &&
       !isDraggingEdgeHandleRef.current &&
@@ -4694,6 +4871,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const svg = getDiagramSvg();
       const edge = resolveEdgeFromElement(labelOrBadgeEl, svg, availableEdges);
       if (edge && edge.from && edge.to) {
+        keepGuardPopup();
         let fullCond = getFullGuardCondition(edge, labelOrBadgeEl);
         if ((fullCond.includes('...') || fullCond.endsWith('▾')) && tcPouContent) {
           const fromPou = tryExtractGuardFromPou(tcPouContent, edge.from, edge.to);
@@ -4721,10 +4899,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
         return;
       } else if (hoveredEdgeCondition) {
-        setHoveredEdgeCondition(null);
+        leaveGuardPopup();
       }
     } else if (hoveredEdgeCondition) {
-      setHoveredEdgeCondition(null);
+      leaveGuardPopup();
     }
 
     // 4. Hover tracking for Complexity Heat-map Tooltip & Refactor Badges
@@ -4737,7 +4915,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const nodeEl = target?.closest('g.node') as HTMLElement | SVGElement | null;
       if (nodeEl) {
         if (hoveredEdgeCondition) {
-          setHoveredEdgeCondition(null);
+          leaveGuardPopup();
         }
         const sId =
           nodeEl.getAttribute('data-state-id') ||
@@ -5135,6 +5313,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setSelectedEdge(null);
       setContextMenuState({ x: e.clientX, y: e.clientY, target: menuTarget });
       return;
+    }
+
+    // 1b. A composite's title or its border (inside it: the canvas' menu, to paste or add there)
+    const clusterEl = target.closest('g.cluster, .statediagram-cluster') as SVGGElement | null;
+    if (clusterEl) {
+      const box = clusterEl.querySelector(':scope > rect, :scope > g > rect.outer')?.getBoundingClientRect();
+      const B = 10;
+      const onBorder = !!box && [e.clientX - box.left, box.right - e.clientX, e.clientY - box.top, box.bottom - e.clientY].some((d) => Math.abs(d) <= B);
+      const name = clusterEl.getAttribute('data-id') || clusterEl.id.replace(/^.*?render-[a-z0-9]+-/i, '');
+      if (name && (target.closest('.cluster-label') || onBorder)) {
+        setContextMenuState({ x: e.clientX, y: e.clientY, target: { type: 'composite', id: name, label: name } });
+        return;
+      }
     }
 
     // 2. Clicked on an edge
@@ -6648,7 +6839,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           handleMouseUp(e);
           setHoveredComplexityMetric(null);
           setHoveredActions(null);
-          setHoveredEdgeCondition(null);
+          lastPointerRef.current = null;
+          leaveGuardPopup();
         }}
         onClick={handleClick}
         onWheel={handleWheel}
@@ -7008,7 +7200,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               transition: 'none',
               zIndex: 60,
             }}
-            className="pointer-events-none max-w-sm sm:max-w-md w-auto min-w-[280px] p-3 bg-slate-950/95 border border-sky-500/60 rounded-xl shadow-2xl shadow-sky-950/50 backdrop-blur-md text-xs animate-in fade-in zoom-in-95 duration-150 select-none"
+            data-pinned={guardPinned ? 'true' : undefined}
+            onMouseEnter={keepGuardPopup}
+            onMouseLeave={leaveGuardPopup}
+            onClick={() => setGuardPinned(true)}
+            className={`pointer-events-auto max-w-sm sm:max-w-md w-auto min-w-[280px] p-3 bg-slate-950/95 border ${guardPinned ? 'border-amber-400/70' : 'border-sky-500/60'} rounded-xl shadow-2xl shadow-sky-950/50 backdrop-blur-md text-xs animate-in fade-in zoom-in-95 duration-150 select-none`}
           >
             <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-800">
               <div className="flex items-center gap-2 min-w-0">
@@ -7037,15 +7233,79 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                   </div>
                 </div>
               </div>
-              {hoveredEdgeCondition.priority !== undefined && (
-                <span
-                  className="shrink-0 font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-400/40 shadow-xs"
-                  title={`Transition Evaluation Priority: ${hoveredEdgeCondition.priority}`}
+              <div className="flex items-center gap-1 shrink-0">
+                {hoveredEdgeCondition.priority !== undefined && (
+                  <span
+                    className="shrink-0 font-mono text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-400/40 shadow-xs"
+                    title={`Transition Evaluation Priority: ${hoveredEdgeCondition.priority}`}
+                  >
+                    Prio [{hoveredEdgeCondition.priority}]
+                  </span>
+                )}
+                <button
+                  id="guard-popup-copy"
+                  type="button"
+                  title="Copy the guard condition"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setGuardPinned(true);
+                    void copyTextToClipboard(hoveredEdgeCondition.fullCondition).then((ok) => {
+                      setGuardCopied(ok !== false);
+                      window.setTimeout(() => setGuardCopied(false), 1500);
+                    });
+                  }}
+                  className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800"
                 >
-                  Prio [{hoveredEdgeCondition.priority}]
-                </span>
-              )}
+                  {guardCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+                <button
+                  id="guard-popup-pin"
+                  type="button"
+                  title={guardPinned ? 'Unpin (Esc): it closes' : 'Pin: it stays open (a click on it pins it too)'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (guardPinned) setHoveredEdgeCondition(null);
+                    else setGuardPinned(true);
+                  }}
+                  className={`p-1 rounded hover:bg-slate-800 ${guardPinned ? 'text-amber-400' : 'text-slate-400 hover:text-sky-300'}`}
+                >
+                  {guardPinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
+
+            {/* A composite's collapsed edge: the transitions of the code it stands for, each opened by a click */}
+            {(() => {
+              const members = edgeMembersOf?.(hoveredEdgeCondition.edge.from, hoveredEdgeCondition.edge.to) ?? [];
+              if (members.length < 2) return null;
+              return (
+                <div id="guard-popup-members" className="pt-2 space-y-1">
+                  <div className="text-[9px] text-slate-400 uppercase font-semibold tracking-wider">Stands for {members.length} transitions:</div>
+                  <div className="space-y-0.5 max-h-40 overflow-y-auto pr-0.5 custom-scrollbar">
+                    {members.map((m, i) => (
+                      <button
+                        key={`${m.from}->${m.to}#${i}`}
+                        type="button"
+                        data-member={`${m.from}->${m.to}`}
+                        disabled={!onOpenTransitionCode}
+                        title={onOpenTransitionCode ? `Open the code of ${m.from} → ${m.to}` : undefined}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenTransitionCode?.(m.from, m.to);
+                          setHoveredEdgeCondition(null);
+                        }}
+                        className="w-full flex items-center justify-between gap-2 text-left text-[10px] font-mono px-2 py-0.5 rounded bg-slate-900/60 border border-slate-800 text-slate-300 hover:border-sky-500/60 hover:text-sky-200 disabled:hover:border-slate-800 disabled:hover:text-slate-300"
+                      >
+                        <span className="truncate">
+                          {m.from} <ArrowRight className="inline w-2.5 h-2.5 text-sky-400" /> {m.to}
+                        </span>
+                        {m.priority != null && m.priority > 0 && <span className="shrink-0 text-sky-300 font-bold">[{m.priority}]</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div className="pt-2 space-y-2">
               <div className="bg-slate-900/90 rounded-lg p-2.5 border border-slate-800/80 shadow-inner">
@@ -7092,7 +7352,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               )}
 
               <div className="text-[9px] text-slate-400 flex items-center justify-between pt-0.5 border-t border-slate-800/60">
-                <span className="text-slate-400">💡 Click edge label to open Guard Inspector</span>
+                <span className="text-slate-400">💡 Click the label: Guard Inspector · click here: pin (Esc closes)</span>
               </div>
             </div>
           </div>
@@ -7411,7 +7671,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         <NoteDialog
           isOpen={isNoteDialogOpen}
           target={activeNoteTarget}
-          currentNote={activeNoteTarget && activeNoteTarget.type !== 'canvas' ? activeNoteTarget.note : ''}
+          currentNote={activeNoteTarget && (activeNoteTarget.type === 'node' || activeNoteTarget.type === 'edge') ? activeNoteTarget.note : ''}
           onSave={handleSaveActiveNote}
           onDelete={handleDeleteActiveNote}
           onClose={() => setIsNoteDialogOpen(false)}

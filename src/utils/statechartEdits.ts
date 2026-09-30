@@ -16,7 +16,7 @@ import { escapeRx, labelNames } from './sourceLocation.ts';
 import { caseBranchRange } from './stateEdits.ts';
 import { stateQualifier } from './stateNames.ts';
 import { leading } from './transitionEdits.ts';
-import { parseParallelRegions } from '../generator.ts';
+import { parseParallelRegions, inferredComposites } from '../generator.ts';
 
 export const FINAL_MARK = '(* final *)';
 const REGION_RX = /^\s*\{\s*region\b\s*(?:"([^"]*)"|'([^']*)'|([^}]*?))\s*\}/i;
@@ -146,6 +146,185 @@ export function wrapInComposite(dutContent: string, member: string, composite: s
   return wrap(decl.slice(0, line.start) + `${indent}{region "${composite}"}${eol}` + decl.slice(line.start, lineEnd) + `${eol}${indent}{endregion}` + decl.slice(lineEnd));
 }
 
+// ---- Moving members' lines (comments, values, marks kept) ----
+
+const memberAt = (code: string) => /^\s*,?\s*([A-Za-z_]\w*)/.exec(code)?.[1] ?? null;
+const codeLines = (lines: string[]) => blankCommentsAndPragmas(lines.join('\n')).split('\n');
+
+/** The enum list's lines (between its parentheses) and the members' line numbers; or an error */
+function memberLines(dutContent: string, members: string[]): { error: string } | { lines: string[]; code: string[]; sorted: number[]; put: (out: string[]) => string } {
+  const { decl, wrap } = declOf(dutContent);
+  const range = enumListRange(decl);
+  if (!range) return { error: 'No enum list in the .TcDUT' };
+  const lines = decl.slice(range.start + 1, range.end).split('\n');
+  const code = codeLines(lines);
+  const idx = members.map((m) => code.findIndex((c) => memberAt(c) === m));
+  const missing = members.filter((_, k) => idx[k] < 0);
+  if (missing.length) return { error: `Not in the enum: ${missing.join(', ')}` };
+  if (members.some((_, k) => /,\s*[A-Za-z_]/.test(code[idx[k]].replace(/^\s*,/, '')))) return { error: 'Several states on one line of the enum: one per line to move them' };
+  const sorted = [...idx].sort((a, b) => a - b);
+  const put = (out: string[]) => wrap(decl.slice(0, range.start + 1) + fixMemberCommas(out).join('\n') + decl.slice(range.end));
+  return { lines, code, sorted, put };
+}
+
+/**
+ * The commas of an enum list's lines put right: each member line's own taken off, then one between each two members:
+ * before the second when its line is written ", NAME", else after the first (a list keeps the style of each line)
+ */
+function fixMemberCommas(lines: string[]): string[] {
+  const mc = codeLines(lines);
+  const at = lines.map((_, i) => (memberAt(mc[i]) ? i : -1)).filter((i) => i >= 0);
+  const leadStyle = new Map(at.map((i) => [i, /^\s*,/.test(mc[i])]));
+  const out = [...lines];
+  const bare = new Map<number, string>();
+  for (const i of at) {
+    let l = lines[i];
+    let c = mc[i];
+    const lead = /^(\s*),\s*/.exec(c);
+    if (lead) {
+      l = lead[1] + l.slice(lead[0].length);
+      c = lead[1] + c.slice(lead[0].length);
+    }
+    // (a comma after the member and its value: the last one in the code, comments blanked)
+    const end = c.replace(/\r$/, '').replace(/\s+$/, '').length;
+    if (c[end - 1] === ',') {
+      l = l.slice(0, end - 1) + l.slice(end);
+      c = c.slice(0, end - 1) + c.slice(end);
+    }
+    bare.set(i, l);
+    mc[i] = c;
+  }
+  at.forEach((i, k) => {
+    let l = bare.get(i)!;
+    const next = at[k + 1];
+    const lead = k > 0 && leadStyle.get(i);
+    if (lead) {
+      const pre = leading(l);
+      l = `${pre}, ${l.slice(pre.length)}`;
+    }
+    if (next !== undefined && !leadStyle.get(next)) {
+      const end = mc[i].replace(/\r$/, '').replace(/\s+$/, '').length + (lead ? 2 : 0);
+      l = `${l.slice(0, end)},${l.slice(end)}`;
+    }
+    out[i] = l;
+  });
+  return out;
+}
+
+/** Other members between two line numbers (members without a value of their own get other numbers when moved past them) */
+const membersBetween = (code: string[], from: number, to: number, skip: number[]) =>
+  code.some((c, i) => i > Math.min(from, to) && i < Math.max(from, to) && !skip.includes(i) && !!memberAt(c));
+
+/**
+ * Several members grouped into a new composite: their lines moved together to where the first of them is, wrapped in
+ * {region "name"} … {endregion}. They must be in the same composite, or in none. reordered: other members were
+ * between them
+ */
+export function groupInComposite(dutContent: string, members: string[], name: string): { dut: string; reordered: boolean } | { error: string } {
+  const list = [...new Set(members)];
+  if (!list.length) return { error: 'No states to group' };
+  if (!isValidCompositeName(name)) return { error: `${name}: letters, digits, _ and spaces` };
+  if (enumComposites(dutContent).some((c) => c.name.toLowerCase() === name.toLowerCase())) return { error: `${name} already exists` };
+  const parents = new Set(list.map((m) => compositeOf(dutContent, m)));
+  if (parents.size > 1) return { error: `The states are in different composites (${[...parents].map((p) => p ?? 'none').join(', ')}): group the states of one composite` };
+  const l = memberLines(dutContent, list);
+  if ('error' in l) return { error: l.error };
+  const { lines, code, sorted, put } = l;
+  // From the first of them to the last, in place: the comments and blank lines between stay where they are; other
+  // members between them (not grouped) move out, right after the composite
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const others = code.map((c, i) => i).filter((i) => i > first && i < last && !sorted.includes(i) && !!memberAt(code[i]));
+  const cr = lines[first].endsWith('\r') ? '\r' : '';
+  const indent = leading(lines[first].replace(/\r$/, ''));
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    if (i === first) out.push(`${indent}{region "${name}"}${cr}`);
+    if (!others.includes(i)) out.push(line);
+    if (i === last) out.push(`${indent}{endregion}${cr}`, ...others.map((k) => lines[k]));
+  });
+  return { dut: put(out), reordered: others.length > 0 };
+}
+
+/**
+ * Members moved into a composite (their lines last in it, before its {endregion}), or out of their composites (target
+ * null: after the outermost one they are in). Composites left empty removed. reordered: they moved past other members
+ */
+export function moveToComposite(dutContent: string, members: string[], target: string | null): { dut: string; reordered: boolean } | { error: string } {
+  const list = [...new Set(members)];
+  if (!list.length) return { error: 'No states to move' };
+  if (target && !enumComposites(dutContent).some((c) => c.name === target)) return { error: `No composite ${target} in the enum` };
+  const l = memberLines(dutContent, list);
+  if ('error' in l) return { error: l.error };
+  const { lines, code, sorted, put } = l;
+  // (the pragmas: at the start of their lines; blanking the comments would take them too)
+  const raw = lines;
+  const regionName = (i: number) => {
+    const r = lines[i].match(REGION_RX);
+    return r ? (r[1] ?? r[2] ?? r[3] ?? '').trim() : null;
+  };
+  const endOf = (start: number) => {
+    let depth = 0;
+    for (let i = start; i < raw.length; i++) {
+      if (REGION_RX.test(raw[i])) depth++;
+      else if (END_REGION_RX.test(raw[i]) && --depth === 0) return i;
+    }
+    return -1;
+  };
+  let at: number;
+  if (target) {
+    const start = raw.findIndex((_, i) => regionName(i) === target);
+    at = endOf(start);
+    if (start < 0 || at < 0) return { error: `${target}: its {region} has no {endregion}` };
+  } else {
+    // (after the outermost composite the first of them is in)
+    let depth = 0;
+    let outer = -1;
+    for (let i = 0; i < sorted[0]; i++) {
+      if (REGION_RX.test(raw[i])) {
+        if (depth === 0) outer = i;
+        depth++;
+      } else if (END_REGION_RX.test(raw[i])) depth--;
+    }
+    if (depth <= 0) return { dut: dutContent, reordered: false };
+    at = endOf(outer) + 1;
+  }
+  const reordered = sorted.some((i) => membersBetween(code, i, at, sorted));
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    if (i === at) out.push(...sorted.map((k) => lines[k]));
+    if (!sorted.includes(i)) out.push(line);
+  });
+  if (at >= lines.length) out.push(...sorted.map((k) => lines[k]));
+  return { dut: dropEmptyComposites(put(out)), reordered };
+}
+
+/**
+ * The composites the chart used to find on its own (inferredComposites: TwinCAT's UML chart, else the state names)
+ * written as {region} markers, outer ones first; "// @initial" on its entry when that is not its first state. The
+ * ones already in the enum are left. { dut, written, errors, reordered }
+ */
+export function writeCompositeMarkers(dutContent: string, pouContent: string): { dut: string; written: string[]; errors: string[]; reordered: boolean } {
+  let dut = dutContent;
+  const written: string[] = [];
+  const errors: string[] = [];
+  let reordered = false;
+  for (const c of inferredComposites(dutContent, pouContent)) {
+    if (enumComposites(dut).some((x) => x.name.toLowerCase() === c.name.toLowerCase())) continue;
+    const r = groupInComposite(dut, c.members, c.name);
+    if ('error' in r) {
+      errors.push(`${c.name}: ${r.error}`);
+      continue;
+    }
+    dut = r.dut;
+    reordered ||= r.reordered;
+    written.push(c.name);
+    const first = enumComposites(dut).find((x) => x.name === c.name)?.members[0];
+    if (c.initial && first && c.initial !== first && compositeOf(dut, c.initial) === c.name) dut = setEnumMark(dut, c.initial, 'initial', true) ?? dut;
+  }
+  return { dut, written, errors, reordered };
+}
+
 /** Composite pragmas with no member left removed */
 export function dropEmptyComposites(dutContent: string): string {
   const { decl, wrap } = declOf(dutContent);
@@ -187,6 +366,50 @@ export function setEnumMark(dutContent: string, member: string, mark: 'initial' 
   if (on) text = /\/\//.test(text) ? text.replace(/\/\/[ \t]?/, `// @${mark} `) : `${text.replace(/\s+$/, '')} // @${mark}`;
   text = text.replace(/[ \t]+$/, '');
   return line.wrap(line.decl.slice(0, line.start) + text + line.decl.slice(line.end));
+}
+
+// (a composite's colour on its {region} line: a preset's name or a #hex)
+const COLOR_MARK_RX = /\s*@colou?r\s+(#[0-9a-f]{3,6}\b|[a-z]+)/gi;
+/** The {region} line of a composite (its index in the declaration's lines) */
+function regionLineIndex(lines: string[], name: string): number {
+  let n = 0;
+  return lines.findIndex((raw) => {
+    const r = raw.match(REGION_RX);
+    if (!r) return false;
+    n++;
+    return ((r[1] ?? r[2] ?? r[3] ?? '').trim() || `Composite${n}`) === name;
+  });
+}
+
+/** The composites' own colours: "// @color rose" or "// @color #7aa2c8" on its {region} line */
+export function compositeColorsOf(dutContent: string): Record<string, string> {
+  const { decl } = declOf(dutContent);
+  const out: Record<string, string> = {};
+  let n = 0;
+  for (const raw of decl.split('\n')) {
+    const r = raw.match(REGION_RX);
+    if (!r) continue;
+    n++;
+    const c = [...raw.slice(r[0].length).matchAll(COLOR_MARK_RX)].pop()?.[1];
+    if (c) out[(r[1] ?? r[2] ?? r[3] ?? '').trim() || `Composite${n}`] = c.toLowerCase();
+  }
+  return out;
+}
+
+/** The .TcDUT with a composite's colour set in a comment on its {region} line (null: its own one taken out) */
+export function setCompositeColor(dutContent: string, name: string, color: string | null): string | null {
+  const { decl, wrap } = declOf(dutContent);
+  const lines = decl.split('\n');
+  const i = regionLineIndex(lines, name);
+  if (i < 0) return null;
+  const cr = lines[i].endsWith('\r');
+  let text = (cr ? lines[i].slice(0, -1) : lines[i]).replace(COLOR_MARK_RX, '');
+  // A comment left empty goes
+  text = text.replace(/[ \t]*\/\/[ \t]*$/, '');
+  if (color) text = /\/\//.test(text) ? text.replace(/\/\/[ \t]?/, `// @color ${color} `) : `${text.replace(/\s+$/, '')} // @color ${color}`;
+  text = text.replace(/[ \t]+$/, '');
+  lines[i] = cr ? `${text}\r` : text;
+  return wrap(lines.join('\n'));
 }
 
 export const isValidCompositeName =(name: string) => /^[A-Za-z_][A-Za-z0-9_ ]*$/.test(name) && name.trim() === name;

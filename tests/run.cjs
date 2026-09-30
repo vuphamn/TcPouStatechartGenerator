@@ -4,6 +4,10 @@
 //   --shard: only every n-th test of each suite, from the i-th (1-based; CI runs the web suite in parallel jobs)
 //   --preview: the built app (dist/, npm run build first) served by vite preview, not the dev server: pages load at
 //   once instead of compiling each module on first use (CI: a slow machine)
+//   --jobs <n>: the web tests n at a time (each has its own ports and browser; the app server is shared). A full local
+//   run: --jobs 2 about halves the web suite's time
+//   desktop on a locked Windows screen: skipped (Electron does not draw then: every test would time out);
+//   KSS_DESKTOP_WHEN_LOCKED=1 runs it anyway
 //   suites: unit (logic, no browser), web (the app in a headless browser), live (gateway / Link / ADS against a
 //   simulated PLC), desktop (the Electron app, Windows only), all (= unit web live desktop). Default: unit web live.
 // web and desktop use TEST_APP_URL when set, else a Vite dev server started here. Logs: tests/.output/logs.
@@ -21,6 +25,9 @@ function killTree(child) {
 
 const REPO = path.resolve(__dirname, '..');
 const OUT = path.join(__dirname, '.output');
+// (a PLC's project kept "in Documents" by the desktop app and Link: the tests' own folder, never the user's)
+process.env.KSS_DOCUMENTS ||= path.join(OUT, 'documents');
+if (process.env.KSS_DOCUMENTS === path.join(OUT, 'documents')) fs.rmSync(process.env.KSS_DOCUMENTS, { recursive: true, force: true });
 const LOGS = path.join(OUT, 'logs');
 fs.mkdirSync(LOGS, { recursive: true });
 
@@ -28,10 +35,12 @@ const argv = process.argv.slice(2);
 let filter = null;
 let shard = null;
 let preview = false;
+let jobs = 1;
 let suites = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--filter') filter = argv[++i];
   else if (argv[i] === '--preview') preview = true;
+  else if (argv[i] === '--jobs') jobs = Math.max(1, Math.min(6, parseInt(argv[++i], 10) || 1));
   else if (argv[i] === '--shard') {
     const [k, n] = String(argv[++i]).split('/').map(Number);
     if (!(n >= 1 && k >= 1 && k <= n)) throw new Error('--shard: expected <i>/<n>, e.g. 1/2');
@@ -120,6 +129,13 @@ async function startApp({ dev = false } = {}) {
   throw new Error(`The dev server did not start (see ${path.join(LOGS, 'vite.log')})`);
 }
 
+/** Is the Windows screen locked (its lock screen running)? */
+function screenLocked() {
+  if (process.platform !== 'win32') return false;
+  const r = spawnSync('powershell', ['-NoProfile', '-Command', '[bool](Get-Process -Name LogonUI -ErrorAction SilentlyContinue)'], { encoding: 'utf8' });
+  return /True/i.test(r.stdout || '');
+}
+
 function failuresOf(log) {
   const text = fs.readFileSync(log, 'utf8');
   const fails = text.split('\n').filter((l) => /^FAIL\b|Error|timed out/.test(l)).slice(0, 6);
@@ -136,14 +152,26 @@ function failuresOf(log) {
         console.log('desktop: skipped (Windows only)');
         continue;
       }
+      // (a locked screen: Electron does not draw, each test would wait minutes and fail)
+      if (suite === 'desktop' && process.env.KSS_DESKTOP_WHEN_LOCKED !== '1' && screenLocked()) {
+        console.log('\ndesktop: skipped (the Windows screen is locked: Electron does not draw then; unlock it, or KSS_DESKTOP_WHEN_LOCKED=1)');
+        continue;
+      }
       let list = suite === 'unit' ? files('unit', '.test.ts') : files(suite, '.test.cjs');
       if (shard) list = list.filter((_, i) => i % shard.n === shard.k - 1);
       if (!list.length) continue;
       console.log(`\n${suite} (${list.length}${shard ? `, shard ${shard.k}/${shard.n}` : ''})`);
       // Everything but the logic and protocol tests runs against the app
       if (suite !== 'unit' && suite !== 'live' && !app) app = await startApp();
-      for (const f of list) {
+      // (the dev server for the tests that import /src/, started once however many run at a time)
+      let devStarting = null;
+      const runOne = async (f) => {
         const name = f.replace(/\.test\.(ts|cjs)$/, '');
+        // (the screen locked meanwhile: this desktop test and the ones after it skipped, not timed out)
+        if (suite === 'desktop' && process.env.KSS_DESKTOP_WHEN_LOCKED !== '1' && screenLocked()) {
+          console.log(`  - ${name} (skipped: the Windows screen is locked)`);
+          return;
+        }
         const log = path.join(LOGS, `${suite}-${name}.log`);
         let r;
         if (suite === 'unit') {
@@ -155,13 +183,13 @@ function failuresOf(log) {
             fs.writeFileSync(log, String(e.message || e));
             results.push({ suite, name, ok: false, ms: 0, log });
             console.log(`  x ${name} (does not build)`);
-            continue;
+            return;
           }
           r = await run(process.execPath, [bundle], { timeout: TIMEOUT.unit, log });
         } else {
           // (the built app has no /src/: a test importing from it gets the dev server)
           const needsDev = preview && app && !GIVEN_URL && fs.readFileSync(path.join(__dirname, suite, f), 'utf8').includes("'/src/");
-          if (needsDev && !devApp) devApp = await startApp({ dev: true });
+          if (needsDev && !devApp) devApp = await (devStarting ??= startApp({ dev: true }));
           r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: TIMEOUT[suite] ?? 300000, log });
         }
         const text = fs.readFileSync(log, 'utf8');
@@ -171,6 +199,14 @@ function failuresOf(log) {
         results.push({ suite, name, ok, ms: r.ms, log });
         console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s)`}`);
         if (!ok) console.log(failuresOf(log));
+      };
+      const n = suite === 'web' ? Math.min(jobs, list.length) : 1;
+      if (n === 1) for (const f of list) await runOne(f);
+      else {
+        const queue = [...list];
+        await Promise.all(Array.from({ length: n }, async () => {
+          while (queue.length) await runOne(queue.shift());
+        }));
       }
     }
   } finally {

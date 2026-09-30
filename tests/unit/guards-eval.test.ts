@@ -70,8 +70,8 @@ expect(byTo('TABLEMANAGER_ERROR')?.result === 'true' && byTo('TABLEMANAGER_IDLE_
 const vals = byTo('TABLEMANAGER_ERROR')!.vars.map((v) => `${v.name}=${v.text}`).join(', ');
 console.log('   vars:', vals);
 expect(/cmd_bHome=TRUE/.test(vals) && /config_fHomePosition=0/.test(vals), 'values listed');
-// preProcess edge from the composite applies in an enabled state
-const pre = Object.entries(views).find(([id]) => id.startsWith('TableManagerEnabled->TABLEMANAGER_ERROR'));
+// preProcess edge (it checks no range: from any state) applies in an enabled state
+const pre = Object.entries(views).find(([id]) => id.startsWith('AnyState->TABLEMANAGER_ERROR'));
 expect(!!pre, `preProcess edge in the active set: ${pre?.[0]} = ${pre?.[1].result}`);
 // Enum comparison
 inp = inputs('TABLEMANAGER_ERROR', { cmd_efeedmode: 0 });

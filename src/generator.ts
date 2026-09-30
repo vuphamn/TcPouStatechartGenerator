@@ -38,7 +38,7 @@ export interface ModelEdge {
   label: string;
   source: string;
   /** The transitions in the code this edge stands for (several when edges were merged into a composite's) */
-  members: { from: string; to: string; frames: GuardFrame[] }[];
+  members: { from: string; to: string; frames: GuardFrame[]; priority?: number | null }[];
 }
 
 export interface StatechartModel {
@@ -60,9 +60,14 @@ export interface Transition {
   redirectedFrom?: string | null;
   /** In a state's top-level IF: which one and which arm (IF 0, ELSIF 1, …) */
   choice?: { id: number; arm: number };
+  /** A composite's edge collapsed from several (Collapse error-sink edges): the transitions of the code it stands for */
+  collapsed?: Transition[];
   redirectedTo?: string | null;
   scopeLower?: string | null;
   scopeUpper?: string | null;
+  /** > / < (the bound itself left out) */
+  scopeLowerStrict?: boolean;
+  scopeUpperStrict?: boolean;
   effectiveFrom: string;
   effectiveTo: string;
 }
@@ -471,6 +476,8 @@ function parsePreProcess(
 
   let pendingLower: string | null = null;
   let pendingUpper: string | null = null;
+  let pendingLowerStrict = false;
+  let pendingUpperStrict = false;
 
   for (const raw of lines) {
     const line = raw.trim();
@@ -501,9 +508,15 @@ function parsePreProcess(
     }
 
     const lo = line.match(lowerRx);
-    if (lo) pendingLower = unqualifyState(lo[3]);
+    if (lo) {
+      pendingLower = unqualifyState(lo[3]);
+      pendingLowerStrict = lo[2] === '>';
+    }
     const hi = line.match(upperRx);
-    if (hi) pendingUpper = unqualifyState(hi[3]);
+    if (hi) {
+      pendingUpper = unqualifyState(hi[3]);
+      pendingUpperStrict = hi[2] === '<';
+    }
 
     let am: RegExpExecArray | null;
     assign.lastIndex = 0;
@@ -519,6 +532,8 @@ function parsePreProcess(
         source: 'preProcess',
         scopeLower: pendingLower,
         scopeUpper: pendingUpper,
+        scopeLowerStrict: pendingLowerStrict,
+        scopeUpperStrict: pendingUpperStrict,
         effectiveFrom: Any,
         effectiveTo: target,
       };
@@ -1017,22 +1032,6 @@ function applyEnumConventions(groups: GroupingResult, enumOrder: string[]) {
   if (enumOrder.length === 0) return;
   groups.enumOrder = enumOrder;
   groups.machineStartState = enumOrder[0];
-
-  const enablingIdx = enumOrder.findIndex((s) => s.endsWith('ENABLING'));
-  if (enablingIdx < 0) return;
-
-  const childStates = new Set(enumOrder.slice(enablingIdx + 1));
-  if (childStates.size === 0) return;
-
-  const firstChild = enumOrder[enablingIdx + 1];
-  const owningGroup = groups.stateToGroup.get(firstChild);
-  if (!owningGroup) return;
-
-  let top = owningGroup;
-  while (groups.groupParent.has(top) && groups.groups.has(groups.groupParent.get(top)!)) {
-    top = groups.groupParent.get(top)!;
-  }
-  groups.enabledCompositeName = top;
 }
 
 function isDescendantGroup(candidate: string | undefined, ancestor: string, groups: GroupingResult): boolean {
@@ -1072,28 +1071,24 @@ function lowestCommonAncestor(a: string, b: string, groups: GroupingResult): str
 }
 
 function resolveScopeComposite(t: Transition, groups: GroupingResult): string | null {
-  if (groups.enumOrder.length === 0) return null;
-
-  const loIdx = t.scopeLower != null ? groups.enumOrder.indexOf(t.scopeLower) : 0;
-  const hiIdx = t.scopeUpper != null ? groups.enumOrder.indexOf(t.scopeUpper) : groups.enumOrder.length - 1;
-  if (loIdx < 0 || hiIdx < 0 || loIdx > hiIdx) {
-    return groups.enabledCompositeName ?? null;
+  const order = groups.enumOrder;
+  // (no range checked: a transition from any state)
+  if (order.length === 0 || (t.scopeLower == null && t.scopeUpper == null)) return null;
+  const lo = t.scopeLower == null ? 0 : order.indexOf(t.scopeLower) + (t.scopeLowerStrict ? 1 : 0);
+  const hi = t.scopeUpper == null ? order.length - 1 : order.indexOf(t.scopeUpper) - (t.scopeUpperStrict ? 1 : 0);
+  if ((t.scopeLower != null && order.indexOf(t.scopeLower) < 0) || (t.scopeUpper != null && order.indexOf(t.scopeUpper) < 0) || hi < lo) return null;
+  // The states the range checks (its target left out: "go to ERROR from any of these") are exactly a composite's,
+  // its sub-composites' too
+  const checked = order.slice(lo, hi + 1).filter((s) => s !== t.to);
+  const inside = (g: string, s: string): boolean => {
+    for (let x = groups.stateToGroup.get(s); x; x = groups.groupParent.get(x)) if (x === g) return true;
+    return false;
+  };
+  for (const g of groups.groups.keys()) {
+    const own = order.filter((s) => s !== t.to && inside(g, s));
+    if (own.length && own.length === checked.length && own.every((s, i) => s === checked[i])) return g;
   }
-
-  const owningGroups = new Set<string>();
-  for (let i = loIdx; i <= hiIdx; i++) {
-    const state = groups.enumOrder[i];
-    if (state === t.to) continue;
-    const g = groups.stateToGroup.get(state);
-    if (g) owningGroups.add(g);
-  }
-  if (owningGroups.size === 0) return groups.enabledCompositeName ?? null;
-
-  let lca: string | null = null;
-  for (const g of owningGroups) {
-    lca = lca === null ? g : lowestCommonAncestor(lca, g, groups);
-  }
-  return lca ?? groups.enabledCompositeName ?? null;
+  return null;
 }
 
 function nameLooksLikeError(state: string | null | undefined): boolean {
@@ -1185,6 +1180,7 @@ function collapseInternalEdgesToBorder(
   const borderSources = new Set<string>();
   // (the priorities of the transitions each collapsed edge stands for: it takes the first one checked)
   const collapsedPriorities = new Map<string, number[]>();
+  const collapsedFrom = new Map<string, Transition[]>();
   const kept: Transition[] = [];
 
   for (const t of transitions) {
@@ -1196,6 +1192,7 @@ function collapseInternalEdgesToBorder(
       const src = topLevelComposite(fromG!, groups);
       borderSources.add(src);
       if (t.priority != null && t.priority > 0) collapsedPriorities.set(src, [...(collapsedPriorities.get(src) ?? []), t.priority]);
+      collapsedFrom.set(src, [...(collapsedFrom.get(src) ?? []), t]);
       continue;
     }
     kept.push(t);
@@ -1218,64 +1215,37 @@ function collapseInternalEdgesToBorder(
         effectiveFrom: src,
         effectiveTo: error,
         ...(prios.length ? { priority: Math.min(...prios) } : {}),
+        collapsed: collapsedFrom.get(src) ?? [],
       });
     }
   }
 }
 
+/**
+ * Collapse error-sink edges: an error state outside a composite that most of the composite's states go to (and that
+ * does not lead back into it): their edges to it drawn as one, from the composite's border. The composites are the
+ * enum's markers: a state inside one stays there
+ */
 function extractErrorSinkStates(
   transitions: Transition[],
   groups: GroupingResult,
   collapseErrorSinkEdges: boolean
 ) {
-  if (groups.groups.size === 0 || transitions.length === 0) return;
-
-  const origStateToGroup = new Map(groups.stateToGroup);
-
-  for (const candidate of Array.from(origStateToGroup.keys())) {
-    const group = origStateToGroup.get(candidate);
-    if (!group) continue;
-
-    if (!nameLooksLikeError(candidate)) continue;
-
-    const incomingFromInside = new Set<string>();
-    let hasForwardEdge = false;
-
-    for (const t of transitions) {
-      if (t.to === candidate && t.from !== candidate) {
-        const fromG = origStateToGroup.get(t.from);
-        if (fromG && isSameOrDescendantGroup(fromG, group, groups)) {
-          incomingFromInside.add(t.from);
-        }
-      }
-
-      if (t.from === candidate && t.to !== candidate) {
-        const toG = origStateToGroup.get(t.to);
-        if (toG && isSameOrDescendantGroup(toG, group, groups)) {
-          hasForwardEdge = true;
-        }
-      }
-    }
-
-    let subtreeMemberCount = 0;
-    for (const [s, g] of origStateToGroup.entries()) {
-      if (s !== candidate && isSameOrDescendantGroup(g, group, groups)) {
-        subtreeMemberCount++;
-      }
-    }
-
-    const isBroadSink =
-      subtreeMemberCount > 0 &&
-      incomingFromInside.size * 2 >= subtreeMemberCount &&
-      !hasForwardEdge;
-
-    if (!isBroadSink) continue;
-
-    removeStateFromGroup(candidate, groups);
-    origStateToGroup.delete(candidate);
-
-    if (collapseErrorSinkEdges) {
-      collapseInternalEdgesToBorder(transitions, candidate, group, groups);
+  if (!collapseErrorSinkEdges || groups.groups.size === 0 || transitions.length === 0) return;
+  const tops = [...groups.groups.keys()].filter((g) => !groups.groupParent.has(g) || !groups.groups.has(groups.groupParent.get(g)!));
+  const errors = new Set([...transitions.map((t) => t.to), ...transitions.map((t) => t.from)].filter((x): x is string => !!x && nameLooksLikeError(x)));
+  for (const group of tops) {
+    const inside = (st: string) => {
+      const g = groups.stateToGroup.get(st);
+      return !!g && isSameOrDescendantGroup(g, group, groups);
+    };
+    const members = [...groups.stateToGroup.keys()].filter(inside);
+    if (!members.length) continue;
+    for (const candidate of errors) {
+      if (inside(candidate)) continue;
+      const incoming = new Set(transitions.filter((t) => t.to === candidate && t.from && inside(t.from)).map((t) => t.from));
+      const back = transitions.some((t) => t.from === candidate && inside(t.to));
+      if (incoming.size > 1 && incoming.size * 2 >= members.length && !back) collapseInternalEdgesToBorder(transitions, candidate, group, groups);
     }
   }
 }
@@ -1459,11 +1429,7 @@ function emitComposite(
   }
 
   const finals = groups.groupFinals?.get(gname);
-  const last = groups.groupLastState.get(gname);
   if (finals) for (const f of finals) lines.push(`${bodyIndent}${san(f)} --> [*]`);
-  else if (last && exitStates.has(last)) {
-    lines.push(`${bodyIndent}${san(last)} --> [*]`);
-  }
 
   lines.push(`${indent}}`);
 }
@@ -1499,11 +1465,8 @@ function buildMermaid(
     firstStateToGroup.set(v, k);
   }
 
+  // (a composite's exits: its final states, // @final or (* final *); none marked: its transitions leave from its states)
   const lastStateToGroup = new Map<string, string>();
-  for (const [k, v] of groups.groupLastState.entries()) {
-    // (a composite with final states marked: those are its exits)
-    if (!groups.groupFinals?.has(k)) lastStateToGroup.set(v, k);
-  }
   for (const [k, list] of groups.groupFinals ?? []) for (const s of list) lastStateToGroup.set(s, k);
 
   for (const t of tr) {
@@ -1581,8 +1544,7 @@ function buildMermaid(
     if (!t.from) continue;
     const g = groups.stateToGroup.get(t.from);
     if (!g) continue;
-    const last = groups.groupLastState.get(g);
-    if (last === t.from) continue;
+    if (groups.groupFinals?.get(g)?.includes(t.from)) continue;
     if (borderExits.has(`${g}###${t.effectiveTo}###${t.guard ?? ''}`)) {
       redundant.add(t);
     }
@@ -1645,7 +1607,7 @@ function buildMermaid(
   // a composite's border exit
   const recordEdge = (t: Transition, label: string, fromNode?: string) => {
     if (!emitted) return;
-    const members = tr
+    const members = (t.collapsed?.length ? t.collapsed : tr
       .filter(
         (m) =>
           m.effectiveTo === t.effectiveTo &&
@@ -1653,8 +1615,8 @@ function buildMermaid(
           m.source === t.source &&
           (!showTransitionPriorities || (m.priority ?? '') === (t.priority ?? '')) &&
           (m.effectiveFrom === t.effectiveFrom || (redundant.has(m) && groups.stateToGroup.get(m.from) === t.effectiveFrom))
-      )
-      .map((m) => ({ from: m.from, to: m.to, frames: m.frames ?? [] }));
+      ))
+      .map((m) => ({ from: m.from, to: m.to, frames: m.frames ?? [], priority: m.priority ?? null }));
     emitted.push({ from: fromNode ?? san(t.effectiveFrom), to: san(t.effectiveTo), label: label.trim(), source: t.source, members });
   };
 
@@ -1705,6 +1667,8 @@ function buildMermaid(
     for (const s of [...finals].sort()) {
       if (states.has(s) && !groups.stateToGroup.has(s)) lines.push(`    ${san(s)} --> endNode(((" ")))`);
     }
+    // preProcess()'s transitions checking no composite's range: from any state
+    if (uniq.some((t) => t.effectiveFrom === 'AnyState')) lines.push('    AnyState(["any state"])', '    classDef kssAnyState stroke-dasharray: 4 3', '    class AnyState kssAnyState');
 
     for (const t of uniq) {
       if (!t.effectiveFrom || !t.effectiveTo) continue;
@@ -1752,6 +1716,7 @@ function buildMermaid(
     for (const s of [...finals].sort()) {
       if (states.has(s) && !groups.stateToGroup.has(s)) lines.push(`    ${san(s)} --> [*]`);
     }
+    if (uniq.some((t) => t.effectiveFrom === 'AnyState')) lines.push('    state "any state" as AnyState', '    classDef kssAnyState stroke-dasharray: 4 3', '    class AnyState kssAnyState');
 
     for (const t of uniq) {
       if (!t.effectiveFrom || !t.effectiveTo) continue;
@@ -1799,6 +1764,45 @@ export function generateStatechart(
   options: GeneratorOptions = {}
 ): string {
   return generateStatechartModel(tcDutContent, tcPouContent, options).markdown;
+}
+
+/**
+ * The composites the chart used to find on its own, before composites came only from the enum's {region} markers:
+ * TwinCAT's UML statechart (doState_UmlSC), else the names (the states after *_ENABLING: <Type>Enabled). An error
+ * state most of a composite's states go to is left out of it (drawn apart, as it was). Offered as "Write these
+ * composites as markers"; outer composites first, each one's states in enum order
+ */
+export function inferredComposites(tcDutContent: string, tcPouContent: string): { name: string; members: string[]; parent: string | null; initial: string | null }[] {
+  const doc = parseXmlDoc(tcPouContent);
+  const decl = extractDeclaration(tcDutContent);
+  const enumOrder = readEnumOrder(decl);
+  const groups = tryLoadUmlGrouping(doc) ?? loadEnumGrouping(decl);
+  if (!groups || !groups.groups.size) return [];
+  const doStateSt = getMethodSt(doc, tcPouContent, 'doState');
+  const stateVar = /\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b/i.exec(doStateSt ?? '')?.[1]?.trim() || 'machineState';
+  const transitions: Transition[] = [];
+  if (doStateSt) parseDoState(doStateSt, stateVar, transitions, new Set<string>(), new Set(enumOrder));
+  // (an error state most of its composite's states go to, that leads nowhere back in: outside it)
+  for (const [candidate, group] of [...groups.stateToGroup]) {
+    if (!nameLooksLikeError(candidate)) continue;
+    const insideOf = (st: string) => { const g = groups.stateToGroup.get(st); return !!g && isSameOrDescendantGroup(g, group, groups); };
+    const incoming = new Set(transitions.filter((t) => t.to === candidate && t.from !== candidate && insideOf(t.from)).map((t) => t.from));
+    const back = transitions.some((t) => t.from === candidate && t.to !== candidate && insideOf(t.to));
+    const count = [...groups.stateToGroup.keys()].filter((st) => st !== candidate && insideOf(st)).length;
+    if (count > 0 && incoming.size * 2 >= count && !back) removeStateFromGroup(candidate, groups);
+  }
+  // (its entry as it was drawn: the state most transitions from outside go to)
+  reorderGroupsByEnum(groups, enumOrder);
+  determineCompositeStartStates(transitions, groups);
+  const order = (st: string) => { const k = enumOrder.indexOf(st); return k < 0 ? Number.MAX_SAFE_INTEGER : k; };
+  const depth = (g: string) => { let d = 0; for (let x = groups.groupParent.get(g); x && groups.groups.has(x); x = groups.groupParent.get(x)) d++; return d; };
+  // (each composite's states, its sub-composites' too: written outer first, the inner ones then nest in them)
+  const within = (name: string) => enumOrder.filter((st) => { const g = groups.stateToGroup.get(st); return !!g && isSameOrDescendantGroup(g, name, groups); });
+  return [...groups.groups.keys()]
+    .map((name) => ({ name, members: within(name), parent: groups.groups.has(groups.groupParent.get(name) ?? '') ? groups.groupParent.get(name)! : null, initial: groups.groupFirstState.get(name) ?? null }))
+    // (one around every state of the enum groups nothing)
+    .filter((c) => c.members.length > 0 && c.members.length < enumOrder.length)
+    .sort((a, b) => depth(a.name) - depth(b.name) || order(a.members[0]) - order(b.members[0]));
 }
 
 /** The Mermaid code, the state variable, and the drawn edges with the code's transitions (and their IF context) */
@@ -1863,8 +1867,8 @@ export function generateStatechartModel(
   if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder));
   if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states);
 
-  const groups: GroupingResult =
-    tryLoadUmlGrouping(doc) ?? loadEnumGrouping(decl) ?? {
+  // Composites: only the enum's {region} markers (nothing inferred from names, TwinCAT's UML chart or preProcess())
+  const groups: GroupingResult = {
       groups: new Map(),
       stateToGroup: new Map(),
       groupFirstState: new Map(),
@@ -1883,7 +1887,6 @@ export function generateStatechartModel(
   // A declared initial value (or one set in initialize()) is the initial state
   const declaredStart = declaredInitialState(tcPouContent, stateVarName) ?? initializedState(getMethodSt(doc, tcPouContent, 'initialize'), stateVarName);
   if (declaredStart && states.has(declaredStart)) groups.machineStartState = declaredStart;
-  determineCompositeStartStates(transitions, groups);
   // Marked states: a composite's @initial is its entry, its final states its exits; an @initial outside the
   // composites is the chart's initial state (unless the declaration / initialize() give one)
   const marks = enumStateMarks(decl);

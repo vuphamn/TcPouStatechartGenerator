@@ -7,7 +7,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
-const { readPlcSources } = require('./tcSources.cjs');
+const { readPlcSources, readBootFile } = require('./tcSources.cjs');
+const { syncPlcProject } = require('./plcProjectCopy.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 const { plcAppInfo, startPlc } = require('./tcAppInfo.cjs');
@@ -345,6 +346,33 @@ function createLiveSession(hooks = {}) {
   }
 
   /**
+   * The PLC's project kept on this computer (plcProjectCopy: shared/plcProjectCopy.cjs), in the Documents folder
+   * (hooks.documents) or its own (req.folder; hooks.folderAllowed says which): req { requestId, folder?, choice?:
+   * 'override' | 'keep', skipProjects? }; answered with plcProjectCopyResult { requestId, status, project, dir, tsproj,
+   * plcProjects, changes, downloaded } or { error }
+   */
+  async function projectCopy(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'plcProjectCopyResult', requestId, error: 'Not connected' });
+    const folder = typeof req?.folder === 'string' && req.folder.trim() ? path.resolve(req.folder.trim()) : undefined;
+    if (folder && hooks.folderAllowed && !hooks.folderAllowed(folder)) return send({ type: 'plcProjectCopyResult', requestId, error: `Not a folder the project can be written to: ${folder}` });
+    try {
+      const r = await syncPlcProject((rel) => readBootFile(s.client, rel), {
+        documents: hooks.documents?.(),
+        folder,
+        chosen: !!req?.chosen,
+        choice: ['override', 'keep'].includes(req?.choice) ? req.choice : undefined,
+        netId: s.netId,
+        skipProjects: Array.isArray(req?.skipProjects) ? req.skipProjects.filter((x) => typeof x === 'string').slice(0, 4) : [],
+      });
+      if (session === s) send({ type: 'plcProjectCopyResult', requestId, ...r });
+    } catch (err) {
+      if (session === s) send({ type: 'plcProjectCopyResult', requestId, error: ads.adsErrorText(err) });
+    }
+  }
+
+  /**
    * Rebuild the PLC's project with the POUs edited here (plcBuild), in TwinCAT XAE on this computer; write it back when
    * asked (write: 'online' or 'activate', only without errors). Progress: plcBuildProgress { requestId, text }; the
    * result: plcBuildResult { requestId, ok, items, errors, warnings, fatal, written }. One at a time
@@ -446,7 +474,7 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
-  return { start, stop, watch, browse, sources, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  return { start, stop, watch, browse, sources, projectCopy, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

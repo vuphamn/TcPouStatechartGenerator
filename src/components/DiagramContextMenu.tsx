@@ -149,7 +149,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
   const adjustedX = Math.min(x, window.innerWidth - menuWidth - 16);
   const adjustedY = Math.min(y, window.innerHeight - menuHeight - 16);
 
-  const hasNote = Boolean(target.type !== 'canvas' && target.note && target.note.trim());
+  const hasNote = Boolean((target.type === 'node' || target.type === 'edge') && target.note && target.note.trim());
 
   const handleCopy = () => {
     let textToCopy = '';
@@ -206,6 +206,15 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
               </div>
             </>
           )}
+          {target.type === 'composite' && (
+            <>
+              <Layers className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <div className="truncate">
+                <span className="font-semibold text-slate-100 block truncate text-[11.5px]">{target.label || target.id}</span>
+                <span className="text-[9.5px] text-amber-300 font-mono uppercase tracking-wider">Composite State</span>
+              </div>
+            </>
+          )}
           {target.type === 'canvas' && (
             <>
               <Sparkles className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -258,7 +267,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
         <div className="px-2.5 py-1.5 mb-1.5 bg-amber-500/10 border border-amber-500/25 rounded-lg text-amber-200/90 text-[11px] flex items-start gap-1.5">
           <StickyNote className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
           <p className="line-clamp-2 italic leading-tight">
-            "{target.type !== 'canvas' ? target.note : ''}"
+            "{target.type === 'node' || target.type === 'edge' ? target.note : ''}"
           </p>
         </div>
       )}
@@ -284,7 +293,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
             ))}
           </div>
         )}
-        {target.type !== 'canvas' && (
+        {(target.type === 'node' || target.type === 'edge') && (
           <>
             <button
               id="context-menu-add-note-btn"

@@ -76,7 +76,7 @@ import {
   AlignVerticalSpaceAround,
   Grid3x3,
 } from 'lucide-react';
-import { generateStatechart, generateStatechartModel, PriorityFormat } from './generator.ts';
+import { generateStatechart, generateStatechartModel, inferredComposites, PriorityFormat } from './generator.ts';
 import {
   MermaidViewer,
   MermaidViewerHandle,
@@ -123,7 +123,7 @@ import { setTransitionCondition, transitionCondition } from './utils/transitionE
 import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
-import { plcPous, plcPouSource, plcProjectFiles, type PlcSources } from './utils/plcSources.ts';
+import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
 import { pendingEditors, savePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -139,6 +139,7 @@ import { BODY, clearBookmarks, listBookmarks, toggleStateBookmark, useBookmarks,
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
 import { armState } from './utils/choiceArms.ts';
+import { COMPOSITE_PRESETS, normalizeCompositeColor } from './utils/compositeColors.ts';
 import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
 import { editionOf, editionVersion } from './utils/releaseNotes.ts';
 import { PlcBuildDialog, type PlcBuildState } from './components/PlcBuildDialog.tsx';
@@ -180,6 +181,11 @@ import {
   isFinalState,
   enumMarksOf,
   setEnumMark,
+  compositeColorsOf,
+  setCompositeColor,
+  groupInComposite,
+  moveToComposite,
+  writeCompositeMarkers,
   isValidCompositeName,
   setFinalState,
   setInitialState,
@@ -403,6 +409,21 @@ export const App: React.FC = () => {
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
+  // The composites' colour (Composites: next to Theme), kept in this browser; a composite's own is in the enum
+  const [compositeColor, setCompositeColorPreset] = useState<string>(() => {
+    try {
+      return normalizeCompositeColor(localStorage.getItem('kss.compositeColor') ?? '') ?? 'sand';
+    } catch {
+      return 'sand';
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('kss.compositeColor', compositeColor);
+    } catch {
+      // (not kept)
+    }
+  }, [compositeColor]);
   const [liveUpdate, setLiveUpdate] = useState<boolean>(true);
   const [exportSettings, setExportSettings] = useState<PresetExportSettings>(() =>
     getPresetExportSettings(initialPreset)
@@ -2614,19 +2635,23 @@ export const App: React.FC = () => {
   const drawnEdge = useCallback((edge: EdgeInfo) => availableEdges.find((e) => e.id === edge.id) ?? edge, [availableEdges]);
   // Each drawn edge's transitions in the code ("from->to" -> [{ from, to }]): an edge drawn from or to a composite's
   // border stands for its states' (the only state in it, or several collapsed into one edge)
-  const edgeMembers = useMemo(() => {
+  // (all: each of them, a state's several transitions to the same target too, with their priorities: the list in a
+  // collapsed edge's guard popup)
+  const { unique: edgeMembers, all: edgeMembersAll } = useMemo(() => {
     const m = new Map<string, { from: string; to: string }[]>();
-    if (!pouContent) return m;
+    const all = new Map<string, { from: string; to: string; priority?: number | null }[]>();
+    if (!pouContent) return { unique: m, all };
     try {
       for (const e of generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes }).edges) {
         const k = `${e.from}->${e.to}`;
-        const all = [...(m.get(k) ?? []), ...e.members.map(({ from, to }) => ({ from, to }))];
-        m.set(k, [...new Map(all.map((x) => [`${x.from}->${x.to}`, x])).values()]);
+        const each = [...(all.get(k) ?? []), ...e.members.map(({ from, to, priority }) => ({ from, to, priority }))];
+        all.set(k, each);
+        m.set(k, [...new Map(each.map((x) => [`${x.from}->${x.to}`, { from: x.from, to: x.to }])).values()]);
       }
     } catch {
       // (the chart is drawn without it: edits go by the drawn edge)
     }
-    return m;
+    return { unique: m, all };
   }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes]);
   const currentEdge = useCallback(
     (edge: EdgeInfo) => {
@@ -2659,6 +2684,8 @@ export const App: React.FC = () => {
     [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast]
   );
   const knownStates = useMemo(() => new Set(identifiedStatesResult.states.map((st) => st.id)), [identifiedStatesResult]);
+  // Move start to… / Move end to… (the transition's menu): a list of the states instead of dragging its end
+  const [endPicker, setEndPicker] = useState<{ edge: EdgeInfo; end: 'start' | 'end' } | null>(null);
   const handleEdgeEndpointDrop = useCallback(
     (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => {
       if (!pouContent) return;
@@ -2687,6 +2714,20 @@ export const App: React.FC = () => {
       if (taken) showCopyToast(`⚠ The PLC took ${e.from} → ${e.to} ${seenText(taken)}: the running machine uses it (Undo: Ctrl+Z)`, 'error', 8000);
     },
     [pouContent, knownStates, currentEdge, drawnEdge, edgeMembers, applyTransitionEdit, stateVarName, showCopyToast, seen]
+  );
+  const edgeMembersOf = useCallback((from: string, to: string) => edgeMembersAll.get(`${from}->${to}`) ?? [], [edgeMembersAll]);
+  // A transition of the code (one of a collapsed edge's, from its guard popup): its IF in the Method editor
+  const handleOpenTransitionCode = useCallback(
+    (from: string, to: string) => {
+      const loc = locateTransition(pouContent, { from, to });
+      if (!loc) {
+        showCopyToast(`The code of ${from} → ${to} was not found`, 'error');
+        return;
+      }
+      handleOpenInspectorPanel('method', { method: `${loc.method}()` });
+      setCodeJump({ method: loc.method, line: loc.line, nonce: Date.now() });
+    },
+    [pouContent, showCopyToast, handleOpenInspectorPanel]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
   // The state(s) copied (Ctrl+C: the selected one, or the several selected ones)
@@ -3006,6 +3047,17 @@ export const App: React.FC = () => {
   const compositeOfState = useCallback((state: string) => Object.entries(chartComposites).find(([, members]) => members.includes(state))?.[0] ?? null, [chartComposites]);
   const isFinal = useCallback((state: string) => isFinalState(pouContent, state) || (!!dutContent.trim() && enumMarksOf(dutContent, state).final), [pouContent, dutContent]);
   const compositeNames = useMemo(() => new Set(composites.map((c) => c.name)), [composites]);
+  const compositeOwnColors = useMemo(() => (dutContent ? compositeColorsOf(dutContent) : {}), [dutContent]);
+  // A composite's colour set (null: the Composites setting's) in a comment on its {region} line
+  const handleCompositeColor = useCallback(
+    (name: string, color: string | null) => {
+      const next = setCompositeColor(dutContent, name, color);
+      if (!next) return showCopyToast(`${name} has no {region} in the enum`, 'error');
+      if (next !== dutContent) handleReplaceSources(null, next);
+      showCopyToast(color ? `${name}: ${color} (// @color on its {region} line)` : `${name}: the Composites colour`, 'success');
+    },
+    [dutContent, handleReplaceSources, showCopyToast]
+  );
   const stateNames = useMemo(() => [...knownStates].filter((st) => st !== '[*]').sort(), [knownStates]);
   // A name for a new state: the machine's prefix and a free suffix
   const newStateName = useCallback(
@@ -3203,40 +3255,93 @@ export const App: React.FC = () => {
         validate: (v) => (!v || compositeNames.has(v) ? null : `No composite ${v} (add one with the palette's Composite)`),
         onSubmit: (target) => {
           if ((target || null) === current) return;
-          const removed = removeEnumMember(dutContent, state);
-          const added = removed && addEnumMemberIn(removed.dut, state, target || null);
-          if (!added) return showCopyToast(`Could not move ${state} in the enum`, 'error');
-          handleReplaceSources(null, dropEmptyComposites(added));
-          dropNodeOffset(state);
-          showCopyToast(target ? `${state} is in ${target}` : `${state} is in no composite`, 'success');
+          moveStatesTo([state], target || null);
         },
       });
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [dutContent, composites, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
   );
-  // A state's node released over another {region} composite (or out of its own): with Alt it moves there
+  // States moved into a composite, or out of theirs (target null): their enum lines moved, kept whole (comments,
+  // values, @initial / @final)
+  const moveStatesTo = (states: string[], target: string | null) => {
+    const r = moveToComposite(dutContent, states, target);
+    if ('error' in r) return showCopyToast(`Could not move ${states.join(', ')} in the enum: ${r.error}`, 'error', 6000);
+    if (r.dut === dutContent) return;
+    handleReplaceSources(null, r.dut);
+    states.forEach(dropNodeOffset);
+    const who = states.length > 1 ? `${states.length} states are` : `${states[0]} is`;
+    showCopyToast(`${target ? `${who} in ${target}` : `${who} in no composite`} (the enum's {region} markers; Ctrl+Z undoes)${r.reordered ? '. Members without a value of their own get new numbers' : ''}`, 'success', 6000);
+  };
+  // Composites come only from the enum's {region} markers: the ones the chart used to find on its own (the state
+  // names, TwinCAT's UML chart) and the enum does not mark yet, offered to be written (the canvas' menu)
+  const pendingComposites = useMemo(() => {
+    if (!pouContent || !dutContent.trim()) return [] as string[];
+    try {
+      const have = new Set(composites.map((c) => c.name.toLowerCase()));
+      return inferredComposites(dutContent, pouContent).map((c) => c.name).filter((n) => !have.has(n.toLowerCase()));
+    } catch {
+      return [] as string[];
+    }
+  }, [pouContent, dutContent, composites]);
+  const handleWriteCompositeMarkers = useCallback(() => {
+    const r = writeCompositeMarkers(dutContent, pouContent);
+    if (!r.written.length) return showCopyToast(r.errors.length ? `No composite written: ${r.errors.join('; ')}` : 'No composite to write', 'error', 7000);
+    handleReplaceSources(null, r.dut);
+    showCopyToast(`Written as {region} markers in the enum: ${r.written.join(', ')}${r.errors.length ? `. Not: ${r.errors.join('; ')}` : ''}${r.reordered ? '. Enum lines were moved together: members without a value of their own get new numbers' : ''} (Ctrl+Z undoes)`, 'success', 8000);
+  }, [dutContent, pouContent, handleReplaceSources, showCopyToast]);
+  // (said once for each POU that has some)
+  const compositesHintRef = useRef('');
+  useEffect(() => {
+    if (!pendingComposites.length || !pouFileName || compositesHintRef.current === pouFileName || composites.length) return;
+    compositesHintRef.current = pouFileName;
+    showCopyToast(`Composites come only from {region} markers in the enum now: right-click the canvas, "Write these composites as markers" (${pendingComposites.join(', ')})`, 'success', 9000);
+  }, [pendingComposites, pouFileName, composites.length, showCopyToast]);
+  // Shift + a box around states: selected, and offered as a new composite ({region} markers around them in the enum)
+  const handleBoxSelected = useCallback(
+    (ids: string[]) => {
+      const states = ids.filter((s) => knownStates.has(s) && !regionOf.has(s));
+      if (!states.length || !pouContent || !dutContent.trim()) return;
+      const parents = [...new Set(states.map((s) => compositeOf(dutContent, s)))];
+      const inComposite = parents.length === 1 ? parents[0] : null;
+      setPromptRequest({
+        title: `Group ${states.length === 1 ? states[0] : `${states.length} states`} into a composite`,
+        label: parents.length > 1
+          ? `These states are in different composites (${parents.map((p) => p ?? 'none').join(', ')}): only the states of one composite can be grouped. Just select them, or box the states of one composite.`
+          : `Its name (a {region "…"} around them in the enum${inComposite ? `, inside ${inComposite}` : ''}). Its first state in the enum is its initial state (right-click a state: Initial state of …). ${states.join(', ')}`,
+        initial: 'NewComposite',
+        monospace: true,
+        submitLabel: 'Group',
+        cancelLabel: 'Just select them',
+        validate: (v) =>
+          parents.length > 1 ? 'Box the states of one composite' : !isValidCompositeName(v) ? 'Letters, digits, _ and spaces' : compositeNames.has(v) ? `${v} already exists` : knownStates.has(v) ? `${v} is a state` : null,
+        onSubmit: (name) => {
+          const r = groupInComposite(dutContent, states, name);
+          if ('error' in r) return showCopyToast(`Could not group them: ${r.error}`, 'error', 6000);
+          handleReplaceSources(null, r.dut);
+          states.forEach(dropNodeOffset);
+          setMultiSelected([]);
+          showCopyToast(`${name}: ${states.length} state${states.length === 1 ? '' : 's'} in it ({region} markers in the enum; Ctrl+Z undoes)${r.reordered ? '. Their enum lines were moved together: members without a value of their own get new numbers' : ''}`, 'success', 7000);
+        },
+      });
+    },
+    [knownStates, regionOf, pouContent, dutContent, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
+  );
+  // A state's node released over another {region} composite (or out of its own): it moves there
   const handleStateDropped = useCallback(
-    (state: string, clusters: string[], altKey: boolean) => {
+    // (Alt no longer needed: a state dropped in a composite's box is in it, dropped outside its box it is out of it)
+    (state: string, clusters: string[], _altKey: boolean) => {
       if (!dutContent.trim() || !knownStates.has(state) || regionOf.has(state)) return;
       const current = compositeOf(dutContent, state);
       const target = clusters.find((c) => compositeNames.has(c)) ?? null;
       if (target === current) return;
-      if (!altKey) {
-        showCopyToast(target ? `Hold Alt while dropping to move ${state} into ${target}` : `Hold Alt while dropping to move ${state} out of ${current}`, 'success', 5000);
-        return;
-      }
-      const removed = removeEnumMember(dutContent, state);
-      const added = removed && addEnumMemberIn(removed.dut, state, target);
-      if (!added) return showCopyToast(`Could not move ${state} in the enum`, 'error');
-      handleReplaceSources(null, dropEmptyComposites(added));
-      dropNodeOffset(state);
-      showCopyToast(
-        `${target ? `${state} is in ${target}` : `${state} is in no composite`}${removed.renumbered ? ' (the members after its old place get new values: they have none of their own)' : ''}`,
-        'success',
-        6000
-      );
+      // (dropped with the states selected with it: those of them in the same composite as it move too)
+      const with_ = multiSelected.includes(state) ? multiSelected.filter((s) => knownStates.has(s) && !regionOf.has(s) && compositeOf(dutContent, s) === current) : [state];
+      // (out of an inner composite into the one around it: into that one)
+      moveStatesTo(with_.length ? with_ : [state], target);
     },
-    [dutContent, knownStates, regionOf, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dutContent, knownStates, regionOf, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast, multiSelected]
   );
   const handlePaletteElement = useCallback(
     (kind: PaletteElement, at: { stateId: string | null; composite: string | null; x: number; y: number } | null) => {
@@ -4227,6 +4332,32 @@ export const App: React.FC = () => {
         if (pouContent) items.push({ id: 'multi-copy-btn', label: `Copy the ${n} states`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+C; then Ctrl+V pastes copies of them, the transitions between them going to the copies', onSelect: () => handleCopyState(many) });
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
       }
+      // A composite's title or border: its colour
+      if (target.type === 'composite') {
+        // (the name drawn: the enum's region, spaces and dots made _)
+        const name = composites.find((c) => c.name === target.id || c.name.replace(/[.\-\s]/g, '_') === target.id)?.name;
+        if (!name) return items;
+        const own = compositeOwnColors[name];
+        for (const p of COMPOSITE_PRESETS.filter((x) => x.id !== 'plain'))
+          items.push({ id: `composite-color-${p.id}`, label: `${own === p.id ? '✓ ' : ''}Colour: ${p.label}`, icon: <Palette className="w-3.5 h-3.5" />, title: `// @color ${p.id} on its {region} line`, onSelect: () => handleCompositeColor(name, p.id) });
+        items.push({
+          id: 'composite-color-custom',
+          label: `${own?.startsWith('#') ? `✓ Colour: ${own}` : 'Colour: custom'}…`,
+          icon: <Palette className="w-3.5 h-3.5" />,
+          onSelect: () =>
+            setPromptRequest({
+              title: `Colour of ${name}`,
+              label: 'A colour as #rgb or #rrggbb (its border and title; a faint tint of it inside)',
+              initial: own?.startsWith('#') ? own : '#7aa2c8',
+              monospace: true,
+              submitLabel: 'Set colour',
+              validate: (v) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim()) ? null : 'As #rgb or #rrggbb'),
+              onSubmit: (v) => handleCompositeColor(name, v.trim().toLowerCase()),
+            }),
+        });
+        if (own) items.push({ id: 'composite-color-default', label: `The Composites colour (${compositeColor})`, icon: <X className="w-3.5 h-3.5" />, title: 'Its own colour taken out of its {region} line', onSelect: () => handleCompositeColor(name, null) });
+        return items;
+      }
       // A free note (from the palette): only the viewer's note items
       if (target.type === 'node' && (target.id.startsWith('note_') || target.id.startsWith('choice_'))) return items;
       if (target.type === 'node') {
@@ -4356,6 +4487,15 @@ export const App: React.FC = () => {
             onSelect: handlePasteState,
           });
       }
+      // The composites the chart used to find on its own (the state names, TwinCAT's UML chart): written as markers
+      if (target.type === 'canvas' && pouContent && dutContent.trim() && pendingComposites.length)
+        items.push({
+          id: 'write-composite-markers-btn',
+          label: `Write these composites as markers (${pendingComposites.length})`,
+          icon: <SquareStack className="w-3.5 h-3.5" />,
+          title: `Composites come only from {region} markers in the enum now: ${pendingComposites.join(', ')} written around their states`,
+          onSelect: handleWriteCompositeMarkers,
+        });
       // A transition's priority (its order in the state's doState() branch, or in preProcess())
       if (target.type === 'edge' && pouContent) {
         const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
@@ -4415,6 +4555,11 @@ export const App: React.FC = () => {
         conditionItems(edge.from, edge.to);
         if (edge.from !== '[*]' && !learnedPou)
           items.push({ id: 'edit-condition-btn', label: 'Edit condition…', icon: <Pencil className="w-3.5 h-3.5" />, title: 'F2: its condition, with the variables of the POU', onSelect: () => handleEditCondition(edge) });
+        if (edge.from !== '[*]' && !learnedPou) {
+          if (!armState(drawnEdge(edge).from))
+            items.push({ id: 'move-start-btn', label: 'Move start to…', icon: <ArrowRightLeft className="w-3.5 h-3.5" />, title: 'Another state it starts from (as dragging its start): its code moved to that state', onSelect: () => setEndPicker({ edge, end: 'start' }) });
+          items.push({ id: 'move-end-btn', label: 'Move end to…', icon: <ArrowRightLeft className="w-3.5 h-3.5" />, title: 'Another state it goes to (as dragging its end)', onSelect: () => setEndPicker({ edge, end: 'end' }) });
+        }
         if (edge.from !== '[*]')
           items.push({ id: 'delete-transition-btn', label: 'Delete transition…', icon: <Trash2 className="w-3.5 h-3.5" />, title: 'Delete: its code in doState() / preProcess()', onSelect: () => handleDeleteTransition(edge) });
       }
@@ -4445,7 +4590,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance]
+    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance, drawnEdge, composites, compositeOwnColors, compositeColor, handleCompositeColor, pendingComposites, handleWriteCompositeMarkers]
   );
   // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
   const symbolCommands = (): PaletteCommand[] => {
@@ -5225,6 +5370,99 @@ export const App: React.FC = () => {
     cache.set(plcProject, p);
     return p;
   }, [liveMode, liveStatus.target]);
+  // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
+  // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval StateScope\PLC projects\<project>; a copy
+  // there that differs from the PLC's: Override, Save to a different location (remembered for this PLC), or Keep
+  // local. Its instances then open with their own POU from it (the same name in another project is another type)
+  const [plcCopy, setPlcCopy] = useState<PlcCopy | null>(null);
+  const plcCopyAskedRef = useRef('');
+  const requestPlcCopy = useCallback(
+    (req: { folder?: string; chosen?: boolean; choice?: 'override' | 'keep'; skipProjects?: string[] }): Promise<PlcCopyResult> => {
+      const r = { requestId: Date.now() % 1e9, ...req };
+      if (liveMode === 'desktop') return desktopLive()?.projectCopy?.(r) ?? Promise.resolve({ error: 'Update the desktop app' });
+      return gatewayRef.current ? gatewayRef.current.request<PlcCopyResult>({ type: 'plcProjectCopy', ...req }, 'plcProjectCopyResult', 180000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
+    },
+    [liveMode]
+  );
+  const copyFolderKey = (target: string) => `kss.plcCopy.folder.${target.split(':')[0]}`;
+  const handlePlcCopy = useCallback(
+    (r: PlcCopyResult, target: string) => {
+      if (r.error || !r.status) {
+        showCopyToast(`The PLC's project was not kept on this computer: ${r.error ?? 'no answer'}`, 'error', 8000);
+        return;
+      }
+      const copy: PlcCopy = { ...r, status: r.status, project: r.project ?? '', target };
+      // (this window's POU from another project: said, its own opened from Symbols)
+      const other = pouTypeName && r.dir && !(pouPath ?? '').toLowerCase().startsWith(r.dir.toLowerCase()) ? `. This window's ${pouTypeName} is ${liveProject || 'another project'}'s: open ${copy.project}'s from Symbols` : '';
+      if (r.status !== 'differs') {
+        setPlcCopy(copy);
+        if (r.status === 'downloaded' || r.status === 'overridden')
+          showCopyToast(`${copy.project}: the PLC's project ${r.status === 'downloaded' ? 'downloaded' : 'written over the local copy'} (${r.dir}). Its instances open with their own POUs from it${other}`, 'success', 9000);
+        else if (r.status === 'current' || r.status === 'kept') showCopyToast(`${copy.project}: its instances open from the local copy (${r.dir})${other}`, 'success', 6000);
+        return;
+      }
+      const keep = () => {
+        setPlcCopy({ ...copy, status: 'kept' });
+        showCopyToast(`${copy.project}: the local copy kept (${r.dir}); its instances open from it`, 'success', 5000);
+      };
+      // Save to a different location: its folder chosen (the desktop app's dialog; Link: typed, in your folders)
+      const elsewhere = async () => {
+        const suggested = `${(r.dir ?? '').replace(/[\\/][^\\/]*$/, '')}\\${copy.project} (${new Date().toISOString().slice(0, 10)})`;
+        const save = (folder: string) => {
+          try {
+            localStorage.setItem(copyFolderKey(target), folder);
+          } catch {
+            // (asked for again next time)
+          }
+          showCopyToast(`${copy.project}: downloading the PLC's project to ${folder}…`, 'success', 4000);
+          void requestPlcCopy({ folder, chosen: true }).then((x) => handlePlcCopy(x, target));
+        };
+        const pick = desktopLive()?.pickFolder;
+        if (pick) {
+          const f = await pick(`Where to keep ${copy.project} (the PLC's project)`);
+          if (f.path) save(f.path);
+          else keep();
+          return;
+        }
+        setPromptRequest({
+          title: `Where to keep ${copy.project}`,
+          label: 'A folder on this computer, in your user folder (Link writes the PLC\'s project there)',
+          initial: suggested,
+          monospace: true,
+          submitLabel: 'Download here',
+          validate: (v) => (/^([A-Za-z]:\\|\\\\|\/)/.test(v.trim()) ? null : 'A full path (C:\\…)'),
+          onSubmit: (v) => save(v.trim()),
+          onCancel: keep,
+        });
+      };
+      setPromptRequest({
+        title: `${copy.project}: the PLC's project differs from your local copy`,
+        label: `The PLC runs another version of ${copy.project} than the copy in ${r.dir}${r.downloaded ? ` (downloaded ${new Date(r.downloaded).toLocaleString()})` : ''}.`,
+        details:
+          r.changes == null
+            ? ['That folder was not downloaded by Kval StateScope: its own edits are not known (Override writes the PLC\'s files over it)']
+            : r.changes.length
+              ? [`Edited here since it was downloaded (Override loses these):`, ...r.changes.slice(0, 12).map((c) => `  ${c}`), ...(r.changes.length > 12 ? [`  … and ${r.changes.length - 12} more`] : [])]
+              : ['Not edited here since it was downloaded'],
+        confirmOnly: true,
+        danger: r.changes == null || r.changes.length > 0,
+        submitLabel: 'Override',
+        onSubmit: () => void requestPlcCopy({ folder: r.dir, choice: 'override' }).then((x) => handlePlcCopy(x, target)),
+        altAction: { id: 'plc-copy-elsewhere-btn', label: 'Save to a different location…', title: 'The PLC\'s project in another folder (this one left as it is); remembered for this PLC', run: () => void elsewhere() },
+        cancelLabel: 'Keep local',
+        onCancel: keep,
+      });
+    },
+    [requestPlcCopy, showCopyToast, pouTypeName, pouPath, liveProject]
+  );
+  // The PLC connected to runs another project than the loaded POU's (its copy kept here): an instance of the "same"
+  // type there is another type, opened with its own POU
+  const livePlcCopy = plcCopy && plcCopy.target === liveStatus.target && plcCopy.status !== 'same-project' ? plcCopy : null;
+  const loadedFromLivePlc =
+    !livePlcCopy ||
+    !liveProject ||
+    (!!pouPath && !!livePlcCopy.dir && pouPath.toLowerCase().startsWith(livePlcCopy.dir.toLowerCase())) ||
+    (!!plcOrigin?.target && !!liveStatus.target && plcOrigin.target.split(':')[0] === liveStatus.target.split(':')[0]);
   const plcCompareKey = `${liveStatus.target ?? ''}|${pouTypeName ?? ''}`;
   const loadPlcBaseline = useCallback(async (): Promise<{ pou?: string; dut?: string; error?: string; note?: string; project?: string }> => {
     if (!pouTypeName) return { error: 'No POU loaded' };
@@ -5315,8 +5553,8 @@ export const App: React.FC = () => {
         showCopyToast(`${node.type} is not a function block type`, 'error');
         return;
       }
-      // This POU: another instance of it
-      if (!on && pouTypeName && typeName.toLowerCase() === pouTypeName.toLowerCase()) {
+      // This POU: another instance of it (not when the PLC runs another project: its type of that name is its own)
+      if (!on && pouTypeName && typeName.toLowerCase() === pouTypeName.toLowerCase() && loadedFromLivePlc) {
         handleOpenInstance(node.path);
         return;
       }
@@ -5408,8 +5646,25 @@ export const App: React.FC = () => {
           } : undefined,
         });
       };
-      if (d?.openPouInProject && pouPath) {
-        void d.openPouInProject(pouPath, typeName).then((src) => {
+      // The PLC runs another project, kept on this computer: its own POU from that copy (the desktop app; Link: the
+      // PLC's sources, the same files)
+      const fromCopy = !on && !loadedFromLivePlc ? livePlcCopy?.plcProjects ?? [] : [];
+      const openInProject = d?.openPouInProject;
+      if (openInProject && fromCopy.length) {
+        void (async () => {
+          for (const plc of fromCopy) {
+            const src = await openInProject(plc.plcproj, typeName);
+            if (!('error' in src)) {
+              showCopyToast(`${typeName} from ${livePlcCopy?.project} (the PLC's project, ${plc.name}), live on ${node.path}`, 'success', 6000);
+              return handOver(src);
+            }
+          }
+          pick();
+        })();
+        return;
+      }
+      if (openInProject && pouPath && loadedFromLivePlc) {
+        void openInProject(pouPath, typeName).then((src) => {
           if ('error' in src) pick();
           else handOver(src);
         });
@@ -5418,7 +5673,7 @@ export const App: React.FC = () => {
       pick();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources, applyLoadedPou]
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources, applyLoadedPou, loadedFromLivePlc, livePlcCopy]
   );
   // Stop following the window's values when it closes or the connection ends
   useEffect(() => {
@@ -5624,6 +5879,28 @@ export const App: React.FC = () => {
     },
     [linkCode, gatewayConnection, liveSettings.linkPort]
   );
+  // (the PLC's project kept on this computer: see requestPlcCopy)
+  const canCopyProject = !replay && (liveMode === 'desktop' ? !!desktopLive()?.projectCopy : liveMode === 'web' && liveVia === 'link' && !!linkBuild?.features?.includes('plcProjectCopy'));
+  // Once per PLC connected to (not while replaying a recording)
+  useEffect(() => {
+    const target = liveStatus.target ?? '';
+    // (stopped: going live again checks again; a connection lost and back does not ask again)
+    if (liveStatus.state === 'stopped') plcCopyAskedRef.current = '';
+    if (liveStatus.state !== 'connected' || !target || !canCopyProject || plcCopyAskedRef.current === target) return;
+    plcCopyAskedRef.current = target;
+    let folder: string | undefined;
+    try {
+      folder = localStorage.getItem(copyFolderKey(target)) || undefined;
+    } catch {
+      folder = undefined;
+    }
+    // (the loaded POU's own project running there: nothing downloaded)
+    const skipProjects = [liveProject, plcOrigin?.project, plcOrigin?.plcProject].filter((x): x is string => !!x);
+    // (a POU of no known project, a sample or a file on its own: which project it is from is not known, nothing kept)
+    if (!skipProjects.length) return;
+    void requestPlcCopy({ folder, skipProjects }).then((r) => handlePlcCopy(r, target));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus.state, liveStatus.target, canCopyProject]);
   const viaLink = liveMode === 'web' && liveVia === 'link';
   const handleScanPlcs = useMemo(() => {
     if (viaLink) {
@@ -7318,6 +7595,24 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* The composites' colour (a composite's own: its menu's Colour); compact, so the toolbar keeps its rows */}
+              <label className="flex items-center gap-1" title="Composites: the composite states' border, title and tint (a composite's own: right-click its title, Colour)">
+                <SquareStack className="w-3.5 h-3.5 text-slate-400" />
+                <select
+                  id="composite-color-select"
+                  value={compositeColor}
+                  onChange={(e) => setCompositeColorPreset(e.target.value)}
+                  aria-label="Composites' colour"
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-1.5 py-0 h-6 text-[11px] leading-none text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
+                >
+                  {COMPOSITE_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               {/* Flowchart Curve Interpolation */}
               {flowchartOutput && (
                 <div className="flex items-center gap-1.5">
@@ -7469,6 +7764,7 @@ export const App: React.FC = () => {
                   canvasBannerAction={learnedPou ? { id: 'canvas-learned-save-btn', label: 'Save as source…', title: 'A .TcPOU and its enum to finish by hand: each transition seen, its condition FALSE to write (what changed just before it in its comment)', onClick: handleSaveLearnedAsSource } : undefined}
                   multiSelection={multiSelected}
                   onMultiSelectionChange={setMultiSelected}
+                  onBoxSelected={pouContent && dutContent.trim() ? handleBoxSelected : undefined}
                   liveHighlight={liveHighlight ?? simHighlight}
                   stateTimes={showStateTimes && measuredStateTimes.length ? stateTimeBadges : null}
                   pathHighlight={pathHighlight}
@@ -7479,6 +7775,10 @@ export const App: React.FC = () => {
                   onConnectTo={handleConnectTo}
                   onConnectCancel={() => setConnectFrom(null)}
                   onEdgeEndpointDrop={pouContent ? handleEdgeEndpointDrop : undefined}
+                  edgeMembersOf={edgeMembersOf}
+                  compositeColor={compositeColor}
+                  compositeOwnColors={compositeOwnColors}
+                  onOpenTransitionCode={pouContent ? handleOpenTransitionCode : undefined}
                   onCanvasKey={handleCanvasKey}
                   onPaletteElement={pouContent ? handlePaletteElement : undefined}
                   onStateDropped={pouContent ? handleStateDropped : undefined}
@@ -7684,7 +7984,7 @@ export const App: React.FC = () => {
             onCompare={() => setCompareOpen(true)}
             replayVars={replayVars}
             reachable={reachable}
-            onOpenInstance={liveMode ? handleOpenInstance : undefined}
+            onOpenInstance={liveMode ? (i: string) => (loadedFromLivePlc || !pouTypeName ? handleOpenInstance(i) : handleWatchMachine({ name: i.split('.').pop() ?? i, path: i, type: pouTypeName, kind: 'struct' })) : undefined}
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
@@ -7761,6 +8061,7 @@ export const App: React.FC = () => {
           onOpenHere={isXaeHost() ? undefined : (m) => handleWatchMachine(m, undefined, { here: true })}
           openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
           loadedType={pouTypeName}
+          loadedIsLive={loadedFromLivePlc}
           onGoLiveHere={handleGoLiveHere}
           plcKey={liveStatus.target}
         />,
@@ -7990,6 +8291,21 @@ export const App: React.FC = () => {
           onClose={() => setPlcPicker(null)}
         />
       )}
+      {endPicker && (() => {
+        const e = currentEdge(endPicker.edge);
+        const keep = endPicker.end === 'start' ? e.from : e.to;
+        const region = regionOfRef.current.get(e.from)?.variable ?? null;
+        const states = identifiedStatesResult.states.map((st) => st.id).filter((id) => id !== keep && (regionOfRef.current.get(id)?.variable ?? null) === region);
+        return (
+          <CommandPalette
+            id="edge-end-picker"
+            label={endPicker.end === 'start' ? 'Move start to' : 'Move end to'}
+            placeholder={endPicker.end === 'start' ? `${e.from} → ${e.to}: the state it starts from instead of ${e.from}…` : `${e.from} → ${e.to}: the state it goes to instead of ${e.to}…`}
+            commands={states.map((id) => ({ id: `edge-end:${id}`, group: 'State', label: id, hint: endPicker.end === 'start' ? `${id} → ${e.to}` : `${e.from} → ${id}`, run: () => handleEdgeEndpointDrop(endPicker.edge, endPicker.end, id) }))}
+            onClose={() => setEndPicker(null)}
+          />
+        );
+      })()}
       {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
       {bookmarksOpen && (
         <BookmarksDialog

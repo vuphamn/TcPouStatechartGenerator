@@ -8,6 +8,7 @@ npm run test:all         # all four
 node tests/run.cjs web --filter pou     # only the tests whose file name contains "pou"
 node tests/run.cjs web --shard 1/2      # every other web test, from the first (CI runs 1/2 and 2/2 side by side)
 node tests/run.cjs web --preview        # against the built app (npm run build first): what CI does, pages load at once
+node tests/run.cjs web --jobs 2         # the web tests two at a time (each has its own ports and browser): about half the time
 ```
 
 The runner prints one line per test and a summary. It exits with 1 when a test fails. Each test's output is in
@@ -24,6 +25,16 @@ The runner prints one line per test and a summary. It exits with 1 when a test f
 
 The **web** and **desktop** suites start a Vite dev server on port 5199 and load the app once before the first
 test. To test a running server instead, set `TEST_APP_URL` (e.g. `http://localhost:3000/`).
+
+On a locked Windows screen the **desktop** suite is skipped (Electron does not draw then, so every test would time
+out): unlock it, or set `KSS_DESKTOP_WHEN_LOCKED=1` to run it anyway.
+
+**Screenshots** (`web/screenshots`, `lib/screens.cjs`): key views (the whole chart, a composite, a selected
+transition, the guard popup) are compared with `tests/baselines/*.png`. A view differs when more than 1% of its pixels
+do (a pixel with a close one next to it in the other image counts as the same: a sub-pixel shift); its shot and a diff image (the differing pixels in red) are in `tests/.output/screens`. After a change of the look
+that is meant, `KSS_UPDATE_BASELINES=1 node tests/run.cjs web --filter screenshots` writes them anew (commit them). A
+missing baseline is written, not failed. CI does not compare them (its fonts and rendering differ;
+`KSS_SCREENSHOTS=1` does).
 
 The browser is `CHROME_PATH` when it is set. Otherwise it is Edge or Chrome where they are normally installed.
 

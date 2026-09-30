@@ -17,7 +17,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     area: 'Canvas',
     keys: [
       ['Click / Ctrl+click', 'Select a state / add it to (or take it out of) a selection of several'],
-      ['Shift+drag', 'Select the states in a box'],
+      ['Shift+drag', 'Select the states in a box, and group them into a composite (or just select them)'],
+      ['Drag a state into / out of a composite', "Moves it into or out of it (the enum's {region} markers)"],
       ['Esc', 'Clear the selection of several states; close a menu'],
       ['Right-click', 'The menu of a state, a transition or the canvas (type to filter it)'],
       ['F2', 'The selected transition: edit its condition on its label; else the next bookmarked state'],

@@ -45,6 +45,9 @@ export interface TextPromptRequest {
   declareScopes?: NewVariable['scope'][];
   /** Another way to go, left of the buttons (the dialog closes first) */
   altAction?: { id: string; label: string; title?: string; run: () => void };
+  /** The Cancel button's label, and what closing without a choice does (Cancel, Esc, ×, a click outside) */
+  cancelLabel?: string;
+  onCancel?: () => void;
 }
 
 /** A name with the part matching what is typed marked */
@@ -65,6 +68,10 @@ type Field = HTMLInputElement | HTMLTextAreaElement;
 /** A small modal asking for one line of text or code (Electron has no window.prompt) */
 export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: () => void }> = ({ request, onClose }) => {
   const [value, setValue] = useState(request.initial ?? '');
+  const cancel = () => {
+    request.onCancel?.();
+    onClose();
+  };
   const inputRef = useRef<Field | null>(null);
   const highlightRef = useRef<HTMLPreElement | null>(null);
   const submitRef = useRef<HTMLButtonElement>(null);
@@ -193,7 +200,7 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
       e.preventDefault();
       submit();
     }
-    if (e.key === 'Escape') onClose();
+    if (e.key === 'Escape') cancel();
   };
   const fieldProps = {
     id: 'text-prompt-input',
@@ -220,7 +227,7 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
     <div
       id="text-prompt-overlay"
       className={`fixed inset-0 z-[80] ${request.inline ? '' : request.anchor ? 'bg-black/20' : 'flex items-center justify-center bg-black/50'}`}
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => e.target === e.currentTarget && cancel()}
     >
       <div
         id="text-prompt-dialog"
@@ -232,13 +239,13 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
         className={`${request.inline ? 'w-[440px] rounded-lg ring-2 ring-sky-500/70' : picker ? (request.multiline ? (request.monospace ? 'w-[860px]' : 'w-[680px]') : 'w-[580px]') : 'w-[480px]'} max-w-[92vw] rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-xs`}
         onKeyDown={(e) => {
           if (!request.confirmOnly) return;
-          if (e.key === 'Escape') onClose();
+          if (e.key === 'Escape') cancel();
           e.stopPropagation();
         }}
       >
         <div className={`flex items-center justify-between px-4 py-2.5 border-b border-slate-800 ${request.inline ? 'hidden' : ''}`}>
           <span className="font-semibold text-slate-100">{request.title}</span>
-          <button onClick={onClose} className="p-0.5 text-slate-400 hover:text-white rounded" title="Cancel (Esc)">
+          <button onClick={cancel} className="p-0.5 text-slate-400 hover:text-white rounded" title="Cancel (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -451,8 +458,8 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
               {request.altAction.label}
             </button>
           )}
-          <button onClick={onClose} className="px-3 py-1 rounded-md text-slate-300 hover:bg-slate-800">
-            Cancel
+          <button id="text-prompt-cancel" onClick={cancel} className="px-3 py-1 rounded-md text-slate-300 hover:bg-slate-800">
+            {request.cancelLabel ?? 'Cancel'}
           </button>
           <button
             id="text-prompt-submit"

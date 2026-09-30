@@ -81,7 +81,9 @@ export interface DiagramNotes {
 export type ContextMenuTarget =
   | { type: 'node'; id: string; label: string; note?: string; style?: NodeDisplayProperties }
   | { type: 'edge'; id: string; from: string; to: string; label?: string; note?: string; style?: NodeDisplayProperties; pathId?: string }
-  | { type: 'canvas'; x: number; y: number };
+  | { type: 'canvas'; x: number; y: number }
+  /** A composite's title or border (its enum {region}) */
+  | { type: 'composite'; id: string; label: string };
 
 export interface SearchMatchItem {
   type: 'state' | 'transition';

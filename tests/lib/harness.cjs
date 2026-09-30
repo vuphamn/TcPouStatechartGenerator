@@ -13,6 +13,9 @@ const OUT = path.join(TESTS, '.output');
 const FAKES = path.join(TESTS, 'fakes');
 const FIXTURES = path.join(TESTS, 'fixtures');
 fs.mkdirSync(OUT, { recursive: true });
+// (a PLC's project kept "in Documents" by the desktop app and Link: the tests' own folder, never the user's; the
+// processes the tests start inherit it)
+process.env.KSS_DOCUMENTS ||= path.join(OUT, 'documents');
 
 const APP_URL = (process.env.TEST_APP_URL || 'http://localhost:3000/').replace(/\/?$/, '/');
 const APP_ORIGIN = APP_URL.replace(/\/$/, '');

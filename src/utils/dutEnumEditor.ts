@@ -258,6 +258,10 @@ function parseDeclarationItems(declaration: string): {
       }
     }
 
+    // A pragma on its own line: {region "Name"} … {endregion} (the composites), {attribute …}; a comment after it
+    // (// @color rose)
+    if (/^\{[^{}]*\}\s*(?:\/\/.*|\(\*.*\*\))?$/.test(trimmed)) continue;
+
     // Standard enum item regex: IDENTIFIER [ := VALUE ] [ , ] [ (* COMMENT *) | // COMMENT ]
     const itemMatch = body.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:=\s*([0-9A-Fa-fx#\-_]+))?(?:\s*,|\s*;|\s*$)?(?:\s*(?:\(\*([^*]+)\*\)|\/\/(.*)))?/);
     if (itemMatch) {

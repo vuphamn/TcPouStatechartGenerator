@@ -24,6 +24,25 @@ export interface PlcSources {
   error?: string;
 }
 
+/**
+ * A PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded, current (the PLC's the same),
+ * differs (asked: Override, Save to a different location, Keep local), overridden, kept, or same-project (the loaded
+ * POU's own project runs there: nothing downloaded)
+ */
+export interface PlcCopyResult {
+  status?: 'downloaded' | 'current' | 'differs' | 'overridden' | 'kept' | 'same-project';
+  project?: string;
+  dir?: string;
+  tsproj?: string | null;
+  plcProjects?: { name: string; dir: string; plcproj: string }[];
+  /** Its files edited here since the download (null: not known, a folder not downloaded here) */
+  changes?: string[] | null;
+  downloaded?: string | null;
+  error?: string;
+}
+/** The copy of the PLC connected to (target: its netId:port) */
+export type PlcCopy = PlcCopyResult & { status: NonNullable<PlcCopyResult['status']>; project: string; target: string };
+
 const base = (p: string) => p.split('/').pop() ?? p;
 
 /** A POU of the PLC's sources (by its type name), with the project's enums: null when the PLC's sources have none */

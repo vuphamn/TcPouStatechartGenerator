@@ -10,7 +10,7 @@ import { enumMembers, lintStateMachine } from '../../src/utils/stateMachineLint.
 import { removeEnumMember } from '../../src/utils/stateCopyDelete.ts';
 import {
   enumMarksOf, setEnumMark, addChoice, addCompletionTransition, addEnumMemberIn, addExceptionTransition, addForkJoinRegions, addStateDescription, regionVariables, compositeOf, describeName, dropEmptyComposites, enumComposites, initialStateOf,
-  isFinalState, setFinalState, setInitialState, wrapInComposite,
+  isFinalState, setFinalState, setInitialState, wrapInComposite, compositeColorsOf, setCompositeColor, groupInComposite, moveToComposite,
 } from '../../src/utils/statechartEdits.ts';
 
 let fails = 0;
@@ -165,6 +165,67 @@ expect(fkKeys.includes('region-unreachable:S_B_A_DONE') && !fkKeys.some((k) => k
 expect(!lintKeys(fjPou, fj.dut).includes('region-unreachable:S_B_A_DONE'), 'with the transition in region A: entered');
 const noFinal = fjPou.replace('S_B_B_DONE: (* final *)', 'S_B_B_DONE:');
 expect(lintKeys(noFinal, fj.dut).includes('region-no-final:S_B.regionB'), 'no (* final *) in region B: region-no-final');
+
+// A composite's own colour: "// @color <preset or #hex>" on its {region} line (set, changed, taken out; the
+// region still a composite, the other lines as they were)
+{
+  const w = wrapInComposite(DUT, 'S_B', 'Working')!;
+  expect(Object.keys(compositeColorsOf(w)).length === 0, 'no colour: none read');
+  const rose = setCompositeColor(w, 'Working', 'rose')!;
+  expect(/\t\{region "Working"\} \/\/ @color rose\r\n\tS_B,/.test(rose) && compositeColorsOf(rose).Working === 'rose', 'Colour rose: // @color rose on its {region} line');
+  expect(enumComposites(rose).map((c) => `${c.name}:${c.members.join('+')}`).join() === 'Working:S_B', 'still the composite Working with S_B');
+  const hex = setCompositeColor(rose, 'Working', '#7aa2c8')!;
+  expect(/\{region "Working"\} \/\/ @color #7aa2c8\r\n/.test(hex) && !/rose/.test(hex) && compositeColorsOf(hex).Working === '#7aa2c8', 'changed to a #hex: the one colour on the line');
+  const withNote = hex.replace('// @color #7aa2c8', '// the working ones @color #7aa2c8');
+  const back = setCompositeColor(withNote, 'Working', null)!;
+  expect(/\{region "Working"\} \/\/ the working ones\r\n/.test(back) && !compositeColorsOf(back).Working, 'taken out: its comment kept, the mark gone');
+  expect(setCompositeColor(setCompositeColor(w, 'Working', 'olive')!, 'Working', null) === w, 'set and taken out: the enum as it was');
+  expect(setCompositeColor(w, 'Nope', 'rose') === null, 'no such composite: null');
+  expect(model(POU, rose).composites.Working?.includes('S_B'), 'the chart still draws Working around S_B');
+}
+
+// Several states grouped into a composite (Shift + a box on the canvas): their lines moved together where the first
+// one is, wrapped in {region}; comments, values and marks kept; the commas right (a comma after, or ", NAME" before)
+{
+  const list = dutOf('\tS_A := 0,\r\n\tS_B, // busy @final\r\n\tS_C,\r\n\tS_D := 7 (* last *)');
+  const g = groupInComposite(list, ['S_D', 'S_B'], 'Work') as { dut: string; reordered: boolean };
+  expect(!('error' in g) && /\tS_A := 0,\r\n\t\{region "Work"\}\r\n\tS_B, \/\/ busy @final\r\n\tS_D := 7, \(\* last \*\)\r\n\t\{endregion\}\r\n\tS_C\r\n\);/.test(g.dut), `S_B and S_D grouped: moved together, their comments and value kept, the commas right (${JSON.stringify(g.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  expect(g.reordered === true && enumMembers(g.dut).join() === 'S_A,S_B,S_D,S_C' && enumComposites(g.dut).map((c) => `${c.name}:${c.members.join('+')}`).join() === 'Work:S_B+S_D', 'reordered (S_C was between them); the composite Work with S_B, S_D');
+  expect(enumMarksOf(g.dut, 'S_B').final, 'its @final mark kept');
+  const inOrder = groupInComposite(list, ['S_B', 'S_C'], 'Run') as { dut: string; reordered: boolean };
+  expect(!inOrder.reordered && /\tS_A := 0,\r\n\t\{region "Run"\}\r\n\tS_B, \/\/ busy @final\r\n\tS_C,\r\n\t\{endregion\}\r\n\tS_D := 7 \(\* last \*\)/.test(inOrder.dut), 'next to each other: only wrapped, nothing reordered');
+  // Comments and blank lines between them: kept in place, inside the composite
+  const commented = dutOf('\tS_A := 0,\r\n\t(* running *)\r\n\tS_B,\r\n\r\n//\tS_OLD,\r\n\tS_C,\r\n\t(* the end *)\r\n\tS_D');
+  const gc = groupInComposite(commented, ['S_B', 'S_C'], 'Run') as { dut: string; reordered: boolean };
+  expect(!gc.reordered && /\t\(\* running \*\)\r\n\t\{region "Run"\}\r\n\tS_B,\r\n\r\n\/\/\tS_OLD,\r\n\tS_C,\r\n\t\{endregion\}\r\n\t\(\* the end \*\)\r\n\tS_D\r\n\);/.test(gc.dut), `the blank line and the commented-out member between them stay (${JSON.stringify(gc.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  // A list with commas before its members (", NAME"), and a mixed one
+  const lead = dutOf('\tS_A,\r\n\tS_B\r\n\t, S_C\r\n\t, S_D\r\n\t, S_E');
+  const gl = groupInComposite(lead, ['S_B', 'S_D'], 'Mid') as { dut: string; reordered: boolean };
+  expect(/\tS_A,\r\n\t\{region "Mid"\}\r\n\tS_B\r\n\t, S_D\r\n\t\{endregion\}\r\n\t, S_C\r\n\t, S_E\r\n\);/.test(gl.dut) && enumMembers(gl.dut).join() === 'S_A,S_B,S_D,S_C,S_E', `commas before the members: kept so (${JSON.stringify(gl.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  const glFirst = groupInComposite(lead, ['S_C', 'S_A'], 'Top') as { dut: string };
+  expect(enumMembers(glFirst.dut).join() === 'S_A,S_C,S_B,S_D,S_E' && !/\{region "Top"\}\r\n\t,/.test(glFirst.dut), `a ", NAME" line first: no comma before it (${JSON.stringify(glFirst.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  // In a composite: the new one inside it; states of two composites: refused
+  const nested = groupInComposite(g.dut, ['S_D'], 'Inner') as { dut: string };
+  expect(enumComposites(nested.dut).find((c) => c.name === 'Inner')?.parent === 'Work', 'a state of Work grouped: the new composite inside Work');
+  const two = groupInComposite(g.dut, ['S_B', 'S_C'], 'Mixed');
+  expect('error' in two && /different composites/.test(two.error), `states of two composites: ${'error' in two ? two.error : 'grouped'}`);
+  expect('error' in groupInComposite(list, ['S_B'], 'S_B?'), 'a bad name: refused');
+  expect('error' in groupInComposite(g.dut, ['S_A'], 'Work'), 'a name already there: refused');
+  expect('error' in groupInComposite(list, ['NOPE'], 'X'), 'not a member: refused');
+
+  // A state dragged into a composite (its line last in it, kept whole), and out again (after the composite)
+  const into = moveToComposite(g.dut, ['S_C'], 'Work') as { dut: string; reordered: boolean };
+  expect(!('error' in into) && /\t\{region "Work"\}\r\n\tS_B, \/\/ busy @final\r\n\tS_D := 7, \(\* last \*\)\r\n\tS_C\r\n\t\{endregion\}\r\n\);/.test(into.dut) && compositeOf(into.dut, 'S_C') === 'Work', `S_C into Work: last in it (${JSON.stringify(into.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  const outOf = moveToComposite(into.dut, ['S_B'], null) as { dut: string; reordered: boolean };
+  expect(!('error' in outOf) && compositeOf(outOf.dut, 'S_B') === null && enumMarksOf(outOf.dut, 'S_B').final && /\t\{endregion\}\r\n\tS_B \/\/ busy @final\r\n\);/.test(outOf.dut) && outOf.reordered, `S_B out of Work: after it, its @final kept (${JSON.stringify(outOf.dut?.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  const empty = moveToComposite(g.dut, ['S_B', 'S_D'], null) as { dut: string };
+  expect(!/\{region/.test(empty.dut) && enumMembers(empty.dut).join() === 'S_A,S_B,S_D,S_C', `all out: the composite gone (${enumMembers(empty.dut).join()})`);
+  const nestedIn = moveToComposite(nested.dut, ['S_B'], 'Inner') as { dut: string };
+  expect(compositeOf(nestedIn.dut, 'S_B') === 'Inner', 'into a composite inside another');
+  const up = moveToComposite(nestedIn.dut, ['S_B'], 'Work') as { dut: string };
+  expect(compositeOf(up.dut, 'S_B') === 'Work' && enumComposites(up.dut).some((c) => c.name === 'Inner'), 'from the inner one back into Work');
+  expect('error' in moveToComposite(g.dut, ['S_A'], 'Nope'), 'no such composite: refused');
+}
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

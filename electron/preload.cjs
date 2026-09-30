@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
     /** The PLC project's sources as the PLC keeps them: { project, plcProject, files: [{ path, content }] } or { error } */
     sources: (req) => ipcRenderer.invoke('tc:live-sources', req),
+    /** The PLC's project kept on this computer: { folder?, choice?, skipProjects? } -> plcProjectCopyResult */
+    projectCopy: (req) => ipcRenderer.invoke('tc:live-project-copy', req),
+    /** A folder chosen (its dialog's title) -> { path } | { canceled } */
+    pickFolder: (title) => ipcRenderer.invoke('tc:pick-folder', title),
     /** Rebuild the PLC's project with edits, write it back: { requestId, edits, write? } -> plcBuildResult (progress: plcBuildProgress) */
     build: (req) => ipcRenderer.invoke('tc:live-build', req),
     /** Close the XAE kept open for builds now -> plcBuildClosed { closed } */
