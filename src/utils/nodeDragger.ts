@@ -1680,6 +1680,30 @@ export function calculateReroutedEdgePath(
     (edgeOffset.endDx !== undefined && edgeOffset.endDx !== 0) ||
     (edgeOffset.endDy !== undefined && edgeOffset.endDy !== 0);
 
+  // A route kept from the drawing before (an edit from the canvas: the other transitions drawn as they were): as long
+  // as its states stay where they were and its own handles are not dragged (its label's move aside)
+  const frozenD = path.getAttribute('data-frozen-d');
+  if (frozenD) {
+    const shape = { ...edgeOffset } as EdgeOffset;
+    delete shape.labelDx;
+    delete shape.labelDy;
+    const at = (n: SVGGElement | null) => {
+      if (!n) return '-';
+      const g = getNodeGeometry(n, svg);
+      return `${Math.round(g.origCenterX)},${Math.round(g.origCenterY)}`;
+    };
+    const sig = `${JSON.stringify(shape)}|${at(srcNodeEl)}|${at(tgtNodeEl)}`;
+    const was = path.getAttribute('data-frozen-sig');
+    if (was === null) path.setAttribute('data-frozen-sig', sig);
+    if (was === null || was === sig) {
+      const pts = extractCoordinatePoints(parseSvgPathCommands(frozenD));
+      const s0 = pts[0] || { x: 0, y: 0 };
+      return { d: frozenD, midPoint: pts[Math.floor(pts.length / 2)] || s0, startPoint: s0, endPoint: pts[pts.length - 1] || s0 };
+    }
+    path.removeAttribute('data-frozen-d');
+    path.removeAttribute('data-frozen-sig');
+  }
+
   // Parse original coordinate points from Mermaid's initial layout
   const origPoints = extractCoordinatePoints(parseSvgPathCommands(origD));
   const origStart = origPoints[0] || { x: 0, y: 0 };
@@ -2084,6 +2108,19 @@ export function applyDiagramOffsetsToSvg(
         const labelOffset = edgeOffsets[rawPathId] || edgeOffsets[edgeId] || edgeOffsets[edgeKey];
         const lDx = labelOffset?.labelDx || 0;
         const lDy = labelOffset?.labelDy || 0;
+        // (its kept route: its label where it was, moved by hand since by the change of its offset)
+        const frozenAt = newD === path.getAttribute('data-frozen-d') ? label.getAttribute('data-frozen-transform') : null;
+        if (frozenAt) {
+          if (!label.hasAttribute('data-frozen-ldx')) {
+            label.setAttribute('data-frozen-ldx', String(lDx));
+            label.setAttribute('data-frozen-ldy', String(lDy));
+          }
+          const f = parseTranslation(frozenAt);
+          const fx = f.x + lDx - parseFloat(label.getAttribute('data-frozen-ldx') || '0');
+          const fy = f.y + lDy - parseFloat(label.getAttribute('data-frozen-ldy') || '0');
+          label.setAttribute('transform', `translate(${fx}, ${fy})`);
+          continue;
+        }
         label.setAttribute('transform', `translate(${origLx + dX + lDx}, ${origLy + dY + lDy})`);
       }
 

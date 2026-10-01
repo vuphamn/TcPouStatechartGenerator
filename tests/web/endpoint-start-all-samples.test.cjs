@@ -1,6 +1,7 @@
 // Every sample: transitions' start endpoints (a spread of each chart's edges) dragged onto another state: the code
 // moved (the status says so; the chart has the edge from the new state), every state where it was on the canvas
-// (locked or not), Ctrl+Z puts the code back
+// (locked or not), every other transition drawn as it was (its route, its label), Ctrl+Z puts the code back (the
+// others still as they were)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -22,6 +23,33 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
 
   // The states' places (in the drawing's own coordinates), by id
   const places = () => p.evaluate(() => Object.fromEntries([...document.querySelectorAll('#mermaid-diagram-svg-container svg g.node[data-state-id]')].map((n) => [n.getAttribute('data-state-id'), [Math.round(n.getCTM().e), Math.round(n.getCTM().f)]])));
+  // The transitions' routes and labels (rounded), by their states and label text (parallel ones numbered)
+  const routes = () => p.evaluate(() => {
+    const svg = document.querySelector('#mermaid-diagram-svg-container svg');
+    const out = {};
+    const round = (s) => (s || '').replace(/-?\d+(\.\d+)?(e-?\d+)?/g, (n) => String(Math.round(Number(n))));
+    for (const path of svg.querySelectorAll('g.edgePaths path.tc-edge-path')) {
+      if (path.classList.contains('tc-edge-hitbox')) continue;
+      const from = path.getAttribute('data-source-id'), to = path.getAttribute('data-target-id');
+      if (!from || !to) continue;
+      const pid = path.getAttribute('data-path-id');
+      const label = pid ? svg.querySelector(`g.edgeLabel[data-linked-path-id="${CSS.escape(pid)}"]`) : null;
+      let k = `${from}->${to}|${(label?.textContent ?? '').replace(/\s+/g, ' ').trim()}`;
+      for (let i = 2; out[k]; i++) k = k.replace(/#\d+$/, '') + `#${i}`;
+      // (a label with no text: nothing seen, not compared)
+      out[k] = `${round(path.getAttribute('d'))} @ ${label?.textContent?.trim() ? round(label.getAttribute('transform')) : ''}`;
+    }
+    // (the composites' boxes too)
+    for (const c of svg.querySelectorAll('g.cluster')) {
+      const r = c.querySelector(':scope > rect');
+      const b = r?.getBoundingClientRect();
+      const name = c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
+      if (b) out[`cluster:${name}`] =round(`${b.x},${b.y},${b.width},${b.height}`);
+    }
+    return out;
+  });
+  // The ones redrawn: in both, not between the edge's states (old or new), differing
+  const redrawn = (a, b, pairs) => Object.keys(a).filter((k) => b[k] !== undefined && !pairs.some((pr) => k.startsWith(`${pr}|`)) && a[k] !== b[k]);
   const keys = () => p.evaluate(() => [...new Set([...document.querySelectorAll('#mermaid-diagram-svg-container svg path.tc-edge-path[data-edge-key]')].map((x) => x.getAttribute('data-edge-key')))]);
   // The edges whose start can be dragged: both ends states drawn (not the initial one, not a composite's border)
   const candidates = () => p.evaluate(() => {
@@ -141,6 +169,7 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
         continue;
       }
       const before = await places();
+      const routesBefore = await routes();
       const statusBefore = await status();
       await p.mouse.move(hd.x, hd.y);
       await p.mouse.down();
@@ -160,6 +189,13 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       // (every state where it was: the drop's place seen)
       const shifted = Object.keys(before).filter((id) => after[id] && (Math.abs(after[id][0] - before[id][0]) > 2 || Math.abs(after[id][1] - before[id][1]) > 2));
       expect(shifted.length === 0, `${sample} ${key}: no state moved on the canvas (${shifted.slice(0, 4).map((id) => `${id} ${before[id]}→${after[id]}`).join(', ') || 'none'})`);
+      // (KSS_ENDPOINT_SHOTS=1: the canvas after each drop, in tests/.output)
+      if (process.env.KSS_ENDPOINT_SHOTS) await p.screenshot({ path: h.out(`endpoint-${sample}-${key.replace(/[^\w]+/g, '_')}.png`) });
+      // (every other transition as it was drawn: its route and its label)
+      const routesAfter = await routes();
+      const pairs = [key, `${pl.target}->${to}`];
+      const rerouted = redrawn(routesBefore, routesAfter, pairs);
+      expect(rerouted.length === 0, `${sample} ${key}: no other transition redrawn (${rerouted.slice(0, 3).map((k) => `${k}: ${routesBefore[k]} → ${routesAfter[k]}`).join(' ; ') || 'none'})`);
       // (undone: the code as before, for the next one)
       await p.keyboard.press('Escape');
       await p.evaluate(() => document.activeElement?.blur());
@@ -171,6 +207,9 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       const undone = await places();
       const strayed = Object.keys(before).filter((id) => undone[id] && (Math.abs(undone[id][0] - before[id][0]) > 2 || Math.abs(undone[id][1] - before[id][1]) > 2));
       expect(back && strayed.length === 0, `${sample} ${key}: Ctrl+Z: back from ${from}, every state where it was (${strayed.slice(0, 3).map((id) => `${id} ${before[id]}→${undone[id]}`).join(', ') || 'none moved'})`);
+      const routesUndone = await routes();
+      const reroutedBack = redrawn(routesBefore, routesUndone, pairs);
+      expect(reroutedBack.length === 0, `${sample} ${key}: Ctrl+Z: no other transition redrawn (${reroutedBack.slice(0, 3).map((k) => `${k}: ${routesBefore[k]} → ${routesUndone[k]}`).join(' ; ') || 'none'})`);
       await h.sleep(800);
     }
   }

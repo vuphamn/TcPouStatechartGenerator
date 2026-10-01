@@ -241,6 +241,104 @@ export interface MermaidViewerHandle {
   tidyEdges: () => number;
 }
 
+/** A transition's route as drawn (its path's d, its label's place), kept across an edit from the canvas */
+interface KeptRoute {
+  d: string;
+  label: string | null;
+}
+const routeKeyOf = (svg: SVGSVGElement, path: SVGPathElement) => {
+  const from = path.getAttribute('data-source-id');
+  const to = path.getAttribute('data-target-id');
+  if (!from || !to) return null;
+  const pid = path.getAttribute('data-path-id') || path.id;
+  const label = pid ? svg.querySelector<SVGGElement>(`g.edgeLabel[data-linked-path-id="${CSS.escape(pid)}"]`) : null;
+  return { pair: `${from}->${to}`, key: `${from}->${to}|${(label?.textContent ?? '').replace(/\s+/g, ' ').trim()}`, label };
+};
+const edgePathsOf = (svg: SVGSVGElement) =>
+  Array.from(svg.querySelectorAll<SVGPathElement>('g.edgePaths path.tc-edge-path')).filter((p) => !p.classList.contains('tc-edge-hitbox') && p.getAttribute('d'));
+/** Each transition's route now, by its states and its label (parallel ones in order) */
+function keptRoutesOf(svg: SVGSVGElement): Record<string, KeptRoute[]> {
+  const out: Record<string, KeptRoute[]> = {};
+  for (const path of edgePathsOf(svg)) {
+    const k = routeKeyOf(svg, path);
+    if (!k) continue;
+    const r = { d: path.getAttribute('d') || '', label: k.label?.getAttribute('transform') ?? null };
+    (out[k.key] ??= []).push(r);
+    (out[`pair:${k.pair}`] ??= []).push(r);
+  }
+  return out;
+}
+/** A composite's box as drawn (its rect, its title's place; in its group's own coordinates, the group's place) */
+interface KeptCluster {
+  at: { x: number; y: number };
+  rect: { x: number; y: number; width: number; height: number } | null;
+  label: { x: number; y: number } | null;
+}
+const clusterNameOf = (c: Element) => c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
+const clusterPartsOf = (c: Element) => ({
+  rect: c.querySelector<SVGRectElement>(':scope > rect'),
+  label: c.querySelector<SVGGElement>(':scope > g.cluster-label'),
+  at: parseTranslation(c.getAttribute('data-orig-transform') ?? c.getAttribute('transform') ?? ''),
+});
+/** Each composite's box now, by its name */
+function keptClustersOf(svg: SVGSVGElement): Record<string, KeptCluster> {
+  const out: Record<string, KeptCluster> = {};
+  for (const c of svg.querySelectorAll('g.cluster')) {
+    const { rect, label, at } = clusterPartsOf(c);
+    const n = (a: string) => parseFloat(rect?.getAttribute(a) ?? 'NaN');
+    out[clusterNameOf(c)] = {
+      at,
+      rect: rect && [n('x'), n('y'), n('width'), n('height')].every(Number.isFinite) ? { x: n('x'), y: n('y'), width: n('width'), height: n('height') } : null,
+      label: label ? parseTranslation(label.getAttribute('transform') ?? '') : null,
+    };
+  }
+  return out;
+}
+/** The new drawing's composites as they were drawn: the layout sized them for its own places, not the states' kept ones */
+function restoreKeptClusters(svg: SVGSVGElement, kept: Record<string, KeptCluster>) {
+  for (const c of svg.querySelectorAll('g.cluster')) {
+    const k = kept[clusterNameOf(c)];
+    if (!k) continue;
+    const { rect, label, at } = clusterPartsOf(c);
+    // (its group placed elsewhere this time: the box where it was all the same)
+    const dx = k.at.x - at.x;
+    const dy = k.at.y - at.y;
+    if (rect && k.rect) {
+      rect.setAttribute('x', String(k.rect.x + dx));
+      rect.setAttribute('y', String(k.rect.y + dy));
+      rect.setAttribute('width', String(k.rect.width));
+      rect.setAttribute('height', String(k.rect.height));
+    }
+    if (label && k.label) label.setAttribute('transform', `translate(${k.label.x + dx}, ${k.label.y + dy})`);
+  }
+}
+/**
+ * The new drawing's transitions given their kept routes: the same states and label (else the only one between the
+ * same states, its label changed: the other arm of an IF / ELSE moved); a new one (the one moved) routed afresh
+ */
+function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>) {
+  const used = new Set<KeptRoute>();
+  const paths = edgePathsOf(svg);
+  const keys = paths.map((p) => routeKeyOf(svg, p));
+  const pairs: Record<string, number> = {};
+  for (const k of keys) if (k) pairs[k.pair] = (pairs[k.pair] ?? 0) + 1;
+  paths.forEach((path, i) => {
+    const k = keys[i];
+    if (!k) return;
+    let r = (kept[k.key] ?? []).find((x) => !used.has(x));
+    if (!r && pairs[k.pair] === 1 && kept[`pair:${k.pair}`]?.length === 1 && !used.has(kept[`pair:${k.pair}`][0])) r = kept[`pair:${k.pair}`][0];
+    if (!r || !r.d) return;
+    used.add(r);
+    path.setAttribute('data-frozen-d', r.d);
+    path.removeAttribute('data-frozen-sig');
+    if (k.label && r.label) {
+      k.label.setAttribute('data-frozen-transform', r.label);
+      k.label.removeAttribute('data-frozen-ldx');
+      k.label.removeAttribute('data-frozen-ldy');
+    }
+  });
+}
+
 export interface MermaidViewerProps {
   code: string;
   layoutEngine?: LayoutEngine;
@@ -2292,7 +2390,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const renderedChartRef = useRef<string | undefined>(undefined);
   // An edit from the canvas itself (an edge's end dropped on another state): the states kept where they were in the
   // drawing that follows it, locked or not (taken at the drop; dropped when no drawing follows within a few seconds)
-  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
+  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
   // Each state's place at the last edits from the canvas and undos (this chart's; a state gone since too): one that
   // comes back (an undo of its deletion) where it was. (Not at each drawing: a deleted state is drawn once more
   // without its offset before it goes.)
@@ -2320,7 +2418,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (!svg) return;
     rememberDrawnPositions();
     const positions: Record<string, { centerX: number; centerY: number }> = { ...lastDrawnPositionsRef.current };
-    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
+    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, edges: keptRoutesOf(svg), clusters: keptClustersOf(svg), frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
   };
   // (an undo / redo of a code change: the states where they are; the chart drawn again for the code as it was)
   const keepSignalRef = useRef(keepPositionsSignal);
@@ -3332,6 +3430,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (isLayoutLocked) lockedNodePositionsRef.current = { ...lockedNodePositionsRef.current, ...keep };
     }
     const pinned = stale ? null : keep ?? (isLayoutLocked && Object.keys(lockedNodePositionsRef.current).length > 0 ? lockedNodePositionsRef.current : null);
+    // (the transitions as they were drawn, but the ones the edit changed: their routes and labels kept)
+    if (!stale && kept) {
+      restoreKeptRoutes(svg, kept.edges);
+      restoreKeptClusters(svg, kept.clusters);
+    }
     if (pinned) {
       // Automatic re-layout is disabled! Maintain custom node positions across code edits:
       const nodes = Array.from(svg.querySelectorAll('g.node')) as SVGGElement[];
