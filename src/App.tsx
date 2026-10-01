@@ -408,6 +408,12 @@ export const App: React.FC = () => {
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
+  // The Theme for the whole app, not only the diagram: a light one on <html data-app-theme> (src/styles/appThemes.css)
+  useEffect(() => {
+    const el = document.documentElement;
+    if (mermaidTheme === 'dark') el.removeAttribute('data-app-theme');
+    else el.setAttribute('data-app-theme', mermaidTheme);
+  }, [mermaidTheme]);
   // The composites' colour (Composites: next to Theme), kept in this browser; a composite's own is in the enum
   const [compositeColor, setCompositeColorPreset] = useState<string>(() => {
     try {
