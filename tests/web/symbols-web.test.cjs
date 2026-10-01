@@ -342,12 +342,32 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   expect(/SAFEOP/.test(props?.state ?? '') && props?.crc === 'A: 0 B: 7 C: 0 D: 0', `its state and CRC counters: ${props?.state}; ${props?.crc}`);
   expect(props?.links?.product === 'https://www.beckhoff.com/EL1008' && /search-results\/\?q=EL1008$/.test(props?.links?.search ?? '') && /^https:\/\/document\.beckhoff\.com\/el1008\.pdf/.test(props?.links?.manual ?? ''), `its links: ${JSON.stringify(props?.links)}`);
   expect(props?.image === 'EL1008 front.png' && /TwinCAT's device file \(Beckhoff EL1xxx\.xml\)/.test(props.source), `its picture (${props?.image}), the device file (${props?.source})`);
+  // Since when it is in that state, when it last left OP
+  const since = await a.evaluate(() => ({ since: document.getElementById('io-box-props-since')?.textContent ?? '', left: document.getElementById('io-box-props-last-left')?.textContent ?? '' }));
+  expect(/^for \d+ (s|min)/.test(since.since) && /Last left OP at .+ ago\)$/.test(since.left), `its state's time: ${JSON.stringify(since)}`);
+  // The CRC counters from now on (the master's stay as they are)
+  await a.click('#io-box-props-crc-reset').catch(() => {});
+  await sleep(300);
+  const crcNow = await a.evaluate(() => ({ crc: [...document.querySelectorAll('#io-box-props [data-io-crc]')].map((c) => c.textContent.trim()).join(' '), since: document.getElementById('io-box-props-crc-since')?.textContent ?? '' }));
+  expect(crcNow.crc === 'A: 0 B: 0 C: 0 D: 0' && /^since /.test(crcNow.since), `Count from now: ${JSON.stringify(crcNow)}`);
+  // Copy diagnostics: its details, state, counters, linked variables, events as text
+  await a.evaluate(() => {
+    window.__copied = [];
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => void window.__copied.push(t) } });
+  });
+  await a.click('#io-box-props-copy').catch(() => {});
+  await sleep(400);
+  const diag = (await a.evaluate(() => window.__copied))[0] ?? '';
+  expect(/^Term 2 \(EL1008\) \[EL1008\]/.test(diag) && /Product code: #x03f03052/.test(diag) && /State: SAFEOP/.test(diag) && /CRC errors since .*: A 0, B 0, C 0, D 0 \(counted in all: 0, 7, 0, 0\)/.test(diag) && /MAIN\.conveyor\.bStart/.test(diag) && /Recent events:/.test(diag), `Copy diagnostics: ${diag.replace(/\n/g, ' | ').slice(0, 400)}`);
   await a.screenshot({ path: h.out('io-props.png') });
   await a.keyboard.press('Escape');
   await sleep(300);
   expect(!(await a.$('#io-box-props')), 'Esc: closed');
   // The events: Term 2 out of OP, Term 3 missing, CRC errors on Term 2's port B
-  await a.click('#io-view-events');
+  // (the network: its device's events in the last hour; a click shows them)
+  const recent = await a.evaluate(() => document.getElementById('io-network-recent')?.textContent ?? '');
+  expect(/^\d+ events? in the last hour$/.test(recent), `the network's recent events: ${recent}`);
+  await a.click('#io-network-recent').catch(() => a.click('#io-view-events'));
   await sleep(400);
   const evs = await a.$$eval('[data-io-event]', (r) => r.map((x) => `${x.getAttribute('data-io-event-kind')}:${x.textContent}`)).catch(() => []);
   expect(evs.some((e) => /^state:.*Term 2 \(EL1008\): OP → SAFEOP/.test(e)) && evs.some((e) => /^crc:.*Term 2 \(EL1008\): 7 CRC errors on port B/.test(e)) && evs.some((e) => /Term 3 \(EL2008\): OP → INIT/.test(e)), `the events: ${evs.join(' | ')}`);

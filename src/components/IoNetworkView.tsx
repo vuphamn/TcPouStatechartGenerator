@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Minus, Plus, Search } from 'lucide-react';
 import type { IoBox, IoDevice } from './IoTreePanel.tsx';
+import { TerminalFaceView } from './TerminalFace.tsx';
+import { faceOf } from '../data/terminalFaces.ts';
 
 /** A slave's state from the EtherCAT master (shared/tcEcat.cjs), by its box's path */
 export interface SlaveState {
@@ -151,13 +153,18 @@ interface Placed {
   port: number;
   /** Cut off: a box before it (on its way to the master) is down */
   behind: string | null;
+  /** Its height (taller with its front drawn) */
+  h: number;
 }
+/** Zoomed in this far: each box's front drawn below it (the types in src/data/terminalFaces.ts) */
+export const FACES_FROM = 1.5;
+const FACE_H = 112;
 
 /**
  * The cabling as the project wires it: a box's children on its port B (the E-bus, its terminals) in a row to its
  * right, those on its ports C / D (a junction's, a coupler's outgoing cables) in rows below
  */
-function layout(device: IoDevice, states: Map<string, SlaveState>): { placed: Placed[]; width: number; height: number } {
+function layout(device: IoDevice, states: Map<string, SlaveState>, faces = false): { placed: Placed[]; width: number; height: number } {
   const all = allBoxes(device.boxes);
   const byId = new Map(all.filter((b) => b.id !== undefined).map((b) => [b.id!, b]));
   // (each box's parent and port: from its port A's info; without it, the box it is nested in, on port B)
@@ -183,7 +190,7 @@ function layout(device: IoDevice, states: Map<string, SlaveState>): { placed: Pl
   // A row from a box: it, then its port-B chain; each one's other ports' cables: rows below
   const row = (start: IoBox, parent: IoBox | null, port: number, x: number, behind: string | null) => {
     const y = cursorY;
-    cursorY += H + GAP_Y;
+    let rowH = H;
     let cur: IoBox | null = start;
     let px = x;
     let p = parent;
@@ -192,7 +199,9 @@ function layout(device: IoDevice, states: Map<string, SlaveState>): { placed: Pl
     const branches: { from: IoBox; box: IoBox; port: number; x: number; behind: string | null }[] = [];
     while (cur) {
       const st = cur.path ? states.get(cur.path) : undefined;
-      placed.push({ box: cur, x: px, y, parent: p, port: pPort, behind: cut });
+      const h = faces && faceOf(cur) ? H + FACE_H : H;
+      rowH = Math.max(rowH, h);
+      placed.push({ box: cur, x: px, y, parent: p, port: pPort, behind: cut, h });
       maxX = Math.max(maxX, px + W);
       const nextCut = cut ?? (st && !st.ok ? cur.name : null);
       const kids: { box: IoBox; port: number }[] = children.get(cur) ?? [];
@@ -206,6 +215,7 @@ function layout(device: IoDevice, states: Map<string, SlaveState>): { placed: Pl
       for (const extra of chain.slice(1)) branches.push({ from: p, box: extra.box, port: 1, x: px + 24, behind: nextCut });
       px += W + GAP_X;
     }
+    cursorY += rowH + GAP_Y;
     for (const br of branches) row(br.box, br.from, br.port, br.x, br.behind);
     return y;
   };
@@ -231,9 +241,13 @@ export const IoNetworkView: React.FC<{
   onOpenProps?: (path: string) => void;
   /** The box whose properties are open */
   selected?: string | null;
-}> = ({ device, states, stateNote, valueOf, onSelectBox, onOpenProps, selected }) => {
-  const { placed, width, height } = useMemo(() => layout(device, states), [device, states]);
+  /** This device's events in the last hour; the Events view shown */
+  recentEvents?: IoEvent[];
+  onShowEvents?: () => void;
+}> = ({ device, states, stateNote, valueOf, onSelectBox, onOpenProps, selected, recentEvents = [], onShowEvents }) => {
   const [scale, setScale] = useState(1);
+  const faces = scale >= FACES_FROM - 1e-6;
+  const { placed, width, height } = useMemo(() => layout(device, states, faces), [device, states, faces]);
   // Find a box: its name, type or a variable linked to it (the others dimmed, the first one scrolled to)
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
@@ -262,15 +276,26 @@ export const IoNetworkView: React.FC<{
           Not yet confirmed on hardware
         </span>
         <span id="io-network-note" className="truncate">{stateNote}</span>
+        {recentEvents.length > 0 && (
+          <button
+            id="io-network-recent"
+            type="button"
+            onClick={onShowEvents}
+            className={`shrink-0 px-1.5 rounded border ${recentEvents.some((e) => !e.ok) ? 'border-rose-700 bg-rose-950/60 text-rose-200' : 'border-slate-700 text-slate-300'} hover:brightness-125`}
+            title={`In the last hour:\n${recentEvents.slice(0, 8).map((e) => `${new Date(e.at).toLocaleTimeString()} ${e.text}`).join('\n')}${recentEvents.length > 8 ? '\n…' : ''}\n(click: the Events view)`}
+          >
+            {recentEvents.length} event{recentEvents.length === 1 ? '' : 's'} in the last hour
+          </button>
+        )}
         <span className="ml-auto flex items-center gap-1 px-1 rounded border border-slate-800 bg-slate-900">
           <Search className="w-3 h-3 text-slate-500" />
           <input id="io-network-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a box or variable" className="w-36 bg-transparent outline-none text-slate-200 text-[10px] py-0.5" />
           {matches && <span id="io-network-matches" className="text-slate-500">{matches.size}</span>}
         </span>
         <span className="flex items-center gap-1">
-          <button type="button" onClick={() => setScale((s) => Math.max(0.4, s - 0.1))} className="p-0.5 rounded hover:bg-slate-800" title="Smaller"><Minus className="w-3 h-3" /></button>
+          <button id="io-network-zoom-out" type="button" onClick={() => setScale((s) => Math.max(0.4, Math.round((s - 0.1) * 10) / 10))} className="p-0.5 rounded hover:bg-slate-800" title="Smaller"><Minus className="w-3 h-3" /></button>
           <span className="font-mono w-9 text-center">{Math.round(scale * 100)}%</span>
-          <button type="button" onClick={() => setScale((s) => Math.min(2, s + 0.1))} className="p-0.5 rounded hover:bg-slate-800" title="Bigger"><Plus className="w-3 h-3" /></button>
+          <button id="io-network-zoom-in" type="button" onClick={() => setScale((s) => Math.min(2.5, Math.round((s + 0.1) * 10) / 10))} className="p-0.5 rounded hover:bg-slate-800" title={`Bigger (from ${FACES_FROM * 100}%: each terminal's front drawn)`}><Plus className="w-3 h-3" /></button>
         </span>
       </div>
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2">
@@ -286,11 +311,11 @@ export const IoNetworkView: React.FC<{
             const d =
               p.port === 1 && from.y === p.y
                 ? `M ${from.x + W} ${from.y + H / 2} L ${p.x} ${p.y + H / 2}`
-                : `M ${p.x + 12} ${from.y + H} L ${p.x + 12} ${p.y + H / 2} L ${p.x} ${p.y + H / 2}`;
+                : `M ${p.x + 12} ${from.y + from.h} L ${p.x + 12} ${p.y + H / 2} L ${p.x} ${p.y + H / 2}`;
             return (
               <g key={`c-${p.box.path}`} data-io-cable={p.box.path}>
                 <path d={d} fill="none" stroke={stroke} strokeWidth={down ? 2 : 1.5} strokeDasharray={p.behind ? '4 3' : undefined} />
-                {p.port !== 1 && <text x={p.x + 15} y={from.y + H + 11} fontSize="9" fill="var(--color-slate-400)">{PORTS[p.port] ?? p.port}</text>}
+                {p.port !== 1 && <text x={p.x + 15} y={from.y + from.h + 11} fontSize="9" fill="var(--color-slate-400)">{PORTS[p.port] ?? p.port}</text>}
               </g>
             );
           })}
@@ -324,9 +349,10 @@ export const IoNetworkView: React.FC<{
                 }}
               >
                 <title>{`${p.box.name}${p.box.info?.type ? `\n${p.box.info.type}` : ''}\n${st ? stateText(st) : 'State not known'}${cut ? `\nCut off: ${p.behind} before it is down` : ''}${linked.length ? `\n\nLinked (${linked.length}):\n${linked.slice(0, 12).map((l) => `${l.name}: ${l.link}`).join('\n')}${linked.length > 12 ? `\n… and ${linked.length - 12} more` : ''}` : ''}${onOpenProps ? '\n\nClick: the tree · Right-click: its properties' : ''}`}</title>
-                {(hit || selected === p.box.path) && <rect x="-3" y="-3" width={W + 6} height={H + 6} rx="8" fill="none" stroke={selected === p.box.path ? 'var(--color-violet-400)' : 'var(--color-sky-400)'} strokeWidth="2" />}
-                <rect width={W} height={H} rx="6" fill="var(--color-slate-900)" stroke={border} strokeWidth={down ? 2.5 : 1.5} />
-                {down && <rect width={W} height={H} rx="6" fill="var(--color-rose-500)" opacity="0.12" />}
+                {(hit || selected === p.box.path) && <rect x="-3" y="-3" width={W + 6} height={p.h + 6} rx="8" fill="none" stroke={selected === p.box.path ? 'var(--color-violet-400)' : 'var(--color-sky-400)'} strokeWidth="2" />}
+                <rect width={W} height={p.h} rx="6" fill="var(--color-slate-900)" stroke={border} strokeWidth={down ? 2.5 : 1.5} />
+                {down && <rect width={W} height={p.h} rx="6" fill="var(--color-rose-500)" opacity="0.12" />}
+                {p.h > H && <TerminalFaceView box={p.box} valueOf={valueOf} compact x={8} y={H - 2} height={FACE_H - 6} />}
                 <text x="8" y="15" fontSize="11" fontWeight="700" fill="var(--color-sky-300)" fontFamily="ui-monospace, monospace">{p.box.product || '—'}</text>
                 <text x={W - 8} y="15" fontSize="9" textAnchor="end" fontWeight="700" fill={down ? 'var(--color-rose-300)' : st ? 'var(--color-emerald-300)' : 'var(--color-slate-500)'}>
                   {cut && !st ? 'cut off' : st ? st.name : '—'}

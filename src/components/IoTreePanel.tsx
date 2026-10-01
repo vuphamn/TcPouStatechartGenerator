@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cpu, FolderOpen, GitBranch, Info, Link2, ListTree, Network, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Activity, ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cpu, Download, FolderOpen, GitBranch, GitCompare, Info, Link2, ListTree, Network, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { compareIoTrees, type IoDifference } from '../utils/ioCompare.ts';
 import { IoNetworkView, allBoxes, boxStates, healthLinks, stateText, type EcatStatesResult, type IoEvent } from './IoNetworkView.tsx';
-import { IoBoxProperties, type DeviceInfo, type DeviceInfoRequest } from './IoBoxProperties.tsx';
+import { IoBoxProperties, type BoxSince, type CrcBase, type DeviceInfo, type DeviceInfoRequest } from './IoBoxProperties.tsx';
+
+/** The events of a device (its boxes' paths start with its name) in the last hour */
+const HOUR = 3600 * 1000;
+export const recentEventsOf = (events: IoEvent[], device: string, now = Date.now()) => events.filter((e) => e.at > now - HOUR && e.path.startsWith(`${device}^`));
 
 /** The PLC's I/O tree (shared/tcIoTree.cjs): devices, boxes nested as wired, their PDOs' entries and PLC links */
 export interface IoEntry {
@@ -90,7 +95,48 @@ export const IoTreePanel: React.FC<{
   onOpenDevicesFolder?: () => void;
   /** The offline folder read's label (the desktop app: its project; the browser: a folder chosen) */
   folderLabel?: string;
-}> = ({ tree, loading, connected, onLoad, onLoadFolder, onVisibleVariables, valueOf, ecat = null, onStatesWanted, guardsOf, onOpenGuard, events = [], onClearEvents, fetchDeviceInfo, onOpenDevicesFolder, folderLabel }) => {
+  /** Since when each box is in its state; the CRC baselines (reset: "since now") */
+  since?: Record<string, BoxSince>;
+  crcBase?: Record<string, CrcBase>;
+  onResetCrc?: (path: string, crc: number[]) => void;
+  /** Where the pictures come from (the desktop app, Link, a gateway) */
+  picturesWhere?: 'desktop' | 'link' | 'gateway';
+  /** Alerts when a box leaves OP: a message, a sound */
+  alerts?: { toast: boolean; sound: boolean };
+  onAlertsChange?: (v: { toast: boolean; sound: boolean }) => void;
+  /** The project's I/O read (to compare with the PLC's); null: canceled */
+  onCompareProject?: () => Promise<IoTree | null>;
+  /** The CSV export's name (the PLC) */
+  exportName?: string;
+}> = ({ tree, loading, connected, onLoad, onLoadFolder, onVisibleVariables, valueOf, ecat = null, onStatesWanted, guardsOf, onOpenGuard, events = [], onClearEvents, fetchDeviceInfo, onOpenDevicesFolder, folderLabel, since = {}, crcBase = {}, onResetCrc, picturesWhere, alerts, onAlertsChange, onCompareProject, exportName = 'io' }) => {
+  // The comparison with the project's I/O (what differs), and its state
+  const [compare, setCompare] = useState<{ project: string; diffs: IoDifference[]; error?: string } | null>(null);
+  const [comparing, setComparing] = useState(false);
+  useEffect(() => setCompare(null), [tree]);
+  const runCompare = async () => {
+    if (!onCompareProject || !tree) return;
+    setComparing(true);
+    try {
+      const p = await onCompareProject();
+      if (p) setCompare(p.error && !p.devices.length ? { project: p.project ?? '', diffs: [], error: p.error } : { project: p.project ?? p.folder ?? '', diffs: compareIoTrees(tree, p) });
+    } catch (e) {
+      setCompare({ project: '', diffs: [], error: e instanceof Error ? e.message : String(e) });
+    }
+    setComparing(false);
+  };
+  /** The events as CSV (time, box, kind, OK, text), downloaded */
+  const exportEvents = () => {
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const rows = ['time,box,path,kind,ok,text', ...events.map((e) => [new Date(e.at).toISOString(), q(e.box), q(e.path), e.kind, e.ok ? 'yes' : 'no', q(e.text)].join(','))];
+    const url = URL.createObjectURL(new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `io-events-${exportName.replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const [filter, setFilter] = useState('');
   const [linkedOnly, setLinkedOnly] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -332,6 +378,11 @@ export const IoTreePanel: React.FC<{
             <Search className="w-3 h-3 text-slate-500" />
             <input id="io-tree-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: a terminal, a channel, a variable" className="flex-1 bg-transparent outline-none text-slate-200 text-[11px]" />
           </span>
+          {onCompareProject && tree && !offline && (
+            <button id="io-compare" type="button" onClick={() => void runCompare()} disabled={comparing} className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="Compare the PLC's I/O with the TwinCAT project's on this computer: boxes added or missing, another device or revision, cabled elsewhere">
+              <GitCompare className={`w-3 h-3 ${comparing ? 'animate-pulse' : ''}`} /> Compare
+            </button>
+          )}
           <label className="flex items-center gap-1 text-[10px] text-slate-400 cursor-pointer" title="Only the inputs and outputs a PLC variable is linked to">
             <input id="io-tree-linked-only" type="checkbox" checked={linkedOnly} onChange={(e) => setLinkedOnly(e.target.checked)} className="accent-sky-500 w-3 h-3" />
             Linked only
@@ -361,9 +412,24 @@ export const IoTreePanel: React.FC<{
       {view === 'events' && (
         <div id="io-events" className="flex-1 min-h-0 flex flex-col">
           <div className="flex items-center gap-2 px-2 py-1 border-b border-slate-800 text-[10px] text-slate-500">
-            <span>{offline ? 'Offline: no events' : connected ? 'While live: each box\'s state changes and CRC errors (the master read every 2 s)' : 'Not live: the events of the last session'}</span>
+            <span className="truncate">{offline ? 'Offline: no events' : connected ? 'While live: state changes and CRC errors (read every 2 s; kept in this browser)' : 'Not live: the events kept for this PLC'}</span>
+            {alerts && onAlertsChange && (
+              <span className="ml-auto flex items-center gap-2">
+                <label className="flex items-center gap-1 cursor-pointer" title="A box leaving OP while live: said in the status bar, wherever the I/O tab is">
+                  <input id="io-alert-toast" type="checkbox" checked={alerts.toast} onChange={(e) => onAlertsChange({ ...alerts, toast: e.target.checked })} className="accent-sky-500 w-3 h-3" /> Alert
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer" title="… with a short sound">
+                  <input id="io-alert-sound" type="checkbox" checked={alerts.sound} onChange={(e) => onAlertsChange({ ...alerts, sound: e.target.checked })} className="accent-sky-500 w-3 h-3" /> Sound
+                </label>
+              </span>
+            )}
+            {events.length > 0 && (
+              <button id="io-events-export" type="button" onClick={exportEvents} className={`${alerts && onAlertsChange ? '' : 'ml-auto '}flex items-center gap-1 px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800`} title="The events as a CSV file (for a report or a spreadsheet)">
+                <Download className="w-3 h-3" /> CSV
+              </button>
+            )}
             {events.length > 0 && onClearEvents && (
-              <button id="io-events-clear" type="button" onClick={onClearEvents} className="ml-auto flex items-center gap-1 px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="Clear the list">
+              <button id="io-events-clear" type="button" onClick={onClearEvents} className="flex items-center gap-1 px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="Clear the list (also the ones kept in this browser)">
                 <Trash2 className="w-3 h-3" /> Clear
               </button>
             )}
@@ -383,10 +449,27 @@ export const IoTreePanel: React.FC<{
       {view === 'network' && tree && (
         <div className="flex-1 min-h-0">
           {device ? (
-            <IoNetworkView device={device} states={states} stateNote={masterNote} valueOf={valueOf} onSelectBox={showInTree} onOpenProps={setPropsPath} selected={propsPath} />
+            <IoNetworkView device={device} states={states} stateNote={masterNote} valueOf={valueOf} onSelectBox={showInTree} onOpenProps={setPropsPath} selected={propsPath} recentEvents={recentEventsOf(events, device.name)} onShowEvents={() => setView('events')} />
           ) : (
             <div id="io-network-empty" className="p-4 text-center text-slate-400">No I/O device with boxes to draw.</div>
           )}
+        </div>
+      )}
+      {view === 'tree' && compare && (
+        <div id="io-compare-result" className="max-h-[40%] overflow-auto custom-scrollbar border-b border-slate-800 px-2 py-1 text-[11px]">
+          <div className="flex items-center gap-1.5 text-slate-300">
+            <GitCompare className="w-3 h-3 text-sky-400" />
+            <span className="font-semibold">{compare.error ? 'Compare' : compare.diffs.length ? `${compare.diffs.length} difference${compare.diffs.length === 1 ? '' : 's'}` : 'The same I/O'}</span>
+            <span className="truncate text-slate-500">the PLC's · the project{compare.project ? ` ${compare.project}` : ''}</span>
+            <button type="button" onClick={() => setCompare(null)} className="ml-auto p-0.5 rounded hover:bg-slate-800 text-slate-400" title="Close"><X className="w-3 h-3" /></button>
+          </div>
+          {compare.error && <div className="text-rose-300">{compare.error}</div>}
+          {!compare.error && compare.diffs.length === 0 && <div id="io-compare-same" className="text-emerald-300">Every box as in the project: the same devices, revisions and cabling.</div>}
+          {compare.diffs.map((d, i) => (
+            <button key={`${d.kind}-${d.path}-${i}`} type="button" data-io-diff={d.kind} data-io-diff-path={d.path} onClick={() => (d.kind === 'only-project' ? undefined : setPropsPath(d.path))} className={`w-full text-left px-1 rounded hover:bg-slate-800 ${d.kind === 'cabling' ? 'text-amber-200' : d.kind === 'device' ? 'text-amber-200' : 'text-rose-200'}`} title={d.kind === 'only-project' ? '' : 'Its properties'}>
+              {d.kind === 'only-plc' ? '+ ' : d.kind === 'only-project' ? '− ' : '≠ '}{d.text}
+            </button>
+          ))}
         </div>
       )}
       {view === 'tree' && (
@@ -401,6 +484,10 @@ export const IoTreePanel: React.FC<{
                 {(() => {
                   const down = allBoxes(d.boxes).filter((b) => states.get(b.path)?.ok === false).length;
                   return down > 0 ? <span data-io-device-down={down} className="text-[9px] font-bold text-rose-200 bg-rose-950/70 border border-rose-700 rounded px-1">{down} not OP</span> : null;
+                })()}
+                {(() => {
+                  const n = recentEventsOf(events, d.name).length;
+                  return n > 0 ? <span data-io-device-events={n} className="text-[9px] font-normal text-amber-200 bg-amber-950/60 border border-amber-800 rounded px-1" title="Events in the last hour (the Events view)">{n} in the last hour</span> : null;
                 })()}
                 {d.netId && <span className="ml-auto text-[9px] font-mono font-normal text-slate-500">{d.netId}</span>}
               </button>
@@ -418,6 +505,10 @@ export const IoTreePanel: React.FC<{
             parent={propsOf.parent}
             state={states.get(propsOf.box.path)}
             events={events.filter((e) => e.path === propsOf.box.path)}
+            since={since[propsOf.box.path]}
+            crcBase={crcBase[propsOf.box.path]}
+            onResetCrc={onResetCrc ? (crc) => onResetCrc(propsOf.box.path, crc) : undefined}
+            picturesWhere={picturesWhere}
             valueOf={valueOf}
             fetchInfo={fetchDeviceInfo}
             onOpenFolder={onOpenDevicesFolder}

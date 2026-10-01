@@ -316,6 +316,12 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusNonce]);
 
+  // Another state selected: an editor's caret state's frame off (its card no longer the one the code shows)
+  useEffect(() => {
+    const keep = selectedStateId ? document.getElementById(`state-list-item-${selectedStateId}`) : null;
+    document.querySelectorAll('[data-code-focus="true"]').forEach((x) => x !== keep && x.removeAttribute('data-code-focus'));
+  }, [selectedStateId]);
+
   // Live, Follow on: the list shows each new live state (the selection stays as it is)
   useEffect(() => {
     if (!liveFollow || !liveStateId || !isExpanded) return;

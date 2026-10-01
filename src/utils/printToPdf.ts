@@ -1,3 +1,4 @@
+import { ideThemeOf } from './ideThemes.ts';
 import html2canvas from 'html2canvas-pro';
 import { jsPDF } from 'jspdf';
 import { exportHighResPng } from './diagramExport.ts';
@@ -77,6 +78,8 @@ export async function exportDiagramVisibleAreaToPdf(
 
     let bgColor = isDark ? '#0f172a' : '#f8fafc';
     if (theme === 'forest') bgColor = '#f4f7f4';
+    const ide = ideThemeOf(theme);
+    if (ide) bgColor = ide.bg;
     if (theme === 'neutral') bgColor = '#f5f5f4';
 
     // 2. Render visible area using html2canvas-pro with fallback to SVG rasterizer

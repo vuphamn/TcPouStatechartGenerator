@@ -104,7 +104,8 @@ export const SimulationPanel: React.FC<SimulationPanelProps> = (p) => {
               <ul className="space-y-1">
                 {p.transitions.map((t, i) => (
                   <li key={t.edgeId} className={`flex items-start gap-1.5 rounded border px-1.5 py-1 ${t === firing ? 'border-violet-600 bg-violet-950/40' : 'border-slate-800'}`}>
-                    <span className="w-5 shrink-0 text-center text-slate-500">{t.priority ?? (t.source === 'preProcess' ? 'pre' : '')}</span>
+                    {/* (preProcess()'s: "pre" and their place there, as their badges number them) */}
+                    <span className={`${t.source === 'preProcess' ? 'min-w-5 whitespace-nowrap' : 'w-5'} shrink-0 text-center text-slate-500`} title={t.source === 'preProcess' ? `preProcess()'s transition${t.priority ? ` ${t.priority}` : ''}: checked before the state's own` : undefined}>{t.source === 'preProcess' ? `pre${t.priority ? ` ${t.priority}` : ''}` : t.priority ?? ''}</span>
                     <div className="flex-1 min-w-0">
                       <div className="font-mono text-slate-100 truncate">→ {t.to}</div>
                       {t.label && <div className="font-mono text-[10px] text-slate-400 break-words">{t.label}</div>}

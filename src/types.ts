@@ -110,7 +110,7 @@ export interface DiagramPreset {
   name: string;
   layoutEngine: 'dagre' | 'elk';
   flowchartCurve: 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
-  mermaidTheme: 'dark' | 'neutral' | 'forest' | 'base' | 'default';
+  mermaidTheme: 'dark' | 'neutral' | 'forest' | 'base' | 'default' | import('./utils/ideThemes.ts').IdeThemeId;
   priorityFormat: 'paren' | 'bracket' | 'circled';
   exportSettings?: PresetExportSettings;
   isBuiltin?: boolean;

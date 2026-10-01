@@ -58,8 +58,33 @@ const PLC = `<?xml version="1.0"?>
     return el ? { name: v('name'), vendor: v('vendor'), port: v('port-a'), links: [...el.querySelectorAll('[data-io-link]')].map((l) => `${l.getAttribute('data-io-link')}=${l.getAttribute('href')}`), pictures: document.getElementById('io-box-props-no-images')?.textContent ?? '', source: document.getElementById('io-box-props-source')?.textContent ?? '' } : null;
   });
   expect(props?.name === 'i550 Inverter FW V05.02.xx' && props.vendor === 'Lenze' && /Inputs, port C/.test(props.port ?? ''), `a Lenze drive's properties: ${JSON.stringify(props)}`);
-  expect(props?.links.length === 1 && /^web=https:\/\/www\.google\.com\/search\?q=Lenze%20i550%20i550%20Inverter/.test(props.links[0]) && /desktop app, or through Link/.test(props.pictures) && /From the project/.test(props.source), `another vendor's link; pictures and device files: said where (${JSON.stringify(props)})`);
+  expect(props?.links.length === 1 && /^web=https:\/\/www\.google\.com\/search\?q=Lenze%20i550%20i550%20Inverter/.test(props.links[0]) && /desktop app, through Link/.test(props.pictures) && /From the project/.test(props.source), `another vendor's link; pictures and device files: said where (${JSON.stringify(props)})`);
   await p.screenshot({ path: h.out('io-offline-web.png') });
+  // A front view (its manual's connection diagram): the Lenze drive's (another vendor's), the EL1008's 8 inputs
+  const lenze = await p.evaluate(() => ({ type: document.querySelector('#io-box-props-face [data-terminal-face]')?.getAttribute('data-terminal-face') ?? null, x3: [...document.querySelectorAll('#io-box-props-face [data-face-row]')].map((r) => r.firstElementChild?.textContent.trim()).slice(0, 3) }));
+  expect(lenze.type === 'i550' && lenze.x3.join() === '1a,1b,2a', `the i550's front view: ${JSON.stringify(lenze)}`);
+  await p.keyboard.press('Escape');
+  await h.sleep(300);
+  await p.click('#io-network [data-io-node$="Inputs (EL1008)"]', { button: 'right' }).catch(() => {});
+  await h.sleep(400);
+  const face = await p.evaluate(() => {
+    const f = document.querySelector('#io-box-props-face [data-terminal-face]');
+    return f ? {
+      type: f.getAttribute('data-terminal-face'),
+      contacts: [...f.querySelectorAll('[data-face-contact]')].length,
+      leds: [...f.querySelectorAll('[data-face-led]')].length,
+      rows: [...f.querySelectorAll('[data-face-row]')].map((r) => [...r.children].map((c) => c.textContent.trim()).join(' ')).slice(0, 2),
+      note: f.querySelector('[data-face-note]')?.textContent ?? '',
+    } : null;
+  });
+  expect(face?.type === 'EL1008' && face.contacts === 8 && face.leds === 8 && /^1 Input 1 MAIN\.bStart/.test(face.rows[0] ?? '') && /^2 Input 3/.test(face.rows[1] ?? '') && /check against the manual/.test(face.note), `the EL1008's front view: ${JSON.stringify(face)}`);
+  await p.screenshot({ path: h.out('io-face.png') });
+  // The network zoomed in (from 150 %): each terminal's front drawn on its node
+  for (let i = 0; i < 6; i++) await p.click('#io-network-zoom-in').catch(() => {});
+  await h.sleep(400);
+  const drawn = await p.$$eval('#io-network [data-io-node] [data-terminal-face]', (n) => n.map((x) => x.getAttribute('data-terminal-face')));
+  expect(drawn.join() === 'EK1100,EL1008,i550', `zoomed in: the fronts on the nodes (${drawn.join(', ')})`);
+  await p.screenshot({ path: h.out('io-network-faces.png') });
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

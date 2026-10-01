@@ -24,7 +24,10 @@ async function run(allowBrowse, port) {
     plcs: [{ id: 'line', name: 'Line', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48953', port: 851 }], tokens: [],
   }, null, 1));
   const token = execFileSync(process.execPath, [path.join(REPO, 'gateway', 'gateway.cjs'), 'add-token', 'tester', '--config', gwConfig], { encoding: 'utf8' }).match(/\n\s+(\S+)\s*\n/)[1];
-  const gw = spawn(process.execPath, [path.join(REPO, 'gateway', 'gateway.cjs'), 'start', '--config', gwConfig], { env: { ...process.env, KSS_BUILD_DRYRUN: '1' }, stdio: ['ignore', fs.openSync(path.join(h.OUT, `gw-sym-${port}.txt`), 'w'), 'ignore'] });
+  // (its Devices folder beside its config: a picture of an EL1008; TwinCAT's device descriptions: none here)
+  fs.mkdirSync(path.join(gwDir, 'Devices'), { recursive: true });
+  fs.writeFileSync(path.join(gwDir, 'Devices', 'EL1008.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
+  const gw = spawn(process.execPath, [path.join(REPO, 'gateway', 'gateway.cjs'), 'start', '--config', gwConfig], { env: { ...process.env, KSS_BUILD_DRYRUN: '1', KSS_ESI_DIR: path.join(gwDir, 'no-esi') }, stdio: ['ignore', fs.openSync(path.join(h.OUT, `gw-sym-${port}.txt`), 'w'), 'ignore'] });
   await sleep(1500);
   const got = [];
   const ws = new WebSocket(`ws://localhost:${port}/live`, { headers: { Origin: `http://localhost:${port}` } });
@@ -46,6 +49,8 @@ async function run(allowBrowse, port) {
   ws.send(JSON.stringify({ type: 'ioTree', requestId: 10 }));
   // The EtherCAT master's slave states: the PLC's own device; another system's refused
   ws.send(JSON.stringify({ type: 'ecatStates', requestId: 11, netIds: ['127.0.0.1.2.1', '10.9.9.9.2.1'] }));
+  // A device's details: the gateway's own pictures of it
+  ws.send(JSON.stringify({ type: 'deviceInfo', requestId: 12, productCode: '#x03f03052', revision: '#x00110000', deviceType: 'EL1008 8Ch. Dig. Input', product: 'EL1008' }));
   // Build with an edit (its error from the stand-in compiler); a write (not allowed); a path outside the project
   const conveyor = require('../fakes/symbols-plc.cjs').PLANT_SOURCES['POUs/Conveyor/SM_Conveyor.TcPOU'];
   ws.send(JSON.stringify({ type: 'plcBuild', requestId: 7, edits: [{ plcProject: 'Plant', path: 'POUs/Conveyor/SM_Conveyor.TcPOU', content: conveyor.replace('doState();', 'doState();\nnoSuchVar := 1;') }] }));
@@ -54,7 +59,7 @@ async function run(allowBrowse, port) {
   await sleep(1500);
   ws.close();
   gw.kill();
-  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult' || m.type === 'ioTreeResult' || m.type === 'ecatStatesResult') && m.requestId === id);
+  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult' || m.type === 'ioTreeResult' || m.type === 'ecatStatesResult' || m.type === 'deviceInfoResult') && m.requestId === id);
 }
 
 (async () => {
@@ -82,6 +87,8 @@ async function run(allowBrowse, port) {
   const ec = r(11);
   const mine = ec?.masters?.['127.0.0.1.2.1'];
   expect(mine?.count === 3 && mine.slaves?.map((x) => x.name).join() === 'OP,OP,OP' && mine.slaves.every((x) => x.ok) && mine.slaves.map((x) => x.address).join() === '1001,1002,1003' && mine.slaves.every((x) => x.crc?.join() === '0,0,0,0') && /Not a device of the connected PLC/.test(ec.masters['10.9.9.9.2.1']?.error ?? ''), `ecatStates: ${JSON.stringify(ec)}`);
+  const di = r(12);
+  expect(di?.images?.length === 1 && di.images[0].name === 'EL1008.png' && /Devices$/.test(di.folder ?? '') && di.esi === null, `deviceInfo: the gateway's pictures (${JSON.stringify({ images: di?.images?.map((i) => i.name), folder: di?.folder, esi: di?.esi })})`);
   const line2 = r(6);
   expect(line2?.plcProject === 'Line2' && (line2.files ?? []).map((x) => x.path).join() === 'POUs/SM_Line2.TcPOU' && !line2.stale, `plcProject Line2: ${line2?.error ?? (line2?.files ?? []).map((x) => x.path).join()}`);
   const b = r(7);
@@ -91,7 +98,7 @@ async function run(allowBrowse, port) {
   expect(!!auditFile && /"plc\.build"/.test(fs.readFileSync(path.join(h.OUT, 'gw-sym-test', auditFile), 'utf8')), 'the build in the audit log');
   r = await run(false, 8457);
   expect(/Building the PLC's project is turned off/.test(r(7)?.fatal ?? ''), `without allowBuild: "${r(7)?.fatal}"`);
-  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? '') && /turned off/.test(r(10)?.error ?? '') && /turned off/.test(r(11)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}", "${r(10)?.error}", "${r(11)?.error}"`);
+  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? '') && /turned off/.test(r(10)?.error ?? '') && /turned off/.test(r(11)?.error ?? '') && /Turned off/.test(r(12)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}", "${r(10)?.error}", "${r(11)?.error}", "${r(12)?.error}"`);
   plc.kill();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

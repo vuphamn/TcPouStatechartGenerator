@@ -563,13 +563,14 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   const selfFocusRef = useRef<string | null>(null);
   const caseStates = useMemo(() => new Set(caseBranches.flatMap((b) => b.label.replace(/:.*$/, '').split(',').map((n) => n.trim().split('.').pop() ?? ''))), [caseBranches]);
   useEffect(() => {
-    if (cleanMethodName.toLowerCase() !== 'dostate') return;
+    const isDoState = cleanMethodName.toLowerCase() === 'dostate';
     const onSel = () => {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       if (!ta || ta.id !== 'method-implementation-editor') return;
-      // (the caret moved here: a row highlighted for a state chosen elsewhere, not the caret's, no longer)
-      const caretLine = ta.value.slice(0, ta.selectionStart).split('\n').length;
+      // (the caret moved here: a row highlighted for a state chosen elsewhere or a jump, not the caret's, no longer)
+      const caretLine = implEditorRef.current?.originalLineAt(ta.selectionStart) ?? ta.value.slice(0, ta.selectionStart).split('\n').length;
       setHighlightedCaseLine((h) => (h !== null && h !== caretLine ? null : h));
+      if (!isDoState) return;
       const state = caseStateAt(ta.value, ta.selectionStart, caseStates);
       if (!state || state === caretStateRef.current) return;
       caretStateRef.current = state;
@@ -710,7 +711,6 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   // A jump to a line (Problems tab: Open code). After the state's CASE label scroll above, so the line wins when both
   // come at once; it waits until the requested method is the one shown.
   const handledCodeJumpRef = useRef(0);
-  const codeJumpTimerRef = useRef<number | null>(null);
   useEffect(() => {
     if (!codeJump || codeJump.nonce === handledCodeJumpRef.current) return;
     if (cleanMethodName.toLowerCase() !== codeJump.method.replace(/\(\)$/, '').toLowerCase()) {
@@ -743,20 +743,23 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         return next;
       });
     }
+    // (its row and its line number marked until the caret leaves it or an edit, as a chosen state's; the caret on it,
+    // the editor focused: typed in at once)
     setHighlightedCaseLine(line);
     // After the tab is shown and the code unfolded; again while a just-shown editor is still laying out its lines
+    let placed = false;
     for (const delay of [80, 300, 700]) {
-      window.setTimeout(() => implEditorRef.current?.scrollToLine(line, delay === 80), delay);
+      window.setTimeout(() => {
+        const ed = implEditorRef.current;
+        ed?.scrollToLine(line, delay === 80);
+        const ta = ed?.getTextarea();
+        if (placed || !ed || !ta || ta.clientHeight === 0) return;
+        placed = true;
+        ed.placeCaret(line, true);
+        ta.focus({ preventScroll: true });
+      }, delay);
     }
-    if (codeJumpTimerRef.current !== null) window.clearTimeout(codeJumpTimerRef.current);
-    codeJumpTimerRef.current = window.setTimeout(() => {
-      setHighlightedCaseLine((l) => (l === line ? null : l));
-      codeJumpTimerRef.current = null;
-    }, 3000);
   }, [codeJump, cleanMethodName, availableMethods, foldableBlocks, foldedBlockIds, selectedStateId]);
-  useEffect(() => () => {
-    if (codeJumpTimerRef.current !== null) window.clearTimeout(codeJumpTimerRef.current);
-  }, []);
 
   const isDirty = code !== initialCode || declaration !== initialDeclaration;
   // Its changes, line by line (its Diff button; the "*" on its tab)

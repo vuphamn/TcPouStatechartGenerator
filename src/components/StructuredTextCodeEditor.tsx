@@ -75,8 +75,11 @@ const BOTTOM_ROOM = 48;
 
 export interface StructuredTextCodeEditorRef {
   scrollToLine: (lineNumber: number, smooth?: boolean) => void;
-  /** The caret on a line (1-based, of the code), at its first character; the focus stays where it is */
-  placeCaret: (lineNumber: number) => void;
+  /** The caret on a line (1-based, of the code), at its first character; the focus stays where it is (focused: the
+   * caret left alone, unless evenFocused) */
+  placeCaret: (lineNumber: number, evenFocused?: boolean) => void;
+  /** The line of the code (1-based) a position in the text shown is on (a folded block: its first line) */
+  originalLineAt: (pos: number) => number | null;
   focus: () => void;
   getTextarea: () => HTMLTextAreaElement | null;
   /** Re-indent the code (Format Document); false: nothing changed */
@@ -431,14 +434,20 @@ export const StructuredTextCodeEditor = forwardRef<
     // Expose imperative methods to parent
     useImperativeHandle(ref, () => ({
       scrollToLine: (originalLineNum: number, smooth = true) => scrollToOriginal(originalLineNum, smooth),
-      placeCaret: (originalLineNum: number) => {
+      placeCaret: (originalLineNum: number, evenFocused = false) => {
         const ta = textareaRef.current;
         // (not while it has the focus: typing there, its own caret)
-        if (!ta || originalLineNum <= 0 || ta.ownerDocument.activeElement === ta) return;
+        if (!ta || originalLineNum <= 0 || (!evenFocused && ta.ownerDocument.activeElement === ta)) return;
         const lines = ta.value.split('\n');
         const idx = Math.min(viewIndexOf(originalLineNum), lines.length - 1);
         const at = lines.slice(0, idx).reduce((n, l) => n + l.length + 1, 0) + (lines[idx]?.match(/^\s*/)?.[0].length ?? 0);
         ta.setSelectionRange(at, at);
+      },
+      originalLineAt: (pos: number) => {
+        const ta = textareaRef.current;
+        if (!ta) return null;
+        const idx = ta.value.slice(0, pos).split('\n').length - 1;
+        return lineEntries[idx]?.originalLineNumber ?? null;
       },
       focus: () => {
         textareaRef.current?.focus();

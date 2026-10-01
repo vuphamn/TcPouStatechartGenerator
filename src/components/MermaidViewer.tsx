@@ -132,10 +132,11 @@ import {
   extractCanvasNodePositions,
 } from '../utils/canvasPositions.ts';
 import { compositeColors } from '../utils/compositeColors.ts';
+import { canvasBackgroundOf, ideThemeOf, isDarkTheme, mermaidThemeOptions } from '../utils/ideThemes.ts';
 
 export type LayoutEngine = 'dagre' | 'elk';
 export type FlowchartCurve = 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
-export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default';
+export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default' | import('../utils/ideThemes.ts').IdeThemeId;
 
 /**
  * Composite states (and parallel regions): a sand border, dashed, with a faint tint of the same and the title in it,
@@ -145,7 +146,7 @@ export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default';
  * sand; the light themes: a darker one
  */
 export function compositeStyle(theme: MermaidTheme | undefined, preset: string = 'sand', own: Record<string, string> = {}): string {
-  const dark = !theme || theme === 'dark';
+  const dark = isDarkTheme(theme);
   // (scope: which clusters, as the inside of a :where(); the rules for one composite come after all's, as specific)
   const rules = (scope: string[], color: string) => {
     const c = compositeColors(color, dark);
@@ -315,6 +316,8 @@ export interface MermaidViewerProps {
   edgeMembersOf?: (from: string, to: string) => { from: string; to: string; priority?: number | null }[];
   /** One of those picked in the guard popup: its code opened */
   onOpenTransitionCode?: (from: string, to: string) => void;
+  /** Go to code: an edge's condition where it is in the code (doState() or preProcess()) */
+  onGoToEdgeCode?: (edge: EdgeInfo) => void;
   /** The composites' colour (a preset: sand, slate, …, plain) and each one's own (its {region}'s // @color) */
   compositeColor?: string;
   compositeOwnColors?: Record<string, string>;
@@ -334,7 +337,10 @@ export interface MermaidViewerProps {
   /** Keys on the canvas (not while typing or with a menu / dialog open), with the selection; true: handled */
   onCanvasKey?: (e: KeyboardEvent, selection: { stateId: string | null; edge: EdgeInfo | null }) => boolean;
   nodeOffsets?: NodeOffsetsMap;
-  onNodeOffsetsChange?: (offsets: NodeOffsetsMap) => void;
+  /** Changed: the states kept where they are in the drawing that follows (an undo / redo of a code change) */
+  keepPositionsSignal?: number;
+  /** (auto: the canvas' own placing, the locked layout's or a drop's: no undo step of its own) */
+  onNodeOffsetsChange?: (offsets: NodeOffsetsMap, opts?: { auto?: boolean }) => void;
   notes?: DiagramNotes;
   onSaveNote?: (target: ContextMenuTarget, noteText: string) => void;
   onDeleteNote?: (target: ContextMenuTarget) => void;
@@ -1051,6 +1057,35 @@ export function findEdgeNearPoint(
   return bestEdge;
 }
 
+/**
+ * A state's box in its drawing's coordinates (the drawing not laid out yet: from its group's translate and its shape's
+ * own attributes, a rect, polygon, circle or path), among a root's nodes; null when not there
+ */
+function nodeBoxIn(root: Element, stateId: string): { x0: number; y0: number; x1: number; y1: number } | null {
+  const esc = stateId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const idRx = new RegExp(`(^|-)${esc}-\\d+$`);
+  const node = Array.from(root.querySelectorAll('g.node')).find((n) => n.getAttribute('data-state-id') === stateId || idRx.test(n.getAttribute('id') || '') || n.getAttribute('data-id') === stateId);
+  if (!node) return null;
+  const t = /translate\(\s*(-?[\d.]+)[\s,]+(-?[\d.]+)\s*\)/.exec(node.getAttribute('transform') || '');
+  const tx = t ? Number(t[1]) : 0;
+  const ty = t ? Number(t[2]) : 0;
+  const shape = node.querySelector(':scope > rect, :scope > polygon, :scope > circle, :scope > path, :scope > g > rect, :scope > g > path');
+  if (!shape) return null;
+  const n = (a: string) => Number(shape.getAttribute(a) || 0);
+  let pts: number[][] = [];
+  const tag = shape.nodeName.toLowerCase();
+  if (tag === 'rect') pts = [[n('x'), n('y')], [n('x') + n('width'), n('y') + n('height')]];
+  else if (tag === 'circle') pts = [[n('cx') - n('r'), n('cy') - n('r')], [n('cx') + n('r'), n('cy') + n('r')]];
+  else {
+    const nums = (shape.getAttribute(tag === 'polygon' ? 'points' : 'd') || '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+    for (let i = 0; i + 1 < nums.length; i += 2) pts.push([nums[i], nums[i + 1]]);
+  }
+  if (!pts.length) return null;
+  const xs = pts.map((q) => q[0] + tx);
+  const ys = pts.map((q) => q[1] + ty);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+}
+
 function enhanceSvgWithPriorityCircles(
   svgString: string,
   selectedStateId?: string | null,
@@ -1569,6 +1604,25 @@ function enhanceSvgWithPriorityCircles(
             }
           }
         }
+        // (still on its state, e.g. a small rounded AnyState whose edges start inside it: further along its edge,
+        // until clear of the state's border)
+        const fromBox = matchedEdge ? nodeBoxIn(parent, matchedEdge.from) : null;
+        const on = (x: number, y: number) => !!fromBox && x > fromBox.x0 - 9 && x < fromBox.x1 + 9 && y > fromBox.y0 - 9 && y < fromBox.y1 + 9;
+        if (on(cx, cy) && typeof (pathEl as SVGPathElement).getPointAtLength === 'function') {
+          try {
+            const len = (pathEl as SVGPathElement).getTotalLength();
+            for (let d = offset; d <= len * 0.7; d += 4) {
+              const q = (pathEl as SVGPathElement).getPointAtLength(d);
+              if (!on(q.x, q.y) && clear(q.x, q.y)) {
+                cx = q.x;
+                cy = q.y;
+                break;
+              }
+            }
+          } catch {
+            // (no geometry here: where it was)
+          }
+        }
         placedBadges.push({ x: cx, y: cy });
 
         // TwinCAT XAE UML Statechart style circular badge
@@ -1697,6 +1751,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onEdgeEndpointDrop,
     edgeMembersOf,
     onOpenTransitionCode,
+    onGoToEdgeCode,
     compositeColor = 'sand',
     compositeOwnColors,
     onCanvasKey,
@@ -1734,6 +1789,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     focusStateRequest,
     priorityFormat = 'circled',
     layoutLocked: externalLayoutLocked,
+    keepPositionsSignal,
     onLayoutLockedChange: onLayoutLockedChangeProp,
     onToast: onToastProp,
     toolbarPortalTarget,
@@ -1766,6 +1822,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     });
   }, []);
   const [svgContent, setSvgContent] = useState<string>('');
+  // The chart (its file) the SVG shown was drawn for: another chart's SVG until the new one is drawn
+  const svgChartRef = useRef<string | undefined>(undefined);
+  // (each new SVG counted: a drop's places are kept in the drawing after it, not in a redraw of the one before)
+  const svgVersionRef = useRef(0);
+  const fileNameRef = useRef(fileName);
+  fileNameRef.current = fileName;
+  useEffect(() => {
+    svgChartRef.current = fileNameRef.current;
+    svgVersionRef.current += 1;
+  }, [svgContent]);
   const [layoutTrigger, setLayoutTrigger] = useState<number>(0);
   const [isAutoAligning, setIsAutoAligning] = useState<boolean>(false);
   const autoAlignInProgressRef = useRef<boolean>(false);
@@ -2219,8 +2285,51 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     return () => clearTimeout(timer);
   }, [layoutLockToast]);
 
-  // Pinned/locked canvas positions for all states (stateId -> { centerX, centerY })
+  // Pinned/locked canvas positions for all states (stateId -> { centerX, centerY }), of the chart drawn (renderedChartRef):
+  // another chart's are not kept (the start symbol and AnyState have the same ids in every chart: they would be put
+  // where the previous chart had them)
   const lockedNodePositionsRef = useRef<Record<string, { centerX: number; centerY: number }>>({});
+  const renderedChartRef = useRef<string | undefined>(undefined);
+  // An edit from the canvas itself (an edge's end dropped on another state): the states kept where they were in the
+  // drawing that follows it, locked or not (taken at the drop; dropped when no drawing follows within a few seconds)
+  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
+  // Each state's place at the last edits from the canvas and undos (this chart's; a state gone since too): one that
+  // comes back (an undo of its deletion) where it was. (Not at each drawing: a deleted state is drawn once more
+  // without its offset before it goes.)
+  const lastDrawnPositionsRef = useRef<Record<string, { centerX: number; centerY: number }>>({});
+  /** The states' places on the canvas now (moved by hand since it was drawn too), this chart's, remembered with those
+   * gone since */
+  const rememberDrawnPositions = () => {
+    const svg = getDiagramSvg();
+    if (!svg || svgChartRef.current !== fileNameRef.current) return;
+    const prev = lastDrawnPositionsRef.current;
+    const now = extractCanvasNodePositions(svg, {});
+    // (a drawing laid out again may be shifted as a whole: the ones not in it moved with it, by the states in both)
+    const median = (v: number[]) => (v.length ? [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)] : 0);
+    const both = Object.keys(now).filter((id) => prev[id]);
+    const dx = median(both.map((id) => now[id].centerX - prev[id].centerX));
+    const dy = median(both.map((id) => now[id].centerY - prev[id].centerY));
+    const drawn: Record<string, { centerX: number; centerY: number }> = {};
+    for (const [id, q] of Object.entries(prev)) if (!now[id]) drawn[id] = { centerX: q.centerX + dx, centerY: q.centerY + dy };
+    for (const [id, q] of Object.entries(now)) drawn[id] = { centerX: q.centerX, centerY: q.centerY };
+    lastDrawnPositionsRef.current = drawn;
+  };
+  /** The states' places now (as drawn: the drawing already has the offsets in it) and its frame, for the next drawing */
+  const keepPositionsForNextDrawing = () => {
+    const svg = getDiagramSvg();
+    if (!svg) return;
+    rememberDrawnPositions();
+    const positions: Record<string, { centerX: number; centerY: number }> = { ...lastDrawnPositionsRef.current };
+    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
+  };
+  // (an undo / redo of a code change: the states where they are; the chart drawn again for the code as it was)
+  const keepSignalRef = useRef(keepPositionsSignal);
+  useEffect(() => {
+    if (keepPositionsSignal === keepSignalRef.current) return;
+    keepSignalRef.current = keepPositionsSignal;
+    keepPositionsForNextDrawing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keepPositionsSignal]);
 
   const handleToggleLayoutLocked = useCallback(() => {
     setEffectiveLayoutLocked((prev) => {
@@ -2254,7 +2363,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   }, [effectiveNodeOffsets, setEffectiveLayoutLocked, getDiagramSvg]);
 
   useEffect(() => {
-    if (externalLayoutLocked) {
+    // (the SVG still another chart's: nothing taken from it)
+    if (externalLayoutLocked && renderedChartRef.current === fileName && svgChartRef.current === fileName) {
       if (containerRef.current) {
         const svg = getDiagramSvg();
         if (svg) {
@@ -2267,7 +2377,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
       }
     }
-  }, [externalLayoutLocked, effectiveNodeOffsets]);
+  }, [externalLayoutLocked, effectiveNodeOffsets, fileName]);
+  // Another chart opened: the locked positions are its own (taken once it is drawn)
+  useEffect(() => {
+    if (renderedChartRef.current !== undefined && renderedChartRef.current !== fileName) lockedNodePositionsRef.current = {};
+  }, [fileName]);
 
   // Custom node styles (fallback to local if not controlled)
   const [internalCustomStyles, setInternalCustomStyles] = useState<CustomNodeStylesMap>({});
@@ -3094,7 +3208,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         ensureElkRegistered();
         mermaid.initialize({
           startOnLoad: false,
-          theme: mermaidTheme,
+          // (an IDE theme: Mermaid's base theme with its colours)
+          ...mermaidThemeOptions(mermaidTheme),
           securityLevel: 'loose',
           layout: layoutEngine,
           flowchart: {
@@ -3195,10 +3310,29 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const svg = getDiagramSvg();
     if (!svg) return;
     initializeSvgDragMetadata(svg, availableEdges);
+    // (the SVG still the previous chart's, its file just changed: not locked to it, nor taken as this chart's)
+    const stale = svgChartRef.current !== fileName;
+    // (this SVG is this chart's: another one's locked positions dropped)
+    if (!stale && renderedChartRef.current !== fileName) {
+      if (renderedChartRef.current !== undefined) lockedNodePositionsRef.current = {};
+      lastDrawnPositionsRef.current = {};
+      renderedChartRef.current = fileName;
+    }
 
     let targetNodeOffsets = { ...effectiveNodeOffsets };
 
-    if (isLayoutLocked && Object.keys(lockedNodePositionsRef.current).length > 0) {
+    // (the states' places to keep: after a drop on the canvas, else the locked layout's)
+    const kept = keepPositionsRef.current && keepPositionsRef.current.chart === fileName && svgVersionRef.current > keepPositionsRef.current.version && Date.now() - keepPositionsRef.current.at < 8000 ? keepPositionsRef.current : null;
+    const keep = kept ? kept.positions : null;
+    if (!stale && kept) {
+      keepPositionsRef.current = null;
+      // (the drawing's frame as before: a bigger one would scale every state on screen)
+      for (const [attr, v] of Object.entries(kept.frame)) if (v !== null) svg.setAttribute(attr, v);
+      // (the locked layout's from now on: these too)
+      if (isLayoutLocked) lockedNodePositionsRef.current = { ...lockedNodePositionsRef.current, ...keep };
+    }
+    const pinned = stale ? null : keep ?? (isLayoutLocked && Object.keys(lockedNodePositionsRef.current).length > 0 ? lockedNodePositionsRef.current : null);
+    if (pinned) {
       // Automatic re-layout is disabled! Maintain custom node positions across code edits:
       const nodes = Array.from(svg.querySelectorAll('g.node')) as SVGGElement[];
       const updatedOffsets: NodeOffsetsMap = { ...targetNodeOffsets };
@@ -3212,7 +3346,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }
         if (!stateId || stateId.startsWith('note_')) continue;
 
-        const lockedPos = lockedNodePositionsRef.current[stateId];
+        const lockedPos = pinned[stateId];
         if (lockedPos) {
           const geom = getNodeGeometry(node, svg);
           const neededX = Math.round(lockedPos.centerX - geom.origCenterX);
@@ -3226,7 +3360,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         targetNodeOffsets = updatedOffsets;
         currentNodeOffsetsRef.current = updatedOffsets;
         if (onNodeOffsetsChange) {
-          onNodeOffsetsChange(updatedOffsets);
+          onNodeOffsetsChange(updatedOffsets, { auto: true });
         } else {
           setInternalNodeOffsets(updatedOffsets);
         }
@@ -3246,7 +3380,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setCanvasNodePositions(positions);
 
     // If layout is not locked, OR if lockedNodePositions is empty (freshly auto-aligned), keep lockedNodePositionsRef in sync with latest positions
-    if (!isLayoutLocked || Object.keys(lockedNodePositionsRef.current).length === 0) {
+    if (!stale && (!isLayoutLocked || Object.keys(lockedNodePositionsRef.current).length === 0)) {
       const newLocked: Record<string, { centerX: number; centerY: number }> = {};
       for (const [id, p] of Object.entries(positions)) {
         newLocked[id] = { centerX: p.centerX, centerY: p.centerY };
@@ -4668,6 +4802,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [eId]: edgeInitialOffsetRef.current };
     const svg = getDiagramSvg();
     if (svg) applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, eId, layoutEngine, flowchartCurve);
+    // (the states stay where they are in the drawing the edit brings)
+    keepPositionsForNextDrawing();
     onEdgeEndpointDrop?.(target.edge, target.type, target.id);
     return true;
   };
@@ -5788,7 +5924,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // Preset export background wins; otherwise derive from the diagram theme
   const defaultExportBackground: ExportBackground =
-    exportSettings?.background ?? (mermaidTheme === 'dark' || !mermaidTheme ? 'dark' : 'white');
+    exportSettings?.background ?? (isDarkTheme(mermaidTheme) ? 'dark' : 'white');
 
   const handleQuickDownloadPng = async (scale: ExportScale = 2, background?: ExportBackground) => {
     const svgEl = getActiveSvgElement();
@@ -7100,10 +7236,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         }}
         onDrop={handlePaletteDrop}
         data-grid={showGrid ? 'on' : 'off'}
+        style={canvasBackgroundOf(mermaidTheme) ? { backgroundColor: canvasBackgroundOf(mermaidTheme)! } : undefined}
         className={`flex-1 relative overflow-hidden [background-size:16px_16px] cursor-grab transition-colors duration-200 ${
           isNodeDragging ? 'tc-node-dragging ' : ''
         }${
-          mermaidTheme === 'dark'
+          ideThemeOf(mermaidTheme)
+            ? `${showGrid ? 'bg-[radial-gradient(var(--color-slate-800)_1px,transparent_1px)]' : ''}`
+            : mermaidTheme === 'dark'
             ? `bg-slate-900 ${showGrid ? 'bg-[radial-gradient(#1e293b_1px,transparent_1px)]' : ''}`
             : mermaidTheme === 'forest'
             ? `bg-[#f4f7f4] ${showGrid ? 'bg-[radial-gradient(#cbd5e1_1px,transparent_1px)]' : ''}`
@@ -7160,8 +7299,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                       cx={snapConfig.gridSize / 2}
                       cy={snapConfig.gridSize / 2}
                       r="1.2"
-                      fill={mermaidTheme === 'dark' ? '#475569' : '#94a3b8'}
-                      opacity={mermaidTheme === 'dark' ? '0.65' : '0.45'}
+                      fill={isDarkTheme(mermaidTheme) ? '#475569' : '#94a3b8'}
+                      opacity={isDarkTheme(mermaidTheme) ? '0.65' : '0.45'}
                     />
                   </pattern>
                 </defs>
@@ -7493,6 +7632,21 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                   >
                     Prio [{hoveredEdgeCondition.priority}]
                   </span>
+                )}
+                {onGoToEdgeCode && hoveredEdgeCondition.edge.from !== '[*]' && (
+                  <button
+                    id="guard-popup-goto-code"
+                    type="button"
+                    title={`Go to code: its condition in ${hoveredEdgeCondition.edge.from === 'AnyState' || /^\[preProcess\]/i.test(hoveredEdgeCondition.fullCondition) ? 'preProcess()' : 'doState()'}, in the Method Editor`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onGoToEdgeCode(hoveredEdgeCondition.edge);
+                      setHoveredEdgeCondition(null);
+                    }}
+                    className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800"
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                  </button>
                 )}
                 <button
                   id="guard-popup-copy"

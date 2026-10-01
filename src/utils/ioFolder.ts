@@ -37,7 +37,11 @@ export async function readIoFolderInBrowser(): Promise<IoTree & { canceled?: boo
   const at = await find(root, 0, '');
   if (!at) return { devices: [], links: [], folder: root.name, error: 'No TwinCAT project (.tsproj) in that folder' };
   let config: Dir | null = null;
-  for await (const e of at.dir.values()) if (e.kind === 'directory' && e.name === '_Config') config = e;
+  let tsprojFile: Entry | null = null;
+  for await (const e of at.dir.values()) {
+    if (e.kind === 'directory' && e.name === '_Config') config = e;
+    if (e.kind === 'file' && e.name === at.tsproj) tsprojFile = e;
+  }
   const files: Record<string, string> = {};
   let count = 0;
   const walk = async (d: Dir, rel: string, depth: number) => {
@@ -48,6 +52,8 @@ export async function readIoFolderInBrowser(): Promise<IoTree & { canceled?: boo
     }
   };
   if (config) await walk(config, '_Config/', 0);
+  // (the .tsproj too: a project may keep its I/O in it)
+  if (tsprojFile?.getFile) files[at.tsproj] = await (await tsprojFile.getFile()).text();
   const parser = new DOMParser();
   const tree = parseIoTreeWith(files, (t) => parser.parseFromString(t, 'text/xml'));
   const project = at.tsproj.replace(/\.tsproj$/i, '');

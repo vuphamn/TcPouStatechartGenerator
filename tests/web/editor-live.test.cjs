@@ -57,7 +57,8 @@ const ID = 'method-implementation-editor';
   await page.evaluate(() => document.getElementById('dock-tab-method')?.click());
   await page.waitForSelector(`#${ID}`, { timeout: 10000 });
   let inline = [];
-  for (let i = 0; i < 30 && !inline.length; i++) {
+  // (until they are all drawn: the first ones may come alone)
+  for (let i = 0; i < 50 && inline.length <= 3; i++) {
     await sleep(200);
     inline = await page.$$eval(`#${ID}-inline-values .st-inline-values`, (n) => n.map((x) => x.textContent.trim()));
   }

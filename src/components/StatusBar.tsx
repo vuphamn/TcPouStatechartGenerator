@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, CircleDot, FileCode, GitCompare, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, CircleDot, Cpu, FileCode, GitCompare, X } from 'lucide-react';
 
 export interface StatusMessage {
   text: string;
@@ -22,6 +22,9 @@ interface StatusBarProps {
   onOpenProblems: () => void;
   live?: { state: string | null; message?: string } | null;
   onOpenLive: () => void;
+  /** The I/O's health while live (the I/O tab's boxes: how many known, how many not in OP) */
+  io?: { known: number; down: string[] } | null;
+  onOpenIo?: () => void;
   /** Compare mode: number of differences to the baseline */
   changes?: number | null;
   onOpenChanges: () => void;
@@ -50,6 +53,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onOpenProblems,
   live,
   onOpenLive,
+  io,
+  onOpenIo,
   changes,
   onOpenChanges,
   host,
@@ -87,6 +92,19 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <button id="status-live" type="button" onClick={onOpenLive} className="flex items-center gap-1.5 hover:text-emerald-200 text-emerald-300 shrink-0" title={live.message}>
         <span className="live-dot" />
         <span className="font-mono truncate max-w-[220px]">{live.state ?? 'LIVE'}</span>
+      </button>
+    )}
+    {io && io.known > 0 && (
+      <button
+        id="status-io"
+        type="button"
+        onClick={onOpenIo}
+        data-down={io.down.length || undefined}
+        className={`flex items-center gap-1 shrink-0 ${io.down.length ? 'text-rose-300 hover:text-rose-200 font-semibold' : 'text-emerald-300 hover:text-emerald-200'}`}
+        title={io.down.length ? `Not in OP:\n${io.down.slice(0, 12).join('\n')}${io.down.length > 12 ? '\n…' : ''}\n(the I/O tab)` : `All ${io.known} boxes in OP (the I/O tab)`}
+      >
+        <Cpu className="w-3 h-3" />
+        {io.down.length ? `I/O: ${io.down.length} not OP` : 'I/O OK'}
       </button>
     )}
     {changes != null && (

@@ -345,9 +345,27 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
     }
     if (mode === 'move') {
       if (!arm) return { error: `Cannot move ${name}: ${TOGETHER}` };
-      if (arm.kw === 'ELSE' && alone) return { error: `${name} is the ELSE of an IF: move it in the Method Editor` };
-      if (arm.kw === 'ELSE') return { error: `Cannot move ${name}: it is inside an ELSE (its condition is the others' not holding): move it in the Method Editor` };
-      if (arm.kw === 'IF' && nextArm?.kw === 'ELSE') return { error: `The IF of ${name} has an ELSE: move it in the Method Editor` };
+      if (arm.kw === 'ELSE') {
+        // (an ELSE's condition: none of the arms before it holding)
+        const conds = arms!.filter((a) => a.kw !== 'ELSE').map(condOf);
+        const bare = /^\s*ELSE\s*$/i.test(s.code[arm.head]);
+        if (!bare || conds.some((c) => !c)) return { error: `Cannot move ${name}: it is inside an ELSE written on one line with its code: move it in the Method Editor` };
+        const elseCond = conds.map((c) => `NOT (${c})`).join(' AND ');
+        const ind = leading(lines[arm.head]);
+        if (alone) {
+          // The ELSE of an IF / ELSIF … / ELSE out, as IF NOT (…) AND NOT (…) of its own; the IF stays without it
+          const endIf = `${ind}${lines[st.end - 1].trim().match(/^END_IF\s*;?/i)?.[0] ?? 'END_IF'}`;
+          const taken = [...lines.slice(arm.start, arm.head), `${ind}IF ${elseCond} THEN`, ...lines.slice(arm.body, arm.end), endIf];
+          return { lines: [...lines.slice(0, arm.start), ...lines.slice(arm.end)], taken: wrap(taken), removed: lines.slice(arm.start, arm.end), note: ` (as IF ${elseCond}: the ELSE it was; the IF stays in ${edge.from} without it)${aroundNote()}` };
+        }
+        // Inside an ELSE: moved inside IF NOT (…) (the ELSE's condition), as in the IFs around it
+        around.push({ cond: elseCond, indent: ind });
+        from = arm.body;
+        to = arm.end;
+        continue;
+      }
+      // (the IF arm of an IF / ELSE alone in it: as above, when its ELSE is written on a line of its own)
+      if (arm.kw === 'IF' && nextArm?.kw === 'ELSE' && alone) return { error: `The IF of ${name} has an ELSE written on one line with its code: move it in the Method Editor` };
     }
     if (arm && alone && !(arm.kw === 'IF' && nextArm?.kw === 'ELSE')) {
       // The arm out of the IF; as an IF of its own

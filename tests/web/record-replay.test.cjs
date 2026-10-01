@@ -12,6 +12,9 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const p = await browser.newPage();
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
+  await p.evaluateOnNewDocument(() => { const orig = console.error; console.error = (...a) => { if (/Maximum update depth/.test(String(a[0]))) orig('LOOPSTACK ' + new Error().stack); return orig(...a); }; });
+  p.on('console', (m) => { if (m.type() === 'error' && /LOOPSTACK/.test(m.text())) console.log(m.text().slice(0, 4000)); if (false) Promise.all(m.args().map((x) => x.evaluate((v) => (v && v.stack) || String(v)).catch(() => '?'))).then((t) => console.log('CONSOLE-ERR', t.join(' || ').slice(0, 6000))); });
+  p.on('framenavigated', (f) => { if (f === p.mainFrame()) console.log('NAVIGATED', f.url()); });
   const sent = [];
   const toApp = (m) => p.evaluate((m) => window.__fromHost(m), m).catch(() => {});
   await p.goto(h.APP_URL, { waitUntil: 'load' });
@@ -120,8 +123,13 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.waitForSelector('#live-replay-bar', { timeout: 3000 }).catch(() => {});
   expect(!!(await p.$('#live-replay-bar')) && /Replay: replay\.kssrec\.json/.test(await p.$eval('#live-status', (e) => e.textContent)), 'Replay: the bar, the status');
   await p.select('#live-replay-speed', '60');
-  await h.sleep(1500);
-  const rows = await p.$$eval('.live-trail-row', (r) => r.length);
+  // (played: its 4 transitions; a busy machine takes longer)
+  let rows = 0;
+  for (let i = 0; i < 40 && rows < 4; i++) {
+    await h.sleep(250);
+    rows = await p.$$eval('.live-trail-row', (r) => r.length);
+  }
+  if (rows < 4) console.log('DBG tabs', JSON.stringify(await p.evaluate(() => ({ tabs: [...document.querySelectorAll('[role=tab][aria-selected=true]')].map((t) => t.id), bar: !!document.getElementById('live-replay-bar'), live: !!document.getElementById('live-status'), status: document.getElementById('live-status')?.textContent, body: document.body.innerText.slice(0, 400) }))));
   const current = await p.$eval('#live-current-state', (e) => e.textContent).catch(() => '');
   expect(rows === 4 && /TABLEMANAGER_CLAMPED/.test(current), `played at 60x: ${rows} transitions, now in ${current.trim().split(/\s+/)[0]}`);
   const guardShown = await p.evaluate(() => document.body.innerText.includes('cmd_bUnclamp = TRUE'));

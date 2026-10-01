@@ -122,8 +122,8 @@ const devicesDirOf = (documents) => path.join(documents || path.join(os.homedir(
  * The user's pictures of a type (its name at the start of the file's: "EL1008.png", "EL1008 front.jpg",
  * "EL1008-back.webp"), at most 8 of 6 MB each: [{ name, dataUrl }]
  */
-function deviceImages(documents, product) {
-  const dir = devicesDirOf(documents);
+function deviceImages(documents, product, folder = null) {
+  const dir = folder || devicesDirOf(documents);
   const p = String(product || '').trim().toLowerCase();
   if (!p || /[\\/]/.test(p)) return [];
   let names = [];
@@ -150,15 +150,18 @@ function deviceImages(documents, product) {
   return out;
 }
 
-/** The properties' details: req { productCode, revision, type, product }, documents -> { esi, images, folder } */
-function deviceInfo(req, documents) {
+/**
+ * The properties' details: req { productCode, revision, type, product }, documents (the user's Documents folder; or
+ * folder: the pictures' own, e.g. a gateway's) -> { esi, images, folder }
+ */
+function deviceInfo(req, documents, folder = null) {
   let esi = null;
   try {
     esi = findDevice(req);
   } catch {
     esi = null;
   }
-  return { esi, images: deviceImages(documents, req?.product || String(req?.type || '').split(/[\s,;]+/)[0]), folder: devicesDirOf(documents), esiDirs: esiDirs() };
+  return { esi, images: deviceImages(documents, req?.product || String(req?.type || '').split(/[\s,;]+/)[0], folder), folder: folder || devicesDirOf(documents), esiDirs: esiDirs() };
 }
 
 module.exports = { deviceInfo, findDevice, deviceImages, devicesDirOf, esiDirs, candidates };

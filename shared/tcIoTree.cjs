@@ -24,7 +24,8 @@ async function readIoTree(read) {
     return { error: 'The PLC keeps no TwinCAT project in its boot folder (CurrentConfig.tszip): activate the configuration from XAE once' };
   }
   const files = {};
-  for (const f of unzip(zip, (path) => /\.xti$/i.test(path))) files[f.path] = f.data.toString('utf8');
+  // (the .xti files, and the .tsproj: a project may keep its I/O in it)
+  for (const f of unzip(zip, (path) => /\.xti$/i.test(path) || /^[^/]+\.tsproj$/i.test(path))) files[f.path] = f.data.toString('utf8');
   let project = '';
   try {
     project = (await projectInfoOf(read, zip))?.project?.name ?? '';
@@ -87,6 +88,12 @@ async function readIoFolder(dir) {
     }
   };
   walk(path.join(root, '_Config'), '_Config/', 0);
+  // (the .tsproj too: a project may keep its I/O in it, no _Config\IO)
+  try {
+    files[tsproj] = fs.readFileSync(path.join(root, tsproj), 'utf8');
+  } catch {
+    // (unreadable: its .xti files only)
+  }
   const project = tsproj.replace(/\.tsproj$/i, '');
   const tree = await parseIoTree(files);
   if (!tree.devices.length) return { ...tree, project, folder: root, error: 'No I/O devices in that TwinCAT project (its _Config folder)' };

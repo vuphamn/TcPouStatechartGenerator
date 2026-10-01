@@ -578,7 +578,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -604,7 +604,7 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}`);
         audit.add(user, 'sign-in', { ip, how: 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
       }
 
       // Operator board: the machines of these PLCs (default: all), once a second
@@ -844,6 +844,15 @@ function start() {
           send({ type: 'ioTreeResult', requestId, error: ads.adsErrorText(err) });
         }
         return;
+      }
+      // A device's details for the I/O tab (read-only, this server): TwinCAT's device descriptions here, the pictures in
+      // its Devices folder (config.devicesFolder, else Devices beside config.json), with the browser's permission
+      if (m.type === 'deviceInfo') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBrowse === false) return send({ type: 'deviceInfoResult', requestId, esi: null, images: [], folder: '', error: 'Turned off on this gateway' });
+        const req = { productCode: String(m.productCode ?? ''), revision: String(m.revision ?? ''), type: String(m.deviceType ?? ''), product: String(m.product ?? '') };
+        const folder = path.resolve(baseDir, config.devicesFolder || 'Devices');
+        return send({ type: 'deviceInfoResult', requestId, ...require('../shared/tcDeviceInfo.cjs').deviceInfo(req, null, folder) });
       }
       // The EtherCAT masters' slave states (read-only), with the browser's permission (the connected PLC's own devices)
       if (m.type === 'ecatStates') {

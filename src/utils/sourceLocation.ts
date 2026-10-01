@@ -66,7 +66,7 @@ export function locateTransition(
   edge: { from: string; to: string; condition?: string; label?: string }
 ): SourceLocation | null {
   const guard = (edge.condition || edge.label || '').replace(/<br\s*\/?>/gi, ' ').trim();
-  const fromPreProcess = /^\[preProcess\]/i.test(guard);
+  const fromPreProcess = /^\[preProcess\]/i.test(guard) || edge.from === 'AnyState';
   const method = fromPreProcess ? 'preProcess' : 'doState';
   const lines = methodLines(pouXml, method);
   if (!lines) return null;

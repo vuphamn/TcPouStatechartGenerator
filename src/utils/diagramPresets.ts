@@ -1,3 +1,4 @@
+import { IDE_THEMES } from './ideThemes.ts';
 import { DiagramPreset, PresetExportSettings } from '../types.ts';
 import { LayoutEngine, FlowchartCurve, MermaidTheme } from '../components/MermaidViewer.tsx';
 import { PriorityFormat } from '../generator.ts';
@@ -87,6 +88,21 @@ export const BUILTIN_PRESETS: DiagramPreset[] = [
     isBuiltin: true,
     description: 'Light background presentation theme with standard parenthesized priorities and 4x ultra lossless vector SVG export.',
   },
+  // After popular IDEs (src/utils/ideThemes.ts): the app and the chart in their colours; ELK, smooth curves, circled
+  // priorities; a PNG export on the theme's own background
+  ...IDE_THEMES.map(
+    (t): DiagramPreset => ({
+      id: `builtin-ide-${t.id}`,
+      name: t.name,
+      layoutEngine: 'elk',
+      flowchartCurve: 'basis',
+      mermaidTheme: t.id,
+      priorityFormat: 'circled',
+      exportSettings: { format: 'png', scale: 2, background: t.dark ? 'dark' : 'white' },
+      isBuiltin: true,
+      description: `The ${t.from} look: its ${t.dark ? 'dark' : 'light'} colours for the whole app and the chart; ELK routing with smooth curves, circled priorities, and a 2x PNG export.`,
+    })
+  ),
 ];
 
 export interface DiagramOptionsState {

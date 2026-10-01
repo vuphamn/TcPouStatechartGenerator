@@ -41,7 +41,7 @@ export function parseIoTreeWith(files, parseXml) {
   const devices = [];
   const links = [];
   for (const [p, text] of Object.entries(files)) {
-    if (!/\.xti$/i.test(p)) continue;
+    if (!/\.(xti|tsproj)$/i.test(p)) continue;
     let doc;
     try {
       doc = parseXml(String(text).replace(/^﻿/, ''));
@@ -50,8 +50,11 @@ export function parseIoTreeWith(files, parseXml) {
     }
     const root = doc?.documentElement;
     if (!root) continue;
-    // An I/O device: its boxes nested
-    for (const dev of kids(root, 'Device')) {
+    // An I/O device: its boxes nested (an .xti's own; a .tsproj's in its <Io>, not those kept in an .xti: File="…")
+    const devs = /\.tsproj$/i.test(p)
+      ? Array.from(root.getElementsByTagName('Device')).filter((d) => d.parentNode?.nodeName === 'Io' && !d.getAttribute('File'))
+      : kids(root, 'Device');
+    for (const dev of devs) {
       const named = textOf(kid(dev, 'Name'));
       const name = dev.getAttribute('RemoteName') || (named && named !== '__FILENAME__' ? named : base(p));
       let slave = 0;
@@ -160,5 +163,5 @@ export function parseIoTreeWith(files, parseXml) {
   return { devices, links };
 }
 
-/** A TwinCAT project folder's files for its I/O tree (offline): its .tsproj's name, its _Config's .xti paths */
-export const IO_FILE = /(^|\/)_Config\/.*\.xti$/i;
+/** A TwinCAT project folder's files for its I/O tree (offline): its .tsproj, its _Config's .xti files */
+export const IO_FILE = /(^|\/)_Config\/.*\.xti$|\.tsproj$/i;

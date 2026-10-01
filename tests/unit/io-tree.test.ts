@@ -7,7 +7,10 @@ const { readIoFolder, parseIoTree: parseIoTreeNode } = require('../../shared/tcI
 const { DOMParser } = require('@xmldom/xmldom');
 import { parseIoTreeWith, portAOf } from '../../shared/ioTreeParse.mjs';
 import { boxStates, stateEvents } from '../../src/components/IoNetworkView.tsx';
-import { deviceLinks } from '../../src/components/IoBoxProperties.tsx';
+import { deviceLinks, durationText } from '../../src/components/IoBoxProperties.tsx';
+import { recentEventsOf } from '../../src/components/IoTreePanel.tsx';
+import { TERMINAL_FACES, contactPos, faceFor, faceOf } from '../../src/data/terminalFaces.ts';
+import { compareIoTrees } from '../../src/utils/ioCompare.ts';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { findDevice, deviceImages, candidates } = require('../../shared/tcDeviceInfo.cjs');
 const parseIoTree = (files: Record<string, string>) => parseIoTreeWith(files, (t: string) => new DOMParser({ onError: () => {} }).parseFromString(t, 'text/xml'));
@@ -191,6 +194,39 @@ expect(op.name === 'OP' && op.ok && bad.name === 'SAFEOP' && !bad.ok && bad.flag
   // Links: Beckhoff's product page (TwinCAT's own when known), its search, its manual; another vendor's: a web search
   const beck = deviceLinks({ name: 'T (EL6070-0033)', product: 'EL6070-0033', path: 'x', boxes: [], pdos: [], info: { type: 'EL6070-0033 1Ch. Licence key', vendorId: 2 } });
   expect(beck.map((l) => `${l.kind}=${l.url}`).join(' ') === 'product=https://www.beckhoff.com/el6070-0033 search=https://www.beckhoff.com/en-us/search-results/?q=EL6070-0033 manual=https://document.beckhoff.com/el6070.pdf?target=el6070&lang=en-us', `Beckhoff's links: ${beck.map((l) => l.url).join(' ')}`);
+  // The front views' table: each type once, each contact in its grid once, a source each; found by the box's type
+  const types = TERMINAL_FACES.map((f) => f.type);
+  expect(new Set(types).size === types.length && types.length >= 23, `the fronts: ${types.length} types, each once`);
+  const bad = TERMINAL_FACES.filter((f) => {
+    const pos = f.contacts.map((c) => contactPos(c.n));
+    return !f.source.length || new Set(pos).size !== pos.length || pos.some((p) => p < 1 || p > f.columns * f.rows) || f.leds.some((l) => l.at && (l.at[0] >= Math.max(1, f.ledColumns) || l.at[0] < 0));
+  }).map((f) => f.type);
+  expect(bad.length === 0, `each front's contacts within its grid, a source each (${bad.join(', ') || 'all fine'})`);
+  expect(faceFor('ELM3142-0000')?.type === 'ELM3142-0000' && faceFor('EL6070-0033')?.type === 'EL6070-0033' && faceFor('EL9227-5500')?.rows === 4 && faceFor('EL7041') === null, 'faceFor: by the type, a variant\'s own');
+  expect(faceOf({ name: 'SI (EL1904)', product: 'EL1904', path: 'x', boxes: [], pdos: [], info: { type: 'EL1904, 4 Ch. Safety Input 24V, TwinSAFE' } })?.type === 'EL1904' && contactPos("3'") === 11 && contactPos(16) === 16, 'faceOf: a TwinSAFE terminal\'s; a second block\'s contact');
+  // (the drives' and other vendors' fronts: by their base type)
+  expect(faceFor('AX5106-0000-0203')?.type === 'AX5106' && faceFor('AX8206-0000-0105')?.type === 'AX8206' && faceFor('EX260-SEC3')?.type === 'EX260-SEC3' && faceOf({ name: 'Feed (Inverter i550 Cabinet)', product: 'x', path: 'x', boxes: [], pdos: [], info: { type: 'i550 Inverter FW V05.02.xx' } })?.type === 'i550', 'faceFor: a variant down to its base type; the i550 by its type\'s first word');
+
+  // A project that keeps its I/O in its .tsproj (no _Config\IO): found there; a device kept in an .xti (File=): not twice
+  const TSPROJ = `<?xml version="1.0"?><TcSmProject><Project><Io><Device File="Other (EtherCAT).xti" Id="2"/><Device Id="1" AmsNetId="5.6.7.8.3.1" RemoteName="Inline (EtherCAT)"><Name>Inline (EtherCAT)</Name><Box Id="1"><Name>K (EK1100)</Name><EtherCAT Type="EK1100" PortABoxInfo="#x00ffffff"/></Box></Device></Io></Project></TcSmProject>`;
+  const inline = parseIoTree({ 'Line.tsproj': TSPROJ });
+  expect(inline.devices.map((d: { name: string }) => d.name).join() === 'Inline (EtherCAT)' && inline.devices[0].boxes[0].product === 'EK1100', `the .tsproj's own I/O: ${JSON.stringify(inline.devices.map((d: { name: string }) => d.name))}`);
+
+  // The PLC's I/O and the project's compared: a box added, one missing, another revision, cabled elsewhere
+  const mk = (boxes: object[]) => ({ devices: [{ name: 'D', netId: null, boxes }], links: [] });
+  const bx = (id: number, name: string, extra: object = {}) => ({ name, product: '', path: `D^${name}`, id, boxes: [], pdos: [], info: { type: name.split(' ')[0], productCode: '#x1', revision: '#x10' }, portA: { master: true, port: 0 }, ...extra });
+  const diffs = compareIoTrees(
+    mk([bx(1, 'EK1100 K'), bx(2, 'EL1008 A', { portA: { box: 1, port: 1 } }), bx(3, 'EL2008 B', { info: { type: 'EL2008', productCode: '#x1', revision: '#x11' } }), bx(4, 'EL9410 P')]) as never,
+    mk([bx(1, 'EK1100 K'), bx(2, 'EL1008 A', { portA: { box: 1, port: 3 } }), bx(3, 'EL2008 B'), bx(5, 'EL1088 Q')]) as never
+  );
+  expect(diffs.map((d) => d.kind).join() === 'cabling,device,only-plc,only-project' && /revision #x11 on the PLC, #x10 in the project/.test(diffs[1].text) && /port B on the PLC.*port D in the project/.test(diffs[0].text), `compareIoTrees: ${diffs.map((d) => d.text).join(' | ')}`);
+  expect(compareIoTrees(mk([bx(1, 'EK1100 K')]) as never, mk([bx(1, 'EK1100 K')]) as never).length === 0, 'the same: no differences');
+
+  // A state's time; a device's events in the last hour
+  expect([5e3, 192e3, 2 * 3600e3 + 5 * 60e3, 3 * 86400e3 + 3600e3].map(durationText).join(' | ') === '5 s | 3 min 12 s | 2 h 05 min | 3 d 1 h', `durationText: ${[5e3, 192e3, 2 * 3600e3 + 5 * 60e3, 3 * 86400e3 + 3600e3].map(durationText).join(' | ')}`);
+  const now = 10 * 3600e3;
+  const evAt = (at: number, path: string) => ({ at, path, box: 'b', kind: 'state' as const, text: '', ok: false });
+  expect(recentEventsOf([evAt(now - 60e3, 'Line^T1'), evAt(now - 2 * 3600e3, 'Line^T2'), evAt(now - 60e3, 'Other^T1'), evAt(now - 60e3, 'Line2^T1')], 'Line', now).length === 1, 'the last hour, this device only');
   // (a TwinSAFE terminal's type: "EL1904, 4 Ch. Safety Input" -> EL1904)
   const safe = deviceLinks({ name: 'SI (EL1904)', product: 'EL1904', path: 'x', boxes: [], pdos: [], info: { type: 'EL1904, 4 Ch. Safety Input 24V, TwinSAFE', vendorId: 2 } });
   expect(safe[0].url === 'https://www.beckhoff.com/el1904' && safe[2].url.startsWith('https://document.beckhoff.com/el1904.pdf'), `a TwinSAFE terminal's links: ${safe.map((l) => l.url).join(' ')}`);

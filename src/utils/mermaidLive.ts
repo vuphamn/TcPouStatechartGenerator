@@ -1,8 +1,9 @@
+import { mermaidThemeOptions } from './ideThemes.ts';
 import pako from 'pako';
 
 export type LayoutEngine = 'dagre' | 'elk';
 export type FlowchartCurve = 'basis' | 'linear' | 'cardinal' | 'stepAfter' | 'monotoneX' | 'natural';
-export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default';
+export type MermaidTheme = 'dark' | 'neutral' | 'forest' | 'base' | 'default' | import('./ideThemes.ts').IdeThemeId;
 
 export interface MermaidLiveOptions {
   layout?: LayoutEngine;
@@ -20,7 +21,10 @@ export function withoutSecurityLevel(init: string): string {
 export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): string {
   const layout = options?.layout ?? 'elk';
   const curve = options?.curve ?? 'basis';
-  const theme = options?.theme ?? 'dark';
+  const ideOptions = mermaidThemeOptions(options?.theme ?? 'dark');
+  const theme = ideOptions.theme;
+  // (an IDE theme: its colours as the init directive's themeVariables)
+  const vars = ideOptions.themeVariables ? `, 'themeVariables': ${JSON.stringify(ideOptions.themeVariables).replace(/"/g, "'")}` : '';
 
   // Inject theme and layout directives into Mermaid source code so mermaid.live always renders
   // with the user's selected theme (dark, neutral, forest, base, default) and layout engine (elk, dagre).
@@ -32,8 +36,9 @@ export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): s
       let updated = match;
       if (/['"]?theme['"]?\s*:/i.test(updated)) {
         updated = updated.replace(/(['"]?theme['"]?\s*:\s*['"])[^'"]+(['"])/i, `$1${theme}$2`);
+        if (vars && !/themeVariables/.test(updated)) updated = updated.replace(/%%\{init:\s*\{/, `%%{init: {${vars.slice(2)}, `);
       } else {
-        updated = updated.replace(/%%\{init:\s*\{/, `%%{init: {'theme': '${theme}', `);
+        updated = updated.replace(/%%\{init:\s*\{/, `%%{init: {'theme': '${theme}'${vars}, `);
       }
       if (/['"]?layout['"]?\s*:/i.test(updated)) {
         updated = updated.replace(/(['"]?layout['"]?\s*:\s*['"])[^'"]+(['"])/i, `$1${layout}$2`);
@@ -44,7 +49,7 @@ export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): s
       return withoutSecurityLevel(updated);
     });
   } else {
-    codeWithTheme = `%%{init: {'theme': '${theme}', 'layout': '${layout}', 'flowchart': {'defaultRenderer': '${layout}', 'curve': '${curve}', 'htmlLabels': true}}}%%\n${codeWithTheme}`;
+    codeWithTheme = `%%{init: {'theme': '${theme}'${vars}, 'layout': '${layout}', 'flowchart': {'defaultRenderer': '${layout}', 'curve': '${curve}', 'htmlLabels': true}}}%%\n${codeWithTheme}`;
   }
 
   const state = {

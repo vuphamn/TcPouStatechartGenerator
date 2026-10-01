@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, ExternalLink, FileText, FolderOpen, ImageOff, Info, ListTree, Search, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ClipboardCopy, ExternalLink, FileText, FolderOpen, ImageOff, Info, ListTree, RotateCcw, Search, X } from 'lucide-react';
+import { copyTextToClipboard } from '../utils/diagramExport.ts';
+import { TerminalFaceView } from './TerminalFace.tsx';
+import { faceOf } from '../data/terminalFaces.ts';
 import type { IoBox, IoDevice } from './IoTreePanel.tsx';
 import { stateText, type IoEvent, type SlaveState } from './IoNetworkView.tsx';
 
@@ -21,8 +24,34 @@ export interface DeviceInfo {
   error?: string;
 }
 
+/** Since when a box is in its state (first: since the I/O tab started reading, it may be longer), when it last left OP */
+export interface BoxSince {
+  name: string;
+  ok: boolean;
+  since: number;
+  first?: boolean;
+  lastLeftOp?: number;
+}
+/** The CRC counters when they were set to count from (Reset: "since now") */
+export interface CrcBase {
+  at: number;
+  crc: number[];
+}
+
+/** A duration as read (e.g. "3 min 12 s", "2 h 05 min") */
+export function durationText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${String(s % 60).padStart(2, '0')} s`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h} h ${String(m % 60).padStart(2, '0')} min`;
+  return `${Math.floor(h / 24)} d ${h % 24} h`;
+}
+const clock = (t: number) => new Date(t).toLocaleTimeString();
+
 /** EtherCAT vendor ids seen in Kval's machines (others: by their number) */
-const VENDORS: Record<number, string> = { 0x2: 'Beckhoff Automation', 0x3b: 'Lenze' };
+const VENDORS: Record<number, string> = { 0x2: 'Beckhoff Automation', 0x3b: 'Lenze', 0x114: 'SMC' };
 const hex8 = (n: number) => `#x${n.toString(16).padStart(8, '0')}`;
 const PORTS = ['A', 'B', 'C', 'D'];
 
@@ -47,7 +76,7 @@ export function deviceLinks(b: IoBox, esiUrl?: string): { kind: 'product' | 'sea
       { kind: 'manual', label: 'Manual (PDF)', url: `https://document.beckhoff.com/${family.toLowerCase()}.pdf?target=${family.toLowerCase()}&lang=en-us` },
     ];
   }
-  const who = b.info?.supplier || (b.info?.vendorId !== undefined ? VENDORS[b.info.vendorId] : '') || '';
+  const who = b.info?.supplier || (b.info?.vendorId !== undefined ? VENDORS[b.info.vendorId] : '') || b.name.replace(/\s*\([^()]*\)\s*$/, '');
   return [
     ...(esiUrl ? [{ kind: 'product' as const, label: 'Product page', url: esiUrl }] : []),
     { kind: 'web', label: 'Search the web', url: `https://www.google.com/search?q=${encodeURIComponent(`${who} ${b.info?.type || t}`.trim())}` },
@@ -73,10 +102,23 @@ export const IoBoxProperties: React.FC<{
   onOpenFolder?: () => void;
   onShowInTree: (path: string) => void;
   onClose: () => void;
-}> = ({ box, device, parent, state, events, valueOf, fetchInfo, onOpenFolder, onShowInTree, onClose }) => {
+  since?: BoxSince;
+  crcBase?: CrcBase;
+  onResetCrc?: (crc: number[]) => void;
+  /** Where its pictures come from (the desktop app, Link, a gateway) */
+  picturesWhere?: 'desktop' | 'link' | 'gateway';
+}> = ({ box, device, parent, state, events, valueOf, fetchInfo, onOpenFolder, onShowInTree, onClose, since, crcBase, onResetCrc, picturesWhere }) => {
   const [info, setInfo] = useState<DeviceInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [zoom, setZoom] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  // (the time in its state, going on)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!since) return;
+    const t = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [since]);
   const t = typeOf(box);
   useEffect(() => {
     setInfo(null);
@@ -95,6 +137,29 @@ export const IoBoxProperties: React.FC<{
   const links = deviceLinks(box, info?.esi?.url);
   const where = box.portA?.master ? `the master (${device.name})` : parent ? `${parent.name.replace(/\s*\([^()]*\)\s*$/, '')}, port ${PORTS[box.portA?.port ?? 1] ?? '?'}` : '—';
   const entries = box.pdos.flatMap((p) => p.entries.map((e) => ({ ...e, pdo: p.name, dir: p.dir })));
+  // The CRC counters from their baseline ("since now"), else as the master counts them
+  const crcShown = state?.crc ? state.crc.map((n, i) => Math.max(0, n - (crcBase?.crc[i] ?? 0))) : null;
+  const sinceText = since ? `${since.first ? 'for at least ' : 'for '}${durationText(Date.now() - since.since)} (since ${clock(since.since)})` : '';
+  /** Everything known of it, as text (a ticket, a message to the electrician) */
+  const diagnostics = () => {
+    const lines = [
+      `${box.name}${t ? ` [${t}]` : ''}`,
+      `Device: ${device.name}${device.netId ? ` (${device.netId})` : ''}`,
+      ...(info?.esi?.name || box.info?.type ? [`Name: ${info?.esi?.name || box.info?.type}`] : []),
+      ...(vendor ? [`Vendor: ${vendor}`] : []),
+      ...(box.info?.productCode ? [`Product code: ${box.info.productCode}, revision ${box.info.revision ?? '?'}`] : []),
+      `Box Id ${box.id ?? '?'}, EtherCAT address ${state?.address ?? box.address ?? '?'}, slave #${box.slave !== null && box.slave !== undefined ? box.slave + 1 : '?'}, port A to ${where}`,
+      `State: ${state ? stateText(state) : 'not known'}${sinceText ? ` ${sinceText}` : ''}${since?.lastLeftOp ? `; last left OP at ${new Date(since.lastLeftOp).toLocaleString()}` : ''}`,
+      ...(crcShown ? [`CRC errors${crcBase ? ` since ${new Date(crcBase.at).toLocaleString()}` : ''}: ${crcShown.map((n, i) => `${PORTS[i]} ${n}`).join(', ')}${crcBase ? ` (counted in all: ${state!.crc!.join(', ')})` : ''}`] : []),
+      ...(entries.some((e) => e.link) ? ['Linked:', ...entries.filter((e) => e.link).map((e) => {
+        const v = valueOf(e.link!);
+        return `  ${e.pdo === '(other links)' ? '' : `${e.pdo} / `}${e.name}: ${e.link}${v === undefined ? '' : ` = ${show(v.v)}`}`;
+      })] : []),
+      ...(events.length ? ['Recent events:', ...events.slice(0, 20).map((ev) => `  ${new Date(ev.at).toLocaleString()} ${ev.text}`)] : []),
+      `(Kval StateScope, ${new Date().toLocaleString()})`,
+    ];
+    return lines.join('\n');
+  };
   const row = (k: string, v: React.ReactNode, id?: string) =>
     v === '' || v === null || v === undefined ? null : (
       <div className="flex gap-2 py-0.5" data-io-prop={id}>
@@ -108,7 +173,19 @@ export const IoBoxProperties: React.FC<{
         <Info className="w-3.5 h-3.5 text-sky-400 shrink-0" />
         {t && <span className="shrink-0 px-1 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-sky-300">{t}</span>}
         <span className="truncate font-semibold text-slate-100" title={box.name}>{box.name.replace(/\s*\([^()]*\)\s*$/, '')}</span>
-        <button type="button" onClick={() => onShowInTree(box.path)} className="ml-auto shrink-0 p-0.5 rounded hover:bg-slate-800 text-slate-400" title="Show it in the tree">
+        <button
+          id="io-box-props-copy"
+          type="button"
+          onClick={() => void copyTextToClipboard(diagnostics()).then((ok) => {
+            setCopied(ok);
+            window.setTimeout(() => setCopied(false), 1500);
+          })}
+          className={`ml-auto shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] ${copied ? 'border-emerald-600 text-emerald-300' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+          title="Copy its details, state, CRC counters, linked variables and recent events (for a ticket or a message)"
+        >
+          <ClipboardCopy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy diagnostics'}
+        </button>
+        <button type="button" onClick={() => onShowInTree(box.path)} className="shrink-0 p-0.5 rounded hover:bg-slate-800 text-slate-400" title="Show it in the tree">
           <ListTree className="w-3.5 h-3.5" />
         </button>
         <button id="io-box-props-close" type="button" onClick={onClose} className="shrink-0 p-0.5 rounded hover:bg-slate-800 text-slate-400" title="Close (Esc)">
@@ -144,13 +221,23 @@ export const IoBoxProperties: React.FC<{
           {state ? (
             <>
               <div data-io-prop="state" className={`font-bold ${state.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{stateText(state)}</div>
-              {state.crc && (
-                <div id="io-box-props-crc" className="mt-1 flex gap-1.5" title="CRC errors counted on each port by the master (rising: a cable or connector to check)">
-                  {state.crc.map((n, i) => (
-                    <span key={i} data-io-crc={PORTS[i]} className={`px-1.5 rounded border font-mono ${n ? 'border-amber-700 bg-amber-950/50 text-amber-200' : 'border-slate-800 text-slate-500'}`}>
-                      {PORTS[i]}: {n}
-                    </span>
-                  ))}
+              {sinceText && <div id="io-box-props-since" className="text-slate-400">{sinceText}</div>}
+              <div id="io-box-props-last-left" className="text-slate-500">{since?.lastLeftOp ? `Last left OP at ${clock(since.lastLeftOp)} (${durationText(Date.now() - since.lastLeftOp)} ago)` : since ? 'Has not left OP since the I/O tab started reading' : ''}</div>
+              {crcShown && (
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <span id="io-box-props-crc" className="flex gap-1.5" title={`CRC errors counted on each port by the master (rising: a cable or connector to check)${crcBase ? `\nSince ${new Date(crcBase.at).toLocaleString()}; counted in all: ${state.crc!.join(', ')}` : ''}`}>
+                    {crcShown.map((n, i) => (
+                      <span key={i} data-io-crc={PORTS[i]} className={`px-1.5 rounded border font-mono ${n ? 'border-amber-700 bg-amber-950/50 text-amber-200' : 'border-slate-800 text-slate-500'}`}>
+                        {PORTS[i]}: {n}
+                      </span>
+                    ))}
+                  </span>
+                  {crcBase && <span id="io-box-props-crc-since" className="text-[10px] text-slate-500">since {clock(crcBase.at)}</span>}
+                  {onResetCrc && (
+                    <button id="io-box-props-crc-reset" type="button" onClick={() => onResetCrc(state.crc!)} className="flex items-center gap-1 px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800" title="Count from now (the master's counters stay as they are): after a cable or connector is changed, new errors stand out">
+                      <RotateCcw className="w-3 h-3" /> Count from now
+                    </button>
+                  )}
                 </div>
               )}
             </>
@@ -158,6 +245,13 @@ export const IoBoxProperties: React.FC<{
             <div className="text-slate-500">{box.disabled ? 'Disabled in the project' : 'Not known (not live, or the master does not answer)'}</div>
           )}
         </section>
+
+        {faceOf(box) && (
+          <section id="io-box-props-face">
+            <h4 className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Front view</h4>
+            <TerminalFaceView box={box} valueOf={valueOf} />
+          </section>
+        )}
 
         {links.length > 0 && (
           <section>
@@ -190,8 +284,8 @@ export const IoBoxProperties: React.FC<{
               <ImageOff className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span>
                 {fetchInfo
-                  ? <>No pictures of {t || 'it'} yet: put your own (front, back, its wiring) in {info?.folder ? <span className="font-mono text-slate-400 break-all">{info.folder}</span> : 'the Devices folder'}, named like <span className="font-mono text-slate-400">{t || 'EL1008'}.png</span> or <span className="font-mono text-slate-400">{t || 'EL1008'} front.jpg</span>.</>
-                  : 'Your own pictures of a device are shown in the desktop app, or through Link.'}
+                  ? <>No pictures of {t || 'it'} yet: put your own (front, back, its wiring) in {info?.folder ? <span className="font-mono text-slate-400 break-all">{info.folder}</span> : 'the Devices folder'}{picturesWhere === 'gateway' ? ' (on the gateway\'s server)' : ''}, named like <span className="font-mono text-slate-400">{t || 'EL1008'}.png</span> or <span className="font-mono text-slate-400">{t || 'EL1008'} front.jpg</span>.</>
+                  : 'Your own pictures of a device are shown in the desktop app, through Link, or from a gateway\'s Devices folder.'}
               </span>
             </div>
           )}

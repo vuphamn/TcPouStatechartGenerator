@@ -133,8 +133,28 @@ import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
 import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
-import type { DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
+import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
 import { canPickIoFolder, readIoFolderInBrowser } from './utils/ioFolder.ts';
+import { IDE_THEMES, ideThemeOf, ideThemesCss } from './utils/ideThemes.ts';
+
+/** A short two-tone beep (an I/O alert) */
+function ioBeep() {
+  try {
+    const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    [880, 660].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = f;
+      g.gain.value = 0.08;
+      o.connect(g).connect(ctx.destination);
+      o.start(ctx.currentTime + i * 0.18);
+      o.stop(ctx.currentTime + i * 0.18 + 0.15);
+    });
+    window.setTimeout(() => void ctx.close(), 800);
+  } catch {
+    // (no audio here)
+  }
+}
 import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -427,9 +447,24 @@ export const App: React.FC = () => {
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
   }, [appearanceOpen]);
-  // The Theme for the whole app, not only the diagram: a light one on <html data-app-theme> (src/styles/appThemes.css)
+  // The Theme for the whole app, not only the diagram: a light one on <html data-app-theme> (src/styles/appThemes.css);
+  // an IDE's on <html data-ide-theme> (its greys and accent; a light one over the light palette, "default")
   useEffect(() => {
     const el = document.documentElement;
+    const ide = ideThemeOf(mermaidTheme);
+    if (ide) {
+      if (!document.getElementById('kss-ide-themes')) {
+        const style = document.createElement('style');
+        style.id = 'kss-ide-themes';
+        style.textContent = ideThemesCss();
+        document.head.appendChild(style);
+      }
+      el.setAttribute('data-ide-theme', ide.id);
+      if (ide.dark) el.removeAttribute('data-app-theme');
+      else el.setAttribute('data-app-theme', 'default');
+      return;
+    }
+    el.removeAttribute('data-ide-theme');
     if (mermaidTheme === 'dark') el.removeAttribute('data-app-theme');
     else el.setAttribute('data-app-theme', mermaidTheme);
   }, [mermaidTheme]);
@@ -2823,8 +2858,8 @@ export const App: React.FC = () => {
   const edgeMembersOf = useCallback((from: string, to: string) => edgeMembersAll.get(`${from}->${to}`) ?? [], [edgeMembersAll]);
   // A transition of the code (one of a collapsed edge's, from its guard popup): its IF in the Method editor
   const handleOpenTransitionCode = useCallback(
-    (from: string, to: string) => {
-      const loc = locateTransition(pouContent, { from, to });
+    (from: string, to: string, label?: string) => {
+      const loc = locateTransition(pouContent, { from, to, label });
       if (!loc) {
         showCopyToast(`The code of ${from} → ${to} was not found`, 'error');
         return;
@@ -2833,6 +2868,18 @@ export const App: React.FC = () => {
       setCodeJump({ method: loc.method, line: loc.line, nonce: Date.now() });
     },
     [pouContent, showCopyToast, handleOpenInspectorPanel]
+  );
+  // Go to code (an edge's menu, its guard popup): its condition in doState() or preProcess(), in the Method Editor; an
+  // edge from a composite's border: its transition's (the first of several: the others in its guard popup)
+  const handleGoToEdgeCode = useCallback(
+    (edge: EdgeInfo) => {
+      const real = currentEdge(edge);
+      const members = edgeMembersAll.get(`${real.from}->${real.to}`) ?? [];
+      const one = real.from !== 'AnyState' && !knownStates.has(real.from) && members.length ? members[0] : real;
+      handleOpenTransitionCode(one.from, one.to, drawnEdge(edge).label ?? edge.label);
+      if (one !== real && members.length > 1) showCopyToast(`This edge stands for ${members.length} transitions: ${one.from} → ${one.to}'s code (the others: in its guard popup)`, 'success', 6000);
+    },
+    [currentEdge, drawnEdge, edgeMembersAll, knownStates, handleOpenTransitionCode, showCopyToast]
   );
   // Copy / paste a state: a new state with a copy of its code (enum member, branches), then Rename… opens for it
   // The state(s) copied (Ctrl+C: the selected one, or the several selected ones)
@@ -2990,6 +3037,8 @@ export const App: React.FC = () => {
         danger: true,
         submitLabel: 'Delete state',
         onSubmit: () => {
+          // (the other states stay where they are on the canvas: Ctrl+Z puts it back where it was)
+          setKeepCanvasPositions((v) => v + 1);
           handleReplaceSources(r.pou, r.dut);
           dropStateKeys(id);
           if (selectedStateId === id) {
@@ -3021,7 +3070,11 @@ export const App: React.FC = () => {
         confirmOnly: true,
         danger: true,
         submitLabel: 'Delete transition',
-        onSubmit: () => applyTransitionEdit(r),
+        onSubmit: () => {
+          // (the states stay where they are on the canvas)
+          setKeepCanvasPositions((v) => v + 1);
+          applyTransitionEdit(r);
+        },
       });
     },
     [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast, seen]
@@ -3608,7 +3661,12 @@ export const App: React.FC = () => {
   const nodeOffsetsRef = useRef(nodeOffsets);
   nodeOffsetsRef.current = nodeOffsets;
   // The canvas moved states: where they were is kept for Undo (a held arrow key is one step)
-  const handleCanvasNodeOffsets = useCallback((next: NodeOffsetsMap) => {
+  const handleCanvasNodeOffsets = useCallback((next: NodeOffsetsMap, opts?: { auto?: boolean }) => {
+    // (the canvas' own placing: the locked layout's, a drop's states kept: part of the edit, no undo step)
+    if (opts?.auto) {
+      setNodeOffsets(next);
+      return;
+    }
     const h = historyRef.current;
     const now = Date.now();
     if (now - h.layoutAt > 300 || h.orderPast[h.orderPast.length - 1] !== 'layout') {
@@ -3624,6 +3682,8 @@ export const App: React.FC = () => {
     setHistoryVersion((v) => v + 1);
   }, []);
   const [historyVersion, setHistoryVersion] = useState(0);
+  // An undo / redo of a code change: the canvas keeps its states where they are (counted)
+  const [keepCanvasPositions, setKeepCanvasPositions] = useState(0);
   useEffect(() => {
     const h = historyRef.current;
     const snap = { pou: pouContent, dut: dutContent };
@@ -3680,6 +3740,8 @@ export const App: React.FC = () => {
         }
       }
       if (orderFrom[orderFrom.length - 1] === 'code') orderFrom.pop();
+      // (the states where they are on the canvas: the chart drawn again for the code as it was)
+      setKeepCanvasPositions((v) => v + 1);
       const from = back ? h.past : h.future;
       const to = back ? h.future : h.past;
       const snap = from.pop();
@@ -4680,6 +4742,9 @@ export const App: React.FC = () => {
       // A transition's priority (its order in the state's doState() branch, or in preProcess())
       if (target.type === 'edge' && pouContent) {
         const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
+        // Go to code: its condition where it is, in doState() or preProcess()
+        if (edge.from !== '[*]')
+          items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()'}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
         // (a choice's arm: its state's order)
         const real = currentEdge(edge);
         const order = transitionOrder(pouContent, real, varFor(real.from));
@@ -4911,6 +4976,10 @@ export const App: React.FC = () => {
     window.addEventListener(CODE_FOCUS_EVENT, on);
     return () => window.removeEventListener(CODE_FOCUS_EVENT, on);
   }, []);
+  // Another state selected (the canvas, Identified States): the editors' caret state is no longer the one shown
+  useEffect(() => {
+    setCodeFocus((f) => (f && f.state !== selectedStateId ? null : f));
+  }, [selectedStateId]);
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
       // (a build's message: opened as the build dialog opens it)
@@ -5339,6 +5408,7 @@ export const App: React.FC = () => {
     const stateVar = identifiedStatesResult.stateVarName || 'machineState';
     const targetNetId = liveSettings.netId.trim();
     // A new session: a new recording (a replay showing ends)
+    console.log('KSS-DBG start', new Error().stack);
     replayingRef.current = false;
     setReplay(null);
     recorderRef.current.reset();
@@ -5571,6 +5641,14 @@ export const App: React.FC = () => {
     setIoEcat(null);
     setIoLoading(false);
   }, [liveStatus.state, liveMode]);
+  // The project's I/O, to compare with the PLC's (the desktop app: the open POU's project, else a folder chosen; the
+  // browser: a folder chosen)
+  const fetchProjectIo = useCallback(async (): Promise<IoTree | null> => {
+    const api = desktopLive()?.ioTreeFolder;
+    const r = api ? await api({ pouPath: pouPath || undefined, pick: false }) : await readIoFolderInBrowser();
+    if (r.canceled) return null;
+    return { devices: r.devices ?? [], links: r.links ?? [], project: r.project, folder: r.folder ?? '', error: r.error };
+  }, [pouPath]);
   // Offline: the I/O of the TwinCAT project on this computer (the desktop app: the open POU's project; pick: a folder
   // chosen; the browser: a folder chosen, Chrome / Edge)
   const ioFolderApi = !!desktopLive()?.ioTreeFolder || (!isXaeHost() && canPickIoFolder());
@@ -5595,7 +5673,8 @@ export const App: React.FC = () => {
   const [ioStatesWanted, setIoStatesWanted] = useState(false);
   const handleIoStatesWanted = useCallback((on: boolean) => setIoStatesWanted(on), []);
   useEffect(() => {
-    if (!ioStatesWanted || liveStatus.state !== 'connected' || !ioTree || ioTree.folder !== undefined) return;
+    // (also with the I/O tab closed: the status bar's health, the alerts)
+    if (liveStatus.state !== 'connected' || !ioTree || ioTree.folder !== undefined) return;
     const netIds = [...new Set(ioTree.devices.filter((d) => d.netId && d.boxes.length).map((d) => d.netId!))];
     if (!netIds.length) return;
     let stopped = false;
@@ -5621,7 +5700,7 @@ export const App: React.FC = () => {
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [ioStatesWanted, liveStatus.state, ioTree, liveMode]);
+  }, [liveStatus.state, ioTree, liveMode]);
   // (another PLC: its tree read again when asked)
   useEffect(() => {
     setIoTree(null);
@@ -5629,9 +5708,34 @@ export const App: React.FC = () => {
   }, [liveStatus.target]);
   // What happened to the boxes while live: each read of the masters compared with the one before (newest first)
   const [ioEvents, setIoEvents] = useState<IoEvent[]>([]);
+  // Alerts when a box leaves OP: a message (on by default), a sound (off)
+  const [ioAlerts, setIoAlertsState] = useState<{ toast: boolean; sound: boolean }>(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem('kss.io.alerts') || '{}');
+      return { toast: v.toast !== false, sound: v.sound === true };
+    } catch {
+      return { toast: true, sound: false };
+    }
+  });
+  const ioAlertsRef = useRef(ioAlerts);
+  ioAlertsRef.current = ioAlerts;
+  const setIoAlerts = useCallback((v: { toast: boolean; sound: boolean }) => {
+    setIoAlertsState(v);
+    try {
+      localStorage.setItem('kss.io.alerts', JSON.stringify(v));
+    } catch {
+      // per-viewer convenience only
+    }
+  }, []);
   const ioPrevStatesRef = useRef<Map<string, SlaveState>>(new Map());
+  // Since when each box is in its state, and when it last left OP (by path)
+  const [ioSince, setIoSince] = useState<Record<string, BoxSince>>({});
+  // The CRC counters' baselines ("since now", by path)
+  const [ioCrcBase, setIoCrcBase] = useState<Record<string, CrcBase>>({});
   useEffect(() => {
     ioPrevStatesRef.current = new Map();
+    setIoSince({});
+    setIoCrcBase({});
   }, [ioTree]);
   useEffect(() => {
     if (!ioTree || !ioEcat?.masters) return;
@@ -5639,9 +5743,56 @@ export const App: React.FC = () => {
     const next = boxStates(ioTree.devices, ioEcat, () => undefined);
     const names = new Map(ioTree.devices.flatMap((d) => allBoxes(d.boxes).map((b) => [b.path, b.name] as const)));
     const found = stateEvents(ioPrevStatesRef.current, next, names);
+    const before = ioPrevStatesRef.current;
     ioPrevStatesRef.current = next;
+    setIoSince((prev) => {
+      let changed = false;
+      const out = { ...prev };
+      const now = Date.now();
+      for (const [path, st] of next) {
+        const was = before.get(path);
+        const cur = out[path];
+        if (!cur || !was || was.name !== st.name || was.ok !== st.ok) {
+          out[path] = { name: st.name, ok: st.ok, since: cur && was && was.name === st.name && was.ok === st.ok ? cur.since : now, first: !was && !cur, ...(cur?.lastLeftOp ? { lastLeftOp: cur.lastLeftOp } : {}), ...(was?.ok && !st.ok ? { lastLeftOp: now } : {}) };
+          changed = true;
+        }
+      }
+      return changed ? out : prev;
+    });
     if (found.length) setIoEvents((prev) => [...found.reverse(), ...prev].slice(0, 500));
+    // (a box out of OP: said at once, wherever the I/O tab is; a sound when asked for)
+    const bad = found.filter((e) => !e.ok && e.kind === 'state' && before.size > 0);
+    if (bad.length && ioAlertsRef.current.toast) showCopyToast(`I/O: ${bad[0].text}${bad.length > 1 ? ` (and ${bad.length - 1} more)` : ''}`, 'error', 10000);
+    if (bad.length && ioAlertsRef.current.sound) ioBeep();
   }, [ioEcat, ioTree]);
+  // The I/O's health while live (the status bar): the boxes known, those not in OP
+  const ioHealth = useMemo(() => {
+    if (!ioTree || ioTree.folder !== undefined || liveStatus.state !== 'connected' || !ioEcat?.masters) return null;
+    const st = boxStates(ioTree.devices, ioEcat, () => undefined);
+    const names = new Map(ioTree.devices.flatMap((d) => allBoxes(d.boxes).map((b) => [b.path, b.name] as const)));
+    return { known: st.size, down: [...st].filter(([, s]) => !s.ok).map(([p, s]) => `${names.get(p) ?? p}: ${s.name}`) };
+  }, [ioTree, ioEcat, liveStatus.state]);
+  // The events kept for each PLC (this browser: they survive a reload)
+  const ioEventsKey = ioTree && ioTree.folder === undefined && liveStatus.target ? `kss.io.events.${liveStatus.target}` : null;
+  const ioEventsLoadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ioEventsKey || ioEventsLoadedRef.current === ioEventsKey) return;
+    ioEventsLoadedRef.current = ioEventsKey;
+    try {
+      const kept = JSON.parse(localStorage.getItem(ioEventsKey) || '[]');
+      if (Array.isArray(kept)) setIoEvents((prev) => [...prev, ...kept.filter((e) => e && typeof e.at === 'number' && typeof e.text === 'string' && !prev.some((p) => p.at === e.at && p.text === e.text))].sort((a, b) => b.at - a.at).slice(0, 500));
+    } catch {
+      // (none kept)
+    }
+  }, [ioEventsKey]);
+  useEffect(() => {
+    if (!ioEventsKey || ioEventsLoadedRef.current !== ioEventsKey) return;
+    try {
+      localStorage.setItem(ioEventsKey, JSON.stringify(ioEvents.slice(0, 500)));
+    } catch {
+      // per-viewer convenience only
+    }
+  }, [ioEvents, ioEventsKey]);
   const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
     const target = `${liveMode}|${liveStatus.target ?? ''}`;
     if (plcSourcesTargetRef.current !== target) {
@@ -6006,6 +6157,7 @@ export const App: React.FC = () => {
   const handleLiveStop = useCallback(() => {
     // Stop during a replay: ends the replay
     if (replayingRef.current) {
+      console.log('KSS-DBG stop', new Error().stack);
       setReplay(null);
       setLiveStatus({ state: 'stopped', message: 'Replay closed', instances: [] });
       return;
@@ -6219,12 +6371,16 @@ export const App: React.FC = () => {
   // A box's device details for the I/O tab: TwinCAT's device descriptions and the user's pictures (the desktop app;
   // Link, also offline with its pairing code)
   const ioViaLink = !desktopLive() && !isXaeHost() && liveVia === 'link' && !!linkCode;
+  // (a gateway: its own device descriptions and pictures, while connected to it)
+  const ioViaGateway = liveMode === 'web' && liveVia === 'gateway' && gatewayFeatures.includes('deviceInfo') && liveStatus.state === 'connected';
   const fetchDeviceInfo = useMemo(() => {
     const api = desktopLive()?.deviceInfo;
     if (api) return (req: DeviceInfoRequest) => api(req);
-    if (ioViaLink) return (req: DeviceInfoRequest) => linkRequest<DeviceInfo>({ type: 'deviceInfo', productCode: req.productCode, revision: req.revision, deviceType: req.type, product: req.product }, 'deviceInfoResult');
+    const msg = (req: DeviceInfoRequest) => ({ type: 'deviceInfo', productCode: req.productCode, revision: req.revision, deviceType: req.type, product: req.product });
+    if (ioViaLink) return (req: DeviceInfoRequest) => linkRequest<DeviceInfo>(msg(req), 'deviceInfoResult');
+    if (ioViaGateway) return (req: DeviceInfoRequest) => (gatewayRef.current ? gatewayRef.current.request<DeviceInfo>(msg(req), 'deviceInfoResult', 20000) : Promise.reject(new Error('Not connected')));
     return undefined;
-  }, [ioViaLink, linkRequest]);
+  }, [ioViaLink, ioViaGateway, linkRequest]);
   const openDevicesFolder = desktopLive()?.openDevicesFolder
     ? () => void desktopLive()!.openDevicesFolder!().then((r) => r.error && showCopyToast(`Could not open ${r.folder}: ${r.error}`, 'error'))
     : undefined;
@@ -7807,13 +7963,25 @@ export const App: React.FC = () => {
                   value={mermaidTheme}
                   onChange={(e) => setMermaidTheme(e.target.value as MermaidTheme)}
                   className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-                  title="The theme of the whole app and of the diagram: dark, or a light one (default, base, neutral, forest)"
+                  title="The theme of the whole app and of the diagram: dark, a light one (default, base, neutral, forest), or one after a popular IDE's (VS Code, Visual Studio, JetBrains …)"
                 >
-                  <option value="dark">dark</option>
-                  <option value="base">base</option>
-                  <option value="forest">forest</option>
-                  <option value="neutral">neutral</option>
-                  <option value="default">default</option>
+                  <optgroup label="StateScope">
+                    <option value="dark">dark</option>
+                    <option value="base">base</option>
+                    <option value="forest">forest</option>
+                    <option value="neutral">neutral</option>
+                    <option value="default">default</option>
+                  </optgroup>
+                  <optgroup label="IDE themes (dark)">
+                    {IDE_THEMES.filter((t) => t.dark).map((t) => (
+                      <option key={t.id} value={t.id} title={t.from}>{t.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="IDE themes (light)">
+                    {IDE_THEMES.filter((t) => !t.dark).map((t) => (
+                      <option key={t.id} value={t.id} title={t.from}>{t.name}</option>
+                    ))}
+                  </optgroup>
                 </select>
               </label>
               <div className="flex items-center justify-between gap-2">
@@ -8317,6 +8485,7 @@ export const App: React.FC = () => {
                   compositeColor={compositeColor}
                   compositeOwnColors={compositeOwnColors}
                   onOpenTransitionCode={pouContent ? handleOpenTransitionCode : undefined}
+                  onGoToEdgeCode={pouContent ? handleGoToEdgeCode : undefined}
                   onCanvasKey={handleCanvasKey}
                   onPaletteElement={pouContent ? handlePaletteElement : undefined}
                   onStateDropped={pouContent ? handleStateDropped : undefined}
@@ -8324,6 +8493,7 @@ export const App: React.FC = () => {
                   history={{ ...historyState, onUndo: () => stepHistory(true), onRedo: () => stepHistory(false) }}
                   placeRequest={placeRequest}
                   nodeOffsets={nodeOffsets}
+                  keepPositionsSignal={keepCanvasPositions}
                   onNodeOffsetsChange={handleCanvasNodeOffsets}
                   onCanvasPositionsChange={setCanvasPositions}
                   notes={diagramNotes}
@@ -8659,6 +8829,14 @@ export const App: React.FC = () => {
             onOpenGuard={(g) => handleOpenTransitionCode(g.from, g.to)}
             events={ioEvents}
             onClearEvents={() => setIoEvents([])}
+            since={ioSince}
+            crcBase={ioCrcBase}
+            onResetCrc={(path, crc) => setIoCrcBase((prev) => ({ ...prev, [path]: { at: Date.now(), crc } }))}
+            picturesWhere={desktopLive()?.deviceInfo ? 'desktop' : ioViaLink ? 'link' : ioViaGateway ? 'gateway' : undefined}
+            alerts={ioAlerts}
+            onAlertsChange={setIoAlerts}
+            onCompareProject={ioFolderApi ? fetchProjectIo : undefined}
+            exportName={liveStatus.target ?? ioTree?.project ?? 'io'}
             fetchDeviceInfo={fetchDeviceInfo}
             onOpenDevicesFolder={openDevicesFolder}
             folderLabel={desktopLive()?.ioTreeFolder ? undefined : 'Offline: the I/O of a TwinCAT project folder you choose (Chrome, Edge)'}
@@ -9000,6 +9178,8 @@ export const App: React.FC = () => {
           onOpenProblems={() => showDockTab('problems')}
           live={liveActive ? { state: liveSession.current?.state ?? null, message: liveStatus.message } : null}
           onOpenLive={() => showDockTab('live')}
+          io={ioHealth}
+          onOpenIo={() => showDockTab('io')}
           changes={chartDiff && compareOnDiagram ? chartDiff.total : null}
           onOpenChanges={() => showDockTab('changes')}
           host={appHost}

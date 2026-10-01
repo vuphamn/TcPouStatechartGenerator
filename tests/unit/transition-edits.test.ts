@@ -127,8 +127,14 @@ expect(prios(p, 'S_A') === 'S_C(1) S_D(2) S_E(3)' && /\t\tIF b AND\r\n\t\t\t\tc 
 // An ELSIF arm: its own IF
 p = apply(POU, moveTransitionStart(POU, edge('S_A', 'S_C', 2), 'S_B', V));
 expect(prios(p, 'S_A') === 'S_B(1) S_D(2) S_E(3)' && prios(p, 'S_B') === 'S_A(1) S_C(2)' && /\t\tIF b AND\r\n\t\t\t\tc THEN\r\n\t\t\tmachineState := E_S\.S_C; \(\* C \*\)\r\n\t\tEND_IF\r\n\tS_C, S_D:/.test(doState(p)), `an ELSIF arm moved: ${prios(p, 'S_B')}`);
+// The ELSE of an IF / ELSIF / ELSE: as IF NOT (a) AND NOT (b AND c) of its own; the IF stays without it
 r = moveTransitionStart(POU, edge('S_A', 'S_D', 3), 'S_B', V);
-expect('error' in r, `the ELSE arm: ${'error' in r ? r.error : 'done'}`);
+expect(!('error' in r), `the ELSE arm: moved (${'error' in r ? r.error : r.message})`);
+if (!('error' in r)) {
+  const d = doState(apply(POU, r));
+  expect(/\tS_B:\r\n\t\tIF x THEN\r\n\t\t\tmachineState := E_S\.S_A;\r\n\t\tEND_IF\r\n\t\tIF NOT \(a\) AND NOT \(b AND c\) THEN\r\n\t\t\tmachineState := E_S\.S_D;\r\n\t\tEND_IF/.test(d) && !/\tS_A:[\s\S]*ELSE\r\n\t\t\tmachineState := E_S\.S_D;[\s\S]*\tS_B:/.test(d), `the ELSE arm: in S_B as IF NOT (a) AND NOT (b AND c), gone from S_A's IF (${d.slice(0, 400)})`);
+  expect(prios(apply(POU, r), 'S_A') === 'S_B(1) S_C(2) S_E(3)', `the ELSE arm: S_A's others kept: ${prios(apply(POU, r), 'S_A')}`);
+}
 // Nested in IFs (an arm of an IF inside an ELSIF arm): moved inside IFs with their conditions, the next arm its IF
 const NESTED = [
   'CASE machineState OF',
@@ -183,10 +189,10 @@ if (!('error' in ee2)) {
   const hr = moveTransitionStart(tm.pouContent, { from: 'TABLEMANAGER_HALT_FEED', to: 'TABLEMANAGER_IDLE_FEED_OFF', label: '' } as never, 'TABLEMANAGER_HOMMING_READY_TO_START', V);
   expect(!('error' in hr) && /IF NOT \(\(cmd_eFeedMode = FEEDMODE_OFF\)\) THEN|IF NOT \(cmd_eFeedMode = FEEDMODE_OFF\) THEN/.test(hr.code), `the sample's HALT_FEED → IDLE_FEED_OFF moved (${'error' in hr ? hr.error : hr.message})`);
 }
-// In an ELSE: refused (no condition to carry)
+// Inside an ELSE: moved inside IF NOT (its IF's condition), as in the IFs around it
 const INELSE = NESTED.replace('\t\t\tELSIF q THEN', '\t\t\tELSE');
 const er = moveTransitionStart(POU.replace(/<Method Name="doState"[\s\S]*?<\/Method>/, method('doState', INELSE)), edge('S_A', 'S_C', 1), 'S_B', V);
-expect('error' in er && /ELSE/.test(er.error), `inside an ELSE: refused (${'error' in er ? er.error : 'moved'})`);
+expect(!('error' in er) && /inside the IFs it was in: p, NOT \(bFirst\)/.test(er.message) && /IF p THEN\r\n\t\t\tIF NOT \(bFirst\) THEN\r\n\t\t\t\tIF \(r OR s\) THEN\r\n\t\t\t\t\tmachineState := E_S\.S_C;/.test(er.code), `inside an ELSE: moved inside IF p, IF NOT (bFirst) (${'error' in er ? er.error : er.message})`);
 r = moveTransitionStart(POU, edge('S_C', 'S_A', 1), 'S_B', V);
 expect('error' in r && /shared/.test(r.error), `a shared branch: ${'error' in r ? r.error : 'done'}`);
 r = moveTransitionStart(POU, pre, 'S_B', V);

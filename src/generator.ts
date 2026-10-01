@@ -525,6 +525,8 @@ function parsePreProcess(
   const code = stripComments(st);
   const lines = toLogicalLines(code);
   const ifStack: IfFrame[] = [];
+  // (its transitions' priorities: their order in preProcess(), as its Earlier / Later moves them)
+  let order = 0;
   const ifRx = /^\s*IF\b(.*?)\bTHEN\b/i;
   const elsifRx = /^\s*ELSIF\b(.*?)\bTHEN\b/i;
   const elseRx = /^\s*ELSE\b/i;
@@ -589,6 +591,7 @@ function parsePreProcess(
         to: target,
         guard: buildResetGuard(ifStack, stateVarName),
         frames: snapshotFrames(ifStack),
+        priority: ++order,
         source: 'preProcess',
         scopeLower: pendingLower,
         scopeUpper: pendingUpper,
@@ -1611,6 +1614,7 @@ function buildMermaid(
   }
 
   // Calculate total out-degree from original and effective sources
+  const preProcessCount = tr.filter((t) => t.source === 'preProcess').length;
   const origOutCounts = new Map<string, number>();
   for (const t of tr) {
     if (t.source === 'doState' && t.from) {
@@ -1643,7 +1647,8 @@ function buildMermaid(
       showTransitionPriorities &&
       t.priority != null &&
       t.priority > 0 &&
-      ((origOutCounts.get(t.from) ?? 0) > 1 || (effectiveOutCounts.get(t.effectiveFrom) ?? 0) > 1)
+      // (preProcess()'s: numbered among its own, when it has several; drawn from AnyState or a composite's border)
+      (t.source === 'preProcess' ? preProcessCount > 1 : (origOutCounts.get(t.from) ?? 0) > 1 || (effectiveOutCounts.get(t.effectiveFrom) ?? 0) > 1)
     ) {
       let prioSymbol: string;
       if (priorityFormat === 'bracket') {
