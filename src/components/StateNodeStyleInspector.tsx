@@ -214,6 +214,8 @@ export interface StateNodeStyleInspectorProps {
   initialMethod?: string;
   /** Open the method at this line (Problems tab: Open code) */
   codeJump?: { method: string; line: number; nonce: number; part?: 'declaration' } | null;
+  /** The state at an editor's caret (the other editor shows it) */
+  codeFocus?: import('../utils/codeFocus.ts').CodeFocus | null;
   initialEnumMember?: string;
   // Documentation / Notes persistence
   notes?: DiagramNotes;
@@ -248,6 +250,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
   initialMode = 'method',
   initialMethod = 'doState()',
   codeJump,
+  codeFocus,
   initialEnumMember,
   notes,
   onSaveNote,
@@ -573,6 +576,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
                 pouContent={tcPouContent || ''}
                 onSaveDutContent={onSaveDutContent}
                 initialSelectedMember={initialEnumMember || (currentEffectiveStateId || undefined)}
+                codeFocus={codeFocus}
                 isModal={false}
                 embedded={true}
               />
@@ -594,6 +598,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
               tcPouFileName={tcPouFileName}
               initialMethod={initialMethod || 'doState()'}
               codeJump={codeJump}
+              codeFocus={codeFocus}
               selectedStateId={currentEffectiveStateId}
               selectedStateLabel={currentEffectiveStateLabel}
               onSaveMethodCode={onSaveMethodCode}

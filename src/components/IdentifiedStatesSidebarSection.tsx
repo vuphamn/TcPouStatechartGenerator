@@ -26,6 +26,9 @@ import { CustomNodeStylesMap } from '../types.ts';
 export interface IdentifiedStatesSidebarSectionProps {
   states: IdentifiedPouState[];
   selectedStateId?: string | null;
+  /** The state at an editor's caret: scrolled to and flashed (the selection stays) */
+  focusStateId?: string | null;
+  focusNonce?: number;
   /** Live: the PLC's current state (marked, never scrolled to: the list stays where it is) */
   liveStateId?: string | null;
   /** Live: Follow (the Live tab's setting): on, the list shows each new live state (the canvas pans to it too) */
@@ -52,6 +55,8 @@ type SortMode = 'enum' | 'alpha' | 'complexity';
 export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSectionProps> = ({
   states,
   selectedStateId,
+  focusStateId,
+  focusNonce,
   liveStateId,
   liveFollow = false,
   onLiveFollowChange,
@@ -292,6 +297,24 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     return () => clearTimeout(timer);
   }, [selectedStateId, isExpanded, filteredStates, states]);
 
+
+  // The state at an editor's caret (the Method or Enum Editor): its card scrolled to and flashed, always (the
+  // selection stays as it is)
+  useEffect(() => {
+    if (!focusStateId || !isExpanded) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`state-list-item-${focusStateId}`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'nearest' });
+      el.classList.remove('state-focus-flash');
+      void el.offsetWidth;
+      el.classList.add('state-focus-flash');
+      el.setAttribute('data-code-focus', 'true');
+      document.querySelectorAll('[data-code-focus="true"]').forEach((x) => x !== el && x.removeAttribute('data-code-focus'));
+    }, 30);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce]);
 
   // Live, Follow on: the list shows each new live state (the selection stays as it is)
   useEffect(() => {

@@ -4,6 +4,7 @@ import { bookmarkedLines, clearBookmarks, ENUM_KEY, toggleLineBookmark, useBookm
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
+import { enumMemberAt, publishCodeFocus, usePersistedFlag, type CodeFocus } from '../utils/codeFocus.ts';
 import { GitCompare } from 'lucide-react';
 import { editorServices } from '../utils/openType.ts';
 import { createPortal } from 'react-dom';
@@ -71,6 +72,8 @@ export interface DutEnumEditorProps {
   onClose?: () => void;
   isModal?: boolean;
   initialSelectedMember?: string;
+  /** The state the caret is in, in the Method Editor: its member shown here */
+  codeFocus?: CodeFocus | null;
   embedded?: boolean;
   /** The POU file whose bookmarks hold the enum's (its PLC Bookmarks: right-click, Ctrl+F2) */
   bookmarksPou?: string;
@@ -87,6 +90,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   onClose,
   isModal = false,
   initialSelectedMember,
+  codeFocus,
   embedded = false,
   bookmarksPou,
 }) => {
@@ -125,11 +129,39 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     // After this render: the view shows the current text
     requestAnimationFrame(() => performJumpRef.current(name));
   };
+  // The member the caret is on: Identified States and the Method Editor always show it; the canvas selects and pans
+  // to it with Follow on (kept in this browser)
+  const [followCanvas, setFollowCanvas] = usePersistedFlag('kss.follow.enum', false);
+  const caretMemberRef = useRef<string | null>(null);
+  const selfFocusRef = useRef<string | null>(null);
   useEffect(() => {
+    const onSel = () => {
+      const ta = document.activeElement as HTMLTextAreaElement | null;
+      if (!ta || ta.id !== 'st-dut-editor') return;
+      const member = enumMemberAt(ta.value, ta.selectionStart);
+      if (!member || member === caretMemberRef.current) return;
+      caretMemberRef.current = member;
+      selfFocusRef.current = member;
+      publishCodeFocus({ state: member, from: 'enum', follow: followCanvas });
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, [followCanvas]);
+  useEffect(() => {
+    // (selected from this editor's caret, Follow on: it is already there)
+    if (initialSelectedMember && initialSelectedMember === selfFocusRef.current) return;
     if (initialSelectedMember) jumpToMember(initialSelectedMember);
     // Only when the selection changes, not on every edit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSelectedMember]);
+  // The Method Editor's caret in a state's branch: its member shown here (after the selection's jump: the latest
+  // wins when the tab opens)
+  useEffect(() => {
+    if (!codeFocus || codeFocus.from === 'enum') return;
+    caretMemberRef.current = null;
+    jumpToMember(codeFocus.state);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeFocus?.t]);
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -829,6 +861,10 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
               Ctrl+S
             </kbd>
           </button>
+          <label className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-[10px] text-slate-300 cursor-pointer select-none" title="The member at the caret: Identified States and the Method Editor always show it; with Follow, the Diagram Canvas selects it and pans to it too">
+                <input id="enum-follow-checkbox" type="checkbox" checked={followCanvas} onChange={(e) => setFollowCanvas(e.target.checked)} className="accent-sky-500 w-3 h-3" />
+                Follow
+              </label>
           <button type="button" id="enum-diff-btn" onClick={() => (((isDirty)) ? setDiffOpen(true) : showFileDiff('enum'))} disabled={!((isDirty) || fileChanged)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title={((isDirty)) ? "This editor's edits, line by line (against what is in the enum now)" : "The enum's changes since it was saved (the canvas' edits too); this editor has none of its own"}><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
           <SaveToFileButton id="enum-save-file-btn" what="the enum" />
 

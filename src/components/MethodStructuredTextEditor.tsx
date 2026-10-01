@@ -74,6 +74,7 @@ import { NewVariable, declarationVariables, declareInDeclaration, guessType, und
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
+import { caseStateAt, publishCodeFocus, usePersistedFlag, type CodeFocus } from '../utils/codeFocus.ts';
 import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
@@ -95,6 +96,8 @@ export interface MethodStructuredTextEditorProps {
   /** Go to this line of the method's implementation (a new nonce each request): scroll, unfold, highlight */
   codeJump?: { method: string; line: number; nonce: number; part?: 'declaration' } | null;
   selectedStateId?: string | null;
+  /** The state the caret is in, in the Enum Editor: its CASE label shown here */
+  codeFocus?: CodeFocus | null;
   selectedStateLabel?: string;
   /** Live: the PLC's current state (marked in the code, never scrolled to) */
   liveStateId?: string | null;
@@ -113,6 +116,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   initialMethod,
   codeJump,
   selectedStateId,
+  codeFocus,
   selectedStateLabel,
   liveStateId,
   onSaveMethodCode,
@@ -551,6 +555,42 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   // Live: the CASE label of the PLC's current state in this method (0: not in it)
   const liveCaseLine = useMemo(() => (liveStateId ? findFoldableBlockForState(foldableBlocks, liveStateId)?.startLine ?? null : null), [liveStateId, foldableBlocks]);
 
+  // The state the caret is in (doState(): the CASE branch around it): Identified States and the Enum Editor always
+  // show it; the canvas selects and pans to it with Follow on (kept in this browser)
+  const [followCanvas, setFollowCanvas] = usePersistedFlag('kss.follow.method', false);
+  const caretStateRef = useRef<string | null>(null);
+  // (the state this editor made the selection: not scrolled to again when it comes back)
+  const selfFocusRef = useRef<string | null>(null);
+  const caseStates = useMemo(() => new Set(caseBranches.flatMap((b) => b.label.replace(/:.*$/, '').split(',').map((n) => n.trim().split('.').pop() ?? ''))), [caseBranches]);
+  useEffect(() => {
+    if (cleanMethodName.toLowerCase() !== 'dostate') return;
+    const onSel = () => {
+      const ta = document.activeElement as HTMLTextAreaElement | null;
+      if (!ta || ta.id !== 'method-implementation-editor') return;
+      const state = caseStateAt(ta.value, ta.selectionStart, caseStates);
+      if (!state || state === caretStateRef.current) return;
+      caretStateRef.current = state;
+      selfFocusRef.current = state;
+      publishCodeFocus({ state, from: 'method', follow: followCanvas });
+    };
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, [cleanMethodName, caseStates, followCanvas]);
+  // The Enum Editor's caret on a member: its CASE label shown here (not the caret moved)
+  useEffect(() => {
+    if (!codeFocus || codeFocus.from === 'method' || cleanMethodName.toLowerCase() !== 'dostate') return;
+    const lineIndex = findCaseLabelLineIndex(code, codeFocus.state, codeFocus.state);
+    if (lineIndex < 0) return;
+    caretStateRef.current = null;
+    lastScrolledTargetRef.current = codeFocus.state;
+    setActiveBreadcrumbState({ id: codeFocus.state, label: codeFocus.state });
+    setScrollToLine(lineIndex + 1);
+    setHighlightedCaseLine(lineIndex + 1);
+    const timer = setTimeout(() => setHighlightedCaseLine(null), 2000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeFocus?.t]);
+
   const handleJumpToCaseBranch = (block: FoldableBlock) => {
     // If target block is folded, unfold it so the code is visible!
     if (foldedBlockIds.has(block.id)) {
@@ -585,6 +625,12 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       lastScrolledTargetRef.current = null;
     }
 
+    // (selected from this editor's caret, Follow on: it is already there)
+    if (isStateChanged && selectedStateId && selectedStateId === selfFocusRef.current) {
+      prevSelectedStateIdRef.current = selectedStateId;
+      lastScrolledTargetRef.current = selectedStateId;
+      return;
+    }
     if (isStateChanged) {
       prevSelectedStateIdRef.current = selectedStateId || null;
       lastScrolledTargetRef.current = null;
@@ -1999,6 +2045,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
 
             {/* Center / Right: State Jump Navigator & Code Folding Action Buttons */}
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* Follow: the canvas too (Identified States and the Enum Editor always follow the caret's state) */}
+              {cleanMethodName.toLowerCase() === 'dostate' && (
+              <label className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-[10px] text-slate-300 cursor-pointer select-none" title="The caret's state: Identified States and the Enum Editor always show it; with Follow, the Diagram Canvas selects it and pans to it too">
+                <input id="method-follow-checkbox" type="checkbox" checked={followCanvas} onChange={(e) => setFollowCanvas(e.target.checked)} className="accent-sky-500 w-3 h-3" />
+                Follow
+              </label>
+              )}
               {/* Quick Jump to State Dropdown (if CASE branches found) */}
               {caseBranches.length > 0 && (
                 <div className="flex items-center gap-1">

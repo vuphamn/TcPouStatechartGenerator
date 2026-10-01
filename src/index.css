@@ -601,6 +601,15 @@ mark.word-occurrence {
   display: inline;
 }
 
+/* Identified States: the state at an editor's caret (a flash, then a thin frame while it stays the caret's) */
+@keyframes state-focus-flash {
+  0% { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.95), 0 0 14px rgba(56, 189, 248, 0.45); }
+  100% { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55); }
+}
+.state-focus-flash[data-code-focus='true'] {
+  animation: state-focus-flash 1.2s ease-out forwards;
+}
+
 /* When a state node is selected, soften unconnected edges and labels so connected transitions stand out clearly */
 .diagram-state-focus-active:not(.diagram-search-active) .tc-edge-path:not(.diagram-connected-edge):not(.selected-edge):not(.diagram-selected-edge),
 .diagram-state-focus-active:not(.diagram-search-active) .edgePath path:not(.diagram-connected-edge):not(.selected-edge):not(.diagram-selected-edge),

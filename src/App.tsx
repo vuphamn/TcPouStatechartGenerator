@@ -129,6 +129,7 @@ import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from '.
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
 import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
+import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -4867,6 +4868,22 @@ export const App: React.FC = () => {
   };
   // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
   const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number; part?: 'declaration' } | null>(null);
+  // The state at the Method or Enum Editor's caret: the other editor and Identified States show it; with the editor's
+  // Follow on, the canvas selects it and pans to it too
+  const [codeFocus, setCodeFocus] = useState<CodeFocus | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => {
+      const f = (e as CustomEvent<CodeFocus>).detail;
+      if (!f?.state) return;
+      setCodeFocus(f);
+      if (!f.follow) return;
+      setSelectedStateId(f.state);
+      setSelectedStateLabel(f.state);
+      mermaidViewerRef.current?.panToState(f.state, Date.now());
+    };
+    window.addEventListener(CODE_FOCUS_EVENT, on);
+    return () => window.removeEventListener(CODE_FOCUS_EVENT, on);
+  }, []);
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
       // (a build's message: opened as the build dialog opens it)
@@ -7611,6 +7628,8 @@ export const App: React.FC = () => {
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
               selectedStateId={selectedStateId}
+              focusStateId={codeFocus?.state ?? null}
+              focusNonce={codeFocus?.t}
               liveStateId={liveActive ? liveSession.current?.state ?? null : simHighlight?.stateId ?? null}
               liveFollow={liveFollow}
               onLiveFollowChange={setLiveFollow}
@@ -8168,6 +8187,7 @@ export const App: React.FC = () => {
               onSavePreProcessCode={handleSavePreProcessCode}
               initialMethod={inspectorRequest.method}
               codeJump={codeJump}
+              codeFocus={codeFocus}
               initialEnumMember={inspectorRequest.enumMember}
               notes={diagramNotes}
               onSaveNote={handleSaveNote}
