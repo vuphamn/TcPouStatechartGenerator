@@ -263,6 +263,43 @@ function reattachEnd(route: Point[], box: NodeBox, gap: number, atStart: boolean
 }
 
 /** A diamond (a Choice): its shape is a polygon of 4 corners */
+/**
+ * An edge's end on its (moved) state, Dagre: where it was on the state (rel: from the state's center, as laid out),
+ * while that side still faces the other end; else on the side facing it, as far along it as it was. A diamond (a
+ * choice): on the diamond's own border (not its box), or its corner facing the other end. gap: off the border (the
+ * arrowhead's)
+ */
+function keepEndOnNode(box: NodeBox, rel: Point, toward: Point, diamond: boolean, gap: number): BoundaryIntersection {
+  const dx = toward.x - box.cx;
+  const dy = toward.y - box.cy;
+  if (diamond) {
+    const len = Math.hypot(rel.x, rel.y);
+    // (its own point, on the diamond's border, while it faces the other end)
+    if (len > 0.5 && rel.x * dx + rel.y * dy > 0) {
+      const t = 1 / (Math.abs(rel.x) / box.hw + Math.abs(rel.y) / box.hh);
+      const nx = rel.x / len;
+      const ny = rel.y / len;
+      return { x: box.cx + rel.x * t + nx * gap, y: box.cy + rel.y * t + ny * gap, normalX: nx, normalY: ny };
+    }
+    const horiz = Math.abs(dx) / box.hw > Math.abs(dy) / box.hh;
+    const nx = horiz ? Math.sign(dx) || 1 : 0;
+    const ny = horiz ? 0 : Math.sign(dy) || 1;
+    return { x: box.cx + nx * (box.hw + gap), y: box.cy + ny * (box.hh + gap), normalX: nx, normalY: ny };
+  }
+  type Side = 'left' | 'right' | 'top' | 'bottom';
+  const normal: Record<Side, Point> = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, top: { x: 0, y: -1 }, bottom: { x: 0, y: 1 } };
+  const sideOf = (x: number, y: number): Side => (Math.abs(x) / box.hw >= Math.abs(y) / box.hh ? (x > 0 ? 'right' : 'left') : y > 0 ? 'bottom' : 'top');
+  const own = sideOf(rel.x, rel.y);
+  const facing = (s: Side) => normal[s].x * dx + normal[s].y * dy > 0;
+  const side: Side = facing(own) ? own : sideOf(dx, dy);
+  const n = normal[side];
+  // (along the side: as far as it was, inside the side's ends)
+  const along = side === 'top' || side === 'bottom' ? Math.max(-box.hw * 0.8, Math.min(box.hw * 0.8, rel.x)) : Math.max(-box.hh * 0.8, Math.min(box.hh * 0.8, rel.y));
+  const x = side === 'left' || side === 'right' ? box.cx + n.x * (box.hw + gap) : box.cx + along;
+  const y = side === 'top' || side === 'bottom' ? box.cy + n.y * (box.hh + gap) : box.cy + along;
+  return { x, y, normalX: n.x, normalY: n.y };
+}
+
 function isDiamondNode(el: Element | null): boolean {
   const poly = el?.querySelector(':scope > polygon, :scope > g > polygon');
   return !!poly && (poly.getAttribute('points') ?? '').trim().split(/[\s,]+/).filter(Boolean).length === 8;
@@ -1747,8 +1784,21 @@ export function calculateReroutedEdgePath(
   const tBox = { cx: tCx, cy: tCy, hw: tHw, hh: tHh };
   const startAt = { x: startBound.x + (edgeOffset.startDx || 0), y: startBound.y + (edgeOffset.startDy || 0) };
   const endAt = { x: endBound.x + (edgeOffset.endDx || 0), y: endBound.y + (edgeOffset.endDy || 0) };
-  startBound = srcNodeEl && (edgeOffset.startDx || edgeOffset.startDy) && isAtBox(sBox, startAt) ? attachToBoxSide(sBox, startAt, 0) : { ...startBound, ...startAt };
-  endBound = tgtNodeEl && (edgeOffset.endDx || edgeOffset.endDy) && isAtBox(tBox, endAt) ? attachToBoxSide(tBox, endAt, 3) : { ...endBound, ...endAt };
+  // Dagre: each end keeps its own place on its state (moved with it), so the edges of a state stay apart instead of
+  // all meeting where the line between the two centers crosses the border; a choice's on the diamond itself
+  if (normEngine === 'dagre') {
+    const otherOf = (end: 'start' | 'end') => (Math.abs(edgeOffset.x || 0) >= 2 || Math.abs(edgeOffset.y || 0) >= 2 ? { x: actualMidX, y: actualMidY } : end === 'start' ? { x: tCx, y: tCy } : { x: sCx, y: sCy });
+    if (srcNodeEl && !edgeOffset.startDx && !edgeOffset.startDy) {
+      const rel = { x: origStart.x - (sCx - srcOffset.x), y: origStart.y - (sCy - srcOffset.y) };
+      startBound = keepEndOnNode(sBox, rel, otherOf('start'), isDiamondNode(srcNodeEl), 0);
+    }
+    if (tgtNodeEl && !edgeOffset.endDx && !edgeOffset.endDy) {
+      const rel = { x: origEnd.x - (tCx - tgtOffset.x), y: origEnd.y - (tCy - tgtOffset.y) };
+      endBound = keepEndOnNode(tBox, rel, otherOf('end'), isDiamondNode(tgtNodeEl), 3);
+    }
+  }
+  startBound = srcNodeEl && (edgeOffset.startDx || edgeOffset.startDy) && isAtBox(sBox, startAt) ? attachToBoxSide(sBox, startAt, 0) : normEngine === 'dagre' && !edgeOffset.startDx && !edgeOffset.startDy ? startBound : { ...startBound, ...startAt };
+  endBound = tgtNodeEl && (edgeOffset.endDx || edgeOffset.endDy) && isAtBox(tBox, endAt) ? attachToBoxSide(tBox, endAt, 3) : normEngine === 'dagre' && !edgeOffset.endDx && !edgeOffset.endDy ? endBound : { ...endBound, ...endAt };
 
   const startX = startBound.x;
   const startY = startBound.y;

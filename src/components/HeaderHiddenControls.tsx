@@ -83,24 +83,25 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
     );
   }
   if (has('generate')) {
-    actions.push({ id: 'header-generate', label: 'Generate', icon: <Play className="w-3.5 h-3.5" />, onSelect: onGenerate });
+    actions.push({ id: 'header-generate', label: 'Generate', title: 'Draw the chart again from the code', icon: <Play className="w-3.5 h-3.5" />, onSelect: onGenerate });
   }
   if (has('copy')) {
-    actions.push({ id: 'header-copy', label: 'Copy Markdown', icon: <Copy className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onCopyMarkdown });
+    actions.push({ id: 'header-copy', label: 'Copy Markdown', title: "The chart's Mermaid code to the clipboard (as Markdown)", icon: <Copy className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onCopyMarkdown });
   }
   if (has('download')) {
-    actions.push({ id: 'header-download', label: 'Download .statechart.md', icon: <Download className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onDownload });
+    actions.push({ id: 'header-download', label: 'Download .statechart.md', title: "The chart's Mermaid code as a Markdown file", icon: <Download className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onDownload });
   }
   if (has('export')) {
     actions.push(
-      { id: 'header-export', label: 'High-Res Export Dialog...', icon: <Sparkles className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onOpenExportDialog },
-      { id: 'header-export-preset', label: 'Export with Preset', hint: exportPresetLabel, icon: <Bookmark className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onExportWithPreset }
+      { id: 'header-export', label: 'High-Res Export Dialog...', title: 'Export the chart as PNG or SVG: its size, scale and background', icon: <Sparkles className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onOpenExportDialog },
+      { id: 'header-export-preset', label: 'Export with Preset', title: 'Export the chart at once with the settings saved last', hint: exportPresetLabel, icon: <Bookmark className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onExportWithPreset }
     );
   }
   if (has('pdf')) {
     actions.push({
       id: 'header-pdf',
       label: isPrintingPdf ? 'Generating PDF...' : 'Print to PDF',
+      title: 'The part of the chart shown on the canvas, as a PDF',
       hint: 'Visible area',
       icon: isPrintingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />,
       disabled: !hasOutput || isPrintingPdf,
@@ -108,7 +109,7 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
     });
   }
   if (has('mermaidLive')) {
-    actions.push({ id: 'header-mermaid-live', label: 'Open in Mermaid Live', icon: <ExternalLink className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onOpenMermaidLive });
+    actions.push({ id: 'header-mermaid-live', label: 'Open in Mermaid Live', title: "The chart's Mermaid code in the Mermaid Live editor (a new browser tab)", icon: <ExternalLink className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onOpenMermaidLive });
   }
   if (actions.length > 0) items.push({ id: 'heading-actions', heading: true, label: 'Actions' }, ...actions);
   if (has('sample')) {
@@ -118,6 +119,7 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
       ...samples.map((s) => ({
         id: `header-sample-${s.id}`,
         label: s.title,
+        title: 'A built-in example state machine',
         checked: s.id === selectedSampleId,
         onSelect: () => onSelectSample(s.id),
       }))

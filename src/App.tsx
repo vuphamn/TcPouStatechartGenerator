@@ -124,7 +124,7 @@ import { allStateActions, readStateCode, writeStateCode } from './utils/stateAct
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
-import { pendingEditors, savePendingEditors } from './utils/pendingSaves.ts';
+import { pendingEditors, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
@@ -135,7 +135,8 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, clearBookmarks, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BODY, ENUM_KEY, clearBookmarks, declarationOf, isDeclarationKey, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { parseDutContent } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
 import { armState } from './utils/choiceArms.ts';
@@ -388,22 +389,9 @@ export const App: React.FC = () => {
   const [includeStateDescriptions, setIncludeStateDescriptions] = useState<boolean>(
     SAMPLES[0].defaultIncludeDescriptions
   );
-  // States' entry / do / exit actions shown on them (as TwinCAT's UML editor does)
-  const [showStateActions, setShowStateActions] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('kss.stateActions') === '1';
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem('kss.stateActions', showStateActions ? '1' : '0');
-    } catch {
-      // (not remembered)
-    }
-  }, [showStateActions]);
-  const stateActions = useMemo(() => (showStateActions && pouContent ? allStateActions(pouContent) : undefined), [showStateActions, pouContent]);
+  // (a state shows its name and its description only: its entry / do / exit actions are edited from its menu, not
+  // drawn on it)
+  const stateActions: ReturnType<typeof allStateActions> | undefined = undefined;
   const [showTransitionPriorities, setShowTransitionPriorities] = useState<boolean>(true);
   const [priorityFormat, setPriorityFormat] = useState<PriorityFormat>(initialPreset.priorityFormat);
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
@@ -2159,9 +2147,22 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   const bookmarkEntries = useMemo(
-    () => (bookmarksOpen ? listBookmarks(pouFileName, (m) => (m === BODY ? getPouBody(pouContent).implementation : getMethodCodeFromPou(pouContent, m).methodFound ? getMethodCodeFromPou(pouContent, m).code : null)) : []),
+    () =>
+      bookmarksOpen
+        ? listBookmarks(pouFileName, (m) => {
+            // (the bookmarks of a declaration, of the enum, of an implementation)
+            if (m === ENUM_KEY) return dutContent.trim() ? parseDutContent(dutContent).declaration : null;
+            if (isDeclarationKey(m)) {
+              const base = declarationOf(m);
+              if (base === BODY) return getPouBody(pouContent).declaration;
+              const c = getMethodCodeFromPou(pouContent, base);
+              return c.methodFound ? c.declaration : null;
+            }
+            return m === BODY ? getPouBody(pouContent).implementation : getMethodCodeFromPou(pouContent, m).methodFound ? getMethodCodeFromPou(pouContent, m).code : null;
+          })
+        : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bookmarksOpen, bookmarks, pouContent, pouFileName]
+    [bookmarksOpen, bookmarks, pouContent, pouFileName, dutContent]
   );
   const [projectFiles, setProjectFiles] = useState<{ project?: string; files: ProjectFile[] } | null>(null);
   // A POU opened from the PLC's sources: code help from the rest of them (no project folder)
@@ -4635,7 +4636,6 @@ export const App: React.FC = () => {
     for (const m of pouContent ? getAllMethodsFromPou(pouContent) : []) cmds.push({ id: `method:${m}`, group: 'Method', label: `Open ${m}()`, run: () => handleOpenInspectorPanel('method', { method: `${m}()` }) });
     menu({ type: 'canvas' } as ContextMenuTarget, 'Canvas');
     const toggle = (id: string, label: string, on: boolean, set: (v: boolean) => void) => cmds.push({ id: `view:${id}`, group: 'View', label: `${on ? 'Hide' : 'Show'} ${label}`, run: () => set(!on) });
-    toggle('actions', 'entry / do / exit actions on the states', showStateActions, setShowStateActions);
     toggle('descriptions', 'state descriptions', includeStateDescriptions, setIncludeStateDescriptions);
     toggle('priorities', 'transition priorities', showTransitionPriorities, setShowTransitionPriorities);
     cmds.push({ id: 'view:engine', group: 'View', label: `Layout engine: ${layoutEngine === 'elk' ? 'Dagre' : 'ELK'}`, run: () => setLayoutEngine(layoutEngine === 'elk' ? 'dagre' : 'elk') });
@@ -4712,7 +4712,7 @@ export const App: React.FC = () => {
     return cmds;
   };
   // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
-  const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number } | null>(null);
+  const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number; part?: 'declaration' } | null>(null);
   const handleLintGoToCode = useCallback(
     (finding: LintFinding) => {
       // (a build's message: opened as the build dialog opens it)
@@ -6613,6 +6613,22 @@ export const App: React.FC = () => {
   const inspectorStateId = selectedStateId ?? (lastStateStillExists ? lastSelectedState!.id : null);
   const inspectorStateLabel = selectedStateId ? selectedStateLabel : lastStateStillExists ? lastSelectedState!.label : '';
 
+  // An editor's tab marked "*" while it has edits not saved: its own (not yet put in the POU / the enum: its Ctrl+S),
+  // or its file's (changed since it was saved)
+  const pendingNow = usePendingEditors();
+  const methodEdits = pendingNow.some((e) => e.id.startsWith('method') || e.id === 'state-code');
+  const pouEdits = pendingNow.some((e) => e.id === 'pou-editor');
+  const enumEdits = pendingNow.some((e) => e.id === 'enum-editor');
+  const dirtyMark = (tab: string, why: (string | false)[]) => {
+    const list = why.filter((x): x is string => !!x);
+    return list.length ? (
+      <span id={`dock-tab-dirty-${tab}`} className="text-amber-300 font-bold leading-none" title={`Not saved: ${list.join('; ')}`}>
+        *
+      </span>
+    ) : undefined;
+  };
+  const pouUnsaved = pouDirty && `${pouFileName} changed since it was saved`;
+  const dutUnsaved = dutDirty && `${dutFileName || 'the .TcDUT'} changed since it was saved`;
   // Titles, icons & badges for every dockable tab
   const dockTabMeta = useMemo<Record<DockTabId, DockTabMeta>>(
     () => ({
@@ -6620,14 +6636,16 @@ export const App: React.FC = () => {
       method: {
         title: 'Method Editor',
         icon: <FileCode />,
+        badge: dirtyMark('method', [methodEdits && 'edits in the Method Editor not put in the POU yet (Ctrl+S in it)', pouUnsaved]),
         tooltip: `Structured Text methods in ${pouFileName || 'POU'}${selectedStateId ? ` — state ${selectedStateId}` : ''}`,
       },
       pou: {
         title: 'POU Editor',
         icon: <Blocks />,
+        badge: dirtyMark('pou', [pouEdits && 'edits in the POU Editor not put in the POU yet (Ctrl+S in it)', pouUnsaved]),
         tooltip: `The declaration and body of ${pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : 'the POU'} (Structured Text)`,
       },
-      enum: { title: 'Enum Editor', icon: <Code2 />, tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
+      enum: { title: 'Enum Editor', icon: <Code2 />, badge: dirtyMark('enum', [enumEdits && 'edits in the Enum Editor not put in the enum yet (Ctrl+S in it)', dutUnsaved]), tooltip: `Enum members in ${dutFileName || '.TcDUT'}` },
       overview: { title: 'Machine Overview', icon: <LayoutGrid />, tooltip: 'Every state machine of the PLC with its current state (while live)' },
       symbols: { title: 'PLC Symbols', icon: <ListTree />, tooltip: "The PLC's symbols and their values (while live); Watch opens a state machine" },
       complexity: {
@@ -6707,7 +6725,7 @@ export const App: React.FC = () => {
       changes: { title: 'Changes', icon: <GitCompare />, tooltip: 'Compare the chart with the saved or committed version' },
       paths: { title: 'Paths', icon: <Route />, tooltip: 'Every path between two states, with the guards along it' },
     }),
-    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message]
+    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message, methodEdits, pouEdits, enumEdits, pouUnsaved, dutUnsaved]
   );
 
   // Canvas tool windows live in the RightPanel; the canvas renders them into these dock slots
@@ -6834,6 +6852,7 @@ export const App: React.FC = () => {
               <span className="text-slate-400 text-[11px] font-medium shrink-0">Sample:</span>
               <select
                 id="sample-selector"
+                title="A built-in example state machine (a POU and its enum) to look at and try things on: your own files stay as they are"
                 value={selectedSampleId}
                 onChange={(e) => {
                   const sample = SAMPLES.find((s) => s.id === e.target.value);
@@ -7439,7 +7458,7 @@ export const App: React.FC = () => {
               </div>
 
               {/* Collapse error sink edges */}
-              <label className="flex items-center gap-2 cursor-pointer select-none">
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="An error state most of a composite's states go to: their transitions to it drawn as one, from the composite's border (its badge lists them)">
                 <input
                   id="collapse-errors-checkbox"
                   type="checkbox"
@@ -7476,7 +7495,7 @@ export const App: React.FC = () => {
               )}
 
               {/* Include state description */}
-              <label className="flex items-center gap-2 cursor-pointer select-none">
+              <label className="flex items-center gap-2 cursor-pointer select-none" title="Each state's description (from getStateDescription()) under its name">
                 <input
                   id="include-descriptions-checkbox"
                   type="checkbox"
@@ -7487,21 +7506,9 @@ export const App: React.FC = () => {
                 <span className="text-slate-300">Include state descriptions</span>
               </label>
 
-              {/* Entry / do / exit on the states */}
-              <label className="flex items-center gap-2 cursor-pointer select-none" title="Each state's entry / do / exit action (its first line) under its name, as TwinCAT's UML editor shows them. Right-click a state to edit them.">
-                <input
-                  id="state-actions-checkbox"
-                  type="checkbox"
-                  checked={showStateActions}
-                  onChange={(e) => setShowStateActions(e.target.checked)}
-                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
-                />
-                <span className="text-slate-300">Actions</span>
-              </label>
-
               {/* Show transition priorities & format */}
               <div className="flex items-center gap-2">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
+                <label className="flex items-center gap-2 cursor-pointer select-none" title="Each transition's priority (the order its state checks it in) in a badge at its start; the format beside">
                   <input
                     id="show-priorities-checkbox"
                     type="checkbox"
@@ -7715,7 +7722,7 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none">
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-400 hover:text-slate-200 select-none" title="The chart drawn again as you edit the code (off: Generate draws it)">
                 <input
                   id="live-update-checkbox"
                   type="checkbox"
@@ -8314,7 +8321,20 @@ export const App: React.FC = () => {
           onClear={() => clearBookmarks(pouFileName)}
           onOpen={(e: BookmarkEntry) => {
             if (e.kind === 'state' && e.state) handleJumpToState(e.state);
-            if (e.method === BODY) {
+            if (e.method === ENUM_KEY) {
+              // (the enum: its member on that line selected in the Enum Editor)
+              const member = /^\s*,?\s*([A-Za-z_]\w*)/.exec(e.text)?.[1];
+              handleOpenEnumEditorModal(member);
+            } else if (isDeclarationKey(e.method)) {
+              const base = declarationOf(e.method);
+              if (base === BODY) {
+                setDockLayout((l) => activateDockTab(l, 'pou'));
+                setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'declaration' });
+              } else {
+                handleOpenInspectorPanel('method', { method: `${base}()` });
+                setCodeJump({ method: base, line: e.line, nonce: Date.now(), part: 'declaration' });
+              }
+            } else if (e.method === BODY) {
               setDockLayout((l) => activateDockTab(l, 'pou'));
               setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'implementation' });
             } else if (e.line > 0) {

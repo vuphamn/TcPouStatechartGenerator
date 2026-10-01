@@ -61,14 +61,11 @@ const MIME = 'application/x-kss-statechart-element';
     await p.evaluate((s) => [...document.getElementById(`state-list-item-${s}`).querySelectorAll('button')].find((b) => /Go to State/.test(b.textContent))?.click(), state);
     await h.sleep(1200);
   };
-  // An empty point of the canvas (no node, edge or cluster around it), in the chart's own box (a wide chart is
-  // drawn letterboxed in the canvas: a state dropped beside that box is not drawn where it was dropped)
+  // An empty point of the canvas (no node, edge or cluster around it)
   const emptyPoint = () => p.evaluate(() => {
     const area = document.getElementById('mermaid-canvas-area').getBoundingClientRect();
-    const svg = document.querySelector('#mermaid-diagram-svg-container svg')?.getBoundingClientRect();
     for (let fy = 0.2; fy < 0.9; fy += 0.05) for (let fx = 0.25; fx < 0.9; fx += 0.05) {
       const x = area.x + area.width * fx, y = area.y + area.height * fy;
-      if (svg && (x < svg.left + 40 || x > svg.right - 40 || y < svg.top + 40 || y > svg.bottom - 40)) continue;
       const ok = [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30], [30, 30], [-30, -30]].every(([dx, dy]) => {
         const e = document.elementFromPoint(x + dx, y + dy);
         return e && document.getElementById('mermaid-canvas-area').contains(e) && !e.closest('g.node, g.edgeLabel, g.edgePaths, g.cluster, path, #statechart-palette, button, [role="dialog"]');

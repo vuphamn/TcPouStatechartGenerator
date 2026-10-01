@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { usePendingSave } from '../utils/pendingSaves.ts';
+import { bookmarkedLines, clearBookmarks, ENUM_KEY, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
+import { editorServices } from '../utils/openType.ts';
 import { createPortal } from 'react-dom';
 import {
   FileCode,
@@ -66,6 +69,8 @@ export interface DutEnumEditorProps {
   isModal?: boolean;
   initialSelectedMember?: string;
   embedded?: boolean;
+  /** The POU file whose bookmarks hold the enum's (its PLC Bookmarks: right-click, Ctrl+F2) */
+  bookmarksPou?: string;
 }
 
 type EditorViewMode = 'st' | 'grid' | 'xml';
@@ -80,6 +85,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   isModal = false,
   initialSelectedMember,
   embedded = false,
+  bookmarksPou,
 }) => {
   // Parse initial DUT structure
   const parsedDut = useMemo(() => {
@@ -230,6 +236,41 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
       return next;
     });
   }, []);
+
+  // PLC Bookmarks in the enum (kept with the POU's: its file name): the right-click menu, Ctrl+F2
+  const bookmarkStore = useBookmarks(bookmarksPou ?? '');
+  const enumBookmarks = useMemo(() => (bookmarksPou ? bookmarkedLines(bookmarksPou, ENUM_KEY, stCode) : []), [bookmarkStore, bookmarksPou, stCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [enumMenu, setEnumMenu] = useState<{ x: number; y: number; line: number } | null>(null);
+  // (a line of the text shown, folded blocks shown as their first line: its line in the code)
+  const codeLineOf = (viewLine: number) => {
+    const hidden = new Set<number>();
+    for (const b of foldableBlocks) if (foldedBlockIds.has(b.id)) for (let l = b.startLine + 1; l <= b.endLine; l++) hidden.add(l);
+    let shown = 0;
+    for (let l = 1; l <= stCode.split('\n').length; l++) {
+      if (hidden.has(l)) continue;
+      if (++shown === viewLine) return l;
+    }
+    return viewLine;
+  };
+  const toggleEnumBookmark = (line: number) => {
+    if (!bookmarksPou) return;
+    const r = toggleLineBookmark(bookmarksPou, ENUM_KEY, stCode, line, { labels: false });
+    setSaveStatus({ type: 'success', message: r.on ? `Bookmark set at line ${line}` : `Bookmark removed at line ${line}` });
+  };
+  const goToEnumBookmark = (dir: 1 | -1, from: number) => {
+    if (!enumBookmarks.length) return;
+    const target = dir > 0 ? enumBookmarks.find((l) => l > from) ?? enumBookmarks[0] : [...enumBookmarks].reverse().find((l) => l < from) ?? enumBookmarks[enumBookmarks.length - 1];
+    // (inside a folded block: unfolded)
+    setFoldedBlockIds((prev) => {
+      const next = new Set(prev);
+      for (const b of foldableBlocks) if (b.startLine < target && target <= b.endLine) next.delete(b.id);
+      return next;
+    });
+    requestAnimationFrame(() => stEditorRef.current?.scrollToLine(target, true));
+    setFlashLine({ view: 'st', line: target });
+    setSaveStatus({ type: 'success', message: `Bookmark ${enumBookmarks.indexOf(target) + 1} of ${enumBookmarks.length} (line ${target})` });
+  };
+  const caretCodeLine = (ta: HTMLTextAreaElement) => codeLineOf(ta.value.slice(0, ta.selectionStart).split('\n').length);
 
   // Find & Replace in ST code
   const [findQuery, setFindQuery] = useState<string>('');
@@ -1071,6 +1112,38 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             placeholder="TYPE E_States : ( ... ); END_TYPE"
             ariaLabel="TwinCAT Structured Text Enum Editor"
             className="flex-1 min-h-0"
+            bookmarkLines={enumBookmarks}
+            onContextMenu={(e) => {
+              if (!bookmarksPou) return;
+              e.preventDefault();
+              setEnumMenu({ x: e.clientX, y: e.clientY, line: caretCodeLine(e.currentTarget) });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'F2' && e.ctrlKey && bookmarksPou) {
+                e.preventDefault();
+                toggleEnumBookmark(caretCodeLine(e.currentTarget));
+              }
+            }}
+          />
+        )}
+        {enumMenu && bookmarksPou && (
+          <MethodEditorContextMenu
+            x={enumMenu.x}
+            y={enumMenu.y}
+            targetSymbol={null}
+            onGoToDefinition={() => {}}
+            bookmarks={{
+              on: enumBookmarks.includes(enumMenu.line),
+              count: enumBookmarks.length,
+              scopeLabel: 'the enum',
+              onToggle: () => toggleEnumBookmark(enumMenu.line),
+              onNext: () => goToEnumBookmark(1, enumMenu.line),
+              onPrev: () => goToEnumBookmark(-1, enumMenu.line),
+              onClearMethod: () => clearBookmarks(bookmarksPou, ENUM_KEY, stCode),
+              onClearAll: () => clearBookmarks(bookmarksPou),
+              onShowAll: editorServices()?.showBookmarks,
+            }}
+            onClose={() => setEnumMenu(null)}
           />
         )}
 

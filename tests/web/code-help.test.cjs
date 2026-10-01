@@ -1,7 +1,7 @@
 // Code help on the canvas (XAE stand-in bridge with the PLC project's types): the condition dialog lists the members
 // after a dot (smOutfeedStopAxis. -> SM_KAxis's), a GVL's variables, the syntax checked while typing; a transition's
 // condition changed from its menu, with F2, and from the Transition Guard window, the dialog by the label; a state's
-// entry / do / exit actions edited from its menu and shown on it (Actions)
+// entry / do / exit actions edited from its menu (not drawn on it: its name and description only)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -222,11 +222,10 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   expect(methodOpen && !typedKept && /TABLEMANAGER_CLAMPED:/.test(await p.evaluate(() => document.querySelector('#method-implementation-editor')?.value.split('\n').find((l) => /TABLEMANAGER_CLAMPED:/.test(l)) ?? '')), `Open in Method Editor: doState() (what was typed not kept); caret line "${caretAt.split('|')[1]?.trim()}"`);
   await p.click('#dock-tab-diagram').catch(() => {});
   await h.sleep(600);
-  // Shown on the state
-  await p.evaluate(() => { const c = document.getElementById('state-actions-checkbox'); if (c && !c.checked) c.click(); });
+  // Not drawn on the state: its name and its description only (its actions in its hover preview)
   await h.sleep(2000);
   const nodeText = await p.$eval(`#mermaid-canvas-area g.node[data-state-id="${S('CLAMPED')}"]`, (e) => e.textContent).catch(() => '');
-  expect(/exit \/ status_bBusy := FALSE;/.test(nodeText), `Actions on: the state shows "exit / ..." (${nodeText.replace(/\s+/g, ' ').slice(0, 120)})`);
+  expect(!/exit \/|entry \/|do \//.test(nodeText) && nodeText.includes(S('CLAMPED')) && !(await p.$('#state-actions-checkbox')), `the state shows its name (and description), no entry / do / exit (${nodeText.replace(/\s+/g, ' ').slice(0, 120)})`);
   await p.screenshot({ path: h.out('code-help.png') });
   // (a close look at the state)
   await p.mouse.move(pt.x, pt.y);

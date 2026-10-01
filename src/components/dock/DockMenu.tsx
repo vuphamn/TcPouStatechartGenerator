@@ -13,6 +13,8 @@ export interface DockMenuItem {
   /** Small uppercase section heading */
   heading?: boolean;
   hint?: string;
+  /** Its tooltip */
+  title?: string;
 }
 
 interface DockMenuProps {
@@ -81,6 +83,7 @@ export const DockMenu: React.FC<DockMenuProps> = ({ x, y, items, onClose, id = '
             id={`dock-menu-${item.id}`}
             type="button"
             role="menuitem"
+            title={item.title}
             disabled={item.disabled}
             onClick={() => {
               onClose();

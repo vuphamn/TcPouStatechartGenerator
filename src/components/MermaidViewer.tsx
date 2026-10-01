@@ -1746,6 +1746,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const autoAlignInProgressRef = useRef<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number>(1);
+  // The chart's scale at zoom 1 (a chart wider or taller than the canvas is fitted to it): the zoom shown is its size
+  const [fitScale, setFitScale] = useState(1);
+  // (zoomed in up to 1000% of its own size: a chart fitted to the canvas goes further than 10 times that)
+  const maxZoomRef = useRef(10);
+  maxZoomRef.current = Math.max(10, 10 / fitScale);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -1835,6 +1840,22 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       (renderedSvg && renderedSvg.id !== 'diagram-snap-grid-svg' ? renderedSvg : null)
     );
   }, [renderedSvg]);
+  // (the chart's width at zoom 1 against its own: 1 when it fits the canvas; measured again when the canvas resizes)
+  useEffect(() => {
+    const measure = () => {
+      const s = getDiagramSvg();
+      const vb = s?.viewBox?.baseVal;
+      if (!s || !vb?.width || !s.clientWidth) return;
+      const f = Math.min(1, s.clientWidth / vb.width);
+      setFitScale((prev) => (Math.abs(prev - f) < 0.001 ? prev : f));
+    };
+    measure();
+    const host = containerRef.current;
+    if (!host || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [svgContent, getDiagramSvg]);
 
   // Whether the pressed edge was already selected before this press (the press itself selects it)
   const edgeSelectedBeforePressRef = useRef<boolean>(false);
@@ -5552,7 +5573,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
     const oldZoom = wheelZoomRef.current;
-    const newZoom = Math.min(Math.max(0.2, oldZoom * factor), 10);
+    const newZoom = Math.min(Math.max(0.2, oldZoom * factor), maxZoomRef.current);
     if (newZoom === oldZoom) return;
 
     // Zoom around the cursor: the wrapper is drawn as translate(pan) scale(zoom) with its origin at the
@@ -5766,7 +5787,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     () => ({
       panToState,
       resetView: handleResetZoom,
-      zoomIn: () => setZoom((prev) => Math.min(10, prev * 1.2)),
+      zoomIn: () => setZoom((prev) => Math.min(maxZoomRef.current, prev * 1.2)),
       zoomOut: () => setZoom((prev) => Math.max(0.2, prev / 1.2)),
       fitToScreen: handleResetZoom,
       autoAlign: handleAutoAlign,
@@ -6218,6 +6239,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           <input
             ref={searchInputRef}
             id="diagram-search-input"
+            title="Find states and transitions by name or condition (Ctrl+F); Enter: the next one"
             type="text"
             value={effectiveSearchQuery}
             onChange={(e) => {
@@ -6445,6 +6467,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             setSnapConfig={setSnapConfig}
             setShowSnapToast={setShowSnapToast}
             zoom={zoom}
+            fitScale={fitScale}
             setZoom={setZoom}
             handleResetZoom={handleResetZoom}
             isFullscreen={isFullscreen}
@@ -6733,15 +6756,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
-            <span className="px-0.5 font-mono text-[11px] text-slate-400 select-none">
-              {Math.round(zoom * 100)}%
+            <span className="px-0.5 font-mono text-[11px] text-slate-400 select-none" title="The chart's size shown (100%: its own size; the reset fits it to the canvas)">
+              {Math.round(zoom * fitScale * 100)}%
             </span>
             <button
               id="zoom-in-button"
               type="button"
               onClick={() => {
                 onSwitchToDiagramTab?.();
-                setZoom((z) => Math.min(10, z * 1.15));
+                setZoom((z) => Math.min(maxZoomRef.current, z * 1.15));
               }}
               className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
               title="Zoom In"
@@ -6980,6 +7003,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 containerElement={containerRef.current}
                 pan={pan}
                 zoom={zoom}
+                fitScale={fitScale}
                 onPanChange={setPan}
                 onResetZoom={handleResetZoom}
                 selectedStateId={effectiveSelectedStateId}

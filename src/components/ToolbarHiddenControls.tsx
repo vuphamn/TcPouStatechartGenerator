@@ -86,6 +86,8 @@ export interface ToolbarHiddenControlsProps {
   setSnapConfig: React.Dispatch<React.SetStateAction<SnapConfig>>;
   setShowSnapToast: (val: { message: string; timestamp: number } | null) => void;
   zoom: number;
+  /** The chart's scale at zoom 1: the % shown is its real size */
+  fitScale?: number;
   setZoom: React.Dispatch<React.SetStateAction<number>>;
   handleResetZoom: () => void;
   isFullscreen: boolean;
@@ -128,6 +130,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
   setSnapConfig,
   setShowSnapToast,
   zoom,
+  fitScale = 1,
   setZoom,
   handleResetZoom,
   isFullscreen,
@@ -346,6 +349,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               {/* Node Styles Inspector */}
               {has('styles') && (
                 <button
+                  title="The style window: the selected state's colours, border and font"
                   type="button"
                   onClick={() => {
                     handleToggleInspector();
@@ -514,6 +518,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               {/* Notes Drawer */}
               {has('notes') && (
                 <button
+                  title="The notes on this chart's states and transitions, all in one list"
                   type="button"
                   onClick={() => {
                     onOpenNotesDrawer();
@@ -540,6 +545,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               {/* Minimap */}
               {has('minimap') && (
                 <button
+                  title="A small map of the whole chart: drag on it to move the view"
                   type="button"
                   onClick={() => setIsMinimapOpen((prev) => !prev)}
                   className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
@@ -561,6 +567,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               {/* Legend */}
               {has('legend') && (
                 <button
+                  title="What the chart's colours, lines and badges mean"
                   type="button"
                   onClick={() => setIsLegendOpen((prev) => !prev)}
                   className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
@@ -624,6 +631,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               {/* Refactor Alert */}
               {has('refactor') && (
                 <button
+                  title="Mark the states whose code is complex (their cyclomatic complexity M at or above the threshold) with a badge"
                   type="button"
                   onClick={() => {
                     setIsHeatmapPanelOpen(true);
@@ -659,6 +667,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
             {has('snap') && (
               <div className="flex items-center justify-between bg-slate-950 p-1.5 rounded-lg border border-slate-800">
                 <button
+                  title="States dragged land on a grid (the size beside)"
                   type="button"
                   onClick={() => {
                     setSnapConfig((prev: SnapConfig) => {
@@ -682,6 +691,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
                 <div className="flex items-center gap-1">
                   {[10, 20, 40].map((size) => (
                     <button
+                  title={`Snap to a ${size} px grid`}
                       key={size}
                       type="button"
                       onClick={() => {
@@ -709,7 +719,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
               <div className="flex items-center justify-between bg-slate-950 p-1.5 rounded-lg border border-slate-800">
                 <span className="text-slate-300 flex items-center gap-1">
                   <span>Zoom Level:</span>
-                  <span className="font-mono text-sky-400 font-semibold">{Math.round(zoom * 100)}%</span>
+                  <span className="font-mono text-sky-400 font-semibold">{Math.round(zoom * fitScale * 100)}%</span>
                 </span>
                 <div className="flex items-center gap-1">
                   <button
@@ -722,7 +732,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setZoom((z) => Math.min(10, z * 1.15))}
+                    onClick={() => setZoom((z) => Math.min(Math.max(10, 10 / fitScale), z * 1.15))}
                     className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
                     title="Zoom In"
                   >

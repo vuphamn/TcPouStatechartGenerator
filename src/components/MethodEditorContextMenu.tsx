@@ -24,10 +24,12 @@ export interface MethodEditorContextMenuProps {
   onToggleFoldCurrent?: () => void;
   /** The POU type of the symbol (see findTypeTarget): it can be opened in StateScope / TwinCAT's editor */
   typeTarget?: { type: string; isTypeItself: boolean; member?: string } | null;
-  /** PLC Bookmarks for the line right-clicked (the implementation) */
+  /** PLC Bookmarks for the line right-clicked (in its section: an implementation, a declaration, the enum) */
   bookmarks?: {
     on: boolean;
     count: number;
+    /** The section its Clear clears ("this method", "the declaration", "the enum") */
+    scopeLabel?: string;
     onToggle: () => void;
     onNext: () => void;
     onPrev: () => void;
@@ -279,10 +281,27 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
           </button>
         )}
 
-        {/* PLC Bookmarks: a submenu */}
+        {/* PLC Bookmarks: the line's toggled at once; the others in a submenu */}
         {bookmarks && (
           <>
             <div className="my-1 border-t border-slate-800" />
+            <button
+              id="editor-menu-bookmark-quick"
+              type="button"
+              role="menuitem"
+              title="A bookmark on this line (Ctrl+F2): the Bookmarks list and Next / Previous go to it"
+              onClick={() => {
+                bookmarks.onToggle();
+                onClose();
+              }}
+              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <span className="flex items-center gap-2">
+                <Bookmark className={`w-3.5 h-3.5 shrink-0 ${bookmarks.on ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
+                <span className="font-medium text-[11px] leading-tight">{bookmarks.on ? 'Remove Bookmark' : 'Toggle Bookmark'}</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">Ctrl+F2</span>
+            </button>
             <div className="relative" onMouseEnter={() => setBookmarksOpen(true)} onMouseLeave={() => setBookmarksOpen(false)}>
               <button
                 id="editor-menu-bookmarks"
@@ -295,7 +314,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               >
                 <span className="flex items-center gap-2">
                   <Bookmark className={`w-3.5 h-3.5 shrink-0 ${bookmarks.on ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
-                  <span className="font-medium text-[11px] leading-tight">PLC Bookmarks</span>
+                  <span className="font-medium text-[11px] leading-tight">Bookmarks</span>
                 </span>
                 <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
               </button>
@@ -310,7 +329,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
                       ['editor-menu-bookmark-toggle', bookmarks.on ? 'Remove Bookmark' : 'Toggle Bookmark', 'Ctrl+F2', bookmarks.onToggle, false],
                       ['editor-menu-bookmark-next', 'Next Bookmark', '', bookmarks.onNext, bookmarks.count === 0],
                       ['editor-menu-bookmark-prev', 'Previous Bookmark', '', bookmarks.onPrev, bookmarks.count === 0],
-                      ['editor-menu-bookmark-clear', 'Clear All Bookmarks (this method)', '', bookmarks.onClearMethod, bookmarks.count === 0],
+                      ['editor-menu-bookmark-clear', `Clear All Bookmarks (${bookmarks.scopeLabel ?? 'this method'})`, '', bookmarks.onClearMethod, bookmarks.count === 0],
                       ['editor-menu-bookmark-clear-all', 'Clear All Bookmarks (the POU)', '', bookmarks.onClearAll, false],
                       ...(bookmarks.onShowAll ? [['editor-menu-bookmark-list', 'Show All Bookmarks…', '', bookmarks.onShowAll, false]] : []),
                     ] as [string, string, string, () => void, boolean][]

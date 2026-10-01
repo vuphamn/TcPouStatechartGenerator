@@ -960,6 +960,19 @@ g.cluster.tc-end-pointer-hover > rect,
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject {
   overflow: visible !important;
 }
+
+/* The chart at 100%: its whole box in the canvas, scaled as one (its width and height alike). As a flex item it was
+   only made narrower (its height kept): a wide chart was drawn tiny in the middle of a tall box, and a state dropped
+   beside that drawing was placed wrong. A chart smaller than the canvas keeps its own size */
+#mermaid-diagram-svg-container > svg {
+  /* (a state dropped or dragged beside the chart's box stays drawn there) */
+  overflow: visible;
+  flex-shrink: 0;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) foreignObject p,
 .node:not([id*="note"]):not([id*="Note"]):not([id*="sticky"]) .nodeLabel {
   white-space: nowrap !important;

@@ -113,13 +113,17 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyP'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
   await p.waitForSelector('#command-palette', { timeout: 3000 }).catch(() => {});
   const all = await p.$$eval('#command-palette .command-palette-item', (r) => r.length);
-  await p.keyboard.type('show actions', { delay: 10 });
+  const descOn = await p.$eval('#include-descriptions-checkbox', (e) => e.checked);
+  await p.keyboard.type('state descriptions', { delay: 10 });
   await h.sleep(150);
   const first = await p.$eval('#command-palette .command-palette-item', (e) => e.textContent.trim()).catch(() => '');
-  expect(all > 10 && /Show entry \/ do \/ exit actions/.test(first), `Ctrl+Shift+P: ${all} commands; "show actions": ${first}`);
+  expect(all > 10 && new RegExp(`${descOn ? 'Hide' : 'Show'} state descriptions`).test(first), `Ctrl+Shift+P: ${all} commands; "state descriptions": ${first}`);
   await p.keyboard.press('Enter');
   await h.sleep(600);
-  expect(await p.$eval('#state-actions-checkbox', (e) => e.checked), 'Enter: the option on');
+  expect((await p.$eval('#include-descriptions-checkbox', (e) => e.checked)) === !descOn, 'Enter: the option switched');
+  // (back as it was: the states' boxes measured later are drawn with their descriptions)
+  await p.click('#include-descriptions-checkbox');
+  await h.sleep(1200);
   await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyP'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
   await p.waitForSelector('#command-palette', { timeout: 3000 }).catch(() => {});
   await p.keyboard.type('go s_run', { delay: 10 });
@@ -135,7 +139,7 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   };
   await palette('');
   const top = await p.$eval('#command-palette .command-palette-item', (e) => e.textContent.trim()).catch(() => '');
-  expect(/(Show|Hide) entry \/ do \/ exit actions.*recently used/.test(top), `the palette again: the last one first, "recently used" (${top})`);
+  expect(/(Show|Hide) state descriptions.*recently used/.test(top),`the palette again: the last one first, "recently used" (${top})`);
   await p.keyboard.press('Escape');
   // Snippets to a file (the save dialog: XAE's) and from one (merged: a key in both, the file's)
   await p.evaluate(() => localStorage.setItem('kss.snippets', JSON.stringify([{ key: 'mine', body: 'a := 1;', description: 'my one' }, { key: 'both', body: 'old;' }])));
@@ -198,7 +202,10 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   const docState = await p.evaluate(() => document.body.innerText.match(/State:\s*(S_\w+)/)?.[1] ?? '');
   expect(picked.includes('S_RUN') || docState === 'S_RUN', `a bookmark on the minimap clicked: S_RUN selected (${picked.join(',') || docState})`);
   await p.keyboard.press('Escape');
-  // Shift+drag a box around both
+  // Shift+drag a box around both (measured again: the bookmark clicked on the minimap panned the canvas)
+  await h.sleep(600);
+  Object.assign(idle, await nodeAt('S_IDLE'));
+  Object.assign(run, await nodeAt('S_RUN'));
   const box = { l: Math.min(idle.r.l, run.r.l) - 20, t: Math.min(idle.r.t, run.r.t) - 20, r: Math.max(idle.r.rr, run.r.rr) + 20, b: Math.max(idle.r.b, run.r.b) + 20 };
   await p.keyboard.down('Shift');
   await p.mouse.move(box.l, box.t);

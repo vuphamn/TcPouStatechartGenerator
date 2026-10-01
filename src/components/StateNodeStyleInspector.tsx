@@ -213,7 +213,7 @@ export interface StateNodeStyleInspectorProps {
   initialMode?: 'enum' | 'method' | 'style' | 'code' | 'preprocess' | 'docs';
   initialMethod?: string;
   /** Open the method at this line (Problems tab: Open code) */
-  codeJump?: { method: string; line: number; nonce: number } | null;
+  codeJump?: { method: string; line: number; nonce: number; part?: 'declaration' } | null;
   initialEnumMember?: string;
   // Documentation / Notes persistence
   notes?: DiagramNotes;
@@ -566,6 +566,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
           <div className="flex-1 min-h-0 flex flex-col bg-slate-950 overflow-hidden">
             {tcDutContent && onSaveDutContent ? (
               <DutEnumEditor
+                bookmarksPou={tcPouFileName}
                 liveStateId={liveStateId}
                 dutContent={tcDutContent}
                 dutFileName={tcDutFileName || 'EnumDeclaration.TcDUT'}

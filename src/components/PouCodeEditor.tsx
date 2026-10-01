@@ -13,7 +13,7 @@ import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
 import { declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { markersFor } from '../utils/variableLint.ts';
-import { BODY, bookmarkedLines, clearBookmarks, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 
 /**
  * POU Editor (MiddlePanel tab): the POU's own Structured Text, as TwinCAT XAE shows it when the POU is opened: the
@@ -263,6 +263,20 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     const r = toggleLineBookmark(pouFileName, BODY, impl, line);
     showNotice('success', r.on ? `Bookmark set at line ${line}` : `Bookmark removed at line ${line}`);
   };
+  // (and in the declaration: its own)
+  const declKey = declarationKey(BODY);
+  const declBookmarks = useMemo(() => bookmarkedLines(pouFileName, declKey, decl), [bookmarkStore, pouFileName, declKey, decl]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleDeclBookmark = (line: number) => {
+    const r = toggleLineBookmark(pouFileName, declKey, decl, line, { labels: false });
+    showNotice('success', r.on ? `Bookmark set at line ${line} of the declaration` : `Bookmark removed at line ${line} of the declaration`);
+  };
+  const goToDeclBookmark = (dir: 1 | -1, from: number) => {
+    if (!declBookmarks.length) return;
+    const target = dir > 0 ? declBookmarks.find((l) => l > from) ?? declBookmarks[0] : [...declBookmarks].reverse().find((l) => l < from) ?? declBookmarks[declBookmarks.length - 1];
+    declRef.current?.scrollToLine(target);
+    setDeclHighlight(target);
+    showNotice('success', `Bookmark ${declBookmarks.indexOf(target) + 1} of ${declBookmarks.length} in the declaration (line ${target})`);
+  };
   const goToBodyBookmark = (dir: 1 | -1, from: number) => {
     if (!bodyBookmarks.length) return;
     const target = dir > 0 ? bodyBookmarks.find((l) => l > from) ?? bodyBookmarks[0] : [...bodyBookmarks].reverse().find((l) => l < from) ?? bodyBookmarks[bodyBookmarks.length - 1];
@@ -349,6 +363,9 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       e.preventDefault();
       const ta = e.currentTarget;
       toggleBodyBookmark(toCodeLine(lineAt(ta.value, ta.selectionStart)));
+    } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'pou-declaration-editor') {
+      e.preventDefault();
+      toggleDeclBookmark(lineAt(e.currentTarget.value, e.currentTarget.selectionStart));
     } else if (e.key === 'F12' && e.shiftKey) {
       e.preventDefault();
       const ta = e.currentTarget;
@@ -523,6 +540,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
               markers={markersFor(editorServices()?.problems?.() ?? [], decl, { declaration: true })}
               onKeyDown={onEditorKeyDown}
               onContextMenu={openMenu('declaration')}
+              bookmarkLines={declBookmarks}
               highlightedLine={declHighlight}
               scrollToLine={declScroll}
               ariaLabel="POU declaration"
@@ -626,6 +644,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
             menu.scope === 'implementation'
               ? {
                   on: bodyBookmarks.includes(menu.line),
+                  scopeLabel: 'the body',
                   count: bodyBookmarks.length,
                   onToggle: () => toggleBodyBookmark(menu.line),
                   onNext: () => goToBodyBookmark(1, menu.line),
@@ -634,7 +653,17 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
                   onClearAll: () => clearBookmarks(pouFileName),
                   onShowAll: editorServices()?.showBookmarks,
                 }
-              : undefined
+              : {
+                  on: declBookmarks.includes(menu.line),
+                  scopeLabel: 'the declaration',
+                  count: declBookmarks.length,
+                  onToggle: () => toggleDeclBookmark(menu.line),
+                  onNext: () => goToDeclBookmark(1, menu.line),
+                  onPrev: () => goToDeclBookmark(-1, menu.line),
+                  onClearMethod: () => clearBookmarks(pouFileName, declKey, decl),
+                  onClearAll: () => clearBookmarks(pouFileName),
+                  onShowAll: editorServices()?.showBookmarks,
+                }
           }
           onGoToDefinition={goToDefinition}
           onFindReferences={(sym) => {

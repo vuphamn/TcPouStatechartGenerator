@@ -72,7 +72,7 @@ import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
 import { NewVariable, declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
-import { bookmarkedLines, clearBookmarks, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
 import { getProjectSymbols } from '../utils/projectSymbols.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
@@ -90,7 +90,7 @@ export interface MethodStructuredTextEditorProps {
   tcPouFileName?: string;
   initialMethod?: string;
   /** Go to this line of the method's implementation (a new nonce each request): scroll, unfold, highlight */
-  codeJump?: { method: string; line: number; nonce: number } | null;
+  codeJump?: { method: string; line: number; nonce: number; part?: 'declaration' } | null;
   selectedStateId?: string | null;
   selectedStateLabel?: string;
   /** Live: the PLC's current state (marked in the code, never scrolled to) */
@@ -660,6 +660,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       return;
     }
     handledCodeJumpRef.current = codeJump.nonce;
+    // A line of its declaration (a bookmark there): the method's declaration shown, the line scrolled to and marked
+    if (codeJump.part === 'declaration') {
+      const line = codeJump.line;
+      setDeclTab('method');
+      for (const delay of [80, 300]) window.setTimeout(() => declEditorRef.current?.scrollToLine(line, true), delay);
+      setDeclHighlightedLine(line);
+      window.setTimeout(() => setDeclHighlightedLine((l) => (l === line ? null : l)), 3000);
+      return;
+    }
     // The selected state's CASE label counts as visited: that scroll must not take the view back later
     lastScrolledTargetRef.current = selectedStateId || null;
     const line = codeJump.line;
@@ -868,6 +877,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       symbol: resolved?.symbol || null,
       memberOf: resolved?.memberOf,
       sourceScope: 'declaration',
+      line: textarea.value.slice(0, textarea.selectionStart).split('\n').length,
     });
   };
 
@@ -1123,6 +1133,20 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const r = toggleLineBookmark(tcPouFileName, cleanMethodName, code, line);
     flashBookmark(r.state ? `${r.on ? 'Bookmarked' : 'Bookmark removed:'} ${r.state} (the state's bookmark)` : `${r.on ? 'Bookmark set' : 'Bookmark removed'} at line ${line}`);
   };
+  // (and in the declaration shown: the method's, or the POU's)
+  const declKey = declarationKey(declTab === 'pou' ? BODY : cleanMethodName);
+  const declText = declTab === 'pou' ? pouDeclaration : declaration;
+  const declBookmarkLines = useMemo(() => bookmarkedLines(tcPouFileName, declKey, declText), [bookmarkStore, tcPouFileName, declKey, declText]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleDeclBookmarkAt = (line: number) => {
+    const r = toggleLineBookmark(tcPouFileName, declKey, declText, line, { labels: false });
+    flashBookmark(`${r.on ? 'Bookmark set' : 'Bookmark removed'} at line ${line} of the ${declTab === 'pou' ? "POU's" : "method's"} declaration`);
+  };
+  const goToDeclBookmark = (dir: 1 | -1, from: number) => {
+    if (!declBookmarkLines.length) return;
+    const target = dir > 0 ? declBookmarkLines.find((l) => l > from) ?? declBookmarkLines[0] : [...declBookmarkLines].reverse().find((l) => l < from) ?? declBookmarkLines[declBookmarkLines.length - 1];
+    declEditorRef.current?.scrollToLine(target, true);
+    flashBookmark(`Bookmark ${declBookmarkLines.indexOf(target) + 1} of ${declBookmarkLines.length} in the declaration (line ${target})`);
+  };
   const goToBookmark = (dir: 1 | -1, from: number) => {
     if (!bookmarkLines.length) return;
     const target = dir > 0 ? bookmarkLines.find((l) => l > from) ?? bookmarkLines[0] : [...bookmarkLines].reverse().find((l) => l < from) ?? bookmarkLines[bookmarkLines.length - 1];
@@ -1154,6 +1178,10 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       const ta = e.currentTarget;
       const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
       if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'method-declaration-editor') {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      toggleDeclBookmarkAt(ta.value.slice(0, ta.selectionStart).split('\n').length);
     } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'method-implementation-editor') {
       // Toggle a bookmark on the caret's line (as TwinCAT's PLC Bookmarks)
       e.preventDefault();
@@ -1867,6 +1895,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               markers={markersFor(editorServices()?.problems?.() ?? [], declTab === 'pou' ? pouDeclaration : declaration, { method: declTab === 'pou' ? undefined : cleanMethodName, declaration: true })}
               onKeyDown={handleEditorKeyDown}
               onContextMenu={handleDeclContextMenu}
+              bookmarkLines={declBookmarkLines}
               highlightedLine={declHighlightedLine}
               scrollToLine={declScrollToLine}
               placeholder={
@@ -2192,7 +2221,25 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                   },
                   onShowAll: editorServices()?.showBookmarks,
                 }
-              : undefined
+              : contextMenu.sourceScope === 'declaration' && contextMenu.line
+                ? {
+                    on: declBookmarkLines.includes(contextMenu.line),
+                    count: declBookmarkLines.length,
+                    scopeLabel: 'the declaration',
+                    onToggle: () => toggleDeclBookmarkAt(contextMenu.line!),
+                    onNext: () => goToDeclBookmark(1, contextMenu.line!),
+                    onPrev: () => goToDeclBookmark(-1, contextMenu.line!),
+                    onClearMethod: () => {
+                      clearBookmarks(tcPouFileName, declKey, declText);
+                      flashBookmark('Bookmarks of the declaration cleared');
+                    },
+                    onClearAll: () => {
+                      clearBookmarks(tcPouFileName);
+                      flashBookmark('All bookmarks of the POU cleared');
+                    },
+                    onShowAll: editorServices()?.showBookmarks,
+                  }
+                : undefined
           }
           onGoToDefinition={handleGoToDefinition}
           onFindReferences={(sym) => {

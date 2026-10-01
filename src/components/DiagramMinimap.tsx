@@ -24,6 +24,8 @@ export interface DiagramMinimapProps {
   containerElement: HTMLDivElement | null;
   pan: { x: number; y: number };
   zoom: number;
+  /** The chart's scale at zoom 1 (a wide chart is fitted to the canvas): the % shown is its real size */
+  fitScale?: number;
   onPanChange: (newPan: { x: number; y: number }) => void;
   onResetZoom: () => void;
   selectedStateId?: string | null;
@@ -89,6 +91,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   containerElement,
   pan,
   zoom,
+  fitScale = 1,
   onPanChange,
   onResetZoom,
   selectedStateId,
@@ -617,7 +620,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
       <div className="flex items-center justify-between px-2.5 py-1 bg-slate-950 border-t border-slate-800 text-[10px] font-mono text-slate-400 select-none">
         <span className="flex items-center gap-1">
           <Crosshair className="w-3 h-3 text-sky-400" />
-          <span>{Math.round(zoom * 100)}%</span>
+          <span title="The chart's size shown (100%: its own size)">{Math.round(zoom * fitScale * 100)}%</span>
         </span>
         <span className="text-[9px] text-slate-500 font-sans">
           {isDragging ? 'Panning canvas...' : 'Click or drag to navigate'}

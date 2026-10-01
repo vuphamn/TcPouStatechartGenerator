@@ -112,7 +112,8 @@ const ID = 'method-implementation-editor';
   await p.click('#editor-menu-bookmarks');
   await h.sleep(200);
   await p.click('#editor-menu-bookmark-next');
-  await h.sleep(600);
+  // (its message, a moment later on a busy machine)
+  await p.waitForFunction(() => /Bookmark \d+ of/.test(document.getElementById('method-jump-toast')?.textContent ?? ''), { timeout: 4000 }).catch(() => {});
   const toast = await p.$eval('#method-jump-toast', (e) => e.textContent).catch(() => '');
   expect(new RegExp(`Bookmark 1 of 2 \\(line ${Math.min(idleLine, cLine)}\\)`).test(toast), `Next Bookmark: ${toast}`);
 
@@ -215,8 +216,8 @@ const ID = 'method-implementation-editor';
   await p.keyboard.press('Escape');
   await h.sleep(200);
   expect(!(await p.$('#diagram-context-menu')), 'Esc again: closed');
-  // (the canvas zooms up to 1000%, and no further)
-  for (let i = 0; i < 30; i++) await p.click('#zoom-in-button');
+  // (the canvas zooms up to 1000% of the chart's own size, and no further: a wide chart starts fitted, far below)
+  for (let i = 0; i < 70; i++) await p.click('#zoom-in-button');
   await h.sleep(400);
   const zoomText = await p.evaluate(() => document.getElementById('zoom-in-button').previousElementSibling?.textContent?.trim() || [...document.querySelectorAll('button, span')].find((e) => /^\d+%$/.test(e.textContent.trim()) && e.closest('#mermaid-canvas-area, [id*="toolbar"], header'))?.textContent.trim());
   expect(zoomText === '1000%', `the canvas zooms in to ${zoomText}`);

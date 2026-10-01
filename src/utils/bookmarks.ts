@@ -61,10 +61,13 @@ export function toggleStateBookmark(pou: string, state: string): boolean {
 
 const sameMethod = (a: string, b: string) => a.replace(/\(\)$/, '').toLowerCase() === b.replace(/\(\)$/, '').toLowerCase();
 
-/** A line of a method's implementation bookmarked or not (a CASE label line: its state's bookmark) */
-export function toggleLineBookmark(pou: string, method: string, code: string, line: number): { on: boolean; state?: string } {
+/**
+ * A line of a method's implementation bookmarked or not (a CASE label line: its state's bookmark). opts.labels false:
+ * the line as it is (a declaration's "nCount : INT;" is no CASE label)
+ */
+export function toggleLineBookmark(pou: string, method: string, code: string, line: number, opts: { labels?: boolean } = {}): { on: boolean; state?: string } {
   const lines = code.split(/\r?\n/);
-  const state = labelStateAt(code, line);
+  const state = opts.labels === false ? undefined : labelStateAt(code, line);
   if (state) return { on: toggleStateBookmark(pou, state), state };
   const b = getBookmarks(pou);
   const at = resolveLines(b, method, code);
@@ -138,6 +141,12 @@ export function useBookmarks(pou: string): PouBookmarks {
 
 /** The POU's own body (the POU Editor's implementation), as a "method" of the line bookmarks */
 export const BODY = '(body)';
+/** A declaration's bookmarks: a method's, the POU's (BODY) */
+export const declarationKey = (method: string) => `${method.replace(/\(\)$/, '')}#declaration`;
+export const isDeclarationKey = (key: string) => key.endsWith('#declaration');
+export const declarationOf = (key: string) => key.replace(/#declaration$/, '');
+/** The enum's bookmarks (its declaration, in the Enum Editor) */
+export const ENUM_KEY = '(enum)';
 
 export interface BookmarkEntry {
   kind: 'state' | 'line';
