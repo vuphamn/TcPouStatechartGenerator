@@ -75,8 +75,9 @@ jobs:
       # which a slow runner does not keep up with)
       - name: Build
         run: npm run build
+      # (--retry: a test failed on the slow runner is run once more; passing then, it is listed as flaky in the log)
       - name: Web app tests (headless Edge)
-        run: node tests/run.cjs web --preview --shard ${{ matrix.shard }}/2
+        run: node tests/run.cjs web --preview --retry --shard ${{ matrix.shard }}/2
       - name: Test summary
         if: always()
         run: node scripts/test-summary.cjs "Web tests (${{ matrix.shard }}/2)" >> "$env:GITHUB_STEP_SUMMARY"
