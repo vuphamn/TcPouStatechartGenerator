@@ -75,6 +75,8 @@ const BOTTOM_ROOM = 48;
 
 export interface StructuredTextCodeEditorRef {
   scrollToLine: (lineNumber: number, smooth?: boolean) => void;
+  /** The caret on a line (1-based, of the code), at its first character; the focus stays where it is */
+  placeCaret: (lineNumber: number) => void;
   focus: () => void;
   getTextarea: () => HTMLTextAreaElement | null;
   /** Re-indent the code (Format Document); false: nothing changed */
@@ -394,22 +396,46 @@ export const StructuredTextCodeEditor = forwardRef<
       return idx >= 0 ? idx : null;
     }, [liveLine, lineEntries]);
 
+    // A line scrolled into view (a bit below the top); hidden (its tab not shown): done when it is shown
+    const pendingScrollRef = useRef<number | null>(null);
+    const viewIndexOf = (originalLineNum: number) => {
+      const i = lineEntries.findIndex((e) => e.originalLineNumber === originalLineNum);
+      return i >= 0 ? i : Math.max(0, originalLineNum - 1);
+    };
+    const scrollToOriginal = (originalLineNum: number, smooth: boolean) => {
+      const ta = textareaRef.current;
+      if (!ta || originalLineNum <= 0) return;
+      if (ta.clientHeight === 0) {
+        pendingScrollRef.current = originalLineNum;
+        return;
+      }
+      pendingScrollRef.current = null;
+      const targetTop = Math.max(0, viewIndexOf(originalLineNum) * lineHRef.current - 2 * lineHRef.current);
+      ta.scrollTo({ top: targetTop, behavior: smooth ? 'smooth' : 'auto' });
+    };
+    const scrollRef = useRef(scrollToOriginal);
+    scrollRef.current = scrollToOriginal;
+    useEffect(() => {
+      const ta = textareaRef.current;
+      if (!ta || typeof ResizeObserver === 'undefined') return;
+      const ro = new ResizeObserver(() => {
+        if (ta.clientHeight > 0 && pendingScrollRef.current !== null) scrollRef.current(pendingScrollRef.current, false);
+      });
+      ro.observe(ta);
+      return () => ro.disconnect();
+    }, []);
+
     // Expose imperative methods to parent
     useImperativeHandle(ref, () => ({
-      scrollToLine: (originalLineNum: number, smooth = true) => {
-        if (!textareaRef.current || originalLineNum <= 0) return;
-        let targetViewIdx = lineEntries.findIndex(
-          (e) => e.originalLineNumber === originalLineNum
-        );
-        if (targetViewIdx < 0) {
-          // Fallback to approximate line position
-          targetViewIdx = Math.max(0, originalLineNum - 1);
-        }
-        const targetTop = Math.max(0, targetViewIdx * lineHRef.current - 2 * lineHRef.current);
-        textareaRef.current.scrollTo({
-          top: targetTop,
-          behavior: smooth ? 'smooth' : 'auto',
-        });
+      scrollToLine: (originalLineNum: number, smooth = true) => scrollToOriginal(originalLineNum, smooth),
+      placeCaret: (originalLineNum: number) => {
+        const ta = textareaRef.current;
+        // (not while it has the focus: typing there, its own caret)
+        if (!ta || originalLineNum <= 0 || ta.ownerDocument.activeElement === ta) return;
+        const lines = ta.value.split('\n');
+        const idx = Math.min(viewIndexOf(originalLineNum), lines.length - 1);
+        const at = lines.slice(0, idx).reduce((n, l) => n + l.length + 1, 0) + (lines[idx]?.match(/^\s*/)?.[0].length ?? 0);
+        ta.setSelectionRange(at, at);
       },
       focus: () => {
         textareaRef.current?.focus();
@@ -420,19 +446,7 @@ export const StructuredTextCodeEditor = forwardRef<
 
     // Auto-scroll when scrollToLine prop changes
     useEffect(() => {
-      if (scrollToLine && scrollToLine > 0 && textareaRef.current) {
-        let targetViewIdx = lineEntries.findIndex(
-          (e) => e.originalLineNumber === scrollToLine
-        );
-        if (targetViewIdx < 0) {
-          targetViewIdx = Math.max(0, scrollToLine - 1);
-        }
-        const targetTop = Math.max(0, targetViewIdx * lineHRef.current - 2 * lineHRef.current);
-        textareaRef.current.scrollTo({
-          top: targetTop,
-          behavior: 'smooth',
-        });
-      }
+      if (scrollToLine && scrollToLine > 0 && textareaRef.current) scrollToOriginal(scrollToLine, true);
     // (not on a zoom: the line height is read from the ref)
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [scrollToLine, lineEntries]);

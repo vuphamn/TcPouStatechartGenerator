@@ -74,7 +74,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.screenshot({ path: path.join(h.OUT, 'enum-jump.png'), clip: { x: 800, y: 60, width: 800, height: 700 } });
   await sleep(3000);
   s = await state('st-dut-editor', 'TABLEMANAGER_AUTOFEED_OUTSTOP_SLOW');
-  expect(s && s.highlighted === null, 'the highlight clears after 3 s');
+  // (a state chosen: its row stays highlighted until another one)
+  expect(s && s.highlighted === s.line, 'the highlight stays (3 s later)');
   // Another state: a new jump
   await clickCard('TABLEMANAGER_HOMMING');
   await sleep(700);

@@ -4882,10 +4882,10 @@ export const App: React.FC = () => {
       const f = (e as CustomEvent<CodeFocus>).detail;
       if (!f?.state) return;
       setCodeFocus(f);
-      if (!f.follow) return;
+      // (the canvas selects it, always; it pans there only with the editor's Follow on)
       setSelectedStateId(f.state);
       setSelectedStateLabel(f.state);
-      mermaidViewerRef.current?.panToState(f.state, Date.now());
+      if (f.follow) mermaidViewerRef.current?.panToState(f.state, Date.now());
     };
     window.addEventListener(CODE_FOCUS_EVENT, on);
     return () => window.removeEventListener(CODE_FOCUS_EVENT, on);

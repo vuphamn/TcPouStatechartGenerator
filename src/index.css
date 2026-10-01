@@ -603,10 +603,15 @@ mark.word-occurrence {
   display: inline;
 }
 
-/* Identified States: the state at an editor's caret (a flash, then a thin frame while it stays the caret's) */
+/* Identified States: the state at an editor's caret (a flash, then a clear frame and tint while it stays the caret's:
+   with the editor's Follow off the selection stays where it was, this card shows where the caret is) */
 @keyframes state-focus-flash {
-  0% { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.95), 0 0 14px rgba(56, 189, 248, 0.45); }
-  100% { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.55); }
+  0% { box-shadow: 0 0 0 3px rgba(56, 189, 248, 1), 0 0 18px rgba(56, 189, 248, 0.55); }
+  100% { box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.9); }
+}
+[data-code-focus='true'] {
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.9);
+  background-color: rgba(14, 165, 233, 0.14) !important;
 }
 .state-focus-flash[data-code-focus='true'] {
   animation: state-focus-flash 1.2s ease-out forwards;

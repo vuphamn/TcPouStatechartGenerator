@@ -174,8 +174,10 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   const nodeAt = (id) => p.evaluate((id) => { const r = document.querySelector(`#mermaid-diagram-svg-container g.node[data-state-id="${id}"]`).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, r: { l: r.left, t: r.top, rr: r.right, b: r.bottom } }; }, id);
   const idle = await nodeAt('S_IDLE');
   const run = await nodeAt('S_RUN');
-  await p.keyboard.down('Control');
+  // (the caret in the Method Editor above selected its state: a plain click on S_IDLE first, then S_RUN added)
   await p.mouse.click(idle.x, idle.y);
+  await h.sleep(300);
+  await p.keyboard.down('Control');
   await p.mouse.click(run.x, run.y);
   await p.keyboard.up('Control');
   await h.sleep(300);

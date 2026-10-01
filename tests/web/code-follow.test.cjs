@@ -1,7 +1,7 @@
 // Follow in the code editors: the caret in a state's CASE branch (the Method Editor): its card in Identified States
-// flashed, its member shown in the Enum Editor; the canvas only with the Method Editor's Follow on (selected there,
-// panned to). The caret on an enum member (the Enum Editor): its card, its CASE label in the Method Editor; the canvas
-// only with the Enum Editor's Follow on
+// flashed, its member shown in the Enum Editor, selected on the canvas; panned to only with the Method Editor's Follow
+// on. The caret on an enum member (the Enum Editor): its card, its CASE label in the Method Editor; panned to only
+// with the Enum Editor's Follow on
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -42,7 +42,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 
   const S1 = 'TABLEMANAGER_HOMMING';
   const S2 = 'TABLEMANAGER_CLAMPED';
-  const before = await canvasSelected();
+  // (where the canvas shows a state: the same place, no pan)
+  const nodeAt = (s) => p.evaluate((s) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`)?.getBoundingClientRect(); return r ? { x: Math.round(r.x), y: Math.round(r.y) } : null; }, s);
+  const at0 = await nodeAt(S1);
 
   // 1. The Method Editor, Follow off: the card and the enum follow, the canvas not
   await p.click('#dock-tab-method');
@@ -52,7 +54,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await caretAt('method-implementation-editor', new RegExp(`^\\s*${S1}\\s*:`), true);
   await h.sleep(600);
   expect((await focusedCard()) === S1, `Identified States: ${S1}'s card flashed (${await focusedCard()})`);
-  expect((await canvasSelected()) === before, `the canvas: not changed (${await canvasSelected()})`);
+  // (the canvas on show again to measure it)
+  await p.click('#dock-tab-diagram');
+  await h.sleep(600);
+  const at1 = await nodeAt(S1);
+  expect((await canvasSelected()) === S1, `the canvas: ${S1} selected (${await canvasSelected()})`);
+  expect(!!at0 && !!at1 && Math.abs(at0.x - at1.x) <= 2 && Math.abs(at0.y - at1.y) <= 2, `Follow off: no pan (${JSON.stringify(at0)} -> ${JSON.stringify(at1)})`);
   await p.click('#dock-tab-enum');
   await p.waitForSelector('#st-dut-editor', { timeout: 10000 });
   await h.sleep(800);
@@ -79,6 +86,16 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const caretLine = await p.evaluate(() => { const ta = document.getElementById('method-implementation-editor'); return ta.value.slice(0, ta.selectionStart).split('\n').length; });
   expect(caretLine === line, `the caret stays where it was put (line ${caretLine}, put on ${line})`);
   expect((await p.evaluate(() => localStorage.getItem('kss.follow.method'))) === '1', 'Follow kept in this browser');
+
+  // 4. Jump to State Case (the Method Editor's list): the same as the caret there (its card, the canvas)
+  const S3 = 'TABLEMANAGER_UNCLAMPING';
+  const value = await p.evaluate((s) => [...document.querySelectorAll('#jump-to-case-state-select option')].find((o) => o.textContent.trim().startsWith(s))?.value ?? null, S3);
+  expect(!!value, `the list has ${S3}`);
+  if (value) {
+    await p.select('#jump-to-case-state-select', value);
+    await h.sleep(800);
+    expect((await focusedCard()) === S3 && (await canvasSelected()) === S3, `Jump to State Case: its card and the canvas follow (${await focusedCard()}, ${await canvasSelected()})`);
+  }
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

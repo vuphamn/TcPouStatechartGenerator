@@ -567,6 +567,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const onSel = () => {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       if (!ta || ta.id !== 'method-implementation-editor') return;
+      // (the caret moved here: a row highlighted for a state chosen elsewhere, not the caret's, no longer)
+      const caretLine = ta.value.slice(0, ta.selectionStart).split('\n').length;
+      setHighlightedCaseLine((h) => (h !== null && h !== caretLine ? null : h));
       const state = caseStateAt(ta.value, ta.selectionStart, caseStates);
       if (!state || state === caretStateRef.current) return;
       caretStateRef.current = state;
@@ -576,7 +579,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     document.addEventListener('selectionchange', onSel);
     return () => document.removeEventListener('selectionchange', onSel);
   }, [cleanMethodName, caseStates, followCanvas]);
-  // The Enum Editor's caret on a member: its CASE label shown here (not the caret moved)
+  // An edit here: the highlighted row is no longer known (its lines moved)
+  useEffect(() => {
+    const onInput = (e: Event) => {
+      if ((e.target as HTMLElement | null)?.id === 'method-implementation-editor') window.setTimeout(() => setHighlightedCaseLine(null), 0);
+    };
+    document.addEventListener('input', onInput);
+    return () => document.removeEventListener('input', onInput);
+  }, []);
+  // The Enum Editor's caret on a member: its CASE label shown here
   useEffect(() => {
     if (!codeFocus || codeFocus.from === 'method' || cleanMethodName.toLowerCase() !== 'dostate') return;
     const lineIndex = findCaseLabelLineIndex(code, codeFocus.state, codeFocus.state);
@@ -585,9 +596,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     lastScrolledTargetRef.current = codeFocus.state;
     setActiveBreadcrumbState({ id: codeFocus.state, label: codeFocus.state });
     setScrollToLine(lineIndex + 1);
+    // (highlighted until another state, the caret on it)
     setHighlightedCaseLine(lineIndex + 1);
-    const timer = setTimeout(() => setHighlightedCaseLine(null), 2000);
-    return () => clearTimeout(timer);
+    requestAnimationFrame(() => implEditorRef.current?.placeCaret(lineIndex + 1));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeFocus?.t]);
 
@@ -606,12 +617,18 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       label: stateLabelOrId,
     });
     setScrollToLine(block.startLine);
+    // (its label's row highlighted until another state; the caret on it)
     setHighlightedCaseLine(block.startLine);
+    requestAnimationFrame(() => implEditorRef.current?.placeCaret(block.startLine));
     setScrollNotification(`Jumped to case: ${block.label.slice(0, 30)} (line ${block.startLine})`);
-    setTimeout(() => {
-      setHighlightedCaseLine(null);
-      setScrollNotification(null);
-    }, 3000);
+    setTimeout(() => setScrollNotification(null), 3000);
+    // Follow: Identified States and the Enum Editor show it; the canvas with Follow on
+    const state = stateLabelOrId.split(',')[0].trim().split('.').pop() ?? '';
+    if (state) {
+      caretStateRef.current = state;
+      selfFocusRef.current = state;
+      publishCodeFocus({ state, from: 'method', follow: followCanvas });
+    }
   };
 
   // Auto-scroll to CASE label in doState() implementation when a state/node is selected on Diagram Canvas
@@ -683,14 +700,10 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       }
 
       setScrollToLine(targetLine);
+      // (its row stays highlighted while it is the selected state: until another one, or an edit here; the caret
+      // on it, the focus where it was: a click in Identified States or on the canvas stays there)
       setHighlightedCaseLine(targetLine);
-
-      // Clear the temporary highlight after 3 seconds. No "Jumped to case" notice here: selecting a state
-      // on the canvas already updates the breadcrumb "Case:" chip and highlights the line
-      const timer = setTimeout(() => {
-        setHighlightedCaseLine(null);
-      }, 3000);
-      return () => clearTimeout(timer);
+      requestAnimationFrame(() => implEditorRef.current?.placeCaret(targetLine));
     }
   }, [selectedStateId, selectedStateLabel, cleanMethodName, code, availableMethods, foldableBlocks, foldedBlockIds]);
 

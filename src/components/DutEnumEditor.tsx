@@ -119,7 +119,11 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   const flashTimerRef = useRef<number | null>(null);
   const performJumpRef = useRef<(name: string) => void>(() => {});
   const isVisible = () => !!rootRef.current && rootRef.current.offsetParent !== null && rootRef.current.clientHeight > 0;
-  const jumpToMember = (name: string) => {
+  // (persist: the selected state's member, from Identified States, the canvas, the Method Editor: its row highlighted
+  // until another one or an edit, the caret on it; else a flash of 3 s)
+  const persistJumpRef = useRef(false);
+  const jumpToMember = (name: string, persist = false) => {
+    persistJumpRef.current = persist;
     setSelectedMemberName(name);
     if (!isVisible()) {
       pendingJumpRef.current = name;
@@ -138,6 +142,9 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     const onSel = () => {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       if (!ta || ta.id !== 'st-dut-editor') return;
+      // (the caret moved here: a row highlighted for a state chosen elsewhere, not the caret's, no longer)
+      const caretLine = ta.value.slice(0, ta.selectionStart).split('\n').length;
+      setFlashLine((f) => (f && f.line !== caretLine ? null : f));
       const member = enumMemberAt(ta.value, ta.selectionStart);
       if (!member || member === caretMemberRef.current) return;
       caretMemberRef.current = member;
@@ -150,7 +157,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   useEffect(() => {
     // (selected from this editor's caret, Follow on: it is already there)
     if (initialSelectedMember && initialSelectedMember === selfFocusRef.current) return;
-    if (initialSelectedMember) jumpToMember(initialSelectedMember);
+    if (initialSelectedMember) jumpToMember(initialSelectedMember, true);
     // Only when the selection changes, not on every edit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSelectedMember]);
@@ -159,7 +166,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   useEffect(() => {
     if (!codeFocus || codeFocus.from === 'enum') return;
     caretMemberRef.current = null;
-    jumpToMember(codeFocus.state);
+    jumpToMember(codeFocus.state, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeFocus?.t]);
   useEffect(() => {
@@ -391,23 +398,36 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     return 0;
   };
   // Highlights for 3 s (a line of the ST / XML editor, or a grid row)
-  const flash = (show: () => void) => {
+  const flash = (show: () => void, persist = false) => {
     if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = null;
     show();
+    if (persist) return;
     flashTimerRef.current = window.setTimeout(() => {
       setFlashLine(null);
       setFlashRow(null);
       flashTimerRef.current = null;
     }, 3000);
   };
-  const flashEditorLine = (view: 'st' | 'xml', line: number) => {
+  const flashEditorLine = (view: 'st' | 'xml', line: number, persist = false) => {
     if (line <= 0) return;
-    (view === 'xml' ? xmlEditorRef : stEditorRef).current?.scrollToLine(line);
+    const ed = (view === 'xml' ? xmlEditorRef : stEditorRef).current;
+    ed?.scrollToLine(line);
+    if (persist) ed?.placeCaret(line);
     flash(() => {
       setFlashRow(null);
       setFlashLine({ view, line });
-    });
+    }, persist);
   };
+  // An edit here: the highlighted row is no longer known (its lines moved)
+  useEffect(() => {
+    const onInput = (e: Event) => {
+      const id = (e.target as HTMLElement | null)?.id;
+      if (id === 'st-dut-editor' || id === 'xml-dut-editor') window.setTimeout(() => setFlashLine(null), 0);
+    };
+    document.addEventListener('input', onInput);
+    return () => document.removeEventListener('input', onInput);
+  }, []);
   // The syntax check numbers the declaration's lines: in the XML view the declaration starts on the CDATA line
   const declarationLineInView = (line: number) => {
     if (viewMode !== 'xml') return line;
@@ -423,11 +443,11 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
       flash(() => {
         setFlashLine(null);
         setFlashRow(name);
-      });
+      }, persistJumpRef.current);
       return;
     }
     const view = viewMode === 'xml' ? 'xml' : 'st';
-    flashEditorLine(view, memberLine(name, view));
+    flashEditorLine(view, memberLine(name, view), persistJumpRef.current);
   };
 
   // Jump to specific enum member in editor
