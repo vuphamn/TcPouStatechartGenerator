@@ -44,7 +44,9 @@ async function session(url, hello, start, label) {
   ws.send(JSON.stringify(start));
   // Watch before the session is connected: applied once it is
   ws.send(JSON.stringify({ type: 'liveWatch', vars }));
+  // (at least 3.5 s: a value's change seen; on a slow machine until the watch is answered and read, 15 s at most)
   await sleep(3500);
+  for (let t = 0; t < 11500 && !(got.some((m) => m.type === 'liveWatchResult') && got.some((m) => m.type === 'liveVars' && m.values?.some((v) => v.id === 'cmd_bhome'))); t += 250) await sleep(250);
   const results = got.filter((m) => m.type === 'liveWatchResult').flatMap((m) => m.vars);
   const values = got.filter((m) => m.type === 'liveVars').flatMap((m) => m.values);
   const last = (id) => values.filter((v) => v.id === id).pop()?.v;
