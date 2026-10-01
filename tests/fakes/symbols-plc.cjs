@@ -103,6 +103,9 @@ function plantBootFiles() {
     'CurrentConfig.tszip': writeZip({
       'Plant.tsproj': '<?xml version="1.0"?>\n<TcSmProject><Project><Plc><Project File="Plant.xti"/></Plc></Project></TcSmProject>',
       '_Config/PLC/Plant.xti': '<?xml version="1.0"?>\n<TcSmItem ClassName="CNestedPlcProjDef"><Project GUID="{p1}" Name="Plant" PrjFilePath="..\\..\\Plant\\Plant.plcproj" TmcFilePath="..\\..\\Plant\\Plant.tmc" AmsPort="851"/></TcSmItem>',
+      // (the I/O: an EtherCAT device, a coupler and a terminal; the PLC instance's link to its first channel)
+      '_Config/IO/Device 1 (EtherCAT).xti': '<?xml version="1.0"?>\n<TcSmItem><Device Id="1" DevType="111" AmsNetId="127.0.0.1.2.1" RemoteName="Device 1 (EtherCAT)"><Name>__FILENAME__</Name><Box Id="1" BoxType="9099"><Name>Term 1 (EK1100)</Name><EtherCAT VendorId="#x2"/><Box Id="2" BoxType="9099"><Name>Term 2 (EL1008)</Name><EtherCAT VendorId="#x2"><Pdo Name="Channel 1" Index="#x1a00"><Entry Name="Input" Index="#x6000" Sub="#x01"><Type>BIT</Type></Entry></Pdo><Pdo Name="Channel 2" Index="#x1a01"><Entry Name="Input" Index="#x6010" Sub="#x01"><Type>BIT</Type></Entry></Pdo></EtherCAT></Box></Box></Device></TcSmItem>',
+      '_Config/PLC/Plant/Plant Instance.xti': '<?xml version="1.0"?>\n<TcSmItem><Mappings><OwnerA Name="InputDst" Prefix="TIPC^Plant^Plant Instance" Type="1"><OwnerB Name="TIID^Device 1 (EtherCAT)^Term 1 (EK1100)^Term 2 (EL1008)"><Link VarA="MAIN.mainStateMachine.bEnable" TypeA="BOOL" VarB="Channel 1^Input"/></OwnerB></OwnerA></Mappings></TcSmItem>',
     }).toString('base64'),
     'CurrentConfig/Line2.tpzip': writeZip(LINE2_SOURCES).toString('base64'),
   };

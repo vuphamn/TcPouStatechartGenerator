@@ -32,6 +32,8 @@ interface DesktopLiveApi {
   browse?: (req: { requestId: number; path: string; stateVar: string }) => Promise<void>;
   /** The PLC project's sources as the PLC keeps them (read-only, its boot folder) */
   sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
+  /** The PLC's I/O tree (read-only) */
+  ioTree?: (req: { requestId: number }) => Promise<import('../components/IoTreePanel.tsx').IoTree>;
   /** The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects, or its own folder) */
   projectCopy?: (req: { requestId: number; folder?: string; chosen?: boolean; choice?: 'override' | 'keep'; skipProjects?: string[] }) => Promise<import('./plcSources.ts').PlcCopyResult>;
   /** A folder chosen (the dialog's title) */

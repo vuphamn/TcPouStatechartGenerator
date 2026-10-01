@@ -5,6 +5,7 @@ import {
   ChevronDown,
   SlidersHorizontal,
   MessageSquare,
+  Grid3x3,
   Palette,
   Code2,
   FileCode,
@@ -34,6 +35,7 @@ export type ToolbarItemId =
   | 'interactive'
   | 'labels'
   | 'hover'
+  | 'grid'
   | 'code'
   | 'autoAlign'
   | 'lock'
@@ -61,6 +63,9 @@ export interface ToolbarHiddenControlsProps {
   /** The popups on hovering a state, a transition's label or a badge (on by default) */
   hoverPopups?: boolean;
   setHoverPopups?: (on: boolean) => void;
+  /** The canvas' grid (its dots; off by default) */
+  showGrid?: boolean;
+  setShowGrid?: (on: boolean) => void;
   isInspectorOpen: boolean;
   handleToggleInspector: () => void;
   handleOpenMethodEditor: (methodName?: string) => void;
@@ -108,6 +113,8 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
   setIsCompactLabels,
   hoverPopups = true,
   setHoverPopups,
+  showGrid = false,
+  setShowGrid,
   isInspectorOpen,
   handleToggleInspector,
   handleOpenMethodEditor,
@@ -686,10 +693,31 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
           </div>
 
           {/* SECTION 4: Grid, Snap & Zoom Navigation */}
-          <div className={`flex flex-col gap-1.5 pt-2 border-t border-slate-800 ${has('snap') || has('zoom') ? '' : 'hidden'}`}>
+          <div className={`flex flex-col gap-1.5 pt-2 border-t border-slate-800 ${has('snap') || has('grid') || has('zoom') ? '' : 'hidden'}`}>
             <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-              Snap to Grid & Zoom
+              Grid, Snap to Grid & Zoom
             </div>
+
+            {/* The canvas' grid on or off */}
+            {has('grid') && setShowGrid && (
+              <button
+                id="hidden-grid-btn"
+                type="button"
+                onClick={() => setShowGrid(!showGrid)}
+                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                  showGrid
+                    ? 'bg-sky-950/80 text-sky-300 border-sky-600/70 shadow-xs'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+                title="The canvas' grid (its dots): on or off"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Grid3x3 className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Grid</span>
+                </div>
+                <span className="text-[9px] font-bold px-1 rounded bg-slate-900 border border-slate-700">{showGrid ? 'ON' : 'OFF'}</span>
+              </button>
+            )}
 
             {/* Snap Toggle + Resolution */}
             {has('snap') && (

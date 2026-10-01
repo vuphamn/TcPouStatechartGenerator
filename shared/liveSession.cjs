@@ -7,7 +7,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
-const { readPlcSources, readBootFile } = require('./tcSources.cjs');
+const { readPlcSources, readBootFile, unzip } = require('./tcSources.cjs');
+const { readIoTree } = require('./tcIoTree.cjs');
 const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
@@ -328,6 +329,22 @@ function createLiveSession(hooks = {}) {
    * or { error }. Read once per connection (a few MB). Only while connected; req: { requestId, plcProject? } (another
    * PLC project on the same target)
    */
+  /**
+   * The PLC's I/O tree (read-only): its devices, boxes, PDO entries and the PLC variables linked to them, from the
+   * TwinCAT project in its boot folder (CurrentConfig.tszip). req { requestId }; answered with ioTreeResult
+   * { requestId, devices, links, project } or { error }
+   */
+  async function ioTree(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'ioTreeResult', requestId, error: 'Not connected' });
+    try {
+      send({ type: 'ioTreeResult', requestId, ...(await readIoTree((rel) => readBootFile(s.client, rel))) });
+    } catch (err) {
+      send({ type: 'ioTreeResult', requestId, error: ads.adsErrorText(err) });
+    }
+  }
+
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
@@ -492,7 +509,7 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
-  return { start, stop, watch, browse, sources, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  return { start, stop, watch, browse, sources, ioTree, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

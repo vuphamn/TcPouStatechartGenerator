@@ -27,6 +27,7 @@ import {
   MousePointerClick,
   SlidersHorizontal,
   MessageSquare,
+  Grid3x3,
   Map,
   Grid,
   Magnet,
@@ -266,6 +267,12 @@ export interface MermaidViewerProps {
   problemMarkers?: Record<string, 'error' | 'warning'>;
   /** Bookmarked states: a badge at their top-left corner */
   bookmarkedStates?: string[];
+  /**
+   * Expanded: the canvas fills the window (the app's Focus mode: the header and the side panels hidden), its toolbar
+   * then drawn on the canvas itself; onExpandedChange: Expand / its exit asks the app for it
+   */
+  expanded?: boolean;
+  onExpandedChange?: (on: boolean) => void;
   /** A click on a state's bookmark ribbon: its bookmark off */
   onToggleStateBookmark?: (stateId: string) => void;
   /** The states whose code changed since the POU was saved (an amber dot on them, the minimap and search) */
@@ -1666,6 +1673,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onEditTransitionCondition,
     problemMarkers,
     bookmarkedStates,
+    expanded,
+    onExpandedChange,
     onToggleStateBookmark,
     changedStates,
     stateTooltips,
@@ -1771,7 +1780,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const mouseDownPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  // Expanded (the app's Focus mode when it says so; else this viewer's own fixed layer over the page)
+  const [ownFullscreen, setOwnFullscreen] = useState<boolean>(false);
+  const isFullscreen = expanded ?? ownFullscreen;
+  const setIsFullscreen = (on: boolean) => (onExpandedChange ? onExpandedChange(on) : setOwnFullscreen(on));
   const [copiedSvg, setCopiedSvg] = useState<boolean>(false);
   const [isMethodModalOpen, setIsMethodModalOpen] = useState<boolean>(false);
   const [methodModalInitialMethod, setMethodModalInitialMethod] = useState<string>('doState()');
@@ -1842,6 +1854,22 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       return true;
     }
   });
+  // The canvas' grid (its dots): off by default, on in the toolbar (kept in this browser)
+  const [showGrid, setShowGridState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.canvas.grid') === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const setShowGrid = useCallback((on: boolean) => {
+    setShowGridState(on);
+    try {
+      localStorage.setItem('kss.canvas.grid', on ? 'on' : 'off');
+    } catch {
+      // (this session only)
+    }
+  }, []);
   const setHoverPopups = useCallback((on: boolean) => {
     setHoverPopupsState(on);
     try {
@@ -5741,6 +5769,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setZoom(newZoom);
   };
 
+  // (the latest Fit, for a delayed call: after the canvas was expanded or brought back)
+  const resetZoomRef = useRef<() => void>(() => {});
+  resetZoomRef.current = () => handleResetZoom();
   const handleResetZoom = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
@@ -5963,6 +5994,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   );
 
   const toggleFullscreen = async () => {
+    // (the app's Focus mode: no browser fullscreen, no fixed layer; the chart fitted to the canvas' new size)
+    if (onExpandedChange) {
+      onExpandedChange(!isFullscreen);
+      window.setTimeout(() => resetZoomRef.current(), 300);
+      return;
+    }
     if (!isFullscreen) {
       setIsFullscreen(true);
       try {
@@ -6017,7 +6054,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           handleCloseInspector();
           return;
         }
-        if (isFullscreen) {
+        // (the app's Focus mode: Esc is the app's)
+        if (isFullscreen && !onExpandedChange) {
           setIsFullscreen(false);
           if (document.fullscreenElement) {
             document.exitFullscreen?.().catch(() => {});
@@ -6298,14 +6336,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const toolbarItems: ToolbarItemId[] = (
     [
       'interactive', 'labels', 'hover', 'code',
-      'autoAlign', 'lock', 'snap', 'resetLayout',
+      'autoAlign', 'lock', 'snap', 'grid', 'resetLayout',
       'heatmap', 'refactor',
       'stats', 'legend', 'notes', 'minimap', 'styles',
       'zoom', 'fullscreen',
     ] as ToolbarItemId[]
   ).filter((id) => (id === 'code' ? hasCodeEditors : id === 'resetLayout' ? movedElementsCount > 0 : true));
   const TOOLBAR_GROUP: Record<ToolbarItemId, number> = {
-    interactive: 0, labels: 0, hover: 0, code: 0,
+    interactive: 0, labels: 0, hover: 0, code: 0, grid: 1,
     autoAlign: 1, lock: 1, snap: 1, resetLayout: 1,
     heatmap: 2, refactor: 2,
     stats: 3, legend: 3, notes: 3, minimap: 3, styles: 3,
@@ -6314,7 +6352,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // First to stay visible -> last to move into the Hidden menu
   const TOOLBAR_PRIORITY: ToolbarItemId[] = [
     'zoom', 'fullscreen', 'interactive', 'code', 'autoAlign', 'heatmap', 'lock', 'resetLayout',
-    'stats', 'legend', 'notes', 'minimap', 'styles', 'refactor', 'snap', 'hover', 'labels',
+    'stats', 'legend', 'notes', 'minimap', 'styles', 'refactor', 'grid', 'snap', 'hover', 'labels',
   ];
 
   // Callback ref: the toolbar is portaled into a container that may not exist on the first render
@@ -6586,6 +6624,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             setIsCompactLabels={setIsCompactLabels}
             hoverPopups={hoverPopups}
             setHoverPopups={setHoverPopups}
+            showGrid={showGrid}
+            setShowGrid={setShowGrid}
             isInspectorOpen={isInspectorOpen}
             handleToggleInspector={handleToggleInspector}
             handleOpenMethodEditor={handleOpenMethodEditor}
@@ -6663,6 +6703,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             title={`Transition labels: ${isCompactLabels ? 'Clean (shortened)' : 'Full condition text'} - click to toggle`}
           >
             <SlidersHorizontal className="w-3.5 h-3.5 text-sky-400" />
+          </button>
+        );
+      case 'grid':
+        return (
+          <button
+            id="toolbar-grid-btn"
+            type="button"
+            aria-pressed={showGrid}
+            onClick={() => setShowGrid(!showGrid)}
+            className={toolbarButtonClass(showGrid, 'bg-sky-950/80 text-sky-300 border border-sky-600/70')}
+            title={`Grid ${showGrid ? 'on' : 'off'}: the canvas' dots - click to turn them ${showGrid ? 'off' : 'on'}`}
+          >
+            <Grid3x3 className={`w-3.5 h-3.5 ${showGrid ? 'text-sky-400' : 'text-slate-500'}`} />
           </button>
         );
       case 'hover':
@@ -6968,7 +7021,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               toggleFullscreen();
             }}
             className={toolbarButtonClass(isFullscreen, 'bg-sky-600 hover:bg-sky-500 text-white shadow-sm ring-1 ring-sky-400/40')}
-            title={isFullscreen ? 'Exit Fullscreen (Esc)' : 'Expand diagram canvas to fill the entire browser window'}
+            title={isFullscreen ? 'Back to the panels (Esc, Z)' : 'Expand the canvas to the whole window: the header and the side panels hidden, the chart fitted (Z; Esc brings them back)'}
           >
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
@@ -6989,7 +7042,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     <div
       id="mermaid-viewer-container"
       className={`relative flex flex-col w-full h-full bg-slate-900 border border-slate-800 rounded-xl overflow-hidden ${
-        isFullscreen ? 'fixed inset-0 z-[100] w-screen h-screen rounded-none border-none shadow-2xl' : ''
+        isFullscreen && !onExpandedChange ? 'fixed inset-0 z-[100] w-screen h-screen rounded-none border-none shadow-2xl' : isFullscreen ? 'rounded-none border-none' : ''
       }`}
     >
       {/* If in Fullscreen mode, render toolbar inside fullscreen container. Otherwise portal to 2nd row of header */}
@@ -7046,16 +7099,17 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           if (!containerRef.current?.contains(e.relatedTarget as Node)) markDropTarget(null);
         }}
         onDrop={handlePaletteDrop}
+        data-grid={showGrid ? 'on' : 'off'}
         className={`flex-1 relative overflow-hidden [background-size:16px_16px] cursor-grab transition-colors duration-200 ${
           isNodeDragging ? 'tc-node-dragging ' : ''
         }${
           mermaidTheme === 'dark'
-            ? 'bg-slate-900 bg-[radial-gradient(#1e293b_1px,transparent_1px)]'
+            ? `bg-slate-900 ${showGrid ? 'bg-[radial-gradient(#1e293b_1px,transparent_1px)]' : ''}`
             : mermaidTheme === 'forest'
-            ? 'bg-[#f4f7f4] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)]'
+            ? `bg-[#f4f7f4] ${showGrid ? 'bg-[radial-gradient(#cbd5e1_1px,transparent_1px)]' : ''}`
             : mermaidTheme === 'neutral'
-            ? 'bg-[#f5f5f4] bg-[radial-gradient(#d6d3d1_1px,transparent_1px)]'
-            : 'bg-[#f8fafc] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)]'
+            ? `bg-[#f5f5f4] ${showGrid ? 'bg-[radial-gradient(#d6d3d1_1px,transparent_1px)]' : ''}`
+            : `bg-[#f8fafc] ${showGrid ? 'bg-[radial-gradient(#cbd5e1_1px,transparent_1px)]' : ''}`
         } ${isDragging || isNodeDragging ? 'cursor-grabbing select-none' : ''}`}
       >
         {error ? (
@@ -7083,8 +7137,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
               dangerouslySetInnerHTML={{ __html: svgContent }}
             />
 
-            {/* Snap to Grid Background Dot Pattern */}
-            {snapConfig.enabled && (
+            {/* Snap to Grid Background Dot Pattern (with the grid on: snapping works without its dots) */}
+            {snapConfig.enabled && showGrid && (
               <svg
                 id="diagram-snap-grid-svg"
                 className="absolute inset-0 pointer-events-none -z-10 overflow-visible"

@@ -250,6 +250,23 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   await a.keyboard.press('Escape');
   await sleep(200);
 
+  // The I/O tab: the PLC's I/O tree (read from its boot folder), a terminal's channel with its linked variable's value
+  await a.evaluate(() => document.getElementById('dock-tab-io')?.click());
+  await sleep(500);
+  await a.click('#io-tree-load').catch(() => {});
+  await a.waitForSelector('[data-io-device]', { timeout: 15000 }).catch(() => {});
+  // (all of it open: the filter shows every match)
+  await a.type('#io-tree-filter', 'bEnable').catch(() => {});
+  await sleep(2500);
+  const io = await a.evaluate(() => ({
+    devices: [...document.querySelectorAll('[data-io-device]')].map((d) => d.getAttribute('data-io-device')),
+    entry: !!document.querySelector('[data-io-entry$="Term 2 (EL1008)^Channel 1^Input"]'),
+    value: document.querySelector('[data-io-value="MAIN.mainStateMachine.bEnable"]')?.textContent.trim() ?? null,
+    error: document.getElementById('io-tree-error')?.textContent ?? null,
+  }));
+  expect(io.devices.includes('Device 1 (EtherCAT)') && io.entry, `the I/O tab: its device and the terminal's channel (${JSON.stringify(io)})`);
+  expect(/^(TRUE|FALSE)$/.test(io.value ?? ''), `the channel's linked variable, live: ${io.value}`);
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
 
   await browser.close().catch(() => {});

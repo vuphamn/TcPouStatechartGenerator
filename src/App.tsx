@@ -14,6 +14,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Palette,
+  Cpu,
   Code2,
   Blocks,
   LayoutGrid,
@@ -130,6 +131,7 @@ import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, 
 import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
+import { IoTreePanel, type IoTree } from './components/IoTreePanel.tsx';
 import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -408,6 +410,20 @@ export const App: React.FC = () => {
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
+  // The header's Theme & Preset panel
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [appearanceAt, setAppearanceAt] = useState<{ top: number; right: number } | null>(null);
+  useEffect(() => {
+    if (!appearanceOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      // (inside it, or a preset menu it opened)
+      if (t?.closest?.('#header-appearance, #header-appearance-panel, #diagram-presets-dropdown-menu, [role="dialog"]')) return;
+      setAppearanceOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [appearanceOpen]);
   // The Theme for the whole app, not only the diagram: a light one on <html data-app-theme> (src/styles/appThemes.css)
   useEffect(() => {
     const el = document.documentElement;
@@ -528,6 +544,8 @@ export const App: React.FC = () => {
 
   // Focus mode (Z): header, side panels and options ribbon hidden, the diagram fills the window; Z / Esc restore
   const [focusMode, setFocusMode] = useState(false);
+  const focusModeRef = useRef(focusMode);
+  focusModeRef.current = focusMode;
   const focusRestoreRef = useRef<{ left: boolean; right: boolean } | null>(null);
   const toggleFocusMode = useCallback(() => {
     setFocusMode((on) => {
@@ -5479,6 +5497,11 @@ export const App: React.FC = () => {
   }, []);
   // The value symbols on show in the window (followed with the guard variables)
   const [symbolPaths, setSymbolPaths] = useState<string[]>([]);
+  // The I/O tab: the PLC's I/O tree, its linked variables on show (followed with the Symbols window's)
+  const [ioTree, setIoTree] = useState<IoTree | null>(null);
+  const [ioLoading, setIoLoading] = useState(false);
+  const [ioVars, setIoVars] = useState<string[]>([]);
+  const handleIoVars = useCallback((vars: string[]) => setIoVars((prev) => (prev.join('\n') === vars.join('\n') ? prev : vars)), []);
   const handleSymbolPaths = useCallback((paths: string[]) => setSymbolPaths((prev) => (prev.join('\n') === paths.join('\n') ? prev : paths)), []);
   // Machine Overview: the machines it follows (their state variables)
   const [overviewPaths, setOverviewPaths] = useState<string[]>([]);
@@ -5527,6 +5550,25 @@ export const App: React.FC = () => {
   // (plcProject: another PLC project on the same target; each read once)
   const plcSourcesRef = useRef<Map<string, Promise<PlcSources>>>(new Map());
   const plcSourcesTargetRef = useRef('');
+  // The PLC's I/O tree (the I/O tab): read from the PLC connected to (its boot folder), read-only
+  const loadIoTree = useCallback(async () => {
+    setIoLoading(true);
+    const req = { requestId: Date.now() % 1e9 };
+    let r: IoTree;
+    try {
+      if (liveStatus.state !== 'connected') r = { devices: [], links: [], error: 'Go live on a PLC first (the Live tab)' };
+      else if (isXaeHost()) r = { devices: [], links: [], error: 'In XAE, the I/O tree is XAE\'s own (its Solution Explorer)' };
+      else if (liveMode === 'desktop') r = (await desktopLive()?.ioTree?.(req)) ?? { devices: [], links: [], error: 'Update the desktop app: it cannot read the I/O tree' };
+      else if (gatewayRef.current) r = await gatewayRef.current.request<IoTree>({ type: 'ioTree', ...req }, 'ioTreeResult', 60000);
+      else r = { devices: [], links: [], error: 'Not connected' };
+    } catch (e) {
+      r = { devices: [], links: [], error: e instanceof Error ? e.message : String(e) };
+    }
+    setIoTree({ devices: r.devices ?? [], links: r.links ?? [], project: r.project, error: r.error });
+    setIoLoading(false);
+  }, [liveStatus.state, liveMode]);
+  // (another PLC: its tree read again when asked)
+  useEffect(() => setIoTree(null), [liveStatus.target]);
   const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
     const target = `${liveMode}|${liveStatus.target ?? ''}`;
     if (plcSourcesTargetRef.current !== target) {
@@ -6518,20 +6560,20 @@ export const App: React.FC = () => {
       return;
     }
     // With the Symbols window's values (full paths, ids "sym:<path>")
-    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}`;
+    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}\n#io\n${ioVars.join('\n')}`;
     if (key === lastWatchRef.current) return;
     const instance = liveStatus.instance;
     const timer = window.setTimeout(() => {
       lastWatchRef.current = key;
       const paths = liveWatchKey && instance ? liveWatchKey.split('\n') : [];
       const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
-      const symbols = symbolPaths.filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
+      const symbols = [...new Set([...symbolPaths, ...ioVars])].filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
       const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
       // The guards first, then the overview's machines; a gateway follows at most 100 by default (more is refused)
       sendLiveWatch([...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [liveWatchKey, symbolPaths, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch]);
+  }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -7053,6 +7095,7 @@ export const App: React.FC = () => {
       changes: { title: 'Changes', icon: <GitCompare />, tooltip: 'Compare the chart with the saved or committed version' },
       diff: { title: 'Diff', icon: <GitCompare />, tooltip: "The Diff docked: an editor's or a file's changes, beside the Diagram Canvas" },
       paths: { title: 'Paths', icon: <Route />, tooltip: 'Every path between two states, with the guards along it' },
+      io: { title: 'I/O', icon: <Cpu />, tooltip: "The PLC's I/O (read-only): its EtherCAT devices, couplers and terminals, the PLC variables linked to them, live" },
     }),
     [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message, methodEdits, pouEdits, enumEdits, pouUnsaved, dutUnsaved, pouContent, dutContent, savedSources]
   );
@@ -7114,7 +7157,7 @@ export const App: React.FC = () => {
     priority: ['source', 'generate', 'sample', 'export', 'copy', 'download', 'mermaidLive', 'pdf'],
     // Row padding (2 x 16) + gap between title and actions + separator + safety margin
     // ... less the README link and Help at the right end
-    available: headerRowWidth - headerLeftWidth - 60 - 76,
+    available: headerRowWidth - headerLeftWidth - 60 - 76 - 34,
     containerRef: headerActionsRef,
     hiddenButtonSelector: '#header-hidden-controls-container',
     initialHiddenButtonWidth: 100,
@@ -7179,7 +7222,7 @@ export const App: React.FC = () => {
         return (
             <div className="flex items-center whitespace-nowrap gap-1 sm:gap-1.5 bg-slate-800/80 border border-slate-700/60 rounded-lg px-1.5 sm:px-2 py-1 text-xs shrink-0 max-w-[240px]">
               <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="text-slate-400 text-[11px] font-medium shrink-0">Sample:</span>
+              <span className="sr-only">Sample:</span>
               <select
                 id="sample-selector"
                 title="A built-in example state machine (a POU and its enum) to look at and try things on: your own files stay as they are"
@@ -7188,7 +7231,7 @@ export const App: React.FC = () => {
                   const sample = SAMPLES.find((s) => s.id === e.target.value);
                   if (sample) handleSelectSample(sample);
                 }}
-                className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer pr-1 truncate w-full"
+                className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer pr-1 truncate w-full max-w-[130px]"
               >
                 {/* A browsed .TcPOU is not one of the samples */}
                 {selectedSampleId === '' && (
@@ -7492,7 +7535,7 @@ export const App: React.FC = () => {
           id="exit-focus-mode-btn"
           type="button"
           onClick={toggleFocusMode}
-          className="fixed top-2 right-3 z-[60] flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-700 text-xs text-slate-300 hover:text-white hover:border-sky-500 shadow-lg"
+          className="fixed bottom-8 right-3 z-[60] flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-700 text-xs text-slate-300 hover:text-white hover:border-sky-500 shadow-lg"
           title="Leave focus mode (Z or Esc)"
         >
           <Minimize2 className="w-3.5 h-3.5" /> Exit focus
@@ -7555,7 +7598,7 @@ export const App: React.FC = () => {
                 <span className="truncate">Kval StateScope</span>
               </h1>
               <p className="text-[11px] text-slate-400 truncate hidden 2xl:block">
-                TwinCAT state machine viewer for Kval SM_*.TcPOU function blocks
+                Design, edit and debug Kval TwinCAT state machines, live on the PLC
               </p>
             </div>
         </div>
@@ -7600,6 +7643,60 @@ export const App: React.FC = () => {
               hasOutput={Boolean(outputMarkdown)}
             />
           )}
+          {/* Theme & Preset: the whole app's theme and the diagram presets, together */}
+          <div className="relative shrink-0" id="header-appearance">
+            <button
+              id="header-appearance-btn"
+              type="button"
+              aria-expanded={appearanceOpen}
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setAppearanceAt({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+                setAppearanceOpen((o) => !o);
+              }}
+              className={`p-1.5 rounded-lg transition-colors ${appearanceOpen ? 'bg-slate-800 text-sky-300' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+              title={`Theme & Preset: the app's theme (${mermaidTheme}) and the diagram presets`}
+            >
+              <Palette className="w-4 h-4" />
+            </button>
+            {createPortal(
+            <div
+              id="header-appearance-panel"
+              className={`${appearanceOpen ? '' : 'hidden'} fixed z-[200] w-[22rem] p-3 rounded-xl border border-slate-700 bg-slate-900 shadow-2xl text-xs space-y-3`}
+              style={appearanceAt ? { top: appearanceAt.top, right: appearanceAt.right } : undefined}
+              onKeyDown={(e) => e.key === 'Escape' && setAppearanceOpen(false)}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-200">Theme & Preset</span>
+                <button type="button" onClick={() => setAppearanceOpen(false)} className="p-0.5 rounded text-slate-400 hover:text-white" title="Close">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <label className="flex items-center justify-between gap-2">
+                <span className="text-slate-400 text-[11px] font-medium">Theme</span>
+                <select
+                  id="mermaid-theme-select"
+                  value={mermaidTheme}
+                  onChange={(e) => setMermaidTheme(e.target.value as MermaidTheme)}
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
+                  title="The theme of the whole app and of the diagram: dark, or a light one (default, base, neutral, forest)"
+                >
+                  <option value="dark">dark</option>
+                  <option value="base">base</option>
+                  <option value="forest">forest</option>
+                  <option value="neutral">neutral</option>
+                  <option value="default">default</option>
+                </select>
+              </label>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-400 text-[11px] font-medium">Preset</span>
+                <DiagramPresetManager currentOptions={currentDiagramOptions} onApplyPreset={handleApplyPreset} onExportSettingsChange={setExportSettings} />
+              </div>
+              <div className="text-[10px] text-slate-500">A preset keeps the diagram's options (engine, curve, priorities, export) with its theme.</div>
+            </div>,
+            document.body
+            )}
+          </div>
           <div className="h-4 sm:h-5 w-[1px] bg-slate-800 shrink-0" />
           {/* The README on GitHub (the desktop app and XAE open it in the default browser) */}
           <a
@@ -7750,18 +7847,6 @@ export const App: React.FC = () => {
                 <Settings2 className="w-3.5 h-3.5 text-sky-400" />
                 <span>Options:</span>
               </div>
-
-              {/* User Preset Quick Toggle & Manager */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-400 text-[11px] font-medium hidden md:inline">Preset:</span>
-                <DiagramPresetManager
-                  currentOptions={currentDiagramOptions}
-                  onApplyPreset={handleApplyPreset}
-                  onExportSettingsChange={setExportSettings}
-                />
-              </div>
-
-              <div className="h-4 w-px bg-slate-800 hidden sm:block"></div>
 
               {/* Format Toggle */}
               <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800">
@@ -7973,24 +8058,6 @@ export const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Theme Preset Dropdown */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-400 text-[11px] font-medium">Theme:</span>
-                <select
-                  id="mermaid-theme-select"
-                  value={mermaidTheme}
-                  onChange={(e) => setMermaidTheme(e.target.value as MermaidTheme)}
-                  className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
-                  title="Mermaid theme preset (dark, base, forest, neutral, default)"
-                >
-                  <option value="dark">dark</option>
-                  <option value="base">base</option>
-                  <option value="forest">forest</option>
-                  <option value="neutral">neutral</option>
-                  <option value="default">default</option>
-                </select>
-              </div>
-
               {/* Lock Diagram Layout Toggle */}
               <button
                 id="lock-diagram-layout-toggle-btn"
@@ -8070,6 +8137,8 @@ export const App: React.FC = () => {
           <div className="relative flex-1 min-h-0">
             <div className="absolute inset-0">
                 <MermaidViewer
+                  expanded={focusMode}
+                  onExpandedChange={(on) => on !== focusModeRef.current && toggleFocusMode()}
                   ref={mermaidViewerRef}
                   toolbarPortalTarget={headerToolbarElement}
                   focusStateRequest={jumpRequest}
@@ -8444,6 +8513,22 @@ export const App: React.FC = () => {
             </div>
           ),
           dockRegistry.nodes.diff
+        )}
+
+      {isDockTabMounted('io') &&
+        createPortal(
+          <IoTreePanel
+            tree={ioTree}
+            loading={ioLoading}
+            connected={liveStatus.state === 'connected'}
+            onLoad={() => void loadIoTree()}
+            onVisibleVariables={handleIoVars}
+            valueOf={(v) => {
+              const x = liveVarValues[symbolWatchId(v)];
+              return x === undefined ? undefined : { v: x };
+            }}
+          />,
+          dockRegistry.nodes.io
         )}
 
       {isDockTabMounted('paths') &&

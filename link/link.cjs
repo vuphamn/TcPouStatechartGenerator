@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -282,6 +282,8 @@ wss.on('connection', (ws, req) => {
     // Symbol browser: a symbol's members in the connected PLC
     if (m.type === 'liveBrowse') return void session.browse(send, m);
     if (m.type === 'plcSources') return void session.sources(send, m);
+    // The PLC's I/O tree (read-only)
+    if (m.type === 'ioTree') return void session.ioTree(send, m);
     // The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects)
     if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
     // A POU of that copy (an instance of it opened live)

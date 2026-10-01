@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
     /** The PLC project's sources as the PLC keeps them: { project, plcProject, files: [{ path, content }] } or { error } */
     sources: (req) => ipcRenderer.invoke('tc:live-sources', req),
+    /** The PLC's I/O tree: { devices, links, project } or { error } */
+    ioTree: (req) => ipcRenderer.invoke('tc:live-io-tree', req),
     /** The PLC's project kept on this computer: { folder?, choice?, skipProjects? } -> plcProjectCopyResult */
     projectCopy: (req) => ipcRenderer.invoke('tc:live-project-copy', req),
     /** A folder chosen (its dialog's title) -> { path } | { canceled } */

@@ -831,6 +831,20 @@ function start() {
         }
         return;
       }
+      // The PLC's I/O tree (read-only), with the sources' permission
+      if (m.type === 'ioTree') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'ioTreeResult', requestId, error: 'Reading the PLC\'s configuration is turned off on this gateway' });
+        if (!session?.conn.client) return send({ type: 'ioTreeResult', requestId, error: 'Not connected' });
+        try {
+          const { readIoTree } = require('../shared/tcIoTree.cjs');
+          const { readBootFile } = require('../shared/tcSources.cjs');
+          send({ type: 'ioTreeResult', requestId, ...(await readIoTree((rel) => readBootFile(session.conn.client, rel))) });
+        } catch (err) {
+          send({ type: 'ioTreeResult', requestId, error: ads.adsErrorText(err) });
+        }
+        return;
+      }
       if (m.type === 'plcSources') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });

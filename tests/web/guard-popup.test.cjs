@@ -64,9 +64,24 @@ const TO = 'ERROR';
 
   // The mouse onto the popup: it stays
   if (l && pop) {
-    const tx = pop.x + pop.w / 2;
-    const ty = pop.y + Math.min(20, pop.h / 2);
-    await p.mouse.move(tx, ty, { steps: 8 });
+    // (a spot of it with no label or badge beneath: the popup gives way to one under it while not pinned; its
+    // title row, not a button; reached in one move, not over others on the way)
+    const spot = await p.evaluate(() => {
+      const el = document.getElementById('edge-guard-condition-hover-badge');
+      const r = el.getBoundingClientRect();
+      for (let fy = 0.06; fy < 0.95; fy += 0.04) for (let fx = 0.2; fx < 0.85; fx += 0.1) {
+        const x = r.x + r.width * fx, y = r.y + r.height * fy;
+        const all = document.elementsFromPoint(x, y);
+        if (all[0]?.closest('button, a')) continue;
+        if (all.some((e) => !el.contains(e) && e.closest('g.edgeLabel, .tc-priority-badge, .priority-badge'))) continue;
+        if (!el.contains(all[0])) continue;
+        return { x, y };
+      }
+      return { x: r.x + r.width / 2, y: r.y + 10 };
+    });
+    const tx = spot.x;
+    const ty = spot.y;
+    await p.mouse.move(tx, ty);
     await h.sleep(500);
     expect(!!(await popup()), 'the mouse moved from the label onto the popup: it stays');
     // A click on it: pinned

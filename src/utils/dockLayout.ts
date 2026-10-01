@@ -29,6 +29,7 @@ export type DockTabId =
   | 'docs'
   | 'problems'
   | 'live'
+  | 'io'
   | 'simulate'
   | 'changes'
   | 'paths'
@@ -54,6 +55,7 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'docs',
   'problems',
   'live',
+  'io',
   'simulate',
   'changes',
   'paths',
@@ -79,6 +81,7 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   docs: 'right',
   problems: 'right',
   live: 'right',
+  io: 'right',
   simulate: 'right',
   changes: 'right',
   paths: 'right',
@@ -184,7 +187,7 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
       groups: [
         {
           id: 'right-main',
-          tabs: ['docs', 'problems', 'live', 'simulate', 'changes', 'paths', 'search', 'stats', 'heatmap', 'notes', 'markdown'],
+          tabs: ['docs', 'problems', 'live', 'io', 'simulate', 'changes', 'paths', 'search', 'stats', 'heatmap', 'notes', 'markdown'],
           active: 'docs',
           size: 1,
         },

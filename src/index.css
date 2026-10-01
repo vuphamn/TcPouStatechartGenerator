@@ -26,7 +26,7 @@ html, body, #root {
 .diagram-search-active .node.diagram-match-node polygon,
 .diagram-search-active .node.diagram-match-node circle,
 .diagram-search-active .node.diagram-match-node path {
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3px !important;
   filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.75)) !important;
 }
@@ -44,7 +44,7 @@ html, body, #root {
 .diagram-search-active .edgeLabel.diagram-match-edge .labelBkg,
 .diagram-search-active .edgeLabel.diagram-match-edge .edgeLabel {
   background: rgba(14, 165, 233, 0.35) !important;
-  border: 1.5px solid #38bdf8 !important;
+  border: 1.5px solid var(--kss-38bdf8) !important;
   border-radius: 4px;
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.7) !important;
   color: #ffffff !important;
@@ -55,7 +55,7 @@ html, body, #root {
 .diagram-search-active .edgePath path.diagram-match-path,
 .diagram-search-active path.diagram-match-path {
   opacity: 1 !important;
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3.5px !important;
   filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.8)) !important;
 }
@@ -69,19 +69,19 @@ html, body, #root {
 .diagram-search-active .node.diagram-match-node.diagram-match-active polygon,
 .diagram-search-active .node.diagram-match-node.diagram-match-active circle,
 .diagram-search-active .node.diagram-match-node.diagram-match-active path {
-  stroke: #f59e0b !important;
+  stroke: var(--kss-f59e0b) !important;
   stroke-width: 4px !important;
   filter: drop-shadow(0 0 18px rgba(245, 158, 11, 0.95)) !important;
 }
 .diagram-search-active .edgeLabel.diagram-match-edge.diagram-match-active .labelBkg,
 .diagram-search-active .edgeLabel.diagram-match-edge.diagram-match-active .edgeLabel {
   background: rgba(245, 158, 11, 0.45) !important;
-  border-color: #f59e0b !important;
+  border-color: var(--kss-f59e0b) !important;
   box-shadow: 0 0 16px rgba(245, 158, 11, 0.95) !important;
 }
 .diagram-search-active .edgePath path.diagram-match-path.diagram-match-active,
 .diagram-search-active path.diagram-match-path.diagram-match-active {
-  stroke: #f59e0b !important;
+  stroke: var(--kss-f59e0b) !important;
   stroke-width: 4.5px !important;
   filter: drop-shadow(0 0 14px rgba(245, 158, 11, 0.95)) !important;
 }
@@ -89,7 +89,7 @@ html, body, #root {
   filter: drop-shadow(0 0 12px rgba(245, 158, 11, 0.95)) !important;
 }
 .diagram-search-active .tc-priority-badge.diagram-match-path.diagram-match-active circle {
-  stroke: #f59e0b !important;
+  stroke: var(--kss-f59e0b) !important;
 }
 
 /* Custom Scrollbar for Code Views */
@@ -98,120 +98,120 @@ html, body, #root {
   height: 8px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: #090d16;
+  background: var(--kss-090d16);
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: var(--kss-1e293b);
   border-radius: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: var(--kss-334155);
 }
 
 /* Prism Syntax Highlighting for Mermaid & Markdown */
 .prism-code {
-  color: #e2e8f0;
+  color: var(--kss-e2e8f0);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .prism-code .token.keyword {
-  color: #38bdf8; /* sky-400 */
+  color: var(--kss-38bdf8); /* sky-400 */
   font-weight: 600;
 }
 
 .prism-code .token.arrow,
 .prism-code .token.operator {
-  color: #fbbf24; /* amber-400 */
+  color: var(--kss-fbbf24); /* amber-400 */
   font-weight: 600;
 }
 
 .prism-code .token.label,
 .prism-code .token.property {
-  color: #34d399; /* emerald-400 */
+  color: var(--kss-34d399); /* emerald-400 */
   font-weight: 500;
 }
 
 .prism-code .token.string,
 .prism-code .token.text {
-  color: #a7f3d0; /* emerald-200 */
+  color: var(--kss-a7f3d0); /* emerald-200 */
 }
 
 .prism-code .token.comment {
-  color: #64748b; /* slate-500 */
+  color: var(--kss-64748b); /* slate-500 */
   font-style: italic;
 }
 
 .prism-code .token.punctuation {
-  color: #94a3b8; /* slate-400 */
+  color: var(--kss-94a3b8); /* slate-400 */
 }
 
 .prism-code .token.style {
-  color: #c084fc; /* purple-400 */
+  color: var(--kss-c084fc); /* purple-400 */
 }
 
 .prism-code .token.number {
-  color: #fb923c; /* orange-400 */
+  color: var(--kss-fb923c); /* orange-400 */
 }
 
 .prism-code .token.class-name,
 .prism-code .token.function {
-  color: #818cf8; /* indigo-400 */
+  color: var(--kss-818cf8); /* indigo-400 */
 }
 
 .prism-code .token.title,
 .prism-code .token.important {
-  color: #60a5fa; /* blue-400 */
+  color: var(--kss-60a5fa); /* blue-400 */
   font-weight: 700;
 }
 
 /* Structured Text (IEC 61131-3) Syntax Highlighting */
 .token.comment,
 .token.block-comment {
-  color: #64748b !important; /* slate-500 */
+  color: var(--kss-64748b) !important; /* slate-500 */
   font-style: italic !important;
 }
 
 .token.keyword {
-  color: #38bdf8 !important; /* sky-400 */
+  color: var(--kss-38bdf8) !important; /* sky-400 */
   font-weight: 600 !important;
 }
 
 .token.class-name {
-  color: #2dd4bf !important; /* teal-400 (types like BOOL, DINT, REAL, etc.) */
+  color: var(--kss-2dd4bf) !important; /* teal-400 (types like BOOL, DINT, REAL, etc.) */
   font-weight: 600 !important;
 }
 
 .token.boolean {
-  color: #fb923c !important; /* orange-400 (TRUE, FALSE) */
+  color: var(--kss-fb923c) !important; /* orange-400 (TRUE, FALSE) */
   font-weight: 600 !important;
 }
 
 .token.number {
-  color: #facc15 !important; /* amber-400 */
+  color: var(--kss-facc15) !important; /* amber-400 */
 }
 
 .token.string {
-  color: #4ade80 !important; /* emerald-400 */
+  color: var(--kss-4ade80) !important; /* emerald-400 */
 }
 
 .token.operator {
-  color: #38bdf8 !important; /* sky-400 (:=, =, etc.) */
+  color: var(--kss-38bdf8) !important; /* sky-400 (:=, =, etc.) */
 }
 
 .token.punctuation {
-  color: #94a3b8 !important; /* slate-400 */
+  color: var(--kss-94a3b8) !important; /* slate-400 */
 }
 
 .token.function {
-  color: #818cf8 !important; /* indigo-400 */
+  color: var(--kss-818cf8) !important; /* indigo-400 */
 }
 
 .token.case-label {
-  color: #f59e0b !important; /* amber-500 */
+  color: var(--kss-f59e0b) !important; /* amber-500 */
 }
 
 .token.case-identifier {
-  color: #f59e0b !important; /* amber-400 */
+  color: var(--kss-f59e0b) !important; /* amber-400 */
   font-weight: 700 !important;
   text-shadow: 0 0 6px rgba(245, 158, 11, 0.35);
 }
@@ -220,11 +220,11 @@ html, body, #root {
 @keyframes stateSelectedPulseAnimation {
   0% {
     box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.8), 0 0 12px rgba(56, 189, 248, 0.4);
-    border-color: #38bdf8;
+    border-color: var(--kss-38bdf8);
   }
   50% {
     box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.25), 0 0 20px rgba(56, 189, 248, 0.6);
-    border-color: #38bdf8;
+    border-color: var(--kss-38bdf8);
   }
   100% {
     box-shadow: 0 0 0 0 rgba(56, 189, 248, 0), 0 0 12px rgba(56, 189, 248, 0.15);
@@ -265,23 +265,23 @@ html, body, #root {
 g.node.diff-added > rect,
 g.node.diff-added > polygon,
 g.node.diff-added > path.basic {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 3px !important;
   stroke-dasharray: none !important;
 }
 g.node.diff-changed > rect,
 g.node.diff-changed > polygon,
 g.node.diff-changed > path.basic {
-  stroke: #fbbf24 !important;
+  stroke: var(--kss-fbbf24) !important;
   stroke-width: 3px !important;
   stroke-dasharray: 5 3 !important;
 }
 path.diff-added {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 3px !important;
 }
 path.diff-changed {
-  stroke: #fbbf24 !important;
+  stroke: var(--kss-fbbf24) !important;
   stroke-width: 3px !important;
   stroke-dasharray: 6 3 !important;
 }
@@ -292,7 +292,7 @@ path.diff-changed {
 }
 .diagram-connect-mode g.node:hover > rect,
 .diagram-connect-mode g.node:hover > polygon {
-  stroke: #a78bfa !important;
+  stroke: var(--kss-a78bfa) !important;
   stroke-width: 3px !important;
 }
 
@@ -308,20 +308,20 @@ path.diff-changed {
 .path-node > polygon,
 .path-node > circle,
 .path-node > path.basic {
-  stroke: #a78bfa !important;
+  stroke: var(--kss-a78bfa) !important;
   stroke-width: 3px !important;
 }
 path.path-edge {
-  stroke: #a78bfa !important;
+  stroke: var(--kss-a78bfa) !important;
   stroke-width: 3px !important;
   opacity: 1 !important;
 }
 
 /* Review and save: the states added, changed and removed */
 .review-svg svg { max-width: 100%; height: auto; }
-.review-added > rect, .review-added > polygon { stroke: #22c55e !important; stroke-width: 4px !important; fill: rgba(34, 197, 94, 0.18) !important; }
-.review-changed > rect, .review-changed > polygon { stroke: #f59e0b !important; stroke-width: 4px !important; fill: rgba(245, 158, 11, 0.18) !important; }
-.review-removed > rect, .review-removed > polygon { stroke: #ef4444 !important; stroke-width: 4px !important; fill: rgba(239, 68, 68, 0.2) !important; }
+.review-added > rect, .review-added > polygon { stroke: var(--kss-22c55e) !important; stroke-width: 4px !important; fill: rgba(34, 197, 94, 0.18) !important; }
+.review-changed > rect, .review-changed > polygon { stroke: var(--kss-f59e0b) !important; stroke-width: 4px !important; fill: rgba(245, 158, 11, 0.18) !important; }
+.review-removed > rect, .review-removed > polygon { stroke: var(--kss-ef4444) !important; stroke-width: 4px !important; fill: rgba(239, 68, 68, 0.2) !important; }
 
 /* Operator board: a new alert's tile flashes (until acknowledged or resolved, at most a minute); the header too */
 @keyframes board-flash {
@@ -339,18 +339,18 @@ path.path-edge {
 }
 
 /* Measured state times: the state's border and its badge, quick (green) to slow (red) */
-.state-time-l0 > rect, .state-time-l0 > polygon { stroke: #22c55e !important; stroke-width: 3px !important; }
-.state-time-l1 > rect, .state-time-l1 > polygon { stroke: #a3e635 !important; stroke-width: 3px !important; }
-.state-time-l2 > rect, .state-time-l2 > polygon { stroke: #facc15 !important; stroke-width: 3px !important; }
-.state-time-l3 > rect, .state-time-l3 > polygon { stroke: #f97316 !important; stroke-width: 3px !important; }
-.state-time-l4 > rect, .state-time-l4 > polygon { stroke: #ef4444 !important; stroke-width: 4px !important; }
+.state-time-l0 > rect, .state-time-l0 > polygon { stroke: var(--kss-22c55e) !important; stroke-width: 3px !important; }
+.state-time-l1 > rect, .state-time-l1 > polygon { stroke: var(--kss-a3e635) !important; stroke-width: 3px !important; }
+.state-time-l2 > rect, .state-time-l2 > polygon { stroke: var(--kss-facc15) !important; stroke-width: 3px !important; }
+.state-time-l3 > rect, .state-time-l3 > polygon { stroke: var(--kss-f97316) !important; stroke-width: 3px !important; }
+.state-time-l4 > rect, .state-time-l4 > polygon { stroke: var(--kss-ef4444) !important; stroke-width: 4px !important; }
 .state-time-badge text { font: 600 11px ui-monospace, Consolas, monospace; fill: #0f172a; pointer-events: none; }
 .state-time-badge rect { stroke: none !important; }
-.state-time-badge-l0 rect { fill: #22c55e; }
-.state-time-badge-l1 rect { fill: #a3e635; }
-.state-time-badge-l2 rect { fill: #facc15; }
-.state-time-badge-l3 rect { fill: #fb923c; }
-.state-time-badge-l4 rect { fill: #f87171; }
+.state-time-badge-l0 rect { fill: var(--kss-22c55e); }
+.state-time-badge-l1 rect { fill: var(--kss-a3e635); }
+.state-time-badge-l2 rect { fill: var(--kss-facc15); }
+.state-time-badge-l3 rect { fill: var(--kss-fb923c); }
+.state-time-badge-l4 rect { fill: var(--kss-f87171); }
 
 /* Live view: the PLC's current state, the previous one and the transition taken */
 .live-active-node > rect,
@@ -358,7 +358,7 @@ path.path-edge {
 .live-active-node > circle,
 .live-active-node > path.basic,
 .live-active-node .outer {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 4px !important;
   stroke-dasharray: none !important;
   animation: live-node-pulse 1.4s ease-in-out infinite !important;
@@ -378,7 +378,7 @@ path.path-edge {
 .live-stuck-node > circle,
 .live-stuck-node > path.basic,
 .live-stuck-node .outer {
-  stroke: #f87171 !important;
+  stroke: var(--kss-f87171) !important;
   animation: live-stuck-pulse 1s ease-in-out infinite !important;
 }
 /* A transition's start / end handle dragged over a state: dropped there, the transition moves to it */
@@ -387,7 +387,7 @@ path.path-edge {
 .edge-drop-target > circle,
 .edge-drop-target > path.basic,
 .edge-drop-target .outer {
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3px !important;
   stroke-dasharray: 6 3 !important;
   filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.9));
@@ -402,7 +402,7 @@ path.path-edge {
 }
 @keyframes edge-drop-snapped {
   0% {
-    stroke: #34d399;
+    stroke: var(--kss-34d399);
     stroke-width: 4px;
     filter: drop-shadow(0 0 10px rgba(52, 211, 153, 0.95));
   }
@@ -421,7 +421,7 @@ path.path-edge {
 }
 /* Live: a state with parallel regions (a cluster), and each region's current state */
 .live-active-cluster > rect {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 3px !important;
   filter: drop-shadow(0 0 8px rgba(52, 211, 153, 0.7));
 }
@@ -429,7 +429,7 @@ path.path-edge {
 .live-region-node > polygon,
 .live-region-node > circle,
 .live-region-node > path.basic {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 2.5px !important;
   fill: rgba(16, 185, 129, 0.25) !important;
 }
@@ -437,12 +437,12 @@ path.path-edge {
 .live-previous-node > polygon,
 .live-previous-node > circle,
 .live-previous-node > path.basic {
-  stroke: #6ee7b7 !important;
+  stroke: var(--kss-6ee7b7) !important;
   stroke-width: 2.5px !important;
   stroke-dasharray: 5 3 !important;
 }
 path.live-last-edge {
-  stroke: #34d399 !important;
+  stroke: var(--kss-34d399) !important;
   stroke-width: 3.5px !important;
   filter: drop-shadow(0 0 6px rgba(52, 211, 153, 0.9));
 }
@@ -450,7 +450,7 @@ path.live-last-edge {
   width: 8px;
   height: 8px;
   border-radius: 9999px;
-  background: #34d399;
+  background: var(--kss-34d399);
   box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7);
   animation: live-dot-pulse 1.4s ease-out infinite;
 }
@@ -507,10 +507,10 @@ tr.enum-row-flash {
   filter: none !important;
 }
 .lint-problem-error circle {
-  fill: #fb7185 !important;
+  fill: var(--kss-fb7185) !important;
 }
 .lint-problem-warning circle {
-  fill: #fbbf24 !important;
+  fill: var(--kss-fbbf24) !important;
 }
 
 /* Selected State Node (Active Inspector Selection) */
@@ -520,7 +520,7 @@ tr.enum-row-flash {
 .diagram-selected-node path.basic,
 .diagram-selected-node .outer,
 .diagram-selected-node .state-title {
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3.5px !important;
   stroke-dasharray: 6 3;
   animation: selected-node-ring-spin 3s linear infinite;
@@ -549,7 +549,7 @@ tr.enum-row-flash {
 .tc-edge-path:hover,
 .tc-edge-path.tc-edge-hover,
 .tc-edge-path.tc-edge-pointer-hover {
-  stroke: #7dd3fc !important;
+  stroke: var(--kss-7dd3fc) !important;
   stroke-width: 2.6px !important;
   filter: drop-shadow(0 0 6px rgba(125, 211, 252, 0.65));
 }
@@ -557,7 +557,7 @@ tr.enum-row-flash {
 /* Selected Edge State */
 .tc-edge-path.selected-edge,
 .tc-edge-path.diagram-selected-edge {
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3.8px !important;
   stroke-dasharray: 6 3;
   animation: selected-edge-dash-spin 3s linear infinite;
@@ -641,7 +641,7 @@ path.diagram-connected-edge {
 .tc-edge-path.diagram-outgoing-edge,
 .edgePath path.diagram-outgoing-edge,
 path.diagram-outgoing-edge {
-  stroke: #10b981 !important;
+  stroke: var(--kss-10b981) !important;
   stroke-width: 3.4px !important;
   filter: drop-shadow(0 0 9px rgba(16, 185, 129, 0.9)) !important;
   stroke-dasharray: 8 4;
@@ -661,7 +661,7 @@ path.diagram-outgoing-edge {
 .tc-edge-path.diagram-incoming-edge,
 .edgePath path.diagram-incoming-edge,
 path.diagram-incoming-edge {
-  stroke: #818cf8 !important;
+  stroke: var(--kss-818cf8) !important;
   stroke-width: 3.4px !important;
   filter: drop-shadow(0 0 9px rgba(129, 140, 248, 0.9)) !important;
   stroke-dasharray: 8 4;
@@ -681,7 +681,7 @@ path.diagram-incoming-edge {
 .tc-edge-path.diagram-loop-edge,
 .edgePath path.diagram-loop-edge,
 path.diagram-loop-edge {
-  stroke: #f59e0b !important;
+  stroke: var(--kss-f59e0b) !important;
   stroke-width: 3.6px !important;
   filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.95)) !important;
   stroke-dasharray: 7 3.5;
@@ -695,11 +695,11 @@ path.diagram-loop-edge {
 .edgeLabel.diagram-outgoing-edge-label span,
 .edgeLabel.diagram-outgoing-edge-label {
   opacity: 1 !important;
-  border-color: #10b981 !important;
-  outline: 2px solid #10b981 !important;
+  border-color: var(--kss-10b981) !important;
+  outline: 2px solid var(--kss-10b981) !important;
   outline-offset: 1px;
   background: rgba(6, 78, 59, 0.88) !important;
-  color: #d1fae5 !important;
+  color: var(--kss-d1fae5) !important;
   font-weight: 600 !important;
   box-shadow: 0 0 14px rgba(16, 185, 129, 0.8) !important;
   border-radius: 4px;
@@ -712,11 +712,11 @@ path.diagram-loop-edge {
 .edgeLabel.diagram-incoming-edge-label span,
 .edgeLabel.diagram-incoming-edge-label {
   opacity: 1 !important;
-  border-color: #818cf8 !important;
-  outline: 2px solid #818cf8 !important;
+  border-color: var(--kss-818cf8) !important;
+  outline: 2px solid var(--kss-818cf8) !important;
   outline-offset: 1px;
   background: rgba(49, 46, 129, 0.88) !important;
-  color: #e0e7ff !important;
+  color: var(--kss-e0e7ff) !important;
   font-weight: 600 !important;
   box-shadow: 0 0 14px rgba(129, 140, 248, 0.8) !important;
   border-radius: 4px;
@@ -729,11 +729,11 @@ path.diagram-loop-edge {
 .edgeLabel.diagram-loop-edge-label span,
 .edgeLabel.diagram-loop-edge-label {
   opacity: 1 !important;
-  border-color: #f59e0b !important;
-  outline: 2px solid #f59e0b !important;
+  border-color: var(--kss-f59e0b) !important;
+  outline: 2px solid var(--kss-f59e0b) !important;
   outline-offset: 1px;
   background: rgba(120, 53, 15, 0.88) !important;
-  color: #fef3c7 !important;
+  color: var(--kss-fef3c7) !important;
   font-weight: 600 !important;
   box-shadow: 0 0 14px rgba(245, 158, 11, 0.8) !important;
   border-radius: 4px;
@@ -741,24 +741,24 @@ path.diagram-loop-edge {
 
 /* Priority Badges for connected transitions */
 .tc-priority-badge.diagram-outgoing-badge circle {
-  stroke: #10b981 !important;
+  stroke: var(--kss-10b981) !important;
   stroke-width: 2.2px !important;
-  fill: #064e3b !important;
+  fill: var(--kss-064e3b) !important;
   filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.95)) !important;
 }
 .tc-priority-badge.diagram-outgoing-badge text {
-  fill: #d1fae5 !important;
+  fill: var(--kss-d1fae5) !important;
   font-weight: 700 !important;
 }
 
 .tc-priority-badge.diagram-incoming-badge circle {
-  stroke: #818cf8 !important;
+  stroke: var(--kss-818cf8) !important;
   stroke-width: 2.2px !important;
-  fill: #312e81 !important;
+  fill: var(--kss-312e81) !important;
   filter: drop-shadow(0 0 8px rgba(129, 140, 248, 0.95)) !important;
 }
 .tc-priority-badge.diagram-incoming-badge text {
-  fill: #e0e7ff !important;
+  fill: var(--kss-e0e7ff) !important;
   font-weight: 700 !important;
 }
 
@@ -769,7 +769,7 @@ path.diagram-loop-edge {
 .clickable-edge-label:hover rect,
 .clickable-edge-label:hover span,
 .clickable-edge-label:hover .labelBkg {
-  outline: 1.5px solid #38bdf8 !important;
+  outline: 1.5px solid var(--kss-38bdf8) !important;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -777,7 +777,7 @@ path.diagram-loop-edge {
 .diagram-selected-edge-label rect,
 .diagram-selected-edge-label span,
 .diagram-selected-edge-label .labelBkg {
-  outline: 2px solid #38bdf8 !important;
+  outline: 2px solid var(--kss-38bdf8) !important;
   outline-offset: 2px;
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.8) !important;
   border-radius: 4px;
@@ -815,7 +815,7 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .tc-interactive-edge-label:hover rect,
 .tc-interactive-edge-label:hover span,
 .tc-interactive-edge-label:hover .labelBkg {
-  outline: 2px solid #10b981 !important;
+  outline: 2px solid var(--kss-10b981) !important;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -823,7 +823,7 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 .tc-interactive-edge-label-active rect,
 .tc-interactive-edge-label-active span,
 .tc-interactive-edge-label-active .labelBkg {
-  outline: 2.5px solid #10b981 !important;
+  outline: 2.5px solid var(--kss-10b981) !important;
   outline-offset: 2px;
   box-shadow: 0 0 14px rgba(16, 185, 129, 0.8) !important;
   border-radius: 4px;
@@ -865,14 +865,14 @@ g.edgeLabel:is(.diagram-outgoing-edge-label, .diagram-incoming-edge-label, .diag
 
 .tc-priority-badge:hover circle,
 .priority-badge:hover circle {
-  fill: #7dd3fc !important;
-  stroke: #0369a1 !important;
+  fill: var(--kss-7dd3fc) !important;
+  stroke: var(--kss-0369a1) !important;
   stroke-width: 2px !important;
 }
 
 .tc-priority-badge:hover text,
 .priority-badge:hover text {
-  fill: #0c4a6e !important;
+  fill: var(--kss-0c4a6e) !important;
   font-weight: 800 !important;
 }
 
@@ -884,7 +884,7 @@ g.cluster.tc-end-hover > rect,
 g.cluster.tc-end-pointer-hover > rect,
 .statediagram-cluster.tc-end-hover > g > rect.outer,
 .statediagram-cluster.tc-end-pointer-hover > g > rect.outer {
-  stroke: #7dd3fc !important;
+  stroke: var(--kss-7dd3fc) !important;
   stroke-width: 2px !important;
   filter: drop-shadow(0 0 6px rgba(125, 211, 252, 0.55));
 }
@@ -900,13 +900,13 @@ g.cluster.tc-end-pointer-hover > rect,
 }
 .tc-priority-badge.tc-priority-badge-hover circle,
 .tc-priority-badge.tc-priority-badge-pointer-hover circle {
-  fill: #7dd3fc !important;
-  stroke: #0369a1 !important;
+  fill: var(--kss-7dd3fc) !important;
+  stroke: var(--kss-0369a1) !important;
   stroke-width: 2px !important;
 }
 .tc-priority-badge.tc-priority-badge-hover text,
 .tc-priority-badge.tc-priority-badge-pointer-hover text {
-  fill: #0c4a6e !important;
+  fill: var(--kss-0c4a6e) !important;
   font-weight: 800 !important;
 }
 
@@ -922,12 +922,12 @@ g.cluster.tc-end-pointer-hover > rect,
 .tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-hover circle,
 .tc-priority-badge.tc-priority-badge-selected.tc-priority-badge-pointer-hover circle,
 .tc-priority-badge.tc-priority-badge-selected:hover circle {
-  fill: #f59e0b !important;
-  stroke: #fef3c7 !important;
+  fill: var(--kss-f59e0b) !important;
+  stroke: var(--kss-fef3c7) !important;
   stroke-width: 2.5px !important;
 }
 .tc-priority-badge.tc-priority-badge-selected:hover circle {
-  fill: #fbbf24 !important;
+  fill: var(--kss-fbbf24) !important;
 }
 .tc-priority-badge.tc-priority-badge-selected text,
 .tc-priority-badge.tc-priority-badge-selected:hover text {
@@ -941,8 +941,8 @@ g.cluster.tc-end-pointer-hover > rect,
 }
 
 .tc-priority-badge-active circle {
-  fill: #10b981 !important;
-  stroke: #059669 !important;
+  fill: var(--kss-10b981) !important;
+  stroke: var(--kss-059669) !important;
   stroke-width: 2.2px !important;
 }
 
@@ -965,13 +965,13 @@ g.cluster.tc-end-pointer-hover > rect,
 
 .tc-edge-handle:hover .handle-core,
 .tc-edge-handle.dragging .handle-core {
-  fill: #0284c7;
+  fill: var(--kss-0284c7);
   r: 7.5px;
 }
 
 .tc-edge-handle:hover .handle-halo,
 .tc-edge-handle.dragging .handle-halo {
-  stroke: #38bdf8;
+  stroke: var(--kss-38bdf8);
   stroke-width: 2px;
   animation: handle-pulse 1.2s ease-in-out infinite;
 }
@@ -1079,21 +1079,21 @@ g.note,
 @keyframes beacon-radar-pulse {
   0% {
     opacity: 1;
-    stroke: #38bdf8;
+    stroke: var(--kss-38bdf8);
     stroke-width: 4px;
-    filter: drop-shadow(0 0 10px #38bdf8);
+    filter: drop-shadow(0 0 10px var(--kss-38bdf8));
   }
   30% {
     opacity: 0.95;
     stroke: #ffffff;
     stroke-width: 5px;
-    filter: drop-shadow(0 0 16px #38bdf8) drop-shadow(0 0 8px #ffffff);
+    filter: drop-shadow(0 0 16px var(--kss-38bdf8)) drop-shadow(0 0 8px #ffffff);
   }
   60% {
     opacity: 0.75;
-    stroke: #38bdf8;
+    stroke: var(--kss-38bdf8);
     stroke-width: 3.5px;
-    filter: drop-shadow(0 0 12px #38bdf8);
+    filter: drop-shadow(0 0 12px var(--kss-38bdf8));
   }
   100% {
     opacity: 0;
@@ -1118,7 +1118,7 @@ g.note,
 /* State Node Border Pulse Highlight Animation - Animates ONLY border stroke and outer glow, leaving fill intact */
 @keyframes state-jump-border-pulse {
   0% {
-    stroke: #38bdf8 !important;
+    stroke: var(--kss-38bdf8) !important;
     stroke-width: 4px !important;
     filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.9)) !important;
   }
@@ -1128,17 +1128,17 @@ g.note,
     filter: drop-shadow(0 0 20px rgba(56, 189, 248, 1)) drop-shadow(0 0 8px rgba(255, 255, 255, 0.9)) !important;
   }
   45% {
-    stroke: #38bdf8 !important;
+    stroke: var(--kss-38bdf8) !important;
     stroke-width: 4px !important;
     filter: drop-shadow(0 0 16px rgba(56, 189, 248, 0.85)) !important;
   }
   70% {
-    stroke: #f59e0b !important;
+    stroke: var(--kss-f59e0b) !important;
     stroke-width: 4.5px !important;
     filter: drop-shadow(0 0 16px rgba(245, 158, 11, 0.9)) !important;
   }
   100% {
-    stroke: #38bdf8 !important;
+    stroke: var(--kss-38bdf8) !important;
     stroke-width: 3px !important;
     filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.5)) !important;
   }
@@ -1288,14 +1288,14 @@ path.state-jump-border-pulse {
 g.node.multi-selected > rect,
 g.node.multi-selected > polygon,
 g.node.multi-selected > .label-container {
-  stroke: #38bdf8 !important;
+  stroke: var(--kss-38bdf8) !important;
   stroke-width: 3px !important;
   stroke-dasharray: 6 3 !important;
 }
 
 /* A name the Problems tab flags, in a state's actions on hover */
 .st-lint-name {
-  text-decoration: underline wavy #f59e0b;
+  text-decoration: underline wavy var(--kss-f59e0b);
   text-decoration-skip-ink: none;
   text-underline-offset: 2px;
 }

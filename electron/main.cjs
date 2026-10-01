@@ -316,6 +316,8 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 });
 // The PLC project's sources as the PLC keeps them (read-only: its boot folder over ADS), for the window's session
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
+// The PLC's I/O tree (read-only: its boot folder's TwinCAT project), for the window's session
+ipcMain.handle('tc:live-io-tree', (event, req) => new Promise((resolve) => liveFor(event.sender).ioTree(resolve, req)));
 // The PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded when new, else current / differs
 ipcMain.handle('tc:live-project-copy', (event, req) => new Promise((resolve) => liveFor(event.sender).projectCopy(resolve, req)));
 // A folder for a PLC's project (Save to a different location; KSS_PICK_FOLDER: the tests' folder, no dialog)

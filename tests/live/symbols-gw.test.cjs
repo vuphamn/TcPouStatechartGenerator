@@ -42,6 +42,8 @@ async function run(allowBrowse, port) {
   ws.send(JSON.stringify({ type: 'plcSources', requestId: 5 }));
   // (another PLC project on the target)
   ws.send(JSON.stringify({ type: 'plcSources', requestId: 6, plcProject: 'Line2' }));
+  // The I/O tree (read-only: its boot folder's TwinCAT project)
+  ws.send(JSON.stringify({ type: 'ioTree', requestId: 10 }));
   // Build with an edit (its error from the stand-in compiler); a write (not allowed); a path outside the project
   const conveyor = require('../fakes/symbols-plc.cjs').PLANT_SOURCES['POUs/Conveyor/SM_Conveyor.TcPOU'];
   ws.send(JSON.stringify({ type: 'plcBuild', requestId: 7, edits: [{ plcProject: 'Plant', path: 'POUs/Conveyor/SM_Conveyor.TcPOU', content: conveyor.replace('doState();', 'doState();\nnoSuchVar := 1;') }] }));
@@ -50,7 +52,7 @@ async function run(allowBrowse, port) {
   await sleep(1500);
   ws.close();
   gw.kill();
-  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult') && m.requestId === id);
+  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult' || m.type === 'ioTreeResult') && m.requestId === id);
 }
 
 (async () => {
@@ -66,6 +68,11 @@ async function run(allowBrowse, port) {
   expect(src?.project === 'Plant' && (src.files ?? []).map((x) => x.path).sort().join() === 'POUs/Conveyor/E_Conveyor_States.TcDUT,POUs/Conveyor/SM_Conveyor.TcPOU,POUs/MAIN.TcPOU,POUs/Table/E_TableManager_States.TcDUT,POUs/Table/SM_TableManager.TcPOU', `plcSources: ${src?.error ?? `${src?.project}: ${(src?.files ?? []).map((x) => x.path).join(', ')}`}`);
   expect(src?.projects?.map((x) => `${x.name}:${x.port}`).join() === 'Plant:851,Line2:852' && src?.libraryTypes?.sm_doordasher === 'Tc3_Doors', `its PLC projects: ${JSON.stringify(src?.projects)}, library types: ${JSON.stringify(src?.libraryTypes)}`);
   expect(/differs from its sources \(SM_Conveyor: machineState not in the PLC's\)/.test(src?.stale ?? ''), `older than the running code: ${src?.stale}`);
+  // The I/O tree: its EtherCAT device, the coupler and the terminal nested, the PLC variable linked to its channel
+  const io = r(10);
+  const term = io?.devices?.[0]?.boxes?.[0]?.boxes?.[0];
+  expect(io?.project === 'Plant' && io.devices?.[0]?.name === 'Device 1 (EtherCAT)' && io.devices[0].boxes[0].product === 'EK1100' && term?.product === 'EL1008', `the I/O tree: ${io?.error ?? `${io?.devices?.[0]?.name} > ${io?.devices?.[0]?.boxes?.[0]?.name} > ${term?.name}`}`);
+  expect(term?.pdos?.[0]?.entries?.[0]?.link === `${R}.bEnable` && !term.pdos[1].entries[0].link, `its channel 1 linked to ${term?.pdos?.[0]?.entries?.[0]?.link}`);
   const line2 = r(6);
   expect(line2?.plcProject === 'Line2' && (line2.files ?? []).map((x) => x.path).join() === 'POUs/SM_Line2.TcPOU' && !line2.stale, `plcProject Line2: ${line2?.error ?? (line2?.files ?? []).map((x) => x.path).join()}`);
   const b = r(7);
@@ -75,7 +82,7 @@ async function run(allowBrowse, port) {
   expect(!!auditFile && /"plc\.build"/.test(fs.readFileSync(path.join(h.OUT, 'gw-sym-test', auditFile), 'utf8')), 'the build in the audit log');
   r = await run(false, 8457);
   expect(/Building the PLC's project is turned off/.test(r(7)?.fatal ?? ''), `without allowBuild: "${r(7)?.fatal}"`);
-  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}"`);
+  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? '') && /turned off/.test(r(10)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}", "${r(10)?.error}"`);
   plc.kill();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);
