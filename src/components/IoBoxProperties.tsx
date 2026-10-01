@@ -27,7 +27,8 @@ const hex8 = (n: number) => `#x${n.toString(16).padStart(8, '0')}`;
 const PORTS = ['A', 'B', 'C', 'D'];
 
 /** The box's type as a word (the ESI type's first, e.g. "EK1200-5000"; else its name's "(…)") */
-export const typeOf = (b: IoBox) => (b.info?.type || b.info?.desc || b.product || '').split(/\s+/)[0];
+// (a TwinSAFE terminal's reads "EL1904, 4 Ch. Safety Input": no comma in it)
+export const typeOf = (b: IoBox) => (b.info?.type || b.info?.desc || b.product || '').split(/[\s,;]+/)[0];
 
 /**
  * Where to read more about a device: Beckhoff's product page (from TwinCAT's device file, else beckhoff.com/<type>,

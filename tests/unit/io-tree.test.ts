@@ -191,6 +191,9 @@ expect(op.name === 'OP' && op.ok && bad.name === 'SAFEOP' && !bad.ok && bad.flag
   // Links: Beckhoff's product page (TwinCAT's own when known), its search, its manual; another vendor's: a web search
   const beck = deviceLinks({ name: 'T (EL6070-0033)', product: 'EL6070-0033', path: 'x', boxes: [], pdos: [], info: { type: 'EL6070-0033 1Ch. Licence key', vendorId: 2 } });
   expect(beck.map((l) => `${l.kind}=${l.url}`).join(' ') === 'product=https://www.beckhoff.com/el6070-0033 search=https://www.beckhoff.com/en-us/search-results/?q=EL6070-0033 manual=https://document.beckhoff.com/el6070.pdf?target=el6070&lang=en-us', `Beckhoff's links: ${beck.map((l) => l.url).join(' ')}`);
+  // (a TwinSAFE terminal's type: "EL1904, 4 Ch. Safety Input" -> EL1904)
+  const safe = deviceLinks({ name: 'SI (EL1904)', product: 'EL1904', path: 'x', boxes: [], pdos: [], info: { type: 'EL1904, 4 Ch. Safety Input 24V, TwinSAFE', vendorId: 2 } });
+  expect(safe[0].url === 'https://www.beckhoff.com/el1904' && safe[2].url.startsWith('https://document.beckhoff.com/el1904.pdf'), `a TwinSAFE terminal's links: ${safe.map((l) => l.url).join(' ')}`);
   const lenze = deviceLinks({ name: 'Feed (Inverter i550 Cabinet)', product: 'Inverter i550 Cabinet', path: 'x', boxes: [], pdos: [], info: { type: 'i550 Inverter FW V05.02.xx', vendorId: 0x3b, supplier: 'Lenze i550' } });
   expect(lenze.length === 1 && lenze[0].kind === 'web' && /q=Lenze%20i550%20i550%20Inverter/.test(lenze[0].url), `another vendor: ${lenze.map((l) => l.url).join(' ')}`);
   const failing = await readEcatStates({ async readRaw() { throw Object.assign(new Error('x'), { adsError: { errorStr: 'Target port not found' } }); } }, '5.6.7.8.2.1');

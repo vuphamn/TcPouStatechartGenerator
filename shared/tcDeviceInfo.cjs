@@ -89,7 +89,7 @@ function devicesIn(file, productCode) {
  * "EL1008", "EK1200-5000"). { type, name, group, vendor, url, revision, file } or null (not found here)
  */
 function findDevice(req) {
-  const type = String(req?.type || '').split(/\s+/)[0];
+  const type = String(req?.type || '').split(/[\s,;]+/)[0];
   const code = hexNum(req?.productCode);
   if (!type || code === null) return null;
   for (const dir of esiDirs()) {
@@ -158,7 +158,7 @@ function deviceInfo(req, documents) {
   } catch {
     esi = null;
   }
-  return { esi, images: deviceImages(documents, req?.product || String(req?.type || '').split(/\s+/)[0]), folder: devicesDirOf(documents), esiDirs: esiDirs() };
+  return { esi, images: deviceImages(documents, req?.product || String(req?.type || '').split(/[\s,;]+/)[0]), folder: devicesDirOf(documents), esiDirs: esiDirs() };
 }
 
 module.exports = { deviceInfo, findDevice, deviceImages, devicesDirOf, esiDirs, candidates };
