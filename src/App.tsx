@@ -63,6 +63,9 @@ import {
   CircleDot,
   Circle,
   SquareStack,
+  Spline,
+  Undo2,
+  Redo2,
   ListTree,
   FlaskConical,
   Pencil,
@@ -124,9 +127,9 @@ import { allStateActions, readStateCode, writeStateCode } from './utils/stateAct
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
-import { pendingEditors, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
+import { pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
-import { DiffDialog, showEditorDiff, type DiffPart } from './components/DiffDialog.tsx';
+import { DiffDialog, SHOW_FILE_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
@@ -137,8 +140,8 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, ENUM_KEY, clearBookmarks, declarationOf, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
-import { parseDutContent } from './utils/dutEnumEditor.ts';
+import { BODY, ENUM_KEY, clearBookmarks, declarationOf, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { parseDutContent, updateDutDeclaration } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
 import { armState } from './utils/choiceArms.ts';
@@ -188,6 +191,7 @@ import {
   setCompositeColor,
   groupInComposite,
   ungroupComposite,
+  nestComposite,
   moveToComposite,
   writeCompositeMarkers,
   isValidCompositeName,
@@ -397,6 +401,8 @@ export const App: React.FC = () => {
   const stateActions: ReturnType<typeof allStateActions> | undefined = undefined;
   const [showTransitionPriorities, setShowTransitionPriorities] = useState<boolean>(true);
   const [priorityFormat, setPriorityFormat] = useState<PriorityFormat>(initialPreset.priorityFormat);
+  // The composites drawn collapsed (one box each), kept per POU in this browser: a view, the code not changed
+  const [collapsedComposites, setCollapsedComposites] = useState<string[]>([]);
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
@@ -721,7 +727,7 @@ export const App: React.FC = () => {
         collapseErrorSinkEdges, choiceNodes,
         includeStateDescriptions, stateActions,
         showTransitionPriorities,
-        priorityFormat,
+        priorityFormat, collapsedComposites,
       });
 
       const elapsed = Math.round(performance.now() - startTime);
@@ -748,7 +754,7 @@ export const App: React.FC = () => {
     collapseErrorSinkEdges, choiceNodes,
     includeStateDescriptions, stateActions,
     showTransitionPriorities,
-    priorityFormat,
+    priorityFormat, collapsedComposites,
   ]);
 
   // Apply custom node styles for live diagram canvas display
@@ -951,7 +957,7 @@ export const App: React.FC = () => {
             collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
-            priorityFormat,
+            priorityFormat, collapsedComposites,
           });
 
           const elapsed = Math.round(performance.now() - startTime);
@@ -984,7 +990,7 @@ export const App: React.FC = () => {
       collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
-      priorityFormat,
+      priorityFormat, collapsedComposites,
     ]
   );
 
@@ -1019,7 +1025,7 @@ export const App: React.FC = () => {
             collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
-            priorityFormat,
+            priorityFormat, collapsedComposites,
           });
 
           const elapsed = Math.round(performance.now() - startTime);
@@ -1052,7 +1058,7 @@ export const App: React.FC = () => {
       collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
-      priorityFormat,
+      priorityFormat, collapsedComposites,
     ]
   );
 
@@ -1066,14 +1072,14 @@ export const App: React.FC = () => {
       try {
         const startTime = performance.now();
         setGenerationError(null);
-        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat });
+        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
         setRawMarkdown(result);
         setGenerationStats({ statesCount: (result.match(/-->/g) || []).length, linesCount: result.split('\n').length, timeMs: Math.round(performance.now() - startTime) });
       } catch (genErr: unknown) {
         setGenerationError(genErr instanceof Error ? genErr.message : String(genErr));
       }
     },
-    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat]
+    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites]
   );
 
   const handleSavePreProcessCode = useCallback(
@@ -1096,7 +1102,7 @@ export const App: React.FC = () => {
             collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
-            priorityFormat,
+            priorityFormat, collapsedComposites,
           });
 
           const elapsed = Math.round(performance.now() - startTime);
@@ -1129,7 +1135,7 @@ export const App: React.FC = () => {
       collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
-      priorityFormat,
+      priorityFormat, collapsedComposites,
     ]
   );
 
@@ -1147,7 +1153,7 @@ export const App: React.FC = () => {
             collapseErrorSinkEdges, choiceNodes,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
-            priorityFormat,
+            priorityFormat, collapsedComposites,
           });
 
           const elapsed = Math.round(performance.now() - startTime);
@@ -1179,7 +1185,7 @@ export const App: React.FC = () => {
       collapseErrorSinkEdges, choiceNodes,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
-      priorityFormat,
+      priorityFormat, collapsedComposites,
     ]
   );
 
@@ -1712,6 +1718,8 @@ export const App: React.FC = () => {
   const localSave = !isXaeHost();
   const pouDirty = localSave && !!pouContent && savedSources.pouKey === pouKey && pouContent !== savedSources.pou;
   const dutDirty = localSave && !!dutContent && savedSources.dutKey === dutKey && dutContent !== savedSources.dut;
+  // (the editors' Diff: enabled for their file's changes too)
+  useEffect(() => setFilesChanged({ pou: !!pouDirty, enum: !!dutDirty }), [pouDirty, dutDirty]);
   const localDirtyCount = Number(pouDirty) + Number(dutDirty);
   const localDirtyRef = useRef(false);
   localDirtyRef.current = localDirtyCount > 0;
@@ -3352,6 +3360,41 @@ export const App: React.FC = () => {
       return [] as string[];
     }
   }, [pouContent, dutContent, composites]);
+  // A composite collapsed (one box) or expanded again: kept per POU in this browser
+  const setCollapsed = useCallback(
+    (name: string, on: boolean) => {
+      setCollapsedComposites((cur) => {
+        const next = on ? [...new Set([...cur, name])] : cur.filter((x) => x !== name);
+        try {
+          const key = `kss.collapsed.${(pouFileName || 'POU').replace(/\.TcPOU$/i, '')}`;
+          if (next.length) localStorage.setItem(key, JSON.stringify(next));
+          else localStorage.removeItem(key);
+        } catch {
+          // (this session only)
+        }
+        return next;
+      });
+      showCopyToast(on ? `${name} collapsed: one box (right-click it: Expand)` : `${name} expanded`, 'success');
+    },
+    [pouFileName, showCopyToast]
+  );
+  // A composite dragged into another one (its {region} block nested there), or out of the one it is in
+  const handleCompositeDropped = useCallback(
+    (name: string, into: string | null) => {
+      if (!dutContent.trim()) return;
+      const all = enumComposites(dutContent);
+      const me = all.find((c) => c.name === name || c.name.replace(/[.\-\s]/g, '_') === name);
+      if (!me) return;
+      const target = into ? all.find((c) => c.name === into || c.name.replace(/[.\-\s]/g, '_') === into)?.name ?? null : null;
+      if ((target ?? null) === (me.parent ?? null)) return;
+      // (out: only when it was released outside the one it is in)
+      const next = nestComposite(dutContent, me.name, target);
+      if (!next) return;
+      handleReplaceSources(null, next);
+      showCopyToast(target ? `${me.name} now in ${target} (its {region} in it: Ctrl+Z undoes)` : `${me.name} moved out of ${me.parent} (Ctrl+Z undoes)`, 'success', 6000);
+    },
+    [dutContent, handleReplaceSources, showCopyToast]
+  );
   const handleWriteCompositeMarkers = useCallback(() => {
     const r = writeCompositeMarkers(dutContent, pouContent);
     if (!r.written.length) return showCopyToast(r.errors.length ? `No composite written: ${r.errors.join('; ')}` : 'No composite to write', 'error', 7000);
@@ -4425,6 +4468,13 @@ export const App: React.FC = () => {
         });
         if (own) items.push({ id: 'composite-color-default', label: `The Composites colour (${compositeColor})`, icon: <X className="w-3.5 h-3.5" />, title: 'Its own colour taken out of its {region} line', onSelect: () => handleCompositeColor(name, null) });
         items.push({
+          id: 'composite-collapse-btn',
+          label: 'Collapse to one box',
+          icon: <Minimize2 className="w-3.5 h-3.5" />,
+          title: 'Drawn as one box, its transitions in and out its own (a view: the code is not changed; its menu: Expand)',
+          onSelect: () => setCollapsed(name, true),
+        });
+        items.push({
           id: 'composite-ungroup-btn',
           label: 'Ungroup (keep its states)',
           icon: <SquareStack className="w-3.5 h-3.5" />,
@@ -4440,6 +4490,11 @@ export const App: React.FC = () => {
       }
       // A free note (from the palette): only the viewer's note items
       if (target.type === 'node' && (target.id.startsWith('note_') || target.id.startsWith('choice_'))) return items;
+      // A collapsed composite: Expand (not a state of the code: no state's items)
+      if (target.type === 'node' && collapsedComposites.includes(target.id)) {
+        items.push({ id: 'composite-expand-btn', label: `Expand ${target.id}`, icon: <Maximize2 className="w-3.5 h-3.5" />, title: 'Drawn with its states again', onSelect: () => setCollapsed(target.id, false) });
+        return items;
+      }
       if (target.type === 'node') {
         items.push(
           { id: 'paths-from-btn', label: 'Paths from here', icon: <Route className="w-3.5 h-3.5" />, onSelect: () => findPathsFor(target.id, 'from') },
@@ -4555,6 +4610,23 @@ export const App: React.FC = () => {
               }),
           });
         }
+      // The canvas: Undo / Redo of the edits (the POU, the enum, the states' moves), as Ctrl+Z / Ctrl+Y
+      if (target.type === 'canvas') {
+        if (historyState.canUndo) items.push({ id: 'undo-btn', label: 'Undo', icon: <Undo2 className="w-3.5 h-3.5" />, title: 'Ctrl+Z: the last edit (of the code, the enum, or a move on the canvas)', onSelect: () => stepHistory(true) });
+        if (historyState.canRedo) items.push({ id: 'redo-btn', label: 'Redo', icon: <Redo2 className="w-3.5 h-3.5" />, title: 'Ctrl+Y: the edit undone last', onSelect: () => stepHistory(false) });
+      }
+      // Tidy up the edges (the states left where they are)
+      if (target.type === 'canvas')
+        items.push({
+          id: 'tidy-edges-btn',
+          label: 'Tidy up edges',
+          icon: <Spline className="w-3.5 h-3.5" />,
+          title: "The states left where they are: each edge's own route (waypoints, moved ends, a moved label) dropped and the edge drawn again from its states",
+          onSelect: () => {
+            const n = mermaidViewerRef.current?.tidyEdges() ?? 0;
+            showCopyToast(n ? `Edges tidied up: ${n} drawn again from their states` : 'Edges tidied up (none had a route of its own)', 'success');
+          },
+        });
       // Right-clicking the empty canvas with a state selected opens the state's menu: Add state is there too
       if ((target.type === 'canvas' || target.type === 'node') && pouContent) {
         items.push({ id: 'add-state-btn', label: 'Add state…', icon: <SquarePlus className="w-3.5 h-3.5" />, onSelect: handleAddState });
@@ -4670,7 +4742,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance, drawnEdge, composites, compositeOwnColors, compositeColor, handleCompositeColor, pendingComposites, handleWriteCompositeMarkers]
+    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance, drawnEdge, composites, compositeOwnColors, compositeColor, handleCompositeColor, pendingComposites, handleWriteCompositeMarkers, historyState, stepHistory, collapsedComposites, setCollapsed]
   );
   // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
   const symbolCommands = (): PaletteCommand[] => {
@@ -4720,6 +4792,8 @@ export const App: React.FC = () => {
     cmds.push({ id: 'view:engine', group: 'View', label: `Layout engine: ${layoutEngine === 'elk' ? 'Dagre' : 'ELK'}`, run: () => setLayoutEngine(layoutEngine === 'elk' ? 'dagre' : 'elk') });
     cmds.push({ id: 'app:save', group: 'File', label: 'Save to project', hint: 'Ctrl+S', run: () => handleSaveToProjectRef.current() });
     cmds.push({ id: 'app:undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => stepHistory(true) });
+    cmds.push({ id: 'app:tidy-edges', group: 'Canvas', label: 'Tidy up edges', hint: 'the states stay: the edges drawn again from them', run: () => { const n = mermaidViewerRef.current?.tidyEdges() ?? 0; showCopyToast(n ? `Edges tidied up: ${n} drawn again from their states` : 'Edges tidied up (none had a route of its own)', 'success'); } });
+    cmds.push({ id: 'app:diff-all', group: 'Edit', label: 'All changes (Diff)', hint: "every editor's edits and the files' since saved", run: () => setAllDiffOpen(true) });
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
@@ -5531,6 +5605,18 @@ export const App: React.FC = () => {
         altAction: { id: 'plc-copy-elsewhere-btn', label: 'Save to a different location…', title: 'The PLC\'s project in another folder (this one left as it is); remembered for this PLC', run: () => void elsewhere() },
         cancelLabel: 'Keep local',
         onCancel: keep,
+        sideAction: r.compare?.length
+          ? {
+              id: 'plc-copy-show-diff-btn',
+              label: `Show the differences (${r.compare.length}${r.compareMore ? `+${r.compareMore}` : ''} file${r.compare.length === 1 ? '' : 's'})`,
+              title: "The PLC's version of each source file that differs, next to your local copy's (read-only)",
+              run: () =>
+                setPlcCopyDiff({
+                  title: `${copy.project}: the PLC's version and your local copy${r.compareMore ? ` (${r.compareMore} more files not shown)` : ''}`,
+                  parts: r.compare!.map((c) => ({ name: c.path + (!c.plc ? ' (only here)' : !c.local ? ' (only on the PLC)' : ''), before: c.plc, after: c.local })),
+                }),
+            }
+          : undefined,
       });
     },
     [requestPlcCopy, showCopyToast, pouTypeName, pouPath, liveProject]
@@ -6361,14 +6447,14 @@ export const App: React.FC = () => {
         collapseErrorSinkEdges, choiceNodes,
         includeStateDescriptions, stateActions,
         showTransitionPriorities,
-        priorityFormat,
+        priorityFormat, collapsedComposites,
       });
       // The generator's own edges (their ids are the diagram's: notes do not change the order of the lines)
       return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
     } catch {
       return null;
     }
-  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, liveEnums]);
+  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const liveGuardInputs = useMemo<GuardInputs | null>(
     () =>
       liveGuardEdges
@@ -6437,12 +6523,12 @@ export const App: React.FC = () => {
   const simGuardEdges = useMemo(() => {
     if (!simOn) return null;
     try {
-      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat });
+      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
       return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
     } catch {
       return null;
     }
-  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, liveEnums]);
+  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const simInputs = useMemo<GuardInputs | null>(
     () =>
       simGuardEdges && sim.current
@@ -6709,29 +6795,87 @@ export const App: React.FC = () => {
   const pouEdits = pendingNow.some((e) => e.id === 'pou-editor');
   const enumEdits = pendingNow.some((e) => e.id === 'enum-editor');
   // (its "*" clicked: the editor's diff, or its file's against its saved version)
-  const [fileDiff, setFileDiff] = useState<{ title: string; parts: DiffPart[] } | null>(null);
+  // A file's changes since it was saved (its parts from the sources as they are now: a change undone or a line edited
+  // in the Diff goes into them, as an edit, Ctrl+Z undoes it)
+  const [fileDiff, setFileDiff] = useState<{ title: string; tab: 'pou' | 'enum' } | null>(null);
   const pouParts = (before: string, after: string): DiffPart[] => {
     const b = getPouBody(before);
     const a = getPouBody(after);
+    const put = (r: { success: boolean; updatedPou: string; error?: string }) => (r.success ? handleReplaceSources(r.updatedPou, null) : showCopyToast(r.error ?? 'Not changed', 'error'));
     const parts: DiffPart[] = [
-      { name: "The POU's declaration", before: b.declaration, after: a.declaration },
-      { name: "The POU's body", before: b.implementation, after: a.implementation },
+      { name: "The POU's declaration", before: b.declaration, after: a.declaration, apply: (t) => put(updatePouBody(after, t, null)) },
+      { name: "The POU's body", before: b.implementation, after: a.implementation, apply: (t) => put(updatePouBody(after, a.declaration, t)) },
     ];
     for (const m of [...new Set([...getAllMethodsFromPou(before), ...getAllMethodsFromPou(after)])]) {
       const x = getMethodCodeFromPou(before, m);
       const y = getMethodCodeFromPou(after, m);
-      parts.push({ name: `${m}() declaration`, before: x.methodFound ? x.declaration : '', after: y.methodFound ? y.declaration : '' }, { name: `${m}() implementation`, before: x.methodFound ? x.code : '', after: y.methodFound ? y.code : '' });
+      // (a method taken out since: read-only here)
+      parts.push(
+        { name: `${m}() declaration`, before: x.methodFound ? x.declaration : '', after: y.methodFound ? y.declaration : '', apply: y.methodFound ? (t) => put(updateMethodCodeInPou(after, m, y.code, t)) : undefined },
+        { name: `${m}() implementation`, before: x.methodFound ? x.code : '', after: y.methodFound ? y.code : '', apply: y.methodFound ? (t) => put(updateMethodCodeInPou(after, m, t, y.declaration)) : undefined }
+      );
     }
     return parts;
   };
+  // The collapsed composites of this POU (this browser), read when another POU is loaded
+  const collapsedKey = `kss.collapsed.${(pouFileName || 'POU').replace(/\.TcPOU$/i, '')}`;
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(collapsedKey) || '[]');
+      setCollapsedComposites(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+    } catch {
+      setCollapsedComposites([]);
+    }
+  }, [collapsedKey]);
+  // The states whose code (their CASE branch in doState()) changed since the POU was saved: marked on the canvas, the
+  // minimap and in the canvas's search
+  const changedStates = useMemo(() => {
+    if (!savedSources.pou || !pouContent || savedSources.pou === pouContent) return [] as string[];
+    const before = getMethodCodeFromPou(savedSources.pou, 'doState');
+    const after = getMethodCodeFromPou(pouContent, 'doState');
+    if (!before.methodFound || !after.methodFound || before.code === after.code) return [] as string[];
+    // (each state's branch as written, its comments too: from its label to the next one)
+    const branches = (code: string) => {
+      const lines = code.replace(/\r\n/g, '\n').split('\n');
+      const blank = blankComments(lines.join('\n')).split('\n');
+      return (id: string) => {
+        const r = caseBranchRange(blank, id);
+        return r ? lines.slice(r.start, r.end).join('\n') : null;
+      };
+    };
+    const was = branches(before.code);
+    const now = branches(after.code);
+    return identifiedStatesResult.states.map((s) => s.id).filter((id) => was(id) !== now(id));
+  }, [savedSources.pou, pouContent, identifiedStatesResult.states]);
+  // The PLC's project and its local copy, compared (asked about before Override / Keep local)
+  const [plcCopyDiff, setPlcCopyDiff] = useState<{ title: string; parts: DiffPart[] } | null>(null);
+  // All changes (the header's Diff): every editor's edits not in the POU yet, then the files' since they were saved
+  const [allDiffOpen, setAllDiffOpen] = useState(false);
+  const allChangesParts = (): DiffPart[] => [
+    ...pendingParts().flatMap((e) => e.parts.map((p) => ({ ...p, name: `${e.label}: ${p.name} (in the editor, not in the POU yet)` }))),
+    ...fileDiffParts('pou').map((p) => ({ ...p, name: `${pouFileName}: ${p.name} (since saved)` })),
+    ...(dutContent ? fileDiffParts('enum').map((p) => ({ ...p, name: `${dutFileName}: ${p.name} (since saved)` })) : []),
+  ];
+  // An editor's Diff with no edits of its own: its file's changes since saved
+  useEffect(() => {
+    const on = (e: Event) => {
+      const file = (e as CustomEvent<{ file: 'pou' | 'enum' }>).detail?.file === 'enum' ? 'enum' : 'pou';
+      setFileDiff({ title: `${file === 'enum' ? dutFileName : pouFileName}: since it was saved`, tab: file });
+    };
+    window.addEventListener(SHOW_FILE_DIFF_EVENT, on);
+    return () => window.removeEventListener(SHOW_FILE_DIFF_EVENT, on);
+  }, [dutFileName, pouFileName]);
+  const fileDiffParts = (tab: 'pou' | 'enum'): DiffPart[] =>
+    tab === 'enum'
+      ? [{ name: 'Declaration', before: savedSources.dut ? parseDutContent(savedSources.dut).declaration : '', after: dutContent ? parseDutContent(dutContent).declaration : '', apply: dutContent ? (t) => handleReplaceSources(null, updateDutDeclaration(dutContent, t)) : undefined }]
+      : pouParts(savedSources.pou, pouContent);
   const openTabDiff = (tab: 'method' | 'pou' | 'enum') => {
     setDockLayout((l) => activateDockTab(l, tab));
     if ({ method: methodEdits, pou: pouEdits, enum: enumEdits }[tab]) {
       window.setTimeout(() => showEditorDiff(tab), 150);
       return;
     }
-    if (tab === 'enum') setFileDiff({ title: `${dutFileName}: since it was saved`, parts: [{ name: 'Declaration', before: savedSources.dut ? parseDutContent(savedSources.dut).declaration : '', after: dutContent ? parseDutContent(dutContent).declaration : '' }] });
-    else setFileDiff({ title: `${pouFileName}: since it was saved`, parts: pouParts(savedSources.pou, pouContent) });
+    setFileDiff({ title: `${tab === 'enum' ? dutFileName : pouFileName}: since it was saved`, tab: tab === 'enum' ? 'enum' : 'pou' });
   };
   const dirtyMark = (tab: 'method' | 'pou' | 'enum', why: (string | false)[]) => {
     const list = why.filter((x): x is string => !!x);
@@ -6926,7 +7070,7 @@ export const App: React.FC = () => {
             hostSave={
               isXaeHost()
                 ? pouPath
-                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, onSaveEditor: handleHeaderSave, menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
+                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, onSaveEditor: handleHeaderSave, onDiffAll: () => setAllDiffOpen(true), menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
                   : undefined
                 : pouContent
                 ? {
@@ -6935,6 +7079,7 @@ export const App: React.FC = () => {
                     dirtyCount: localDirtyCount,
                     onSave: () => void handleSaveSources(),
                     onSaveEditor: handleHeaderSave,
+                    onDiffAll: () => setAllDiffOpen(true),
                     title: desktopSave()?.saveSources
                       ? `Write the edits back to ${[pouDirty && (pouPath ? pouFileName : `${pouFileName} (Save As)`), dutDirty && dutFileName].filter(Boolean).join(' and ')} (Ctrl+S)`
                       : canWriteBack()
@@ -7884,6 +8029,7 @@ export const App: React.FC = () => {
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
                   bookmarkedStates={bookmarks.states}
+                  changedStates={changedStates}
                   stateTooltips={stateTooltips}
                   stateProblems={stateProblems}
                   groupSnapEach={groupSnapEach}
@@ -7909,6 +8055,7 @@ export const App: React.FC = () => {
                   onCanvasKey={handleCanvasKey}
                   onPaletteElement={pouContent ? handlePaletteElement : undefined}
                   onStateDropped={pouContent ? handleStateDropped : undefined}
+                  onCompositeDropped={pouContent ? handleCompositeDropped : undefined}
                   history={{ ...historyState, onUndo: () => stepHistory(true), onRedo: () => stepHistory(false) }}
                   placeRequest={placeRequest}
                   nodeOffsets={nodeOffsets}
@@ -8442,9 +8589,16 @@ export const App: React.FC = () => {
           onOpen={openBookmark}
           onNote={(e, note) => setBookmarkNote(pouFileName, e.key, note)}
           onStep={stepBookmark}
+          onExport={() => ({ name: `${(pouFileName || 'POU').replace(/\.TcPOU$/i, '')}.bookmarks.json`, text: exportBookmarks(pouFileName) })}
+          onImport={(text) => {
+            const r = importBookmarks(pouFileName, text);
+            return r.error ?? `Imported: ${r.added} bookmark${r.added === 1 ? '' : 's'} added`;
+          }}
         />
       )}
-      {fileDiff && <DiffDialog title={fileDiff.title} beforeLabel="saved" afterLabel="now" parts={fileDiff.parts} onClose={() => setFileDiff(null)} />}
+      {fileDiff && <DiffDialog title={fileDiff.title} beforeLabel="saved" afterLabel="now" parts={fileDiffParts(fileDiff.tab)} onClose={() => setFileDiff(null)} />}
+      {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
+      {allDiffOpen && <DiffDialog title="All changes" beforeLabel="before" afterLabel="now" parts={allChangesParts} onClose={() => setAllDiffOpen(false)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">

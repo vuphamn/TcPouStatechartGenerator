@@ -34,6 +34,8 @@ export interface DiagramSearchPanelProps {
   onPrevMatch: () => void;
   availableStates: StateNodeInfo[];
   availableEdges: EdgeInfo[];
+  /** The states changed since the POU was saved: tagged in the results */
+  changedStateIds?: string[];
   onSelectState?: (stateId: string, label?: string) => void;
   onSelectEdge?: (edge: EdgeInfo) => void;
   onPanToElement?: (element: Element) => void;
@@ -108,6 +110,7 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
   onPrevMatch,
   availableStates,
   availableEdges,
+  changedStateIds,
   onSelectState,
   onSelectEdge,
   onPanToElement,
@@ -701,6 +704,11 @@ export const DiagramSearchPanel: React.FC<DiagramSearchPanelProps> = ({
                         <div className="min-w-0">
                           <div className="font-medium text-slate-200 truncate flex items-center gap-1">
                             <HighlightedText text={stateLabel} query={searchQuery} />
+                            {changedStateIds?.includes(stateId) && (
+                              <span className="search-changed-tag shrink-0 px-1 rounded bg-amber-950/80 border border-amber-700/70 text-amber-300 text-[9px] font-semibold" title="Its code changed since the POU was saved">
+                                changed
+                              </span>
+                            )}
                           </div>
                           {stateId !== stateLabel && (
                             <div className="text-[10px] font-mono text-slate-400 truncate">

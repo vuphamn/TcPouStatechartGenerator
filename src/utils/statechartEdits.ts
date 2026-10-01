@@ -277,6 +277,71 @@ export function ungroupComposite(dutContent: string, name: string): string | nul
   return wrap(decl.slice(0, range.start + 1) + fixMemberCommas(out).join('\n') + decl.slice(range.end));
 }
 
+/** A composite's {region} line and its matching {endregion} line in the enum's list lines, or null */
+function regionBlock(lines: string[], name: string): { start: number; end: number } | null {
+  let n = 0;
+  const start = lines.findIndex((l) => {
+    const r = l.match(REGION_RX);
+    if (!r) return false;
+    n++;
+    return ((r[1] ?? r[2] ?? r[3] ?? '').trim() || `Composite${n}`) === name;
+  });
+  if (start < 0) return null;
+  let depth = 0;
+  for (let i = start; i < lines.length; i++) {
+    if (REGION_RX.test(lines[i])) depth++;
+    else if (END_REGION_RX.test(lines[i]) && --depth === 0) return { start, end: i };
+  }
+  return null;
+}
+
+/**
+ * A composite (its {region} … {endregion} lines, its states and sub-composites with it) moved into another one (last
+ * in it, before its {endregion}), or out of the composites it is in (into null: after the outermost one). null: no
+ * change (already there, into itself or one of its own, not found)
+ */
+export function nestComposite(dutContent: string, name: string, into: string | null): string | null {
+  const { decl, wrap } = declOf(dutContent);
+  const range = enumListRange(decl);
+  if (!range) return null;
+  const lines = decl.slice(range.start + 1, range.end).split('\n');
+  const block = regionBlock(lines, name);
+  if (!block) return null;
+  const moved = lines.slice(block.start, block.end + 1);
+  // (the composites around it, outermost first)
+  const around = lines
+    .map((l, i) => (REGION_RX.test(l) ? i : -1))
+    .filter((i) => i >= 0 && i < block.start)
+    .map((i) => {
+      let depth = 0;
+      for (let j = i; j < lines.length; j++) {
+        if (REGION_RX.test(lines[j])) depth++;
+        else if (END_REGION_RX.test(lines[j]) && --depth === 0) return { start: i, end: j };
+      }
+      return { start: i, end: -1 };
+    })
+    .filter((r) => r.end > block.end);
+  let out: string[];
+  if (into) {
+    const target = regionBlock(lines, into);
+    // (into itself or one inside it: no)
+    if (!target || (target.start >= block.start && target.end <= block.end)) return null;
+    // (already right in it)
+    const parent = around[around.length - 1];
+    if (parent && parent.start === target.start) return null;
+    const rest = [...lines.slice(0, block.start), ...lines.slice(block.end + 1)];
+    const endAt = target.end > block.end ? target.end - moved.length : target.end;
+    out = [...rest.slice(0, endAt), ...moved, ...rest.slice(endAt)];
+  } else {
+    if (!around.length) return null;
+    const outer = around[0];
+    const rest = [...lines.slice(0, block.start), ...lines.slice(block.end + 1)];
+    const after = outer.end - moved.length + 1;
+    out = [...rest.slice(0, after), ...moved, ...rest.slice(after)];
+  }
+  return wrap(decl.slice(0, range.start + 1) + fixMemberCommas(out).join('\n') + decl.slice(range.end));
+}
+
 /**
  * Members moved into a composite (their lines last in it, before its {endregion}), or out of their composites (target
  * null: after the outermost one they are in). Composites left empty removed. reordered: they moved past other members

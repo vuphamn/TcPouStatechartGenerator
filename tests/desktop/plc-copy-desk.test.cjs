@@ -112,6 +112,16 @@ const cfg = writeSymbolsPlc('fake-ams2-copy.json', [], { sources: true });
   const cancelLabel = ask ? await w1.$eval('#text-prompt-cancel', (e) => e.textContent.trim()) : '';
   const buttons = ask ? await w1.evaluate(() => [...document.querySelectorAll('#text-prompt-submit, #plc-copy-elsewhere-btn')].map((b) => b.textContent.trim()).join(' | ')) : '';
   expect(cancelLabel === 'Keep local' && /Override/.test(buttons) && /Save to a different location/.test(buttons), `its choices: ${buttons} | ${cancelLabel}`);
+  // Show the differences: the PLC's version and the local one, the question still open under it
+  if (ask && (await w1.$('#plc-copy-show-diff-btn'))) {
+    await w1.click('#plc-copy-show-diff-btn');
+    await w1.waitForSelector('#diff-dialog', { timeout: 5000 }).catch(() => {});
+    const parts = await w1.$$eval('#diff-dialog [data-diff-part]', (d) => d.map((x) => x.getAttribute('data-diff-part')));
+    expect(parts.some((x) => /SM_TableManager\.TcPOU/.test(x)), `Show the differences: ${parts.join(', ')}`);
+    await w1.keyboard.press('Escape');
+    await new Promise((r) => setTimeout(r, 400));
+    expect(!(await w1.$('#diff-dialog')) && !!(await w1.$('#text-prompt-cancel')), 'Esc: the differences closed, the question still there');
+  } else expect(false, 'Show the differences offered');
   if (ask) await w1.click('#text-prompt-cancel');
   const kept = await waitStatus(w1, /local copy kept/);
   expect(/local copy kept/.test(kept) && /edited here/.test(fs.readFileSync(copiedPou, 'utf8')), `Keep local: "${kept}", the edit still there`);

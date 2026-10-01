@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Bookmark, ChevronDown, ChevronUp, Pencil, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Bookmark, ChevronDown, ChevronUp, Download, Pencil, Upload, X } from 'lucide-react';
 import type { BookmarkEntry } from '../utils/bookmarks.ts';
 import { BODY, ENUM_KEY, declarationOf, isDeclarationKey } from '../utils/bookmarks.ts';
 
@@ -24,7 +24,25 @@ export const BookmarksDialog: React.FC<{
   onClose: () => void;
   onNote?: (e: BookmarkEntry, note: string) => void;
   onStep?: (dir: 1 | -1) => void;
-}> = ({ entries, onOpen, onClear, onClose, onNote, onStep }) => {
+  /** Share them: Export (a file: its name, its text), Import (a file's text put in; what it says) */
+  onExport?: () => { name: string; text: string };
+  onImport?: (text: string) => string;
+}> = ({ entries, onOpen, onClear, onClose, onNote, onStep, onExport, onImport }) => {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [said, setSaid] = useState('');
+  const exportFile = () => {
+    if (!onExport) return;
+    const { name, text } = onExport();
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setSaid(`Exported: ${name}`);
+  };
   const [naming, setNaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   useEffect(() => {
@@ -109,6 +127,30 @@ export const BookmarksDialog: React.FC<{
               </button>
             </>
           )}
+          {onExport && entries.length > 0 && (
+            <button id="bookmarks-export" type="button" onClick={exportFile} className="p-1 rounded text-slate-300 hover:bg-slate-800" title="Export: the POU's bookmarks (and their names) as a file to share">
+              <Download className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onImport && (
+            <>
+              <button id="bookmarks-import" type="button" onClick={() => fileRef.current?.click()} className="p-1 rounded text-slate-300 hover:bg-slate-800" title="Import: a bookmarks file (Export's) put in with these">
+                <Upload className="w-3.5 h-3.5" />
+              </button>
+              <input
+                id="bookmarks-import-file"
+                ref={fileRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) void f.text().then((t) => setSaid(onImport(t)));
+                }}
+              />
+            </>
+          )}
           {entries.length > 0 && (
             <button id="bookmarks-clear" type="button" onClick={onClear} className="px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800" title="Clear all bookmarks of the POU">
               Clear all
@@ -119,6 +161,11 @@ export const BookmarksDialog: React.FC<{
           </button>
         </span>
       </div>
+      {said && (
+        <div id="bookmarks-said" className="px-3 py-1 border-b border-slate-800 text-[11px] text-slate-400">
+          {said}
+        </div>
+      )}
       <div className="overflow-y-auto p-2 space-y-2">
         {entries.length === 0 && <div className="text-slate-500 px-1">No bookmarks yet: right-click a state, or a line of a code editor (Toggle Bookmark, Ctrl+F2).</div>}
         {states.length > 0 && (

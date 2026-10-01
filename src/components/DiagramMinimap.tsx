@@ -35,6 +35,8 @@ export interface DiagramMinimapProps {
   onSelectState?: (stateId: string) => void;
   /** Bookmarked states: marked, a click goes there */
   bookmarkedStateIds?: string[];
+  /** The states changed since the POU was saved: an amber dot */
+  changedStateIds?: string[];
   /** Several states selected: each marked */
   multiSelection?: string[];
   isOpen?: boolean;
@@ -100,6 +102,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
   canvasPositions = {},
   onSelectState,
   bookmarkedStateIds,
+  changedStateIds,
   multiSelection,
   isOpen = true,
   onClose,
@@ -418,6 +421,7 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
     [geometry, canvasPositions]
   );
   const bookmarkMarkers = useMemo(() => (bookmarkedStateIds ?? []).map(markerAt).filter((m): m is NonNullable<typeof m> => !!m), [bookmarkedStateIds, markerAt]);
+  const changedMarkers = useMemo(() => (changedStateIds ?? []).map(markerAt).filter((m): m is NonNullable<typeof m> => !!m), [changedStateIds, markerAt]);
   const multiMarkers = useMemo(() => ((multiSelection?.length ?? 0) > 1 ? multiSelection!.filter((id) => id !== selectedStateId).map(markerAt).filter((m): m is NonNullable<typeof m> => !!m) : []), [multiSelection, selectedStateId, markerAt]);
 
   // Selected state node coordinate on the minimap
@@ -552,6 +556,9 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
         {/* Selected State Marker & Beacon */}
         {multiMarkers.map((m) => (
           <div key={`multi-${m.id}`} className="minimap-multi-marker absolute pointer-events-none z-20 -translate-x-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-sky-300/80 ring-1 ring-sky-200" data-state-id={m.id} style={{ left: `${m.x}px`, top: `${m.y}px` }} />
+        ))}
+        {changedMarkers.map((m) => (
+          <div key={`changed-${m.id}`} className="minimap-changed-marker absolute pointer-events-none z-20 translate-x-1 -translate-y-2 w-1.5 h-1.5 rounded-full bg-amber-400 ring-1 ring-amber-200/80" data-state-id={m.id} title={`${m.label}: changed since saved`} style={{ left: `${m.x}px`, top: `${m.y}px` }} />
         ))}
         {bookmarkMarkers.map((m) => (
           <button

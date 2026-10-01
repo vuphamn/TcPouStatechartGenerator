@@ -292,15 +292,19 @@ export function reindent(lines: string[], indent: string): string[] {
 
 /**
  * The code of a transition, taken out of its scope: the largest statement / IF arm holding only this transition
- * (an arm becomes an IF of its own). move: only at the scope's top level, where its conditions are its own;
- * delete: also nested, else just the assignment's line.
+ * (an arm becomes an IF of its own). move: nested in IFs too, wrapped in the IFs around it (their conditions), not in
+ * an ELSE; delete: also nested, else just the assignment's line.
  */
 function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRef, stateVar: string): { lines: string[]; taken: string[]; removed: string[]; note: string } | { error: string } {
   const lines = [...s.lines];
   const name = `${edge.from} → ${edge.to}`;
   let from = s.start;
   let to = s.end;
-  let nested = false;
+  // (move: the conditions of the IF / ELSIF arms around it, outermost first, with their keyword lines' indentation)
+  const around: { cond: string; indent: string }[] = [];
+  const wrap = (taken: string[]) =>
+    around.reduceRight((inner, a) => [`${a.indent}IF ${a.cond} THEN`, ...inner, `${a.indent}END_IF`], taken);
+  const aroundNote = () => (around.length ? ` (inside ${around.length === 1 ? 'the IF' : 'the IFs'} it was in: ${around.map((a) => a.cond).join(', ')})` : '');
   // Every assignment of the state variable counts here: a block setting the state to itself stays where it is
   const all = scanItems(s.code, s.label, s.start, s.end, null, stateVar);
   const assignsIn = (r: { start: number; end: number }) => all.filter((x) => inRange(x.line, r)).length;
@@ -308,17 +312,17 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
     const st = parseList(s.code, s.lines, from, to).find((x) => inRange(t.line, x));
     if (!st) return { error: `${name} is on the state’s label line: change it in the Method Editor` };
     if (assignsIn(st) === 1) {
-      if (nested && mode === 'move') return { error: `Cannot move ${name}: ${TOGETHER}` };
       const taken = lines.slice(st.start, st.end);
-      return { lines: [...lines.slice(0, st.start), ...lines.slice(st.end)], taken, removed: taken, note: '' };
+      return { lines: [...lines.slice(0, st.start), ...lines.slice(st.end)], taken: mode === 'move' ? wrap(taken) : taken, removed: taken, note: mode === 'move' ? aroundNote() : '' };
     }
     const arms = st.arms;
     const arm = arms?.find((x) => inRange(t.line, x));
     const nextArm = arm && arms![arms!.indexOf(arm) + 1];
     const alone = !!arm && assignsIn(arm) === 1;
     if (mode === 'move') {
-      if (!arm || !alone || nested) return { error: `Cannot move ${name}: ${TOGETHER}` };
-      if (arm.kw === 'ELSE') return { error: `${name} is the ELSE of an IF: move it in the Method Editor` };
+      if (!arm) return { error: `Cannot move ${name}: ${TOGETHER}` };
+      if (arm.kw === 'ELSE' && alone) return { error: `${name} is the ELSE of an IF: move it in the Method Editor` };
+      if (arm.kw === 'ELSE') return { error: `Cannot move ${name}: it is inside an ELSE (its condition is the others' not holding): move it in the Method Editor` };
       if (arm.kw === 'IF' && nextArm?.kw === 'ELSE') return { error: `The IF of ${name} has an ELSE: move it in the Method Editor` };
     }
     if (arm && alone && !(arm.kw === 'IF' && nextArm?.kw === 'ELSE')) {
@@ -332,12 +336,19 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
         const head = nextArm!.head - (arm.end - arm.start);
         rest[head] = setKeyword(rest[head], 'IF');
       }
-      return { lines: rest, taken, removed: lines.slice(arm.start, arm.end), note: arm.kw === 'ELSIF' ? ' (as an IF of its own: the conditions before it in the IF no longer apply)' : '' };
+      const own = arm.kw === 'ELSIF' ? ' (as an IF of its own: the conditions before it in the IF no longer apply)' : '';
+      return { lines: rest, taken: mode === 'move' ? wrap(taken) : taken, removed: lines.slice(arm.start, arm.end), note: mode === 'move' ? own + aroundNote() : own };
     }
     if (arm && !alone) {
+      if (mode === 'move') {
+        // (its condition, comments left out: from the keyword to THEN)
+        const head = s.code.slice(arm.head, arm.body).join(' ');
+        const cond = head.match(/^\s*(?:IF|ELSIF)\b([\s\S]*?)\bTHEN\b/i)?.[1].replace(/\s+/g, ' ').trim();
+        if (!cond) return { error: `Cannot move ${name}: ${TOGETHER}` };
+        around.push({ cond, indent: leading(lines[arm.head]) });
+      }
       from = arm.body;
       to = arm.end;
-      nested = true;
       continue;
     }
     // delete: just the assignment, when its line holds nothing else

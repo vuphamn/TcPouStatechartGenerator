@@ -61,18 +61,23 @@ export function diffLines(beforeText: string, afterText: string): DiffRow[] {
 
 /** The changed rows with `context` lines around them; null in between: lines left out */
 export function diffHunks(rows: DiffRow[], context = 3): (DiffRow | null)[] {
+  return diffHunkIndices(rows, context).map((i) => (i === null ? null : rows[i]));
+}
+
+/** As diffHunks, the rows' indices */
+export function diffHunkIndices(rows: DiffRow[], context = 3): (number | null)[] {
   const keep = new Set<number>();
   rows.forEach((r, i) => {
     if (r.type === 'same') return;
     for (let k = Math.max(0, i - context); k <= Math.min(rows.length - 1, i + context); k++) keep.add(k);
   });
-  const out: (DiffRow | null)[] = [];
+  const out: (number | null)[] = [];
   let last = -1;
-  rows.forEach((r, i) => {
+  rows.forEach((_r, i) => {
     if (!keep.has(i)) return;
     if (last >= 0 && i > last + 1) out.push(null);
     else if (last < 0 && i > 0) out.push(null);
-    out.push(r);
+    out.push(i);
     last = i;
   });
   if (last >= 0 && last < rows.length - 1) out.push(null);
@@ -81,3 +86,34 @@ export function diffHunks(rows: DiffRow[], context = 3): (DiffRow | null)[] {
 
 /** How many lines put in and taken out */
 export const diffCounts = (rows: DiffRow[]) => ({ added: rows.filter((r) => r.type === 'add').length, removed: rows.filter((r) => r.type === 'del').length });
+
+/** A change: rows start..end (inclusive) taken out and / or put in, with the same lines around it */
+export interface DiffChange {
+  start: number;
+  end: number;
+}
+
+/** The changes of a diff, in order: each run of rows taken out or put in */
+export function diffChanges(rows: DiffRow[]): DiffChange[] {
+  const out: DiffChange[] = [];
+  rows.forEach((r, i) => {
+    if (r.type === 'same') return;
+    const last = out[out.length - 1];
+    if (last && last.end === i - 1) last.end = i;
+    else out.push({ start: i, end: i });
+  });
+  return out;
+}
+
+/**
+ * The text after, one change undone (its lines taken out put back, those put in taken out); eol: the after text's
+ * line ends (\r\n kept)
+ */
+export function undoChange(rows: DiffRow[], change: DiffChange, eol = '\n'): string {
+  const lines: string[] = [];
+  rows.forEach((r, i) => {
+    const inIt = i >= change.start && i <= change.end;
+    if (r.type === 'same' || (r.type === 'add' && !inIt) || (r.type === 'del' && inIt)) lines.push(r.text);
+  });
+  return lines.join(eol);
+}

@@ -256,11 +256,11 @@ export function highlightWordOccurrences(prismHtml: string, word: string): { htm
     return '';
   });
   if (count < 2) return { html: prismHtml, count };
-  const style = 'background-color:rgba(56,189,248,0.2);outline:1px solid rgba(56,189,248,0.5);outline-offset:0px;border-radius:2px;display:inline;';
+  // (its look: mark.word-occurrence in index.css, the word in its own colour)
   const html = prismHtml.replace(/(<[^>]+>)|([^<]+)/g, (_full, tag, textNode) => {
     if (tag) return tag;
     rx.lastIndex = 0;
-    return textNode.replace(rx, (m: string) => `<mark class="word-occurrence" style="${style}">${m}</mark>`);
+    return textNode.replace(rx, (m: string) => `<mark class="word-occurrence">${m}</mark>`);
   });
   return { html, count };
 }

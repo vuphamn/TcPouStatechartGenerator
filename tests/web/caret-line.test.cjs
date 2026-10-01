@@ -45,7 +45,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     await caretTo(id, 5);
     await sleep(200);
     let s = await state(id);
-    expect(s?.line === 5 && s.gutter === 'focused' && s.gutterNumber === '5' && /bg-slate-600/.test(s.cls), `${tab}: caret on line 5: band on ${s?.line}, gutter ${s?.gutterNumber} (${s?.gutter}), ${s?.bg}`);
+    expect(s?.line === 5 && s.gutter === 'focused' && s.gutterNumber === '5' && /\bcaret-band\b/.test(s.cls) && !/is-blurred/.test(s.cls), `${tab}: caret on line 5: band on ${s?.line}, gutter ${s?.gutterNumber} (${s?.gutter}), ${s?.bg}`);
     // Keyboard moves
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('ArrowDown');
@@ -81,7 +81,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     await page.evaluate(() => document.activeElement?.blur());
     await sleep(200);
     s = await state(id);
-    expect(s && s.gutter === 'blurred' && /bg-slate-700/.test(s.cls), `${tab}: not focused: dimmer (${s?.gutter})`);
+    expect(s && s.gutter === 'blurred' && /is-blurred/.test(s.cls), `${tab}: not focused: dimmer (${s?.gutter})`);
   }
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   console.log(`${fails} failures`);

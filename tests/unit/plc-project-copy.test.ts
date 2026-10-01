@@ -52,6 +52,10 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   boot['CurrentConfig/EdgePlc.tpzip'] = tpzip('<POU Name="SM_TableManager">v2</POU>');
   r = await syncPlcProject(read, { documents });
   expect(r.status === 'differs' && r.changes?.join() === 'EdgePlc/POUs/SM_TableManager.TcPOU' && fs.readFileSync(pou, 'utf8').includes('mine'), `the PLC's changed: differs, the edit listed, nothing written (${r.status})`);
+  // ... the files that differ compared (the PLC's text, the local one), shown before Override / Keep local
+  const cmp = r.compare ?? [];
+  expect(cmp.length === 1 && cmp[0].path === 'EdgePlc/POUs/SM_TableManager.TcPOU' && /v2/.test(cmp[0].plc) && /mine/.test(cmp[0].local) && !r.compareMore, `compared: ${cmp.map((c: { path: string }) => c.path).join()} (the PLC's v2, the local edit)`);
+  expect(!fs.readdirSync(os.tmpdir()).some((f: string) => f.startsWith('kss-plc-compare-') && fs.statSync(path.join(os.tmpdir(), f)).mtimeMs > Date.now() - 5000), "the PLC's version for the comparison: not left behind");
   // Keep local
   r = await syncPlcProject(read, { documents, choice: 'keep' });
   expect(r.status === 'kept' && fs.readFileSync(pou, 'utf8').includes('mine'), 'Keep local: left as it is');

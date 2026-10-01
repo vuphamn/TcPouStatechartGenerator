@@ -1,6 +1,8 @@
 // Screenshot comparisons of key views (tests/lib/screens.cjs: against tests/baselines; not compared on CI): the whole
 // chart, a composite (its sand box, title, the badges of its edges), a selected transition (its line and amber
-// badge) and the guard popup (a composite's collapsed edge: its list). KPowerSupply, dark theme, flowchart
+// badge) and the guard popup (a composite's collapsed edge: its list). KPowerSupply, dark theme, flowchart. Then the
+// chart in a light theme (default), the Method Editor's caret line with the uses of the word at the caret (their
+// contrast), and the Diff popup (its toolbar, the lines put in)
 const h = require('../lib/harness.cjs');
 const { compareShot } = require('../lib/screens.cjs');
 let fails = 0;
@@ -87,6 +89,55 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       return r ? { x: Math.round(r.x - 4), y: Math.round(r.y - 4), width: Math.round(r.width + 8), height: Math.round(r.height + 8) } : null;
     }));
   }
+
+  // The chart in a light theme
+  await p.select('#mermaid-theme-select', 'default');
+  await h.sleep(2500);
+  await rest();
+  await shot('chart-light', await clipOf(['#mermaid-canvas-area svg g.node', '#mermaid-canvas-area svg g.cluster', '#mermaid-canvas-area svg g.edgeLabel'], 24));
+  await p.select('#mermaid-theme-select', 'dark');
+  await h.sleep(1500);
+
+  // The Method Editor: the caret's line, on a name used again (its uses framed)
+  await p.click('#dock-tab-method');
+  await p.waitForSelector('#method-implementation-editor', { timeout: 10000 });
+  await h.sleep(800);
+  const band = await p.evaluate(() => {
+    const ta = document.getElementById('method-implementation-editor');
+    // (the state variable of its CASE, on the CASE line's next use)
+    const v = ta.value.match(/CASE\s*\(?\s*([A-Za-z_]\w*)/)?.[1];
+    if (!v) return null;
+    const at = ta.value.indexOf(v, ta.value.indexOf(v) + v.length);
+    ta.focus();
+    ta.setSelectionRange(at + 2, at + 2);
+    ta.dispatchEvent(new Event('select'));
+    ta.scrollTop = 0;
+    ta.dispatchEvent(new Event('scroll'));
+    return v;
+  });
+  await h.sleep(600);
+  expect(!!band, `a name used again at the caret (${band})`);
+  await shot('editor-caret', await p.evaluate(() => {
+    const b = document.getElementById('method-implementation-editor-caret-line')?.getBoundingClientRect();
+    return b ? { x: Math.round(Math.max(0, b.x - 50)), y: Math.round(b.y - 60), width: 700, height: Math.round(b.height + 120) } : null;
+  }));
+
+  // The Diff popup: two lines put in
+  await p.evaluate(() => {
+    const ta = document.getElementById('method-implementation-editor');
+    ta.focus();
+    ta.setSelectionRange(0, 0);
+    document.execCommand('insertText', false, '// first\n');
+  });
+  await h.sleep(300);
+  await p.click('#method-diff-btn');
+  await p.waitForSelector('#diff-dialog', { timeout: 3000 }).catch(() => {});
+  await rest();
+  await shot('diff-dialog', await p.evaluate(() => {
+    const r = document.getElementById('diff-dialog')?.getBoundingClientRect();
+    return r ? { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) } : null;
+  }));
+  await p.keyboard.press('Escape');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

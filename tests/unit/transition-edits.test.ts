@@ -129,6 +129,43 @@ p = apply(POU, moveTransitionStart(POU, edge('S_A', 'S_C', 2), 'S_B', V));
 expect(prios(p, 'S_A') === 'S_B(1) S_D(2) S_E(3)' && prios(p, 'S_B') === 'S_A(1) S_C(2)' && /\t\tIF b AND\r\n\t\t\t\tc THEN\r\n\t\t\tmachineState := E_S\.S_C; \(\* C \*\)\r\n\t\tEND_IF\r\n\tS_C, S_D:/.test(doState(p)), `an ELSIF arm moved: ${prios(p, 'S_B')}`);
 r = moveTransitionStart(POU, edge('S_A', 'S_D', 3), 'S_B', V);
 expect('error' in r, `the ELSE arm: ${'error' in r ? r.error : 'done'}`);
+// Nested in IFs (an arm of an IF inside an ELSIF arm): moved inside IFs with their conditions, the next arm its IF
+const NESTED = [
+  'CASE machineState OF',
+  '\tS_A:',
+  '\t\tIF p THEN',
+  '\t\t\tIF bFirst THEN',
+  '\t\t\t\tn := 0;',
+  '\t\t\tELSIF q THEN',
+  '\t\t\t\tIF (r OR s) THEN',
+  '\t\t\t\t\tmachineState := E_S.S_C;',
+  '\t\t\t\t// next',
+  '\t\t\t\tELSIF t THEN',
+  '\t\t\t\t\tmachineState := E_S.S_B;',
+  '\t\t\t\tEND_IF',
+  '\t\t\tEND_IF',
+  '\t\tEND_IF',
+  '\tS_B:',
+  '\t\tn := 1;',
+  'END_CASE',
+].join('\r\n');
+const NPOU = POU.replace(/<Method Name="doState"[\s\S]*?<\/Method>/, method('doState', NESTED));
+const nr = moveTransitionStart(NPOU, edge('S_A', 'S_C', 1), 'S_B', V);
+expect(!('error' in nr), `nested: moved (${'error' in nr ? nr.error : nr.message})`);
+if (!('error' in nr)) {
+  p = apply(NPOU, nr);
+  const d = doState(p);
+  // (one transition each: no priorities; the chart's edges)
+  const keys = extractEdgesFromMermaid(generateStatechartModel(DUT, p, {}).markdown).map((e) => `${e.from}->${e.to}`);
+  expect(keys.includes('S_B->S_C') && keys.includes('S_A->S_B') && !keys.includes('S_A->S_C'), `nested: the chart ${keys.join(', ')}`);
+  expect(/\tS_B:\r\n\t\tn := 1;\r\n\t\tIF p THEN\r\n\t\t\tIF q THEN\r\n\t\t\t\tIF \(r OR s\) THEN\r\n\t\t\t\t\tmachineState := E_S\.S_C;\r\n\t\t\t\tEND_IF\r\n\t\t\tEND_IF\r\n\t\tEND_IF\r\nEND_CASE/.test(d), 'nested: inside IF p, IF q, indented like the branch');
+  expect(/\t\t\tELSIF q THEN\r\n\t\t\t\t\/\/ next\r\n\t\t\t\tIF t THEN\r\n\t\t\t\t\tmachineState := E_S\.S_B;\r\n\t\t\t\tEND_IF/.test(d), 'nested: the next arm (and its comment) now the IF');
+  expect(/inside the IFs it was in: p, q/.test(nr.message), `nested: says so (${nr.message})`);
+}
+// In an ELSE: refused (no condition to carry)
+const INELSE = NESTED.replace('\t\t\tELSIF q THEN', '\t\t\tELSE');
+const er = moveTransitionStart(POU.replace(/<Method Name="doState"[\s\S]*?<\/Method>/, method('doState', INELSE)), edge('S_A', 'S_C', 1), 'S_B', V);
+expect('error' in er && /ELSE/.test(er.error), `inside an ELSE: refused (${'error' in er ? er.error : 'moved'})`);
 r = moveTransitionStart(POU, edge('S_C', 'S_A', 1), 'S_B', V);
 expect('error' in r && /shared/.test(r.error), `a shared branch: ${'error' in r ? r.error : 'done'}`);
 r = moveTransitionStart(POU, pre, 'S_B', V);

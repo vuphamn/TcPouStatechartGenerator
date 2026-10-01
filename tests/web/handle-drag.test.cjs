@@ -1,5 +1,6 @@
 const h = require('../lib/harness.cjs');
-// Edge endpoint / waypoint handles: the line follows while dragging (only that edge), and keeps the result
+// Edge endpoint / waypoint handles: the line follows while dragging (only that edge), and keeps the result; then
+// Tidy up edges (the canvas's menu): the edge drawn as it was laid out again
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -34,6 +35,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(800);
   // (a click only selects: the Transition Guard window opens on a double-click)
   console.log('   after click:', JSON.stringify(await p.evaluate((key) => ({ selected: document.querySelector('#mermaid-canvas-area path.tc-edge-path[data-edge-key="' + key + '"]').getAttribute('class'), handles: [...document.querySelectorAll('#mermaid-canvas-area .tc-edge-handle')].map((h) => h.getAttribute('data-handle-type') + ':' + (() => { const r = h.getBoundingClientRect(); const e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return e ? e.tagName + '.' + (e.getAttribute('class') || '').slice(0, 40) : 'none'; })()) }), key)));
+  const laidOut = await p.evaluate((key) => document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${key}"]`).getAttribute('d'), key);
   for (const type of ['end', 'mid']) {
     const hd = await p.evaluate((type) => {
       // The diagram's handle that is under the pointer (not the minimap's, not covered)
@@ -62,6 +64,32 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     const after = await p.evaluate((key) => document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${key}"]`).getAttribute('d'), key);
     expect(live.d !== before && live.changed === 1 && after === live.d, `${type} handle: the line follows (${live.changed} element(s) changed while dragging) and keeps its shape after release`);
   }
+  // Tidy up edges: its own route dropped, drawn as laid out
+  // (the whole chart in view: an empty spot of the canvas to right-click)
+  await p.click('#zoom-reset-button');
+  await sleep(800);
+  const empty = await p.evaluate(() => {
+    // (anywhere in the drawing's area, the chart's empty parts or around it: no state, edge, label or handle there)
+    const area = document.getElementById('mermaid-canvas-area');
+    const r = area.getBoundingClientRect();
+    for (let fy = 0.08; fy < 0.92; fy += 0.04) for (let fx = 0.08; fx < 0.75; fx += 0.04) {
+      const x = r.x + r.width * fx, y = r.y + r.height * fy;
+      const ok = [[0, 0], [12, 0], [-12, 0], [0, 12], [0, -12]].every(([dx, dy]) => { const e = document.elementFromPoint(x + dx, y + dy); return e && area.contains(e) && !e.closest('g.node, g.edgeLabel, g.edgePaths, g.cluster, path, line, polyline, text, foreignObject, .tc-edge-handle, button, [id*="minimap"]'); });
+      if (ok && x > 0 && y > 0 && x < innerWidth && y < innerHeight) return { x, y };
+    }
+    return null;
+  });
+  if (empty) {
+    await p.mouse.click(empty.x, empty.y);
+    await sleep(200);
+    await p.mouse.click(empty.x, empty.y, { button: 'right' });
+  }
+  const tidy = await p.waitForSelector('#context-menu-tidy-edges-btn', { timeout: 3000 }).catch(() => null);
+  expect(!!tidy, `the canvas's menu: Tidy up edges (spot ${JSON.stringify(empty)}; menu: ${await p.evaluate(() => [...document.querySelectorAll('[id^=context-menu-]')].map((e) => e.id).slice(0, 8).join(', '))})`);
+  if (tidy) await tidy.click();
+  await sleep(900);
+  const tidied = await p.evaluate((key) => document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${key}"]`).getAttribute('d'), key);
+  expect(tidied === laidOut, 'Tidy up edges: the edge as laid out again');
   console.log('page errors:', errors.slice(0, 5));
   await b.close().catch(() => {}); edge.kill();
   console.log(`${fails} failures`);

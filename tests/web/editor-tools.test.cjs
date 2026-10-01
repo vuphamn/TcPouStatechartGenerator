@@ -260,6 +260,15 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
     }, ID);
   };
   const onState = await occurrences('machineState := E_S.S_RUN');
+  // (readable: the word in its own colour, not a <mark>'s black; a frame, hardly a fill)
+  const look = await p.evaluate((id) => {
+    const m = document.getElementById(id)?.parentElement?.querySelector('mark.word-occurrence');
+    if (!m) return null;
+    const cs = getComputedStyle(m);
+    const alpha = +(cs.backgroundColor.match(/rgba?\([^)]*,\s*([\d.]+)\)/)?.[1] ?? (cs.backgroundColor === 'transparent' ? 0 : 1));
+    return { color: cs.color, parent: getComputedStyle(m.parentElement).color, alpha, outline: cs.outlineStyle };
+  }, ID);
+  expect(!!look && look.color === look.parent && look.color !== 'rgb(0, 0, 0)' && look.alpha <= 0.1 && look.outline === 'solid', `the uses marked readably: ${JSON.stringify(look)}`);
   const onKeyword = await occurrences('THEN');
   expect(onState.uses >= 3 && onState.marks.length === onState.uses && onState.marks.every((t) => /^machineState$/i.test(t)) && onKeyword.marks.length === 0, `the caret in machineState: ${onState.marks.length} of its ${onState.uses} uses marked; in THEN: ${onKeyword.marks.length}`);
 

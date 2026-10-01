@@ -10,6 +10,13 @@ export interface MermaidLiveOptions {
   theme?: MermaidTheme;
 }
 
+/** An init directive without its securityLevel (mermaid.live asks before it drops one: "Removing securityLevel …") */
+export function withoutSecurityLevel(init: string): string {
+  return init
+    .replace(/\s*['"]?securityLevel['"]?\s*:\s*['"][^'"]*['"]\s*,?/gi, '')
+    .replace(/,(\s*\})/g, '$1');
+}
+
 export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): string {
   const layout = options?.layout ?? 'elk';
   const curve = options?.curve ?? 'basis';
@@ -33,15 +40,11 @@ export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): s
       } else {
         updated = updated.replace(/%%\{init:\s*\{/, `%%{init: {'layout': '${layout}', `);
       }
-      if (/['"]?securityLevel['"]?\s*:/i.test(updated)) {
-        updated = updated.replace(/(['"]?securityLevel['"]?\s*:\s*['"])[^'"]+(['"])/i, `$1loose$2`);
-      } else {
-        updated = updated.replace(/%%\{init:\s*\{/, `%%{init: {'securityLevel': 'loose', `);
-      }
-      return updated;
+      // (no securityLevel: mermaid.live takes "loose" out itself, asking first in a dialog each time)
+      return withoutSecurityLevel(updated);
     });
   } else {
-    codeWithTheme = `%%{init: {'theme': '${theme}', 'layout': '${layout}', 'securityLevel': 'loose', 'flowchart': {'defaultRenderer': '${layout}', 'curve': '${curve}', 'htmlLabels': true}}}%%\n${codeWithTheme}`;
+    codeWithTheme = `%%{init: {'theme': '${theme}', 'layout': '${layout}', 'flowchart': {'defaultRenderer': '${layout}', 'curve': '${curve}', 'htmlLabels': true}}}%%\n${codeWithTheme}`;
   }
 
   const state = {
@@ -49,7 +52,6 @@ export function getMermaidLiveUrl(code: string, options?: MermaidLiveOptions): s
     mermaid: JSON.stringify({
       theme,
       layout,
-      securityLevel: 'loose',
       flowchart: { curve, htmlLabels: true },
       state: { useMaxWidth: false },
     }),

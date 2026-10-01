@@ -10,6 +10,8 @@ import {
   ExternalLink,
   Bookmark,
   ChevronRight,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { openTypeHandlerFor } from '../utils/openType.ts';
 
@@ -58,6 +60,15 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
 }) => {
   const [bookmarksOpen, setBookmarksOpen] = React.useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // The editor right-clicked (it has the focus then): its own Undo / Redo, as Ctrl+Z / Ctrl+Y in it
+  const editorRef = useRef<HTMLTextAreaElement | null>(document.activeElement instanceof HTMLTextAreaElement ? document.activeElement : null);
+  const editStep = (cmd: 'undo' | 'redo') => {
+    const ta = editorRef.current;
+    onClose();
+    if (!ta) return;
+    ta.focus();
+    ta.ownerDocument.execCommand(cmd);
+  };
   const [copied, setCopied] = React.useState(false);
 
   // Close when clicking outside or pressing Escape
@@ -91,7 +102,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
   const opener = openTypeHandlerFor(typeTarget?.type);
   const openType = opener && typeTarget ? typeTarget.type : null;
   const member = typeTarget?.member;
-  const menuHeight = (openType ? 320 : 220) + (extraItems?.length ?? 0) * 28 + (bookmarks ? 30 : 0);
+  const menuHeight = (openType ? 320 : 220) + (extraItems?.length ?? 0) * 28 + (bookmarks ? 30 : 0) + (editorRef.current ? 64 : 0);
   const clampedX = Math.max(8, Math.min(window.innerWidth - menuWidth - 8, x));
   const clampedY = Math.max(8, Math.min(window.innerHeight - menuHeight - 8, y));
 
@@ -147,6 +158,33 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
       )}
 
       <div className="py-1">
+        {/* Undo / Redo: the editor's own (its typing, a snippet, a rename in place) */}
+        {editorRef.current && (
+          <>
+            {([
+              ['undo', 'Undo', 'Ctrl+Z', Undo2, "Undo the last change in this editor (its own undo: the canvas' edits are undone there)"],
+              ['redo', 'Redo', 'Ctrl+Y', Redo2, 'Redo the change undone last in this editor'],
+            ] as const).map(([cmd, label, keys, Icon, title]) => (
+              <button
+                key={cmd}
+                id={`editor-menu-${cmd}`}
+                type="button"
+                role="menuitem"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => editStep(cmd)}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-left text-slate-200 hover:text-white hover:bg-slate-800 cursor-pointer"
+                title={title}
+              >
+                <span className="flex items-center gap-2">
+                  <Icon className="w-4 h-4 text-slate-400" />
+                  <span className="font-medium text-[11px]">{label}</span>
+                </span>
+                <span className="text-[10px] font-mono text-slate-400 px-1 py-0.5 rounded bg-slate-800/80">{keys}</span>
+              </button>
+            ))}
+            <div className="my-1 border-t border-slate-800" />
+          </>
+        )}
         {/* Go to Definition (F12) */}
         <button
           type="button"

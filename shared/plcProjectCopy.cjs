@@ -64,6 +64,47 @@ function writeCopy(archives, dir, meta) {
   return { ws, manifest };
 }
 
+/**
+ * The project's source files that differ between the PLC's version (its archives, unpacked into a folder of its own
+ * for the comparison) and the local copy: [{ path, plc, local }] ('' where a side has no such file), the first 60 and
+ * 4 MB of them; more: how many were left out. Shown before Override / Keep local
+ */
+const COMPARED = /\.(TcPOU|TcDUT|TcGVL|TcIO|TcTTO|TcTLO|plcproj|tsproj|xti)$/i;
+function compareWithPlc(archives, dir) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-plc-compare-'));
+  try {
+    writeWorkspace(archives, [], tmp);
+    const read = (root, rel) => {
+      try {
+        const t = fs.readFileSync(path.join(root, rel), 'utf8');
+        return t.charCodeAt(0) === 0xfeff ? t.slice(1) : t;
+      } catch {
+        return '';
+      }
+    };
+    const rels = [...new Set([...filesIn(tmp), ...filesIn(dir)])].filter((r) => COMPARED.test(r)).sort();
+    const compare = [];
+    let size = 0;
+    let more = 0;
+    for (const rel of rels) {
+      const plc = read(tmp, rel);
+      const local = read(dir, rel);
+      if (plc.replace(/\r\n/g, '\n') === local.replace(/\r\n/g, '\n')) continue;
+      if (compare.length >= 60 || size + plc.length + local.length > 4_000_000) {
+        more++;
+        continue;
+      }
+      size += plc.length + local.length;
+      compare.push({ path: rel, plc, local });
+    }
+    return { compare, compareMore: more };
+  } catch (err) {
+    return { compare: [], compareMore: 0, compareError: err.message };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 const describe = (dir, ws) => ({ dir, tsproj: ws?.tsproj ?? null, plcProjects: (ws?.plcProjects ?? []).map((p) => ({ name: p.name, dir: p.dir, plcproj: p.plcproj })) });
 
 /** A copy's .tsproj and PLC projects (already on disk) */
@@ -120,7 +161,7 @@ async function syncPlcProject(read, opts = {}) {
     const here = { project, dir, ...projectOf(dir), changes, downloaded: manifest?.downloaded ?? null };
     if (manifest?.hash === hash) return { status: 'current', ...here };
     if (opts.choice === 'keep') return { status: 'kept', ...here };
-    return { status: 'differs', ...here };
+    return { status: 'differs', ...here, ...compareWithPlc(archives, dir) };
   } catch (err) {
     return { error: `${project}: could not write ${dir} (${err.message})` };
   }

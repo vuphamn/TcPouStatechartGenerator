@@ -43,6 +43,8 @@ export interface TextPromptRequest {
   preview?: (value: string) => string[];
   /** The scopes offered when declaring */
   declareScopes?: NewVariable['scope'][];
+  /** A look at something first (the dialog stays open), under the details */
+  sideAction?: { id: string; label: string; title?: string; run: () => void };
   /** Another way to go, left of the buttons (the dialog closes first) */
   altAction?: { id: string; label: string; title?: string; run: () => void };
   /** The Cancel button's label, and what closing without a choice does (Cancel, Esc, ×, a click outside) */
@@ -261,6 +263,11 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
                 </li>
               ))}
             </ul>
+          )}
+          {request.sideAction && (
+            <button id={request.sideAction.id} type="button" onClick={request.sideAction.run} title={request.sideAction.title} className="text-sky-300 hover:text-sky-100 underline underline-offset-2">
+              {request.sideAction.label}
+            </button>
           )}
           {!request.confirmOnly && (
             <div className="relative flex gap-1.5 items-start">

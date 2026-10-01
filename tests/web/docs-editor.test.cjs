@@ -54,7 +54,7 @@ const ID = 'state-documentation-textarea';
   await h.sleep(150);
   let b = await band();
   expect(b && Math.abs(b.top - (b.pad + b.line)) <= 2 && Math.abs(b.height - b.line) <= 2, `line 2: one row high at row 2 (top ${b?.top}, height ${b?.height}, row ${b?.line})`);
-  expect(/bg-slate-600/.test(b?.cls ?? ''), 'bright while focused');
+  expect(/caret-band/.test(b?.cls ?? '') && !/is-blurred/.test(b?.cls ?? ''), 'bright while focused');
   await caretToLine(3);
   await h.sleep(150);
   b = await band();
@@ -85,7 +85,7 @@ const ID = 'state-documentation-textarea';
   // Blurred: dimmer
   await page.evaluate(() => document.activeElement.blur());
   await h.sleep(150);
-  expect(/bg-slate-700/.test((await band())?.cls ?? ''), 'dimmer when not focused');
+  expect(/is-blurred/.test((await band())?.cls ?? ''), 'dimmer when not focused');
 
   // Zoom (Ctrl+wheel), shared with the code editors
   const r = await page.evaluate((id) => { const x = document.getElementById(id).getBoundingClientRect(); return { x: x.x + x.width / 2, y: x.y + x.height / 2 }; }, ID);

@@ -14,7 +14,7 @@ import { declarationVariables, declareInDeclaration, guessType, undeclaredNames 
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { markersFor } from '../utils/variableLint.ts';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
-import { DiffDialog, SHOW_EDITOR_DIFF_EVENT } from './DiffDialog.tsx';
+import { DiffDialog, SHOW_EDITOR_DIFF_EVENT, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 
@@ -55,6 +55,13 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   const dirty = decl !== baseRef.current.decl || impl !== baseRef.current.impl;
   // Its changes, line by line (its Diff button; the "*" on its tab)
   const [diffOpen, setDiffOpen] = useState(false);
+  // (its file changed since saved: the Diff shows that when this editor has no edits of its own)
+  const fileChanged = useFileChanged('pou');
+  // (its Diff, and the header's All changes)
+  const diffParts = [
+    { name: 'Declaration', before: baseRef.current.decl, after: decl, apply: setDecl },
+    { name: 'Implementation', before: baseRef.current.impl, after: impl, apply: setImpl },
+  ];
   useEffect(() => {
     const on = (e: Event) => {
       if ((e as CustomEvent<{ editor: string }>).detail?.editor === 'pou') setDiffOpen(true);
@@ -362,7 +369,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       .filter((b) => b.startLine <= line && line <= b.endLine)
       .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0];
 
-  usePendingSave('pou-editor', `the POU Editor (${pouFileName})`, dirty, () => save());
+  usePendingSave('pou-editor', `the POU Editor (${pouFileName})`, dirty, () => save(), () => diffParts);
 
   const onEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -476,17 +483,14 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           <button id="pou-editor-save" onClick={save} disabled={!dirty} className="flex items-center gap-1 px-2.5 py-1 rounded bg-sky-700 hover:bg-sky-600 text-white font-semibold disabled:opacity-40" title="Write the declaration and the body into the .TcPOU (Ctrl+S)">
             <Save className="w-3.5 h-3.5" /> Save to POU
           </button>
-          <button type="button" id="pou-editor-diff" onClick={() => setDiffOpen(true)} disabled={!(dirty)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title="This editor's edits, line by line (against what is in the file now)"><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
+          <button type="button" id="pou-editor-diff" onClick={() => (((dirty)) ? setDiffOpen(true) : showFileDiff('pou'))} disabled={!((dirty) || fileChanged)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title={((dirty)) ? "This editor's edits, line by line (against what is in the POU now)" : "The POU's changes since it was saved (the canvas' edits too); this editor has none of its own"}><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
           <SaveToFileButton id="pou-editor-save-file" what="the POU" />
           {diffOpen && (
             <DiffDialog
               title={`${pouFileName}: the POU Editor's edits`}
               beforeLabel="in the POU"
               afterLabel="in the editor"
-              parts={[
-                { name: 'Declaration', before: baseRef.current.decl, after: decl },
-                { name: 'Implementation', before: baseRef.current.impl, after: impl },
-              ]}
+              parts={diffParts}
               onClose={() => setDiffOpen(false)}
             />
           )}

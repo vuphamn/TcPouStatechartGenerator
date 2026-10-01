@@ -91,11 +91,23 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(400);
   const named = await p.$$eval('#bookmarks-dialog .bookmark-note', (r) => r.map((x) => x.textContent.trim()));
   expect(named.includes('start here'), `named: ${named.join(', ')}`);
+  // Shared: Export and Import; a file imported adds its bookmarks
+  expect(!!(await p.$('#bookmarks-export')) && !!(await p.$('#bookmarks-import')), 'the list: Export and Import');
+  const upload = require('path').join(h.OUT, 'shared.bookmarks.json');
+  require('fs').mkdirSync(h.OUT, { recursive: true });
+  require('fs').writeFileSync(upload, JSON.stringify({ format: 'kss-bookmarks', version: 1, pou: 'X', states: ['TABLEMANAGER_HOMMING'], lines: [], notes: { 'state:TABLEMANAGER_HOMMING': 'shared' } }));
+  const input = await p.$('#bookmarks-import-file');
+  if (input) await input.uploadFile(upload);
+  await h.sleep(800);
+  const said = await p.$eval('#bookmarks-said', (e) => e.textContent).catch(() => '');
+  const rowsNow = await p.$$eval('#bookmarks-dialog .bookmark-row', (r) => r.length);
+  expect(/Imported: 1 bookmark added/.test(said) && rowsNow === rows.length + 1, `Import: ${said} (${rowsNow} now)`);
   // Next (its button, Alt+F2): through every section in the list's order
   await p.click('#bookmarks-next');
   await h.sleep(800);
   const first = await p.$eval('#status-message', (e) => e.textContent).catch(() => '');
-  expect(/Bookmark 1 of \d+: start here/.test(first), `Next: the first, by its name (${first})`);
+  // (the state imported comes first: the states before the lines)
+  expect(/Bookmark 1 of \d+: shared/.test(first), `Next: the first, by its name (${first})`);
   await p.keyboard.press('Escape');
   await h.sleep(300);
   await p.keyboard.down('Alt'); await p.keyboard.press('F2'); await p.keyboard.up('Alt');
@@ -110,6 +122,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.click('#dock-tab-method');
   await h.sleep(600);
   expect(!(await p.$('#dock-tab-dirty-method')), 'no edit yet: no "*" on the Method Editor tab');
+  expect(await p.$eval('#method-diff-btn', (b) => b.disabled), 'no edit yet (nor of its file): its Diff disabled');
   await p.evaluate(() => {
     const ta = document.getElementById('method-implementation-editor');
     ta.focus();

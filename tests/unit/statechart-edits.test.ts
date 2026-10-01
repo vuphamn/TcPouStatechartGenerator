@@ -10,7 +10,7 @@ import { enumMembers, lintStateMachine } from '../../src/utils/stateMachineLint.
 import { removeEnumMember } from '../../src/utils/stateCopyDelete.ts';
 import {
   enumMarksOf, setEnumMark, addChoice, addCompletionTransition, addEnumMemberIn, addExceptionTransition, addForkJoinRegions, addStateDescription, regionVariables, compositeOf, describeName, dropEmptyComposites, enumComposites, initialStateOf,
-  isFinalState, setFinalState, setInitialState, wrapInComposite, compositeColorsOf, setCompositeColor, groupInComposite, moveToComposite, ungroupComposite,
+  isFinalState, setFinalState, setInitialState, wrapInComposite, compositeColorsOf, setCompositeColor, groupInComposite, moveToComposite, ungroupComposite, nestComposite,
 } from '../../src/utils/statechartEdits.ts';
 
 let fails = 0;
@@ -232,6 +232,15 @@ expect(lintKeys(noFinal, fj.dut).includes('region-no-final:S_B.regionB'), 'no (*
   const plain = ungroupComposite(g.dut, 'Work')!;
   expect(/\tS_A := 0,\r\n\tS_B, \/\/ busy @final\r\n\tS_D := 7, \(\* last \*\)\r\n\tS_C\r\n\);/.test(plain), `ungrouped: the lines as they were around it (${JSON.stringify(plain.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
   expect(ungroupComposite(g.dut, 'Nope') === null, 'no such composite: null');
+
+  // A composite dragged out of the one it is in (after it), and into one again (last in it), its states with it
+  const parentOf = (dut: string, name: string) => enumComposites(dut).find((c) => c.name === name)?.parent ?? null;
+  const out = nestComposite(nested.dut, 'Inner', null)!;
+  const innerState = enumComposites(nested.dut).find((c) => c.name === 'Inner')!.members[0];
+  expect(!!out && parentOf(out, 'Inner') === null && compositeOf(out, innerState) === 'Inner', `Inner out of Work: top level, its state with it (${out && enumComposites(out).map((c) => `${c.name}:${c.parent}`).join()})`);
+  const back = nestComposite(out, 'Inner', 'Work')!;
+  expect(!!back && parentOf(back, 'Inner') === 'Work' && compositeOf(back, innerState) === 'Inner', `Inner into Work again (${back && enumComposites(back).map((c) => `${c.name}:${c.parent}`).join()})`);
+  expect(nestComposite(nested.dut, 'Inner', 'Work') === null && nestComposite(nested.dut, 'Work', 'Inner') === null && nestComposite(g.dut, 'Work', null) === null, 'already in it, into its own, nowhere to go out of: no change');
 }
 
 console.log(`${fails} failures`);

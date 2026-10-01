@@ -7,10 +7,19 @@ import { useEffect, useRef, useState } from 'react';
  * (its root carries data-save-scope with its id).
  */
 
+/** A part of an editor's edits, as the Diff shows it (its text in the POU, in the editor; apply: the editor's text set) */
+export interface PendingPart {
+  name: string;
+  before: string;
+  after: string;
+  apply?: (after: string) => void;
+}
+
 interface PendingSave {
   label: string;
   dirty: () => boolean;
   save: () => void;
+  parts?: () => PendingPart[];
 }
 
 const entries = new Map<string, PendingSave>();
@@ -28,12 +37,15 @@ if (typeof window !== 'undefined') {
   });
 }
 
-/** An editor's edits kept until its Save: registered while it is shown (dirty: whether it has any now) */
-export function usePendingSave(id: string, label: string, dirty: boolean, save: () => void): void {
-  const ref = useRef({ label, dirty, save });
-  ref.current = { label, dirty, save };
+/**
+ * An editor's edits kept until its Save: registered while it is shown (dirty: whether it has any now; parts: its
+ * edits as the Diff shows them, for the header's All changes)
+ */
+export function usePendingSave(id: string, label: string, dirty: boolean, save: () => void, parts?: () => PendingPart[]): void {
+  const ref = useRef({ label, dirty, save, parts });
+  ref.current = { label, dirty, save, parts };
   useEffect(() => {
-    entries.set(id, { get label() { return ref.current.label; }, dirty: () => ref.current.dirty, save: () => ref.current.save() });
+    entries.set(id, { get label() { return ref.current.label; }, dirty: () => ref.current.dirty, save: () => ref.current.save(), parts: () => ref.current.parts?.() ?? [] });
     changed();
     return () => {
       entries.delete(id);
@@ -50,6 +62,11 @@ export function usePendingSave(id: string, label: string, dirty: boolean, save: 
 export function pendingEditors(): { id: string; label: string; active: boolean }[] {
   const list = [...entries].filter(([, e]) => e.dirty()).map(([id, e]) => ({ id, label: e.label, active: id === lastActive }));
   return list.sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+/** The edits of the editors that have some, by editor (their parts as the Diff shows them) */
+export function pendingParts(): { label: string; parts: PendingPart[] }[] {
+  return pendingEditors().map((e) => ({ label: e.label, parts: entries.get(e.id)?.parts?.() ?? [] }));
 }
 
 /** Their edits put into the POU (the editor used last only, or all); how many */

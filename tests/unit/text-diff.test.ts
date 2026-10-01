@@ -1,7 +1,7 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
 // The editors' Diff (src/utils/textDiff.ts): lines put in, taken out, changed (one out, one in), their line numbers
 // before and after; the hunks: the changes with 3 lines around them, a gap marked between them
-import { diffCounts, diffHunks, diffLines } from '../../src/utils/textDiff.ts';
+import { diffChanges, diffCounts, diffHunks, diffLines, undoChange } from '../../src/utils/textDiff.ts';
 
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -24,6 +24,15 @@ const gaps = hunks.filter((h) => h === null).length;
 expect(gaps >= 1 && hunks.filter((h) => h && h.type === 'same').length <= 3 * 6, `hunks: the changes with their context, ${gaps} gaps`);
 expect(diffLines('a\nb', 'a\nb').every((r) => r.type === 'same'), 'no change: all the same');
 expect(diffLines('', 'x').some((r) => r.type === 'add' && r.text === 'x'), 'from nothing: put in');
+
+// The changes one by one (Diff's Previous / Next), each undone on its own (its Undo change), the line ends kept
+const changes = diffChanges(rows);
+expect(changes.length === 3, `3 changes (line 3, line 15, line 21): ${changes.length}`);
+const no3 = undoChange(rows, changes[0], '\r\n');
+expect(no3.includes('line 3\r\n') && !no3.includes('line three') && !no3.includes('line 15\r\n') && no3.includes('line 21'), 'the first undone: line 3 back, the others kept');
+const no15 = undoChange(rows, changes[1], '\r\n');
+expect(no15.includes('line 14\r\nline 15\r\nline 16') && no15.includes('line three'), 'the second undone: line 15 back where it was');
+expect(diffChanges(diffLines(before, undoChange(rows, changes[2], '\r\n'))).length === 2, 'the third undone: two changes left');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

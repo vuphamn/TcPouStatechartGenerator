@@ -155,7 +155,7 @@ export const ZoomableTextArea = React.forwardRef<HTMLTextAreaElement, ZoomableTe
         {band && (
           <div
             id={`${id}-caret-line`}
-            className={`absolute left-0 right-0 pointer-events-none z-0 border-y ${focused ? 'bg-slate-600/30 border-slate-500/60' : 'bg-slate-700/15 border-slate-700/60'}`}
+            className={`caret-band absolute left-0 right-0 pointer-events-none z-0 ${focused ? '' : 'is-blurred'}`}
             style={{ top: band.top - scrollTop, height: band.height }}
           />
         )}

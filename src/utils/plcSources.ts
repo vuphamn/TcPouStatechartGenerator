@@ -37,6 +37,9 @@ export interface PlcCopyResult {
   plcProjects?: { name: string; dir: string; plcproj: string }[];
   /** Its files edited here since the download (null: not known, a folder not downloaded here) */
   changes?: string[] | null;
+  /** differs: the source files not the same on the PLC and here (the PLC's text, the local one); more: left out */
+  compare?: { path: string; plc: string; local: string }[];
+  compareMore?: number;
   downloaded?: string | null;
   error?: string;
 }

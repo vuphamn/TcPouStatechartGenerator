@@ -230,6 +230,12 @@ export interface MermaidViewerHandle {
   getActiveSvgElement: () => SVGSVGElement | null;
   /** Several states lined up (their left / centre / right / top / middle / bottom edge) or spread evenly */
   arrangeStates: (ids: string[], mode: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'distribute-h' | 'distribute-v') => void;
+  /**
+   * Tidy up the edges: the states left where they are, each edge's own route (its waypoints, moved ends, moved label)
+   * dropped, so it is drawn again from its states' places (Dagre: the ends on a side spread, the labels apart). How
+   * many edges had a route of their own
+   */
+  tidyEdges: () => number;
 }
 
 export interface MermaidViewerProps {
@@ -259,6 +265,8 @@ export interface MermaidViewerProps {
   problemMarkers?: Record<string, 'error' | 'warning'>;
   /** Bookmarked states: a badge at their top-left corner */
   bookmarkedStates?: string[];
+  /** The states whose code changed since the POU was saved (an amber dot on them, the minimap and search) */
+  changedStates?: string[];
   /** A state's tooltip (its entry / do / exit actions), by state */
   stateTooltips?: Record<string, string>;
   /** The Problems tab's findings in a state's code (their messages, the names they flag), by state */
@@ -309,6 +317,8 @@ export interface MermaidViewerProps {
   history?: { canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void };
   /** A state's node dragged and released: the composites (cluster labels) under the pointer, smallest first */
   onStateDropped?: (stateId: string, composites: string[], altKey: boolean) => void;
+  /** A composite dragged by its title and released: the composite under the pointer (not itself or one of its own), or null */
+  onCompositeDropped?: (composite: string, into: string | null) => void;
   /** Move this (new) state's node to that point of the screen, once the chart has it */
   placeRequest?: { stateId: string; x: number; y: number; nonce: number } | null;
   /** Keys on the canvas (not while typing or with a menu / dialog open), with the selection; true: handled */
@@ -1653,6 +1663,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onEditTransitionCondition,
     problemMarkers,
     bookmarkedStates,
+    changedStates,
     stateTooltips,
     stateProblems,
     canvasBanner,
@@ -1678,6 +1689,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onCanvasKey,
     onPaletteElement,
     onStateDropped,
+    onCompositeDropped,
     history,
     placeRequest = null,
     onStyleChange: onStyleChangeProp,
@@ -3857,6 +3869,39 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     });
   }, [renderedSvg, bookmarkKey]);
 
+  // Changed since saved: an amber dot at the top-right corner of each such state
+  const changedKey = (changedStates ?? []).join('|');
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('g.state-changed-marker').forEach((el) => el.remove());
+    const marked = new Set(changedKey ? changedKey.split('|') : []);
+    if (!marked.size) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    svg.querySelectorAll('g.node[data-state-id]').forEach((node) => {
+      const id = node.getAttribute('data-state-id') || '';
+      if (!marked.has(id)) return;
+      let b: DOMRect;
+      try {
+        b = (node as SVGGElement).getBBox();
+      } catch {
+        return;
+      }
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', 'state-changed-marker');
+      g.setAttribute('data-state-id', id);
+      g.setAttribute('transform', `translate(${b.x + b.width - 7}, ${b.y + 7})`);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = 'Its code changed since the POU was saved (the header\'s Diff shows how)';
+      const dot = document.createElementNS(ns, 'circle');
+      dot.setAttribute('r', '4');
+      // (inline and important: the theme's ".node circle" fill would paint it over)
+      dot.setAttribute('style', 'fill:#f59e0b !important;stroke:#fde68a !important;stroke-width:1px !important;');
+      g.append(title, dot);
+      node.appendChild(g);
+    });
+  }, [renderedSvg, changedKey]);
+
   // Custom transition line styles, applied to the rendered paths (resolved like a click on the path)
   useEffect(() => {
     const svg = renderedSvg;
@@ -4084,11 +4129,22 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const groupInitialRef = useRef<Record<string, { x: number; y: number }> | null>(null);
   // (a composite dragged by its title: its name; its release is no drop of a state into or out of a composite)
   const compositeDragRef = useRef<string | null>(null);
+  // (the dragged composite's own sub-composites: not where it can be dropped)
+  const compositeDragInnerRef = useRef<string[]>([]);
   // (Snap each to the grid, the selection's menu: each of them snapped when moved, not only the one dragged)
   const groupSnapEachRef = useRef(false);
   groupSnapEachRef.current = !!groupSnapEach;
   // Several states lined up / spread evenly: their offsets changed, the diagram re-drawn, the positions kept
   const arrangeRef = useRef<(ids: string[], mode: string) => void>(() => {});
+  const tidyRef = useRef<() => number>(() => 0);
+  tidyRef.current = () => {
+    const svg = getDiagramSvg();
+    const n = Object.keys(currentEdgeOffsetsRef.current).length;
+    currentEdgeOffsetsRef.current = {};
+    setEdgeOffsets({});
+    if (svg) applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, {}, null, selectedEdge?.id, layoutEngine, flowchartCurve);
+    return n;
+  };
   arrangeRef.current = (ids, mode) => {
     const svg = getDiagramSvg();
     if (!svg || ids.length < 2) return;
@@ -4384,6 +4440,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (name && lead && leadEl) {
         e.preventDefault();
         compositeDragRef.current = name;
+        compositeDragInnerRef.current = inner;
         isDraggingNodeRef.current = true;
         draggedNodeIdRef.current = lead;
         draggedNodeElRef.current = leadEl;
@@ -5128,7 +5185,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         // (a composite dragged by its title: moved, not dropped into another one)
         if (compositeDragRef.current) {
           getDiagramSvg()?.querySelectorAll('.dragging-composite').forEach((c) => c.classList.remove('dragging-composite'));
+          const dragged = compositeDragRef.current;
+          const own = new Set([dragged, ...compositeDragInnerRef.current]);
           compositeDragRef.current = null;
+          // (the composite it was released in: nested there, or out of the one it was in)
+          if (wasMoved) onCompositeDropped?.(dragged, compositesAt(e.clientX, e.clientY).find((c) => !own.has(c)) ?? null);
         } else onStateDropped?.(stateId, dropComposites, e.altKey);
         return;
       }
@@ -5840,6 +5901,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       printVisiblePdf: () => handlePrintVisiblePdf(),
       getActiveSvgElement: () => getActiveSvgElement(),
       arrangeStates: (ids, mode) => arrangeRef.current(ids, mode),
+      tidyEdges: () => tidyRef.current(),
     }),
     [
       panToState,
@@ -7063,6 +7125,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 availableStatesCount={availableStates.length}
                 canvasPositions={canvasNodePositions}
                 bookmarkedStateIds={bookmarkedStates}
+                changedStateIds={changedStates}
                 multiSelection={multiSelection}
                 onSelectState={(id) => {
                   handleSelectState(id);
@@ -7452,6 +7515,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 onPrevMatch={goToPrevMatch}
                 availableStates={availableStates}
                 availableEdges={availableEdges}
+                changedStateIds={changedStates}
                 onSelectState={(id, label) => {
                   handleSelectState(id, label);
                 }}

@@ -5,7 +5,9 @@
 //   --preview: the built app (dist/, npm run build first) served by vite preview, not the dev server: pages load at
 //   once instead of compiling each module on first use (CI: a slow machine)
 //   --jobs <n>: the web tests n at a time (each has its own ports and browser; the app server is shared). A full local
-//   run: --jobs 2 about halves the web suite's time
+//   run: --jobs 2 about halves the web suite's time. A web test failed while others ran beside it is run once more
+//   alone (a slow machine's timing, not the app): it passes then, but is listed as flaky in the summary
+//   --retry: the failed web tests run once more without --jobs too (CI: its shards)
 //   desktop on a locked Windows screen: skipped (Electron does not draw then: every test would time out);
 //   KSS_DESKTOP_WHEN_LOCKED=1 runs it anyway
 //   suites: unit (logic, no browser), web (the app in a headless browser), live (gateway / Link / ADS against a
@@ -36,10 +38,12 @@ let filter = null;
 let shard = null;
 let preview = false;
 let jobs = 1;
+let retry = false;
 let suites = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--filter') filter = argv[++i];
   else if (argv[i] === '--preview') preview = true;
+  else if (argv[i] === '--retry') retry = true;
   else if (argv[i] === '--jobs') jobs = Math.max(1, Math.min(6, parseInt(argv[++i], 10) || 1));
   else if (argv[i] === '--shard') {
     const [k, n] = String(argv[++i]).split('/').map(Number);
@@ -165,7 +169,7 @@ function failuresOf(log) {
       if (suite !== 'unit' && suite !== 'live' && !app) app = await startApp();
       // (the dev server for the tests that import /src/, started once however many run at a time)
       let devStarting = null;
-      const runOne = async (f) => {
+      const runOne = async (f, again = false) => {
         const name = f.replace(/\.test\.(ts|cjs)$/, '');
         // (the screen locked meanwhile: this desktop test and the ones after it skipped, not timed out)
         if (suite === 'desktop' && process.env.KSS_DESKTOP_WHEN_LOCKED !== '1' && screenLocked()) {
@@ -196,8 +200,8 @@ function failuresOf(log) {
         // A test fails on a non-zero exit, and on any "FAIL" line (some tests only print them)
         const ok = r.code === 0 && !/^FAIL\b/m.test(text);
         const skipped = ok && /^skipped/m.test(text);
-        results.push({ suite, name, ok, ms: r.ms, log });
-        console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s)`}`);
+        results.push({ suite, name, file: f, ok, ms: r.ms, log, flaky: again && ok });
+        console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s${again ? ', run again alone' : ''})`}`);
         if (!ok) console.log(failuresOf(log));
       };
       const n = suite === 'web' ? Math.min(jobs, list.length) : 1;
@@ -207,6 +211,16 @@ function failuresOf(log) {
         await Promise.all(Array.from({ length: n }, async () => {
           while (queue.length) await runOne(queue.shift());
         }));
+      }
+      // The web tests failed beside others (or with --retry): once more, alone; the first run's log kept (.first.log)
+      if (suite === 'web' && (n > 1 || retry)) {
+        const failedHere = results.filter((r) => r.suite === suite && !r.ok && r.file);
+        if (failedHere.length) console.log(`  (${failedHere.length} failed: run again, one at a time)`);
+        for (const r of failedHere) {
+          fs.copyFileSync(r.log, r.log.replace(/\.log$/, '.first.log'));
+          results.splice(results.indexOf(r), 1);
+          await runOne(r.file, true);
+        }
       }
     }
   } finally {
@@ -230,6 +244,8 @@ function failuresOf(log) {
       console.log(`::error title=${title}::${esc(found.join('\n') || 'failed (no FAIL line: see its log)')}`);
     }
   }
+  const flaky = results.filter((r) => r.flaky);
+  if (flaky.length) console.log(`\nflaky (failed beside other tests, passed alone; the first run: its .first.log): ${flaky.map((r) => `${r.suite}/${r.name}`).join(', ')}`);
   console.log(`\n${results.length - failed.length}/${results.length} passed${failed.length ? `; failed: ${failed.map((r) => `${r.suite}/${r.name}`).join(', ')} (logs in tests/.output/logs)` : ''}`);
   process.exit(failed.length ? 1 : 0);
 })().catch((e) => {

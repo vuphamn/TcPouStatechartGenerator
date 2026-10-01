@@ -186,6 +186,44 @@ export function listBookmarks(pou: string, codeOf: (method: string) => string | 
   return out;
 }
 
+/** The POU's bookmarks as a file to share (Export in the Bookmarks list): kss-bookmarks, version 1 */
+export function exportBookmarks(pou: string): string {
+  const b = getBookmarks(pou);
+  return JSON.stringify({ format: 'kss-bookmarks', version: 1, pou: (pou || 'POU').replace(/\.TcPOU$/i, ''), states: b.states, lines: b.lines, notes: b.notes ?? {} }, null, 1);
+}
+
+/**
+ * A bookmarks file (Export's) put in with the POU's own: its states and lines added (the same ones once), its names
+ * taken (over the ones here). { added } or { error }
+ */
+export function importBookmarks(pou: string, text: string): { added: number; error?: undefined } | { error: string; added?: undefined } {
+  let raw: { format?: string; states?: unknown; lines?: unknown; notes?: unknown };
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { error: 'Not a bookmarks file (not JSON)' };
+  }
+  if (raw?.format !== 'kss-bookmarks' || !Array.isArray(raw.states) || !Array.isArray(raw.lines)) return { error: 'Not a bookmarks file (Export in the Bookmarks list writes one)' };
+  const b = getBookmarks(pou);
+  const states = [...b.states];
+  const lines = [...b.lines];
+  let added = 0;
+  for (const s of raw.states) if (typeof s === 'string' && /^[A-Za-z_]\w*$/.test(s) && !states.includes(s)) {
+    states.push(s);
+    added++;
+  }
+  for (const l of raw.lines as LineBookmark[]) {
+    if (!l || typeof l.method !== 'string' || typeof l.line !== 'number' || typeof l.text !== 'string') continue;
+    if (lines.some((x) => sameMethod(x.method, l.method) && x.text === l.text)) continue;
+    lines.push({ method: l.method, line: l.line, text: l.text });
+    added++;
+  }
+  const notes = { ...(b.notes ?? {}) };
+  if (raw.notes && typeof raw.notes === 'object') for (const [k, v] of Object.entries(raw.notes as Record<string, unknown>)) if (typeof v === 'string' && v.trim()) notes[k] = v.trim();
+  setBookmarks(pou, { states, lines, notes });
+  return { added };
+}
+
 /** A bookmark named (its note; empty: its name taken off) */
 export function setBookmarkNote(pou: string, key: string, note: string): void {
   const b = getBookmarks(pou);

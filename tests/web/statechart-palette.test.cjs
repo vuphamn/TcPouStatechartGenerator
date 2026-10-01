@@ -174,11 +174,14 @@ const MIME = 'application/x-kss-statechart-element';
   expect(new RegExp(`\\n\\s*${DONE}\\s*,?\\s*// @final`).test(dut), 'the enum: // @final on its line');
 
   // 6. Transition dragged onto NEW_STATE2, then a click on DONE
+  // (each box waited for: Go to State may redraw the chart, slower on CI)
   await goTo(NEW2);
+  await waitFor(() => nodeBox(NEW2));
   b = await nodeBox(NEW2);
   await drop('transition', b.x, b.y);
   expect(!!(await p.$('#connect-mode-hint')), 'connect mode from NEW_STATE2');
   await goTo(DONE);
+  await waitFor(() => nodeBox(DONE));
   const d = await nodeBox(DONE);
   await p.mouse.click(d.x, d.y);
   await answer('bDone');

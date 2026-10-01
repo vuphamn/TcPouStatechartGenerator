@@ -37,7 +37,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.mouse.click(p.x, p.y);
   await sleep(150);
   let c = await cur();
-  expect(c?.line === 5 && c.state === 'focused' && /bg-slate-600/.test(c.cls) && c.num === '5', `click on line 5: current ${c?.line} (${c?.state})`);
+  expect(c?.line === 5 && c.state === 'focused' && /caret-band/.test(c.cls) && !/is-blurred/.test(c.cls) && c.num === '5', `click on line 5: current ${c?.line} (${c?.state})`);
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
   await sleep(100);

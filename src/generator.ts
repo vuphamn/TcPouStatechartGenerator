@@ -15,6 +15,66 @@ export interface GeneratorOptions {
   priorityFormat?: PriorityFormat;
   /** States' entry / do / exit actions (their first line) shown under their names, as TwinCAT's UML editor does */
   stateActions?: Map<string, { entry?: string; do?: string; exit?: string }>;
+  /** Composites drawn collapsed: one box for the composite and its states (their transitions in and out its own) */
+  collapsedComposites?: string[];
+}
+
+/**
+ * Composites collapsed (a view of the chart; the code is not changed): each one's states, its sub-composites' too,
+ * drawn as one state named after it, in the composite around it if any. The transitions into or out of them go to /
+ * leave that state, the ones within it are left out, a choice's arms from it are plain transitions
+ */
+function collapseComposites(names: string[], transitions: Transition[], states: Set<string>, groups: GroupingResult, finalStates: Set<string>, stateDescriptions?: Map<string, string>) {
+  for (const name of names) {
+    if (!groups.groups.has(name)) continue;
+    // (the composite's own states and its sub-composites')
+    const inside = new Set<string>();
+    const subs = new Set<string>([name]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [child, parent] of groups.groupParent) if (subs.has(parent) && !subs.has(child)) {
+        subs.add(child);
+        grew = true;
+      }
+    }
+    for (const g of subs) for (const s of groups.groups.get(g) ?? []) inside.add(s);
+    if (states.has(name) && !inside.has(name)) continue;
+    const parent = groups.groupParent.get(name);
+    for (const g of subs) {
+      groups.groups.delete(g);
+      groups.groupParent.delete(g);
+      groups.groupFirstState.delete(g);
+      groups.groupLastState.delete(g);
+      groups.markedInitial?.delete(g);
+      groups.groupFinals?.delete(g);
+    }
+    for (const s of inside) {
+      states.delete(s);
+      groups.stateToGroup.delete(s);
+      finalStates.delete(s);
+    }
+    states.add(name);
+    if (parent && groups.groups.has(parent)) {
+      groups.groups.get(parent)!.push(name);
+      groups.stateToGroup.set(name, parent);
+    }
+    if (groups.machineStartState && inside.has(groups.machineStartState)) groups.machineStartState = name;
+    stateDescriptions?.set(name, `collapsed: ${inside.size} states`);
+    const at = (s: string) => (inside.has(s) ? name : s);
+    for (let i = transitions.length - 1; i >= 0; i--) {
+      const t = transitions[i];
+      const from = at(t.from);
+      const to = at(t.to);
+      if (from === name && to === name) {
+        transitions.splice(i, 1);
+        continue;
+      }
+      if (from !== t.from || to !== t.to) {
+        transitions[i] = { ...t, from, to, effectiveFrom: at(t.effectiveFrom), effectiveTo: at(t.effectiveTo), choice: from !== t.from ? undefined : t.choice };
+      }
+    }
+  }
 }
 
 /** A line of code in a node label: # < > as Mermaid entities, short */
@@ -1908,6 +1968,7 @@ export function generateStatechartModel(
     const g = groups.stateToGroup.get(s);
     if (g) groups.groupFinals.set(g, [...(groups.groupFinals.get(g) ?? []), s]);
   }
+  if (options.collapsedComposites?.length) collapseComposites(options.collapsedComposites, transitions, states, groups, finalStates, stateDescriptions);
   extractErrorSinkStates(transitions, groups, collapseErrorSinkEdges);
 
   const edges: ModelEdge[] = [];

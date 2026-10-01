@@ -49,6 +49,16 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
     ],
   },
   {
+    area: 'Diff',
+    keys: [
+      ['F8 / Shift+F8 (Alt+↓ / Alt+↑)', 'The next / previous change'],
+      ['Alt+Home / Alt+End', 'The first / last change'],
+      ['F2, a double-click', 'Edit the line in place (Enter puts it in, Shift+Enter a new line, Esc drops it)'],
+      ['Right-click a change', 'Undo this change, Redo change, Edit this line, First / Previous / Next / Last'],
+      ['Ctrl+wheel, Ctrl+= / Ctrl+-, Ctrl+0', 'Text size (the code editors\' ) / 100%'],
+    ],
+  },
+  {
     area: 'Dialogs',
     keys: [
       ['Enter / Esc', 'Confirm / cancel'],

@@ -448,11 +448,8 @@ export const MermaidMarkdownViewer: React.FC<MermaidMarkdownViewerProps> = ({
                 matchingLineIndices.length > 0 && matchingLineIndices[activeMatchIndex] === idx;
               // The current line: a frame (and, off the search matches, a band), dimmer when the view is not focused
               const isCurrent = currentLine === idx;
-              const currentCls = isCurrent
-                ? focused
-                  ? `ring-1 ring-inset ring-slate-500/60 ${isActiveMatch || isHighlightedMatch ? '' : 'bg-slate-600/30'}`
-                  : `ring-1 ring-inset ring-slate-700/60 ${isActiveMatch || isHighlightedMatch ? '' : 'bg-slate-700/15'}`
-                : '';
+              // (on a search match: the match's own fill kept, the band's lines on it)
+              const currentCls = isCurrent ? `${isActiveMatch || isHighlightedMatch ? 'caret-band-lines' : 'caret-band'} ${focused ? '' : 'is-blurred'}` : '';
 
               return (
                 <div

@@ -803,9 +803,7 @@ export const StructuredTextCodeEditor = forwardRef<
           {caretViewLine !== null && caretViewLine < lineEntries.length && (
             <div
               id={id ? `${id}-caret-line` : undefined}
-              className={`st-caret-line absolute left-0 right-0 pointer-events-none z-0 border-y ${
-                focused ? 'bg-slate-600/30 border-slate-500/60' : 'bg-slate-700/15 border-slate-700/60'
-              }`}
+              className={`st-caret-line caret-band absolute left-0 right-0 pointer-events-none z-0 ${focused ? '' : 'is-blurred'}`}
               style={{ top: `${caretViewLine * lineH + 8 - scrollTop}px`, height: `${lineH}px` }}
             />
           )}

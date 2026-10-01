@@ -1782,21 +1782,22 @@ export function calculateReroutedEdgePath(
   // A dragged end: onto the side of its state it was dropped by, with that side's normal (square to the border)
   const sBox = { cx: sCx, cy: sCy, hw: sHw, hh: sHh };
   const tBox = { cx: tCx, cy: tCy, hw: tHw, hh: tHh };
-  const startAt = { x: startBound.x + (edgeOffset.startDx || 0), y: startBound.y + (edgeOffset.startDy || 0) };
-  const endAt = { x: endBound.x + (edgeOffset.endDx || 0), y: endBound.y + (edgeOffset.endDy || 0) };
   // Dagre: each end keeps its own place on its state (moved with it), so the edges of a state stay apart instead of
-  // all meeting where the line between the two centers crosses the border; a choice's on the diamond itself
+  // all meeting where the line between the two centers crosses the border; a choice's on the diamond itself. A dragged
+  // end is moved from there (where its handle was drawn), so it stays under the pointer
   if (normEngine === 'dagre') {
     const otherOf = (end: 'start' | 'end') => (Math.abs(edgeOffset.x || 0) >= 2 || Math.abs(edgeOffset.y || 0) >= 2 ? { x: actualMidX, y: actualMidY } : end === 'start' ? { x: tCx, y: tCy } : { x: sCx, y: sCy });
-    if (srcNodeEl && !edgeOffset.startDx && !edgeOffset.startDy) {
+    if (srcNodeEl) {
       const rel = { x: origStart.x - (sCx - srcOffset.x), y: origStart.y - (sCy - srcOffset.y) };
       startBound = keepEndOnNode(sBox, rel, otherOf('start'), isDiamondNode(srcNodeEl), 0);
     }
-    if (tgtNodeEl && !edgeOffset.endDx && !edgeOffset.endDy) {
+    if (tgtNodeEl) {
       const rel = { x: origEnd.x - (tCx - tgtOffset.x), y: origEnd.y - (tCy - tgtOffset.y) };
       endBound = keepEndOnNode(tBox, rel, otherOf('end'), isDiamondNode(tgtNodeEl), 3);
     }
   }
+  const startAt = { x: startBound.x + (edgeOffset.startDx || 0), y: startBound.y + (edgeOffset.startDy || 0) };
+  const endAt = { x: endBound.x + (edgeOffset.endDx || 0), y: endBound.y + (edgeOffset.endDy || 0) };
   startBound = srcNodeEl && (edgeOffset.startDx || edgeOffset.startDy) && isAtBox(sBox, startAt) ? attachToBoxSide(sBox, startAt, 0) : normEngine === 'dagre' && !edgeOffset.startDx && !edgeOffset.startDy ? startBound : { ...startBound, ...startAt };
   endBound = tgtNodeEl && (edgeOffset.endDx || edgeOffset.endDy) && isAtBox(tBox, endAt) ? attachToBoxSide(tBox, endAt, 3) : normEngine === 'dagre' && !edgeOffset.endDx && !edgeOffset.endDy ? endBound : { ...endBound, ...endAt };
 

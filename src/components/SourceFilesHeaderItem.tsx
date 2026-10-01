@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save, SaveAll } from 'lucide-react';
+import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save, SaveAll, GitCompare } from 'lucide-react';
 import { usePendingEditors } from '../utils/pendingSaves.ts';
 import { DockMenu, DockMenuItem } from './dock/DockMenu.tsx';
 import { DutMatch } from '../utils/dutMatcher.ts';
@@ -31,14 +31,16 @@ export interface SourceFilesHeaderItemProps {
   /** Write the edited .TcPOU / .TcDUT back (XAE: into the project; desktop / web: to the files), with a menu */
   hostSave?: { dirtyCount: number; onSave: () => void;
     /** Save (the editor used last) / Save All (every editor): their edits into the POU, then the files written */
-    onSaveEditor?: (which: 'active' | 'all') => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
+    onSaveEditor?: (which: 'active' | 'all') => void;
+    /** All changes: every editor's edits and the files' since they were saved, in one Diff */
+    onDiffAll?: () => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
   /** TwinCAT XAE extension: a file with unsaved edits here was changed in XAE */
   hostConflict?: { name: string; onReload: () => void; onKeepMine: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
 /** The header's Save and Save All icons: an editor's edits (the one used last / all of them) into the POU, then the files */
-const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => void; fileCount: number }> = ({ onSaveEditor, fileCount }) => {
+const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => void; fileCount: number; onDiffAll?: () => void }> = ({ onSaveEditor, fileCount, onDiffAll }) => {
   const editors = usePendingEditors();
   const active = editors.find((e) => e.active) ?? editors[0];
   const files = fileCount > 0 ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
@@ -49,6 +51,19 @@ const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => voi
   const hereToSave = editors.length > 0 || fileCount > 0;
   return (
     <>
+      {/* (shown only with something to compare: the header keeps its room) */}
+      {onDiffAll && hereToSave && (
+        <button
+          id="header-diff-all-btn"
+          type="button"
+          disabled={!hereToSave}
+          onClick={onDiffAll}
+          className={btn(hereToSave)}
+          title={hereToSave ? `All changes: ${[editors.length ? `the edits of ${editors.map((e) => e.label).join(', ')}` : '', files ? `the ${files} since saved` : ''].filter(Boolean).join(', and ')}, in one Diff` : 'All changes: none'}
+        >
+          <GitCompare className="w-3.5 h-3.5" />
+        </button>
+      )}
       <button
         id="header-save-btn"
         type="button"
@@ -280,7 +295,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           {hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
         </button>
         {hostSave.onSaveEditor && (
-          <HeaderSaveIcons onSaveEditor={hostSave.onSaveEditor} fileCount={hostSave.dirtyCount} />
+          <HeaderSaveIcons onSaveEditor={hostSave.onSaveEditor} fileCount={hostSave.dirtyCount} onDiffAll={hostSave.onDiffAll} />
         )}
         {hostSave.menu && hostSave.menu.length > 0 && (
           <button

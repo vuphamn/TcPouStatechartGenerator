@@ -572,6 +572,35 @@ tr.enum-row-flash {
    State Selection: Connected Incoming & Outgoing Edge Highlighting
    ========================================================================== */
 
+/* The caret's line in the code views (as in Visual Studio): a faint band, thin lines above and below, an accent on its
+   left; faint enough that the code on it keeps its colours (comments too). Not focused: the lines only. Shadows, not
+   borders, so a line's row keeps its height */
+.caret-band,
+.caret-band-lines {
+  box-shadow: inset 0 1px 0 rgba(100, 116, 139, 0.45), inset 0 -1px 0 rgba(100, 116, 139, 0.45), inset 2px 0 0 rgba(56, 189, 248, 0.85);
+}
+.caret-band {
+  background-color: rgba(148, 163, 184, 0.07);
+}
+/* (.caret-band-lines: on a search match's line, whose own fill stays) */
+.caret-band.is-blurred,
+.caret-band-lines.is-blurred {
+  box-shadow: inset 0 1px 0 rgba(51, 65, 85, 0.7), inset 0 -1px 0 rgba(51, 65, 85, 0.7), inset 2px 0 0 rgba(100, 116, 139, 0.5);
+}
+.caret-band.is-blurred {
+  background-color: transparent;
+}
+/* The uses of the word at the caret: a frame only, the word in its own syntax colour (a <mark>'s own black text and
+   a fill under it made it hard to read, on the caret's line most) */
+mark.word-occurrence {
+  background-color: rgba(56, 189, 248, 0.06);
+  color: inherit;
+  outline: 1px solid rgba(56, 189, 248, 0.7);
+  outline-offset: 0;
+  border-radius: 2px;
+  display: inline;
+}
+
 /* When a state node is selected, soften unconnected edges and labels so connected transitions stand out clearly */
 .diagram-state-focus-active:not(.diagram-search-active) .tc-edge-path:not(.diagram-connected-edge):not(.selected-edge):not(.diagram-selected-edge),
 .diagram-state-focus-active:not(.diagram-search-active) .edgePath path:not(.diagram-connected-edge):not(.selected-edge):not(.diagram-selected-edge),
