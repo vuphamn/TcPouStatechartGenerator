@@ -566,6 +566,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
               onKeyDown={onEditorKeyDown}
               onContextMenu={openMenu('declaration')}
               bookmarkLines={declBookmarks}
+              onBookmarkClick={toggleDeclBookmark}
               highlightedLine={declHighlight}
               scrollToLine={declScroll}
               ariaLabel="POU declaration"
@@ -607,6 +608,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
                 completionScope={() => editorServices()?.scope?.() ?? null}
                 markers={markersFor(editorServices()?.problems?.() ?? [], impl, { declaration: false })}
                 bookmarkLines={bodyBookmarks}
+                onBookmarkClick={toggleBodyBookmark}
                 onKeyDown={onEditorKeyDown}
                 onContextMenu={openMenu('implementation')}
                 ariaLabel="POU implementation"

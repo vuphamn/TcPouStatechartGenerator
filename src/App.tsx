@@ -8096,6 +8096,7 @@ export const App: React.FC = () => {
                   onShowInXae={canNavigateInXae ? handleShowInXae : undefined}
                   problemMarkers={lintProblemMarkers}
                   bookmarkedStates={bookmarks.states}
+                  onToggleStateBookmark={(id) => handleToggleBookmark(id)}
                   changedStates={changedStates}
                   stateTooltips={stateTooltips}
                   stateProblems={stateProblems}

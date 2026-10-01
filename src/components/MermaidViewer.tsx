@@ -266,6 +266,8 @@ export interface MermaidViewerProps {
   problemMarkers?: Record<string, 'error' | 'warning'>;
   /** Bookmarked states: a badge at their top-left corner */
   bookmarkedStates?: string[];
+  /** A click on a state's bookmark ribbon: its bookmark off */
+  onToggleStateBookmark?: (stateId: string) => void;
   /** The states whose code changed since the POU was saved (an amber dot on them, the minimap and search) */
   changedStates?: string[];
   /** A state's tooltip (its entry / do / exit actions), by state */
@@ -1664,6 +1666,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onEditTransitionCondition,
     problemMarkers,
     bookmarkedStates,
+    onToggleStateBookmark,
     changedStates,
     stateTooltips,
     stateProblems,
@@ -3841,6 +3844,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // one shows); no browser tooltip, which came late and covered it
   const [hoveredActions, setHoveredActions] = useState<{ id: string; text: string; x: number; y: number; rect: ScreenRect } | null>(null);
 
+  const onToggleStateBookmarkRef = useRef(onToggleStateBookmark);
+  onToggleStateBookmarkRef.current = onToggleStateBookmark;
   // Bookmarks: a ribbon at the top-left corner of each bookmarked state
   const bookmarkKey = (bookmarkedStates ?? []).join('|');
   useEffect(() => {
@@ -3877,11 +3882,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       g.setAttribute('data-state-id', id);
       g.setAttribute('transform', `translate(${box.x + 6}, ${box.y - 3})`);
       const title = document.createElementNS(ns, 'title');
-      title.textContent = 'Bookmark (right-click the state to remove it)';
+      title.textContent = onToggleStateBookmarkRef.current ? 'Bookmark: a click removes it' : 'Bookmark (right-click the state to remove it)';
       const ribbon = document.createElementNS(ns, 'path');
       ribbon.setAttribute('d', 'M0,0 H12 V16 L6,11.5 L0,16 Z');
       // (inline and important: the theme's ".node path" fill would paint it dark; the colours of Identified States' icon)
-      ribbon.setAttribute('style', 'fill:#38bdf8 !important;stroke:#7dd3fc !important;stroke-width:1.2px !important;stroke-linejoin:round;filter:drop-shadow(0 0 3px rgba(56,189,248,0.7));');
+      ribbon.setAttribute('style', 'fill:#38bdf8 !important;stroke:#7dd3fc !important;stroke-width:1.2px !important;stroke-linejoin:round;filter:drop-shadow(0 0 3px rgba(56,189,248,0.7));cursor:pointer;');
       g.append(title, ribbon);
       node.appendChild(g);
     });
@@ -4147,6 +4152,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const groupInitialRef = useRef<Record<string, { x: number; y: number }> | null>(null);
   // (a composite dragged by its title: its name; its release is no drop of a state into or out of a composite)
   const compositeDragRef = useRef<string | null>(null);
+  // (a press on a bookmark ribbon: its release is no click on the state)
+  const ribbonClickRef = useRef(false);
   // (the dragged composite's own sub-composites: not where it can be dropped)
   const compositeDragInnerRef = useRef<string[]>([]);
   // (Snap each to the grid, the selection's menu: each of them snapped when moved, not only the one dragged)
@@ -4301,6 +4308,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   }, [renderedSvg, multiKey]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    // A state's bookmark ribbon: a click takes its bookmark off (no selection, no drag)
+    const ribbon = e.button === 0 ? (e.target as Element).closest?.('g.state-bookmark-marker') : null;
+    if (ribbon && onToggleStateBookmark) {
+      e.preventDefault();
+      e.stopPropagation();
+      ribbonClickRef.current = true;
+      const id = ribbon.getAttribute('data-state-id');
+      if (id) onToggleStateBookmark(id);
+      return;
+    }
     if (handleMultiSelectDown(e)) return;
     if (e.button === 2) {
       // A right-click: its menu is for the transition pressed (the release may re-draw it away from the pointer)
@@ -5104,6 +5121,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
+    // (a ribbon's click: done on the press)
+    if (ribbonClickRef.current) {
+      ribbonClickRef.current = false;
+      return;
+    }
     // (a Ctrl+click / Shift+drag selection: nothing else)
     if (multiGestureRef.current) return;
     // Apply the latest pending node-drag position before finishing the drag

@@ -95,7 +95,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(!!(await p.$('#bookmarks-export')) && !!(await p.$('#bookmarks-import')), 'the list: Export and Import');
   const upload = require('path').join(h.OUT, 'shared.bookmarks.json');
   require('fs').mkdirSync(h.OUT, { recursive: true });
-  require('fs').writeFileSync(upload, JSON.stringify({ format: 'kss-bookmarks', version: 1, pou: 'X', states: ['TABLEMANAGER_HOMMING'], lines: [], notes: { 'state:TABLEMANAGER_HOMMING': 'shared' } }));
+  require('fs').writeFileSync(upload, JSON.stringify({ format: 'kss-bookmarks', version: 1, pou: 'X', states: ['TABLEMANAGER_UNCLAMPING'], lines: [], notes: { 'state:TABLEMANAGER_UNCLAMPING': 'shared' } }));
   const input = await p.$('#bookmarks-import-file');
   if (input) await input.uploadFile(upload);
   await h.sleep(800);
@@ -106,8 +106,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.click('#bookmarks-next');
   await h.sleep(800);
   const first = await p.$eval('#status-message', (e) => e.textContent).catch(() => '');
-  // (the state imported comes first: the states before the lines)
-  expect(/Bookmark 1 of \d+: shared/.test(first), `Next: the first, by its name (${first})`);
+  // (the states first: the enum's member line bookmarked above is TABLEMANAGER_HOMMING's, then the one imported)
+  expect(/Bookmark 1 of \d+/.test(first), `Next: the first (${first})`);
   await p.keyboard.press('Escape');
   await h.sleep(300);
   await p.keyboard.down('Alt'); await p.keyboard.press('F2'); await p.keyboard.up('Alt');

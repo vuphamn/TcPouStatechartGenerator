@@ -631,11 +631,33 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                       {/* State Details */}
                       <div className="flex flex-col min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {bookmarkSet.has(state.id) && (
-                            <span id={`state-bookmark-${state.id}`} className="shrink-0" title="Bookmark (right-click to remove it)">
+                          {/* Its bookmark: a click takes it off; a faint one on hover: a click sets it */}
+                          {bookmarkSet.has(state.id) ? (
+                            <span
+                              id={`state-bookmark-${state.id}`}
+                              className={`shrink-0 ${onToggleBookmark ? 'cursor-pointer hover:scale-125 transition-transform' : ''}`}
+                              title={onToggleBookmark ? 'Bookmark: a click removes it' : 'Bookmark (right-click to remove it)'}
+                              onClick={(e) => {
+                                if (!onToggleBookmark) return;
+                                e.stopPropagation();
+                                onToggleBookmark(state.id);
+                              }}
+                            >
                               <Bookmark className="w-3 h-3 text-sky-300 fill-sky-400" />
                             </span>
-                          )}
+                          ) : onToggleBookmark ? (
+                            <span
+                              id={`state-add-bookmark-${state.id}`}
+                              className="shrink-0 cursor-pointer opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-sky-300"
+                              title="Bookmark this state (a click)"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleBookmark(state.id);
+                              }}
+                            >
+                              <Bookmark className="w-3 h-3" />
+                            </span>
+                          ) : null}
                           <span
                             className={`font-mono text-xs font-semibold leading-tight break-all ${
                               isJustNavigated

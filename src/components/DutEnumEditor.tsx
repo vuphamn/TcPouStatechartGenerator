@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { usePendingSave } from '../utils/pendingSaves.ts';
-import { bookmarkedLines, clearBookmarks, ENUM_KEY, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { clearBookmarks, ENUM_KEY, enumBookmarkedLines, enumMemberOnLine, toggleLineBookmark, toggleStateBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
@@ -298,7 +298,8 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
 
   // PLC Bookmarks in the enum (kept with the POU's: its file name): the right-click menu, Ctrl+F2
   const bookmarkStore = useBookmarks(bookmarksPou ?? '');
-  const enumBookmarks = useMemo(() => (bookmarksPou ? bookmarkedLines(bookmarksPou, ENUM_KEY, stCode) : []), [bookmarkStore, bookmarksPou, stCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (the states' bookmarks too: on their member lines)
+  const enumBookmarks = useMemo(() => (bookmarksPou ? enumBookmarkedLines(bookmarksPou, stCode) : []), [bookmarkStore, bookmarksPou, stCode]); // eslint-disable-line react-hooks/exhaustive-deps
   const [enumMenu, setEnumMenu] = useState<{ x: number; y: number; line: number } | null>(null);
   // (a line of the text shown, folded blocks shown as their first line: its line in the code)
   const codeLineOf = (viewLine: number) => {
@@ -313,6 +314,15 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   };
   const toggleEnumBookmark = (line: number) => {
     if (!bookmarksPou) return;
+    // A member's line: its state's bookmark (the one Identified States, the canvas and the Method Editor show)
+    const member = enumMemberOnLine(stCode, line);
+    // (an older line bookmark of its own on that line, not the state's: taken off as a line bookmark)
+    const ownLine = enumBookmarks.includes(line) && !(member && bookmarkStore.states.includes(member));
+    if (member && !ownLine) {
+      const on = toggleStateBookmark(bookmarksPou, member);
+      setSaveStatus({ type: 'success', message: on ? `Bookmark set on ${member}` : `Bookmark removed from ${member}` });
+      return;
+    }
     const r = toggleLineBookmark(bookmarksPou, ENUM_KEY, stCode, line, { labels: false });
     setSaveStatus({ type: 'success', message: r.on ? `Bookmark set at line ${line}` : `Bookmark removed at line ${line}` });
   };
@@ -1191,6 +1201,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             ariaLabel="TwinCAT Structured Text Enum Editor"
             className="flex-1 min-h-0"
             bookmarkLines={enumBookmarks}
+            onBookmarkClick={toggleEnumBookmark}
             onContextMenu={(e) => {
               if (!bookmarksPou) return;
               e.preventDefault();

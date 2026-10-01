@@ -111,6 +111,8 @@ export interface StructuredTextCodeEditorProps {
   onContextMenu?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
   /** Bookmarked lines (1-based original line numbers): a mark in the gutter */
   bookmarkLines?: number[];
+  /** A click on the bookmark margin of a line (its mark, or the faint one a row shows on hover): toggle it */
+  onBookmarkClick?: (line: number) => void;
   /** Completion (Ctrl+Space, and after a dot): the names the code sees */
   completionScope?: () => SymbolScope | null;
   /** Problems in the code: wavy underlines, the message on hover */
@@ -144,6 +146,7 @@ export const StructuredTextCodeEditor = forwardRef<
       activeFindMatchIndex,
       onContextMenu,
       bookmarkLines,
+      onBookmarkClick,
       completionScope,
       markers,
       inlineValues,
@@ -765,11 +768,34 @@ export const StructuredTextCodeEditor = forwardRef<
 
                 {/* Right: Line Number and Find Match Indicator */}
                 <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
-                  {entry.originalLineNumber !== null && bookmarkSet.has(entry.originalLineNumber) && (
-                    <span className="st-bookmark shrink-0 text-sky-300" data-bookmark-line={entry.originalLineNumber} title="Bookmark (right-click: PLC Bookmarks)">
+                  {entry.originalLineNumber !== null && bookmarkSet.has(entry.originalLineNumber) ? (
+                    <span
+                      className={`st-bookmark shrink-0 text-sky-300 ${onBookmarkClick ? 'cursor-pointer hover:text-sky-100' : ''}`}
+                      data-bookmark-line={entry.originalLineNumber}
+                      title={onBookmarkClick ? 'Bookmark: a click removes it (right-click: PLC Bookmarks)' : 'Bookmark (right-click: PLC Bookmarks)'}
+                      onMouseDown={(e) => onBookmarkClick && e.preventDefault()}
+                      onClick={(e) => {
+                        if (!onBookmarkClick) return;
+                        e.stopPropagation();
+                        onBookmarkClick(entry.originalLineNumber!);
+                      }}
+                    >
                       <BookmarkIcon className="w-2.5 h-2.5 fill-sky-400" />
                     </span>
-                  )}
+                  ) : entry.originalLineNumber !== null && onBookmarkClick && !entry.isPlaceholder ? (
+                    <span
+                      className="st-bookmark-add shrink-0 text-slate-500 opacity-0 group-hover/gutter-row:opacity-70 hover:!opacity-100 hover:text-sky-300 cursor-pointer"
+                      data-bookmark-add-line={entry.originalLineNumber}
+                      title="Bookmark this line (a click)"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onBookmarkClick(entry.originalLineNumber!);
+                      }}
+                    >
+                      <BookmarkIcon className="w-2.5 h-2.5" />
+                    </span>
+                  ) : null}
                   {matchingViewLines.has(idx) && (
                     <span
                       className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 shadow-[0_0_6px_rgba(251,191,36,0.8)]"

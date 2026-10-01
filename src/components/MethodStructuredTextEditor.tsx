@@ -1979,6 +1979,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               onKeyDown={handleEditorKeyDown}
               onContextMenu={handleDeclContextMenu}
               bookmarkLines={declBookmarkLines}
+              onBookmarkClick={toggleDeclBookmarkAt}
               highlightedLine={declHighlightedLine}
               scrollToLine={declScrollToLine}
               placeholder={
@@ -2163,6 +2164,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               onKeyDown={handleEditorKeyDown}
               onContextMenu={handleImplContextMenu}
               bookmarkLines={bookmarkLines}
+              onBookmarkClick={toggleBookmarkAt}
               inlineValues={inlineValues}
               completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}
               markers={markersFor(editorServices()?.problems?.() ?? [], code, { method: cleanMethodName, declaration: false })}

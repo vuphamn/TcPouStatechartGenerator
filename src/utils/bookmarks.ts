@@ -141,6 +141,27 @@ export function useBookmarks(pou: string): PouBookmarks {
   return getBookmarks(pou);
 }
 
+/** The enum member a line of the enum's declaration declares (1-based), or null (a comment, a pragma, TYPE …) */
+export function enumMemberOnLine(code: string, line: number): string | null {
+  const text = (code.split(/\r?\n/)[line - 1] ?? '').replace(/\(\*.*?\*\)/g, '').replace(/\/\/.*$/, '');
+  const m = text.match(/^\s*,?\s*([A-Za-z_]\w*)\s*(?::=|,|\)|$)/);
+  return m && !/^(TYPE|END_TYPE|STRUCT|END_STRUCT|UNION|END_UNION)$/i.test(m[1]) ? m[1] : null;
+}
+
+/**
+ * The enum's bookmarked lines: its own line bookmarks and the member lines of the bookmarked states (a state's
+ * bookmark is one: Identified States, the canvas, the Method Editor's CASE label, the Enum Editor's member)
+ */
+export function enumBookmarkedLines(pou: string, code: string): number[] {
+  const set = new Set(bookmarkedLines(pou, ENUM_KEY, code));
+  const states = new Set(getBookmarks(pou).states);
+  if (states.size) code.split(/\r?\n/).forEach((_, i) => {
+    const m = enumMemberOnLine(code, i + 1);
+    if (m && states.has(m)) set.add(i + 1);
+  });
+  return [...set].sort((a, c) => a - c);
+}
+
 /** The POU's own body (the POU Editor's implementation), as a "method" of the line bookmarks */
 export const BODY = '(body)';
 /** A declaration's bookmarks: a method's, the POU's (BODY) */
