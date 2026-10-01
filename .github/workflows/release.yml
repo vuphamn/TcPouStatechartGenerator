@@ -106,7 +106,10 @@ jobs:
 
       - name: XAE edition files
         if: env.XAE == 'true'
-        run: Copy-Item xae-extension/KvalStateScope.Xae/bin/Release/KvalStateScope.Xae.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION.vsix"
+        run: |
+          Copy-Item xae-extension/KvalStateScope.Xae/bin/Release/KvalStateScope.Xae.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION.vsix"
+          # (TwinCAT 4024's TcXaeShell, Visual Studio 2017 / 2019: not yet tested)
+          Copy-Item xae-extension/KvalStateScope.Xae.Vs2017/bin/Release/KvalStateScope.Xae.Vs2017.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION-vs2017.vsix"
 
       - name: Web edition files
         if: env.WEB == 'true'

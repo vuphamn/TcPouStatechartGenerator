@@ -1,12 +1,17 @@
 // The EtherCAT master's own view of its slaves, over ADS (read-only): the master answers at its device's AmsNetId
 // (the I/O device's, e.g. 10.10.10.221.2.1, from the project's .xti) on port 0xFFFF:
 //   index group 0x06: the number of slaves (UINT)
+//   index group 0x07: their EtherCAT addresses (UINT each, in the same order)
 //   index group 0x09: each slave's state, in the order they are wired (2 bytes each: its device state, its link state)
-// as Tc2_EtherCAT's FB_EcGetSlaveCount / FB_EcGetAllSlaveStates read them. NOT YET CONFIRMED ON HARDWARE: the calls
+//   index group 0x12: each slave's CRC error counters, ports A … D
+// as Tc2_EtherCAT's FB_EcGetSlaveCount / FB_EcGetAllSlaveAddr / FB_EcGetAllSlaveStates / FB_EcGetAllSlaveCrcErrors
+// read them (the addresses and counters only when the master answers them). NOT YET CONFIRMED ON HARDWARE: the calls
 // follow Beckhoff's documentation of the EtherCAT master's ADS interface; a PLC may answer otherwise.
 const ECAT_PORT = 0xffff;
 const IG_SLAVE_COUNT = 0x06;
+const IG_SLAVE_ADDRESSES = 0x07;
 const IG_SLAVE_STATES = 0x09;
+const IG_SLAVE_CRC = 0x12;
 
 /** A slave's device state as TwinCAT names it (the low nibble), and its flags (the high one) */
 const STATE_NAMES = { 1: 'INIT', 2: 'PREOP', 3: 'BOOT', 4: 'SAFEOP', 8: 'OP' };
@@ -32,7 +37,8 @@ function describeState(device, link) {
 
 /**
  * The slaves' states (client: an ads-client connected to the PLC's router; masterNetId: the I/O device's AmsNetId):
- * { count, slaves: [{ index, name, ok, flags, link, ports, device, linkState }], at } or { error }
+ * { count, slaves: [{ index, name, ok, flags, link, ports, device, linkState, address?, crc? }], at } or { error }
+ * (crc: the counters of ports A … D)
  */
 async function readEcatStates(client, masterNetId) {
   if (!/^\d+\.\d+\.\d+\.\d+\.\d+\.\d+$/.test(String(masterNetId || ''))) return { error: 'Not an EtherCAT master\'s AmsNetId' };
@@ -43,6 +49,22 @@ async function readEcatStates(client, masterNetId) {
     const raw = await client.readRaw(IG_SLAVE_STATES, 0, count * 2, target);
     const slaves = [];
     for (let i = 0; i < count && i * 2 + 1 < raw.length; i++) slaves.push({ index: i, ...describeState(raw[i * 2], raw[i * 2 + 1]) });
+    // (the addresses and the CRC counters: when the master answers them)
+    try {
+      const a = await client.readRaw(IG_SLAVE_ADDRESSES, 0, count * 2, target);
+      for (let i = 0; i < slaves.length && i * 2 + 1 < a.length; i++) slaves[i].address = a.readUInt16LE(i * 2);
+    } catch {
+      // (not known: the slaves matched by their order)
+    }
+    try {
+      const c = await client.readRaw(IG_SLAVE_CRC, 0, count * 16, target);
+      // (4 counters a slave: 4 bytes each, or 2)
+      const per = Math.floor(c.length / count);
+      const size = per >= 16 ? 4 : per >= 8 ? 2 : 0;
+      if (size) for (let i = 0; i < slaves.length; i++) slaves[i].crc = [0, 1, 2, 3].map((k) => (size === 4 ? c.readUInt32LE(i * per + k * 4) : c.readUInt16LE(i * per + k * 2)));
+    } catch {
+      // (no counters)
+    }
     return { count, slaves, at: Date.now() };
   } catch (err) {
     return { error: err?.adsError?.errorStr ? `${err.adsError.errorStr} (the EtherCAT master at ${masterNetId})` : String(err?.message || err) };
@@ -63,4 +85,4 @@ async function readMasters(client, targetNetId, netIds) {
   return { masters };
 }
 
-module.exports = { readEcatStates, readMasters, describeState, ECAT_PORT, IG_SLAVE_COUNT, IG_SLAVE_STATES };
+module.exports = { readEcatStates, readMasters, describeState, ECAT_PORT, IG_SLAVE_COUNT, IG_SLAVE_ADDRESSES, IG_SLAVE_STATES, IG_SLAVE_CRC };

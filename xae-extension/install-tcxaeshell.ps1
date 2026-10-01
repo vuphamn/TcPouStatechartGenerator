@@ -20,8 +20,10 @@
   .\install-tcxaeshell.ps1 -Quiet   (from the Kval StateScope installer: no prompts, the exit code tells the result)
 #>
 param(
-  [string]$Vsix = (Join-Path $PSScriptRoot 'KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix'),
-  [string]$ShellRoot = 'C:\Program Files\Beckhoff\TcXaeShell',
+  # (none given: TwinCAT 4026's 64-bit TcXaeShell with the main VSIX; only 4024's 32-bit one there: it, with the
+  # Visual Studio 2017 build, KvalStateScope.Xae.Vs2017.vsix, NOT YET TESTED in it)
+  [string]$Vsix = '',
+  [string]$ShellRoot = '',
   [switch]$Uninstall,
   # No prompts: errors only set the exit code (1: failed, 2: TcXaeShell is running, 3: TcXaeShell is not installed)
   [switch]$Quiet,
@@ -30,6 +32,14 @@ param(
 )
 # (TcXaeShell.exe is only checked for, never started: the change is picked up on its next start)
 $ErrorActionPreference = 'Stop'
+$shell4026 = 'C:\Program Files\Beckhoff\TcXaeShell'
+$shell4024 = 'C:\Program Files (x86)\Beckhoff\TcXaeShell'
+if (-not $ShellRoot) {
+  $ShellRoot = if (-not (Test-Path (Join-Path $shell4026 'Common7\IDE\TcXaeShell.exe')) -and (Test-Path (Join-Path $shell4024 'Common7\IDE\TcXaeShell.exe'))) { $shell4024 } else { $shell4026 }
+}
+if (-not $Vsix) {
+  $Vsix = if ($ShellRoot -like '*Program Files (x86)*') { Join-Path $PSScriptRoot 'KvalStateScope.Xae.Vs2017\bin\Release\KvalStateScope.Xae.Vs2017.vsix' } else { Join-Path $PSScriptRoot 'KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix' }
+}
 
 $shellExe = Join-Path $ShellRoot 'Common7\IDE\TcXaeShell.exe'
 $target = Join-Path $ShellRoot 'Common7\IDE\Extensions\Kval Inc\Kval StateScope'

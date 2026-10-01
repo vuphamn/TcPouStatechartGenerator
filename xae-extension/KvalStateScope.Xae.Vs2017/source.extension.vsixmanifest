@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Id="KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6" Version="0.8.0" Language="en-US" Publisher="Kval Inc." />
+    <DisplayName>Kval StateScope for TwinCAT XAE (4024)</DisplayName>
+    <Description xml:space="preserve">View and edit Kval SM_*.TcPOU state machines as interactive diagrams inside TwinCAT XAE. Right-click a .TcPOU and choose "Open in Kval StateScope". For TwinCAT 4024's TcXaeShell and Visual Studio 2017 / 2019 (not yet tested there). (Prototype)</Description>
+    <Icon>Resources\icon.png</Icon>
+    <Tags>TwinCAT; PLC; state machine; Kval</Tags>
+  </Metadata>
+  <Installation>
+    <!-- TwinCAT 4024's TcXaeShell: the 32-bit Visual Studio 2017 shell; Visual Studio 2017 / 2019 -->
+    <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[15.0,17.0)" />
+  </Installation>
+  <Dependencies>
+    <Dependency Id="Microsoft.Framework.NDP" DisplayName="Microsoft .NET Framework" d:Source="Manual" Version="[4.8,)" />
+  </Dependencies>
+  <Prerequisites>
+    <Prerequisite Id="Microsoft.VisualStudio.Component.CoreEditor" Version="[15.0,17.0)" DisplayName="Visual Studio core editor" />
+  </Prerequisites>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.VsPackage" d:Source="Project" d:ProjectName="%CurrentProject%" Path="|%CurrentProject%;PkgdefProjectOutputGroup|" />
+  </Assets>
+</PackageManifest>

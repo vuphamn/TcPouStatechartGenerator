@@ -125,6 +125,17 @@ function handle(sock, f) {
       m.reads = (m.reads || 0) + 1;
       return result(0, withLength(Buffer.from(now.flat()).subarray(0, size)));
     }
+    if (ig === 7 && m.addresses) {
+      const b = Buffer.alloc(m.addresses.length * 2);
+      m.addresses.forEach((a, i) => b.writeUInt16LE(a, i * 2));
+      return result(0, withLength(b.subarray(0, size)));
+    }
+    if (ig === 0x12 && m.crc) {
+      const crc = m.down && (m.reads || 0) >= m.down.afterReads && m.down.crc ? m.down.crc : m.crc;
+      const b = Buffer.alloc(crc.length * 16);
+      crc.forEach((ports, i) => ports.forEach((v, k) => b.writeUInt32LE(v, i * 16 + k * 4)));
+      return result(0, withLength(b.subarray(0, size)));
+    }
     return result(0x702);
   }
   // config.configMode: TwinCAT in Config mode (no PLC runtime): its system service (port 10000) says Config, every

@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree', 'ecatStates'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree', 'ecatStates', 'deviceInfo'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -286,6 +286,12 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'ioTree') return void session.ioTree(send, m);
     // The EtherCAT masters' slave states (read-only)
     if (m.type === 'ecatStates') return void session.ecatStates(send, m);
+    // A device's details for the I/O tab (TwinCAT's device descriptions here, the user's pictures of it)
+    if (m.type === 'deviceInfo') {
+      const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+      const req = { productCode: String(m.productCode ?? ''), revision: String(m.revision ?? ''), type: String(m.type_ ?? m.deviceType ?? ''), product: String(m.product ?? '') };
+      return void send({ type: 'deviceInfoResult', requestId, ...require('../shared/tcDeviceInfo.cjs').deviceInfo(req, documents()) });
+    }
     // The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects)
     if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
     // A POU of that copy (an instance of it opened live)

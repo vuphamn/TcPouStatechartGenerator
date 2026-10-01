@@ -8,6 +8,8 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
+// (the Visual Studio 2017 SDK also has a Shell.Task)
+using Task = System.Threading.Tasks.Task;
 
 namespace KvalStateScope.Xae
 {

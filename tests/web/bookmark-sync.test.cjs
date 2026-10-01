@@ -67,10 +67,21 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 
   // 3. From Identified States (a card's menu): the Enum Editor's member line marked
   const S2 = 'TABLEMANAGER_CLAMPED';
-  const card = await p.evaluate((s) => { const el = document.getElementById(`state-list-item-${s}`); el?.scrollIntoView({ block: 'center' }); const r = el?.getBoundingClientRect(); return r ? { x: r.x + 60, y: r.y + 12 } : null; }, S2);
-  if (card) await p.evaluate((s) => document.getElementById(`state-list-item-${s}`).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 400, button: 2 })), S2);
-  const add = await p.waitForSelector('#state-list-bookmark-btn', { timeout: 3000 }).catch(() => null);
-  expect(!!add, `its card's menu: Add bookmark (${await p.evaluate(() => [...document.querySelectorAll('[id*="context-menu"] [id], [role="menu"] [id]')].map((e) => e.id).slice(0, 8).join(', '))})`);
+  // (a slow machine: the menu asked for again, at most 3 times; what is on screen said when it does not open)
+  let add = null;
+  let card = null;
+  for (let k = 0; k < 3 && !add; k++) {
+    card = await p.evaluate((s) => {
+      const el = document.getElementById(`state-list-item-${s}`);
+      if (!el) return { found: false, cards: document.querySelectorAll('[id^="state-list-item-"]').length };
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(r.x + 60), clientY: Math.round(r.y + 12), button: 2 }));
+      return { found: true, visible: r.width > 0 && r.height > 0 };
+    }, S2);
+    add = await p.waitForSelector('#state-list-bookmark-btn', { timeout: 2500 }).catch(() => null);
+  }
+  expect(!!add, `its card's menu: Add bookmark (card ${JSON.stringify(card)}; menus: ${await p.evaluate(() => [...document.querySelectorAll('[id*="context-menu"] [id], [role="menu"] [id]')].map((e) => e.id).slice(0, 8).join(', '))})`);
   if (add) await p.evaluate(() => document.getElementById('state-list-bookmark-btn')?.click());
   // (a slow machine: until it shows, at most a few seconds)
   for (let i = 0; i < 25 && !(await cards()).includes(S2); i++) await h.sleep(200);

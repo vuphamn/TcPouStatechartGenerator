@@ -20,6 +20,8 @@ const write = (f, s) => fs.writeFileSync(path.join(root, f), s);
 const APP = ['src', 'public', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json'];
 const MANIFEST = 'xae-extension/KvalStateScope.Xae/source.extension.vsixmanifest';
 const ASSEMBLY = 'xae-extension/KvalStateScope.Xae/Properties/AssemblyInfo.cs';
+// (its build for TwinCAT 4024's TcXaeShell / Visual Studio 2017: the same version)
+const MANIFEST_2017 = 'xae-extension/KvalStateScope.Xae.Vs2017/source.extension.vsixmanifest';
 
 const EDITIONS = {
   xae: {
@@ -28,6 +30,7 @@ const EDITIONS = {
     version: () => read(MANIFEST).match(/<Identity\b[^>]*\bVersion="(\d+\.\d+\.\d+)"/)[1],
     stamp: (v) => {
       write(MANIFEST, read(MANIFEST).replace(/(<Identity\b[^>]*\bVersion=")\d+\.\d+\.\d+(")/, `$1${v}$2`));
+      write(MANIFEST_2017, read(MANIFEST_2017).replace(/(<Identity\b[^>]*\bVersion=")\d+\.\d+\.\d+(")/, `$1${v}$2`));
       write(ASSEMBLY, read(ASSEMBLY).replace(/(Assembly(?:File)?Version\(")\d+\.\d+\.\d+\.\d+("\))/g, `$1${v}.0$2`));
     },
   },

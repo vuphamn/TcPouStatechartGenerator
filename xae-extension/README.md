@@ -2,7 +2,9 @@
 
 A Visual Studio extension (VSIX) that opens a Kval `SM_*.TcPOU` state machine in Kval StateScope, docked as a document tab inside TwinCAT XAE. The tab hosts the same web app as the browser and desktop versions, running in WebView2 (the Edge browser control).
 
-Targets: TcXaeShell 64-bit (TwinCAT 3.1.4026+), and Visual Studio 2022 and 2026 with TwinCAT integration. It uses the same installation target as Beckhoff's own XAE extensions. The older 32-bit TcXaeShell (VS 2017 based) is not supported.
+Targets: TcXaeShell 64-bit (TwinCAT 3.1.4026+), and Visual Studio 2022 and 2026 with TwinCAT integration. It uses the same installation target as Beckhoff's own XAE extensions.
+
+**TwinCAT 4024** (not yet tested): its TcXaeShell is the 32-bit Visual Studio 2017 shell, which cannot load that build. `KvalStateScope.Xae.Vs2017` builds the same sources against the Visual Studio 2017 SDK, as `KvalStateScope.Xae.Vs2017.vsix` (`build.ps1` builds both). Those IDEs have no WebView2 of their own, so it carries WebView2 (its x86 loader too; the WebView2 Runtime must be on the PC, as on any current Windows 10 / 11). `install-tcxaeshell.ps1` installs it into `C:\Program Files (x86)\Beckhoff\TcXaeShell` when that is the only TcXaeShell (or pass `-ShellRoot` and `-Vsix`). Visual Studio 2017 / 2019 take it with their VSIXInstaller.
 
 ## Build
 

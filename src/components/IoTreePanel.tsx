@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cpu, FolderOpen, GitBranch, Link2, ListTree, Network, RefreshCw, Search } from 'lucide-react';
-import { IoNetworkView, allBoxes, boxStates, healthLinks, stateText, type EcatStatesResult } from './IoNetworkView.tsx';
+import { Activity, ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Cpu, FolderOpen, GitBranch, Info, Link2, ListTree, Network, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { IoNetworkView, allBoxes, boxStates, healthLinks, stateText, type EcatStatesResult, type IoEvent } from './IoNetworkView.tsx';
+import { IoBoxProperties, type DeviceInfo, type DeviceInfoRequest } from './IoBoxProperties.tsx';
 
 /** The PLC's I/O tree (shared/tcIoTree.cjs): devices, boxes nested as wired, their PDOs' entries and PLC links */
 export interface IoEntry {
@@ -25,6 +26,10 @@ export interface IoBox {
   slave?: number | null;
   /** Where its port A is cabled: the port (0 … 3: A … D) of the box of that Id, or the master */
   portA?: { box?: number; port: number; master?: boolean };
+  /** Its EtherCAT address by default (1000 + its Id) */
+  address?: number;
+  /** What the project says of its device (its ESI type and name, vendor, product code, revision) */
+  info?: { type?: string; desc?: string; vendorId?: number; productCode?: string; revision?: string; supplier?: string };
   disabled?: boolean;
   boxes: IoBox[];
   pdos: IoPdo[];
@@ -77,19 +82,36 @@ export const IoTreePanel: React.FC<{
   /** The transitions whose conditions read a variable; one opened (its code) */
   guardsOf?: (variable: string) => IoGuardUse[];
   onOpenGuard?: (g: IoGuardUse) => void;
-}> = ({ tree, loading, connected, onLoad, onLoadFolder, onVisibleVariables, valueOf, ecat = null, onStatesWanted, guardsOf, onOpenGuard }) => {
+  /** What happened to the boxes while live (newest first); cleared */
+  events?: IoEvent[];
+  onClearEvents?: () => void;
+  /** A box's device details from the host (desktop app, Link); the pictures folder opened */
+  fetchDeviceInfo?: (req: DeviceInfoRequest) => Promise<DeviceInfo>;
+  onOpenDevicesFolder?: () => void;
+  /** The offline folder read's label (the desktop app: its project; the browser: a folder chosen) */
+  folderLabel?: string;
+}> = ({ tree, loading, connected, onLoad, onLoadFolder, onVisibleVariables, valueOf, ecat = null, onStatesWanted, guardsOf, onOpenGuard, events = [], onClearEvents, fetchDeviceInfo, onOpenDevicesFolder, folderLabel }) => {
   const [filter, setFilter] = useState('');
   const [linkedOnly, setLinkedOnly] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [guardsOpen, setGuardsOpen] = useState<string | null>(null);
-  const [view, setViewState] = useState<'tree' | 'network'>(() => {
+  const [view, setViewState] = useState<'tree' | 'network' | 'events'>(() => {
     try {
-      return localStorage.getItem(VIEW_KEY) === 'network' ? 'network' : 'tree';
+      const v = localStorage.getItem(VIEW_KEY);
+      return v === 'network' || v === 'events' ? v : 'tree';
     } catch {
       return 'tree';
     }
   });
-  const setView = (v: 'tree' | 'network') => {
+  // A box's properties (the network's right-click, a tree row's ⓘ, an event)
+  const [propsPath, setPropsPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (!propsPath) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPropsPath(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [propsPath]);
+  const setView = (v: 'tree' | 'network' | 'events') => {
     setViewState(v);
     try {
       localStorage.setItem(VIEW_KEY, v);
@@ -157,6 +179,16 @@ export const IoTreePanel: React.FC<{
     setView('tree');
     window.setTimeout(() => document.querySelector(`[data-io-box="${CSS.escape(path)}"]`)?.scrollIntoView({ block: 'center' }), 0);
   };
+  // The box whose properties are open, its device and the box its port A is cabled to
+  const propsOf = useMemo(() => {
+    if (!propsPath || !tree) return null;
+    for (const d of tree.devices) {
+      const all = allBoxes(d.boxes);
+      const box = all.find((b) => b.path === propsPath);
+      if (box) return { box, device: d, parent: box.portA?.box !== undefined ? all.find((b) => b.id === box.portA!.box) ?? null : null };
+    }
+    return null;
+  }, [propsPath, tree]);
   const masterNote = (() => {
     if (offline) return `Offline: the project in ${tree?.folder} (no states, no values)`;
     if (!connected) return 'Not live: no states';
@@ -193,6 +225,24 @@ export const IoTreePanel: React.FC<{
           <span className="ml-auto shrink-0 flex items-center gap-1.5">
             {linked > 0 && <span className="text-[9px] text-slate-500">{linked} linked</span>}
             {badge(b)}
+            <span
+              role="button"
+              tabIndex={0}
+              data-io-props={b.path}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                setPropsPath(b.path);
+              }}
+              onKeyDown={(ev) => {
+                if (ev.key !== 'Enter') return;
+                ev.stopPropagation();
+                setPropsPath(b.path);
+              }}
+              className={`p-0.5 rounded hover:bg-slate-700 ${propsPath === b.path ? 'text-violet-300' : 'text-slate-500'}`}
+              title="Its properties: the device, its state, links to its documentation, your pictures of it"
+            >
+              <Info className="w-3 h-3" />
+            </span>
           </span>
         </button>
         {isOpen && (
@@ -252,7 +302,7 @@ export const IoTreePanel: React.FC<{
 
   return (
     <div id="io-tree-panel" className="h-full flex flex-col text-xs bg-slate-950">
-      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-slate-800">
+      <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 border-b border-slate-800">
         <Cpu className="w-3.5 h-3.5 text-sky-400" />
         <span className="font-semibold text-slate-200">I/O</span>
         <span className="text-[10px] text-slate-500 truncate">{tree?.project ? `${tree.project} · ` : ''}{offline ? 'offline, from the project folder' : 'read-only: nothing is written to the PLC'}</span>
@@ -263,9 +313,12 @@ export const IoTreePanel: React.FC<{
           <button id="io-view-network" type="button" aria-pressed={view === 'network'} onClick={() => setView('network')} className={`flex items-center gap-1 px-1.5 py-0.5 border-l border-slate-700 ${view === 'network' ? 'bg-sky-900/60 text-sky-100' : 'text-slate-400 hover:bg-slate-800'}`} title="The EtherCAT network as it is cabled, with each box's state (not yet confirmed on hardware)">
             <Network className="w-3 h-3" /> Network
           </button>
+          <button id="io-view-events" type="button" aria-pressed={view === 'events'} onClick={() => setView('events')} className={`flex items-center gap-1 px-1.5 py-0.5 border-l border-slate-700 ${view === 'events' ? 'bg-sky-900/60 text-sky-100' : 'text-slate-400 hover:bg-slate-800'}`} title="What happened to the boxes while live: state changes, CRC errors">
+            <Activity className="w-3 h-3" /> Events{events.length ? <span id="io-events-count" className={`px-1 rounded-full text-[9px] ${events.some((e) => !e.ok) ? 'bg-rose-900 text-rose-100' : 'bg-slate-800 text-slate-300'}`}>{events.length}</span> : null}
+          </button>
         </span>
         {onLoadFolder && (
-          <button id="io-tree-load-folder" type="button" onClick={(ev) => onLoadFolder(ev.shiftKey)} disabled={loading} className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="Offline: the I/O of the TwinCAT project on this computer (the open POU's project; Shift: choose a folder)">
+          <button id="io-tree-load-folder" type="button" onClick={(ev) => onLoadFolder(ev.shiftKey)} disabled={loading} className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title={folderLabel ?? 'Offline: the I/O of the TwinCAT project on this computer (the open POU\'s project; Shift: choose a folder)'}>
             <FolderOpen className="w-3 h-3" /> From project
           </button>
         )}
@@ -303,10 +356,34 @@ export const IoTreePanel: React.FC<{
         </div>
       )}
       {tree?.error && <div id="io-tree-error" className="p-3 text-rose-300">{tree.error}</div>}
+      <div className="@container relative flex-1 min-h-0 flex">
+      <div className="flex-1 min-w-0 flex flex-col">
+      {view === 'events' && (
+        <div id="io-events" className="flex-1 min-h-0 flex flex-col">
+          <div className="flex items-center gap-2 px-2 py-1 border-b border-slate-800 text-[10px] text-slate-500">
+            <span>{offline ? 'Offline: no events' : connected ? 'While live: each box\'s state changes and CRC errors (the master read every 2 s)' : 'Not live: the events of the last session'}</span>
+            {events.length > 0 && onClearEvents && (
+              <button id="io-events-clear" type="button" onClick={onClearEvents} className="ml-auto flex items-center gap-1 px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="Clear the list">
+                <Trash2 className="w-3 h-3" /> Clear
+              </button>
+            )}
+          </div>
+          <div className="flex-1 min-h-0 overflow-auto p-1 custom-scrollbar">
+            {events.length === 0 && <div id="io-events-empty" className="p-4 text-center text-slate-400">Nothing yet: a box that leaves OP, a link fault or CRC errors are listed here, with the time.</div>}
+            {events.map((ev, i) => (
+              <button key={`${ev.at}-${i}`} type="button" data-io-event={ev.path} data-io-event-kind={ev.kind} onClick={() => setPropsPath(ev.path)} className={`w-full flex items-start gap-2 px-1.5 py-0.5 rounded text-left hover:bg-slate-800 ${ev.ok ? 'text-slate-300' : 'text-rose-200'}`} title="Its properties">
+                <span className="shrink-0 font-mono text-[10px] text-slate-500">{new Date(ev.at).toLocaleTimeString()}</span>
+                <span className={`shrink-0 w-1.5 h-1.5 mt-1.5 rounded-full ${ev.ok ? 'bg-emerald-400' : ev.kind === 'crc' ? 'bg-amber-400' : 'bg-rose-500'}`} />
+                <span className="min-w-0 break-words">{ev.text}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {view === 'network' && tree && (
         <div className="flex-1 min-h-0">
           {device ? (
-            <IoNetworkView device={device} states={states} stateNote={masterNote} valueOf={valueOf} onSelectBox={showInTree} />
+            <IoNetworkView device={device} states={states} stateNote={masterNote} valueOf={valueOf} onSelectBox={showInTree} onOpenProps={setPropsPath} selected={propsPath} />
           ) : (
             <div id="io-network-empty" className="p-4 text-center text-slate-400">No I/O device with boxes to draw.</div>
           )}
@@ -332,6 +409,24 @@ export const IoTreePanel: React.FC<{
           ))}
         </div>
       )}
+      </div>
+      {propsOf && (
+        <div className="absolute inset-y-0 right-0 z-10 w-full max-w-[380px] shadow-2xl @[600px]:static @[600px]:z-auto @[600px]:w-[42%] @[600px]:shadow-none shrink-0">
+          <IoBoxProperties
+            box={propsOf.box}
+            device={propsOf.device}
+            parent={propsOf.parent}
+            state={states.get(propsOf.box.path)}
+            events={events.filter((e) => e.path === propsOf.box.path)}
+            valueOf={valueOf}
+            fetchInfo={fetchDeviceInfo}
+            onOpenFolder={onOpenDevicesFolder}
+            onShowInTree={showInTree}
+            onClose={() => setPropsPath(null)}
+          />
+        </div>
+      )}
+      </div>
     </div>
   );
 };

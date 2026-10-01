@@ -18,7 +18,17 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
 (async () => {
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48968', cfg], { stdio: ['ignore', fs.openSync(path.join(h.OUT, 'fake-ams2-sym-web.txt'), 'w'), 'ignore'] });
   const out = fs.openSync(path.join(h.OUT, 'link-sym-run.txt'), 'w');
-  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48964'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-appdata') }, stdio: ['ignore', out, out] });
+  // (TwinCAT's device descriptions and the user's pictures, as Link finds them: the tests' own)
+  const esiDir = path.join(h.OUT, 'sym-esi');
+  const docsDir = path.join(h.OUT, 'sym-docs');
+  fs.rmSync(esiDir, { recursive: true, force: true });
+  fs.rmSync(docsDir, { recursive: true, force: true });
+  fs.mkdirSync(esiDir, { recursive: true });
+  fs.mkdirSync(path.join(docsDir, 'Kval StateScope', 'Devices'), { recursive: true });
+  fs.writeFileSync(path.join(esiDir, 'Beckhoff EL1xxx.xml'), '<?xml version="1.0" encoding="ISO-8859-1"?><EtherCATInfo><Vendor><Id>2</Id><Name>Beckhoff Automation GmbH &amp; Co. KG</Name></Vendor><Descriptions><Groups><Group><Type>DigIn</Type><Name LcId="1033">Digital Input Terminals (ED1xxx, EL1xxx)</Name></Group></Groups><Devices><Device Physics="YY"><Type ProductCode="#x03f03052" RevisionNo="#x00110000">EL1008</Type><Name LcId="1033"><![CDATA[EL1008 8Ch. Dig. Input 24V, 3ms]]></Name><URL LcId="1033"><![CDATA[http://www.beckhoff.com/EL1008]]></URL><GroupType>DigIn</GroupType></Device></Devices></Descriptions></EtherCATInfo>');
+  // (a 1x1 PNG)
+  fs.writeFileSync(path.join(docsDir, 'Kval StateScope', 'Devices', 'EL1008 front.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
+  const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48964'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-appdata'), KSS_ESI_DIR: esiDir, KSS_DOCUMENTS: docsDir }, stdio: ['ignore', out, out] });
   await sleep(2500);
   const code = (await h.waitForText(path.join(h.OUT, 'link-sym-run.txt'), /Pairing code:\s+(\S+)/))?.[1];
   if (!code) throw new Error('Link did not start (no pairing code)');
@@ -302,6 +312,47 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   for (let i = 0; i < 60 && !/down/.test(nw.nodes['Term 2 (EL1008)'] ?? ''); i++) { await sleep(300); nw = await net(); }
   expect(nw.nodes['Term 1 (EK1100)'] === 'OP' && nw.nodes['Term 2 (EL1008)'] === 'SAFEOP:down' && /:cut$/.test(nw.nodes['Term 3 (EL2008)'] ?? ''), `a box down: red, the one behind it cut off (${JSON.stringify(nw.nodes)})`);
   await a.screenshot({ path: h.out('io-network.png') });
+  // Find a box: by a variable linked to it (the others dimmed)
+  await a.type('#io-network-search', 'conveyor.bStart').catch(() => {});
+  await sleep(400);
+  const found = await a.evaluate(() => ({ n: document.getElementById('io-network-matches')?.textContent, hits: [...document.querySelectorAll('#io-network [data-io-node][data-match]')].map((x) => x.getAttribute('data-io-node').split('^').pop()) }));
+  expect(found.n === '1' && found.hits.join() === 'Term 2 (EL1008)', `the network's search: ${JSON.stringify(found)}`);
+  // A box's properties (right-click): the project's and TwinCAT's device file's details (through Link), the master's
+  // state, address and CRC counters, its links, the user's picture of it
+  await a.click('#io-network [data-io-node$="Term 2 (EL1008)"]', { button: 'right' }).catch(() => {});
+  await a.waitForSelector('#io-box-props', { timeout: 5000 }).catch(() => {});
+  let props = null;
+  for (let i = 0; i < 30 && !(props?.image); i++) {
+    await sleep(200);
+    props = await a.evaluate(() => {
+      const p = document.getElementById('io-box-props');
+      if (!p) return null;
+      const v = (k) => { const r = p.querySelector(`[data-io-prop="${k}"]`); return (r?.children.length > 1 ? r.lastElementChild : r)?.textContent.trim() ?? null; };
+      return {
+        box: p.getAttribute('data-io-props-box')?.split('^').pop(),
+        name: v('name'), group: v('group'), vendor: v('vendor'), code: v('product-code'), address: v('address'), port: v('port-a'), state: v('state'),
+        crc: [...p.querySelectorAll('[data-io-crc]')].map((c) => c.textContent.trim()).join(' '),
+        links: Object.fromEntries([...p.querySelectorAll('[data-io-link]')].map((l) => [l.getAttribute('data-io-link'), l.getAttribute('href')])),
+        image: p.querySelector('[data-io-image]')?.getAttribute('data-io-image') ?? null,
+        source: document.getElementById('io-box-props-source')?.textContent ?? '',
+      };
+    });
+  }
+  expect(props?.box === 'Term 2 (EL1008)' && props.name === 'EL1008 8Ch. Dig. Input 24V, 3ms' && props.group === 'Digital Input Terminals (ED1xxx, EL1xxx)' && /Beckhoff/.test(props.vendor ?? '') && props.code === '#x03f03052' && props.address === '1002' && /Term 1, port B/.test(props.port ?? ''), `its properties: ${JSON.stringify(props)}`);
+  expect(/SAFEOP/.test(props?.state ?? '') && props?.crc === 'A: 0 B: 7 C: 0 D: 0', `its state and CRC counters: ${props?.state}; ${props?.crc}`);
+  expect(props?.links?.product === 'https://www.beckhoff.com/EL1008' && /search-results\/\?q=EL1008$/.test(props?.links?.search ?? '') && /^https:\/\/document\.beckhoff\.com\/el1008\.pdf/.test(props?.links?.manual ?? ''), `its links: ${JSON.stringify(props?.links)}`);
+  expect(props?.image === 'EL1008 front.png' && /TwinCAT's device file \(Beckhoff EL1xxx\.xml\)/.test(props.source), `its picture (${props?.image}), the device file (${props?.source})`);
+  await a.screenshot({ path: h.out('io-props.png') });
+  await a.keyboard.press('Escape');
+  await sleep(300);
+  expect(!(await a.$('#io-box-props')), 'Esc: closed');
+  // The events: Term 2 out of OP, Term 3 missing, CRC errors on Term 2's port B
+  await a.click('#io-view-events');
+  await sleep(400);
+  const evs = await a.$$eval('[data-io-event]', (r) => r.map((x) => `${x.getAttribute('data-io-event-kind')}:${x.textContent}`)).catch(() => []);
+  expect(evs.some((e) => /^state:.*Term 2 \(EL1008\): OP → SAFEOP/.test(e)) && evs.some((e) => /^crc:.*Term 2 \(EL1008\): 7 CRC errors on port B/.test(e)) && evs.some((e) => /Term 3 \(EL2008\): OP → INIT/.test(e)), `the events: ${evs.join(' | ')}`);
+  await a.click('#io-view-network');
+  await sleep(200);
   // (a node: shown in the tree)
   await a.click('#io-network [data-io-node$="Term 2 (EL1008)"]').catch(() => {});
   await sleep(500);

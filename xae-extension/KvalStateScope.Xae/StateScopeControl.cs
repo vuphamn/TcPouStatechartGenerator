@@ -13,6 +13,8 @@ using Microsoft.VisualStudio.TextManager.Interop;
 using Microsoft.VisualStudio.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+// (the Visual Studio 2017 SDK also has a Shell.Task)
+using Task = System.Threading.Tasks.Task;
 
 namespace KvalStateScope.Xae
 {

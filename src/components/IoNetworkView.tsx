@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Minus, Plus } from 'lucide-react';
+import { Minus, Plus, Search } from 'lucide-react';
 import type { IoBox, IoDevice } from './IoTreePanel.tsx';
 
 /** A slave's state from the EtherCAT master (shared/tcEcat.cjs), by its box's path */
@@ -11,6 +11,19 @@ export interface SlaveState {
   ports: string[];
   /** Where it was read: the master (over ADS), or the box's own linked InfoData / WcState */
   from?: 'master' | 'infodata';
+  /** Its EtherCAT address, as the master gives it */
+  address?: number;
+  /** The master's CRC error counters of its ports A … D */
+  crc?: number[];
+}
+/** Something the I/O tab saw happen to a box (a state change, CRC errors counted): newest first */
+export interface IoEvent {
+  at: number;
+  path: string;
+  box: string;
+  kind: 'state' | 'crc';
+  text: string;
+  ok: boolean;
 }
 /** The masters' answer (ecatStatesResult): by the I/O device's AmsNetId */
 export interface EcatStatesResult {
@@ -65,11 +78,19 @@ export function boxStates(devices: IoDevice[], ecat: EcatStatesResult | null, va
   const out = new Map<string, SlaveState>();
   for (const d of devices) {
     const master = d.netId ? ecat?.masters?.[d.netId] : undefined;
-    for (const b of allBoxes(d.boxes)) {
+    const boxes = allBoxes(d.boxes);
+    // (by address when the master gives them and each is a box's: a box missing in the chain does not shift the
+    // others; else by their order)
+    const byAddress = new Map(boxes.filter((b) => b.address !== undefined).map((b) => [b.address!, b]));
+    const slaves = master?.slaves ?? [];
+    const addressed = slaves.length > 0 && slaves.every((s) => s.address !== undefined && byAddress.has(s.address)) && new Set(slaves.map((s) => s.address)).size === slaves.length;
+    const ofBox = new Map<IoBox, SlaveState & { index: number }>();
+    if (addressed) for (const s of slaves) ofBox.set(byAddress.get(s.address!)!, s);
+    for (const b of boxes) {
       let st: SlaveState | undefined;
-      const fromMaster = master?.slaves && b.slave !== undefined && b.slave !== null ? master.slaves[b.slave] : undefined;
+      const fromMaster = addressed ? ofBox.get(b) : master?.slaves && b.slave !== undefined && b.slave !== null ? master.slaves[b.slave] : undefined;
       if (fromMaster) st = { ...fromMaster, from: 'master' };
-      else if (master?.slaves && typeof b.slave === 'number' && master.count !== undefined && b.slave >= master.count) st = { name: 'missing', ok: false, flags: [], link: ['not found by the master'], ports: [], from: 'master' };
+      else if (master?.slaves && typeof b.slave === 'number' && (addressed || (master.count !== undefined && b.slave >= master.count))) st = { name: 'missing', ok: false, flags: [], link: ['not found by the master'], ports: [], from: 'master' };
       const h = healthLinks(b);
       if (!st && h.state) {
         const v = valueOf(h.state)?.v;
@@ -79,6 +100,33 @@ export function boxStates(devices: IoDevice[], ecat: EcatStatesResult | null, va
         st = st ? { ...st, ok: false, flags: [...st.flags, 'working counter'] } : { name: 'WC', ok: false, flags: ['working counter'], link: [], ports: [], from: 'infodata' };
       }
       if (st) out.set(b.path, st);
+    }
+  }
+  return out;
+}
+
+/**
+ * What changed between two reads of the boxes' states (by path): a box's state or link, its CRC counters going up;
+ * names: each path's box name
+ */
+export function stateEvents(prev: Map<string, SlaveState>, next: Map<string, SlaveState>, names: Map<string, string>, at = Date.now()): IoEvent[] {
+  const out: IoEvent[] = [];
+  for (const [path, st] of next) {
+    const was = prev.get(path);
+    const box = names.get(path) ?? path.split('^').pop() ?? path;
+    if (!was) {
+      // (the first read: only what is wrong)
+      if (prev.size === 0 && !st.ok) out.push({ at, path, box, kind: 'state', text: `${box}: ${stateText(st)}`, ok: false });
+      continue;
+    }
+    if (was.name !== st.name || was.ok !== st.ok || was.link.join() !== st.link.join() || was.flags.join() !== st.flags.join()) {
+      out.push({ at, path, box, kind: 'state', text: `${box}: ${was.name} → ${stateText(st)}`, ok: st.ok });
+    }
+    if (was.crc && st.crc) {
+      st.crc.forEach((n, i) => {
+        const before = was.crc![i] ?? 0;
+        if (n > before) out.push({ at, path, box, kind: 'crc', text: `${box}: ${n - before} CRC error${n - before === 1 ? '' : 's'} on port ${'ABCD'[i]} (${n} counted)`, ok: false });
+      });
     }
   }
   return out;
@@ -179,9 +227,29 @@ export const IoNetworkView: React.FC<{
   stateNote: string | null;
   valueOf: (variable: string) => { v: unknown } | undefined;
   onSelectBox?: (path: string) => void;
-}> = ({ device, states, stateNote, valueOf, onSelectBox }) => {
+  /** A box's properties (right-click, or Alt+click) */
+  onOpenProps?: (path: string) => void;
+  /** The box whose properties are open */
+  selected?: string | null;
+}> = ({ device, states, stateNote, valueOf, onSelectBox, onOpenProps, selected }) => {
   const { placed, width, height } = useMemo(() => layout(device, states), [device, states]);
   const [scale, setScale] = useState(1);
+  // Find a box: its name, type or a variable linked to it (the others dimmed, the first one scrolled to)
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const linkedOf = (b: IoBox) => b.pdos.flatMap((p) => p.entries.filter((e) => e.link).map((e) => ({ name: `${p.name === '(other links)' ? '' : `${p.name} · `}${e.name}`, link: e.link! })));
+  const matches = useMemo(() => {
+    if (!q) return null;
+    return new Set(placed.filter((p) => p.box.name.toLowerCase().includes(q) || (p.box.info?.type ?? '').toLowerCase().includes(q) || linkedOf(p.box).some((l) => l.link.toLowerCase().includes(q))).map((p) => p.box.path));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, placed]);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!matches?.size) return;
+    const first = placed.find((p) => matches.has(p.box.path));
+    const el = scrollRef.current;
+    if (first && el) el.scrollTo({ left: Math.max(0, first.x * scale - 40), top: Math.max(0, first.y * scale - 40), behavior: 'smooth' });
+  }, [matches, placed, scale]);
   const at = new Map(placed.map((p) => [p.box, p]));
   const leds = (b: IoBox) =>
     b.pdos
@@ -194,13 +262,18 @@ export const IoNetworkView: React.FC<{
           Not yet confirmed on hardware
         </span>
         <span id="io-network-note" className="truncate">{stateNote}</span>
-        <span className="ml-auto flex items-center gap-1">
+        <span className="ml-auto flex items-center gap-1 px-1 rounded border border-slate-800 bg-slate-900">
+          <Search className="w-3 h-3 text-slate-500" />
+          <input id="io-network-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a box or variable" className="w-36 bg-transparent outline-none text-slate-200 text-[10px] py-0.5" />
+          {matches && <span id="io-network-matches" className="text-slate-500">{matches.size}</span>}
+        </span>
+        <span className="flex items-center gap-1">
           <button type="button" onClick={() => setScale((s) => Math.max(0.4, s - 0.1))} className="p-0.5 rounded hover:bg-slate-800" title="Smaller"><Minus className="w-3 h-3" /></button>
           <span className="font-mono w-9 text-center">{Math.round(scale * 100)}%</span>
           <button type="button" onClick={() => setScale((s) => Math.min(2, s + 0.1))} className="p-0.5 rounded hover:bg-slate-800" title="Bigger"><Plus className="w-3 h-3" /></button>
         </span>
       </div>
-      <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2">
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2">
         <svg width={width * scale} height={height * scale} viewBox={`0 0 ${width} ${height}`} className="block" style={{ minWidth: width * scale }}>
           {/* The cables: to each box from the port of the box it is wired to */}
           {placed.map((p) => {
@@ -229,6 +302,8 @@ export const IoNetworkView: React.FC<{
             const border = down ? 'var(--color-rose-500)' : cut ? 'var(--color-slate-600)' : st ? 'var(--color-emerald-500)' : 'var(--color-slate-600)';
             const label = p.box.name.replace(/\s*\([^()]*\)\s*$/, '');
             const lights = leds(p.box);
+            const hit = matches ? matches.has(p.box.path) : null;
+            const linked = linkedOf(p.box);
             return (
               <g
                 key={p.box.path}
@@ -237,11 +312,19 @@ export const IoNetworkView: React.FC<{
                 data-down={down ? 'true' : undefined}
                 data-cut={cut ? 'true' : undefined}
                 transform={`translate(${p.x}, ${p.y})`}
-                opacity={cut ? 0.45 : 1}
+                data-match={hit ? 'true' : undefined}
+                data-selected={selected === p.box.path ? 'true' : undefined}
+                opacity={hit === false ? 0.2 : cut ? 0.45 : 1}
                 style={{ cursor: onSelectBox ? 'pointer' : undefined }}
-                onClick={() => onSelectBox?.(p.box.path)}
+                onClick={(ev) => (ev.altKey && onOpenProps ? onOpenProps(p.box.path) : onSelectBox?.(p.box.path))}
+                onContextMenu={(ev) => {
+                  if (!onOpenProps) return;
+                  ev.preventDefault();
+                  onOpenProps(p.box.path);
+                }}
               >
-                <title>{`${p.box.name}\n${st ? stateText(st) : 'State not known'}${cut ? `\nCut off: ${p.behind} before it is down` : ''}`}</title>
+                <title>{`${p.box.name}${p.box.info?.type ? `\n${p.box.info.type}` : ''}\n${st ? stateText(st) : 'State not known'}${cut ? `\nCut off: ${p.behind} before it is down` : ''}${linked.length ? `\n\nLinked (${linked.length}):\n${linked.slice(0, 12).map((l) => `${l.name}: ${l.link}`).join('\n')}${linked.length > 12 ? `\n… and ${linked.length - 12} more` : ''}` : ''}${onOpenProps ? '\n\nClick: the tree · Right-click: its properties' : ''}`}</title>
+                {(hit || selected === p.box.path) && <rect x="-3" y="-3" width={W + 6} height={H + 6} rx="8" fill="none" stroke={selected === p.box.path ? 'var(--color-violet-400)' : 'var(--color-sky-400)'} strokeWidth="2" />}
                 <rect width={W} height={H} rx="6" fill="var(--color-slate-900)" stroke={border} strokeWidth={down ? 2.5 : 1.5} />
                 {down && <rect width={W} height={H} rx="6" fill="var(--color-rose-500)" opacity="0.12" />}
                 <text x="8" y="15" fontSize="11" fontWeight="700" fill="var(--color-sky-300)" fontFamily="ui-monospace, monospace">{p.box.product || '—'}</text>

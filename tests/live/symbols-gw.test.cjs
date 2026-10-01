@@ -81,7 +81,7 @@ async function run(allowBrowse, port) {
   expect(io?.devices?.[0]?.netId === '127.0.0.1.2.1' && coupler?.id === 1 && coupler.slave === 0 && coupler.portA?.master === true && term?.slave === 1 && term.portA?.box === 1 && term.portA.port === 1 && t3?.portA?.box === 2 && t3.slave === 2, `the cabling: ${JSON.stringify([coupler?.portA, term?.portA, t3?.portA])}`);
   const ec = r(11);
   const mine = ec?.masters?.['127.0.0.1.2.1'];
-  expect(mine?.count === 3 && mine.slaves?.map((x) => x.name).join() === 'OP,OP,OP' && mine.slaves.every((x) => x.ok) && /Not a device of the connected PLC/.test(ec.masters['10.9.9.9.2.1']?.error ?? ''), `ecatStates: ${JSON.stringify(ec)}`);
+  expect(mine?.count === 3 && mine.slaves?.map((x) => x.name).join() === 'OP,OP,OP' && mine.slaves.every((x) => x.ok) && mine.slaves.map((x) => x.address).join() === '1001,1002,1003' && mine.slaves.every((x) => x.crc?.join() === '0,0,0,0') && /Not a device of the connected PLC/.test(ec.masters['10.9.9.9.2.1']?.error ?? ''), `ecatStates: ${JSON.stringify(ec)}`);
   const line2 = r(6);
   expect(line2?.plcProject === 'Line2' && (line2.files ?? []).map((x) => x.path).join() === 'POUs/SM_Line2.TcPOU' && !line2.stale, `plcProject Line2: ${line2?.error ?? (line2?.files ?? []).map((x) => x.path).join()}`);
   const b = r(7);

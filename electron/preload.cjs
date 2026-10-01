@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     ecatStates: (req) => ipcRenderer.invoke('tc:live-ecat-states', req),
     /** A TwinCAT project's I/O tree on this computer (offline): { pouPath?, pick? } -> the tree, or { canceled } */
     ioTreeFolder: (req) => ipcRenderer.invoke('tc:io-tree-folder', req),
+    /** A device's details: { productCode, revision, type, product } -> { esi, images, folder } */
+    deviceInfo: (req) => ipcRenderer.invoke('tc:device-info', req),
+    /** The device pictures' folder opened (made when missing) -> { folder, error? } */
+    openDevicesFolder: () => ipcRenderer.invoke('tc:open-devices-folder'),
     /** The PLC's project kept on this computer: { folder?, choice?, skipProjects? } -> plcProjectCopyResult */
     projectCopy: (req) => ipcRenderer.invoke('tc:live-project-copy', req),
     /** A folder chosen (its dialog's title) -> { path } | { canceled } */

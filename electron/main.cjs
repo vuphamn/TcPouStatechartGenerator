@@ -318,6 +318,17 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
 // The PLC's I/O tree (read-only: its boot folder's TwinCAT project), for the window's session
 ipcMain.handle('tc:live-io-tree', (event, req) => new Promise((resolve) => liveFor(event.sender).ioTree(resolve, req)));
+// A device's details for the I/O tab: TwinCAT's device descriptions (ESI), the user's pictures of it
+// (Documents\Kval StateScope\Devices; KSS_DOCUMENTS: the tests' folder)
+const devicesDocuments = () => process.env.KSS_DOCUMENTS || app.getPath('documents');
+ipcMain.handle('tc:device-info', (event, req) => require('../shared/tcDeviceInfo.cjs').deviceInfo(req ?? {}, devicesDocuments()));
+// That pictures folder opened in Explorer (made first when missing)
+ipcMain.handle('tc:open-devices-folder', async () => {
+  const dir = require('../shared/tcDeviceInfo.cjs').devicesDirOf(devicesDocuments());
+  fs.mkdirSync(dir, { recursive: true });
+  const err = await shell.openPath(dir);
+  return { folder: dir, ...(err ? { error: err } : {}) };
+});
 // The EtherCAT masters' slave states (read-only), for the window's session
 ipcMain.handle('tc:live-ecat-states', (event, req) => new Promise((resolve) => liveFor(event.sender).ecatStates(resolve, req)));
 // The I/O tree of a TwinCAT project on this computer (offline): the open POU's project, else a folder chosen
@@ -333,7 +344,7 @@ ipcMain.handle('tc:io-tree-folder', async (event, req) => {
     dir = r.filePaths[0];
   }
   try {
-    return readIoFolder(dir);
+    return await readIoFolder(dir);
   } catch (err) {
     return { devices: [], links: [], error: String(err?.message || err) };
   }

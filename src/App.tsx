@@ -132,7 +132,9 @@ import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendi
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
-import type { EcatStatesResult } from './components/IoNetworkView.tsx';
+import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
+import type { DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
+import { canPickIoFolder, readIoFolderInBrowser } from './utils/ioFolder.ts';
 import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -5569,15 +5571,15 @@ export const App: React.FC = () => {
     setIoEcat(null);
     setIoLoading(false);
   }, [liveStatus.state, liveMode]);
-  // Offline: the I/O of the TwinCAT project on this computer (the open POU's project; pick: a folder chosen)
-  const ioFolderApi = desktopLive()?.ioTreeFolder;
+  // Offline: the I/O of the TwinCAT project on this computer (the desktop app: the open POU's project; pick: a folder
+  // chosen; the browser: a folder chosen, Chrome / Edge)
+  const ioFolderApi = !!desktopLive()?.ioTreeFolder || (!isXaeHost() && canPickIoFolder());
   const loadIoFolder = useCallback(
     async (pick: boolean) => {
       const api = desktopLive()?.ioTreeFolder;
-      if (!api) return;
       setIoLoading(true);
       try {
-        const r = await api({ pouPath: pouPath || undefined, pick });
+        const r = api ? await api({ pouPath: pouPath || undefined, pick }) : await readIoFolderInBrowser();
         if (!r.canceled) setIoTree({ devices: r.devices ?? [], links: r.links ?? [], project: r.project, folder: r.folder ?? '', error: r.error });
       } catch (e) {
         setIoTree({ devices: [], links: [], folder: '', error: e instanceof Error ? e.message : String(e) });
@@ -5625,6 +5627,21 @@ export const App: React.FC = () => {
     setIoTree(null);
     setIoEcat(null);
   }, [liveStatus.target]);
+  // What happened to the boxes while live: each read of the masters compared with the one before (newest first)
+  const [ioEvents, setIoEvents] = useState<IoEvent[]>([]);
+  const ioPrevStatesRef = useRef<Map<string, SlaveState>>(new Map());
+  useEffect(() => {
+    ioPrevStatesRef.current = new Map();
+  }, [ioTree]);
+  useEffect(() => {
+    if (!ioTree || !ioEcat?.masters) return;
+    // (the masters' own states: the InfoData ones change with the values, not with the reads)
+    const next = boxStates(ioTree.devices, ioEcat, () => undefined);
+    const names = new Map(ioTree.devices.flatMap((d) => allBoxes(d.boxes).map((b) => [b.path, b.name] as const)));
+    const found = stateEvents(ioPrevStatesRef.current, next, names);
+    ioPrevStatesRef.current = next;
+    if (found.length) setIoEvents((prev) => [...found.reverse(), ...prev].slice(0, 500));
+  }, [ioEcat, ioTree]);
   const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
     const target = `${liveMode}|${liveStatus.target ?? ''}`;
     if (plcSourcesTargetRef.current !== target) {
@@ -6199,6 +6216,18 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStatus.state, liveStatus.target, canCopyProject]);
   const viaLink = liveMode === 'web' && liveVia === 'link';
+  // A box's device details for the I/O tab: TwinCAT's device descriptions and the user's pictures (the desktop app;
+  // Link, also offline with its pairing code)
+  const ioViaLink = !desktopLive() && !isXaeHost() && liveVia === 'link' && !!linkCode;
+  const fetchDeviceInfo = useMemo(() => {
+    const api = desktopLive()?.deviceInfo;
+    if (api) return (req: DeviceInfoRequest) => api(req);
+    if (ioViaLink) return (req: DeviceInfoRequest) => linkRequest<DeviceInfo>({ type: 'deviceInfo', productCode: req.productCode, revision: req.revision, deviceType: req.type, product: req.product }, 'deviceInfoResult');
+    return undefined;
+  }, [ioViaLink, linkRequest]);
+  const openDevicesFolder = desktopLive()?.openDevicesFolder
+    ? () => void desktopLive()!.openDevicesFolder!().then((r) => r.error && showCopyToast(`Could not open ${r.folder}: ${r.error}`, 'error'))
+    : undefined;
   const handleScanPlcs = useMemo(() => {
     if (viaLink) {
       return (addresses: string[]) => linkRequest<PlcScanResult>({ type: 'discover', addresses }, 'discoverResult').catch((err: Error) => ({ devices: [], errors: [err.message] }));
@@ -8628,6 +8657,11 @@ export const App: React.FC = () => {
             onStatesWanted={handleIoStatesWanted}
             guardsOf={ioGuardsOf}
             onOpenGuard={(g) => handleOpenTransitionCode(g.from, g.to)}
+            events={ioEvents}
+            onClearEvents={() => setIoEvents([])}
+            fetchDeviceInfo={fetchDeviceInfo}
+            onOpenDevicesFolder={openDevicesFolder}
+            folderLabel={desktopLive()?.ioTreeFolder ? undefined : 'Offline: the I/O of a TwinCAT project folder you choose (Chrome, Edge)'}
           />,
           dockRegistry.nodes.io
         )}

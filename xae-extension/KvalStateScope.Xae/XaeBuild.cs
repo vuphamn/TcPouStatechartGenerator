@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
+// (the Visual Studio 2017 SDK also has a Shell.Task)
+using Task = System.Threading.Tasks.Task;
 
 namespace KvalStateScope.Xae
 {
