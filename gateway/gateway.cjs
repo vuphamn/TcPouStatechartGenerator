@@ -845,6 +845,19 @@ function start() {
         }
         return;
       }
+      // The EtherCAT masters' slave states (read-only), with the browser's permission (the connected PLC's own devices)
+      if (m.type === 'ecatStates') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBrowse === false) return send({ type: 'ecatStatesResult', requestId, error: 'Reading the PLC\'s I/O states is turned off on this gateway' });
+        if (!session?.conn.client) return send({ type: 'ecatStatesResult', requestId, error: 'Not connected' });
+        try {
+          const { readMasters } = require('../shared/tcEcat.cjs');
+          send({ type: 'ecatStatesResult', requestId, ...(await readMasters(session.conn.client, session.conn.plc.netId, m.netIds)) });
+        } catch (err) {
+          send({ type: 'ecatStatesResult', requestId, error: ads.adsErrorText(err) });
+        }
+        return;
+      }
       if (m.type === 'plcSources') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });

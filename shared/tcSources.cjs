@@ -142,6 +142,40 @@ async function staleCheck(client, tmc, sourceFiles) {
   return null;
 }
 
+/**
+ * The boot folder's project information (read: relPath → Buffer; zip: its CurrentConfig.tszip when already read):
+ * CurrentProjectInfo.json; without it (TwinCAT 4024 may keep none; NOT YET TESTED there), the same from the TwinCAT
+ * project in CurrentConfig.tszip: its name (the .tsproj's), its PLC projects (_Config/PLC/*.xti: Name, AmsPort).
+ * { project: { name }, sub_projects: [{ name, file: 'Plc/Port_<port>.json' }], derived? }; throws when neither is there
+ */
+async function projectInfoOf(read, zip = null) {
+  let first;
+  try {
+    return JSON.parse(text(await read('CurrentProjectInfo.json')));
+  } catch (err) {
+    first = err;
+  }
+  let system = zip;
+  try {
+    system ??= await read('CurrentConfig.tszip');
+  } catch {
+    throw first;
+  }
+  const entries = unzip(system, (p) => /^[^/]+\.tsproj$/i.test(p) || /^_Config\/PLC\/[^/]+\.xti$/i.test(p));
+  const tsproj = entries.find((f) => /\.tsproj$/i.test(f.path));
+  const subs = [];
+  for (const f of entries.filter((x) => /\.xti$/i.test(x.path))) {
+    const tag = /<Project\b[^>]*>/.exec(text(f.data))?.[0] ?? '';
+    const name = /\bName="([^"]+)"/.exec(tag)?.[1] ?? '';
+    if (!name || !/\.plcproj"/i.test(tag)) continue;
+    // (no AmsPort: the next of 851, 852 …)
+    const port = Number(/\bAmsPort="(\d+)"/.exec(tag)?.[1]) || 851 + subs.length;
+    subs.push({ name, file: `Plc/Port_${port}.json` });
+  }
+  if (!tsproj && !subs.length) throw first;
+  return { project: { name: tsproj ? tsproj.path.replace(/\.tsproj$/i, '') : subs[0]?.name ?? '' }, sub_projects: subs, derived: true };
+}
+
 /** The PLC projects the boot folder names: [{ name, port }] */
 function plcProjectsOf(info) {
   return (Array.isArray(info?.sub_projects) ? info.sub_projects : [])
@@ -158,7 +192,7 @@ function plcProjectsOf(info) {
 async function readPlcSources(client, adsPort = 851, options = {}) {
   let info;
   try {
-    info = JSON.parse(text(await readBootFile(client, 'CurrentProjectInfo.json')));
+    info = await projectInfoOf((p) => readBootFile(client, p));
   } catch (err) {
     return { error: `The PLC has no project information in its boot folder (${err?.adsError?.errorStr ?? err?.message ?? err})` };
   }
@@ -186,4 +220,4 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
   return { project: info?.project?.name ?? name, plcProject: name, projects, files, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { readBootFile, readPlcSources, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT };
+module.exports = { readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT };

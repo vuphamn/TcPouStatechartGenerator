@@ -318,6 +318,26 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
 // The PLC's I/O tree (read-only: its boot folder's TwinCAT project), for the window's session
 ipcMain.handle('tc:live-io-tree', (event, req) => new Promise((resolve) => liveFor(event.sender).ioTree(resolve, req)));
+// The EtherCAT masters' slave states (read-only), for the window's session
+ipcMain.handle('tc:live-ecat-states', (event, req) => new Promise((resolve) => liveFor(event.sender).ecatStates(resolve, req)));
+// The I/O tree of a TwinCAT project on this computer (offline): the open POU's project, else a folder chosen
+// (KSS_PICK_PROJECT: the tests' folder, no dialog)
+ipcMain.handle('tc:io-tree-folder', async (event, req) => {
+  const { readIoFolder } = require('../shared/tcIoTree.cjs');
+  let dir = req?.pick ? null : (req?.pouPath && require('../shared/tcBuild.cjs').projectRootOf(String(req.pouPath))) || null;
+  if (!dir) dir = process.env.KSS_PICK_PROJECT || null;
+  if (!dir) {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const r = await dialog.showOpenDialog(win, { title: 'A TwinCAT project (the folder with its .tsproj)', properties: ['openDirectory'] });
+    if (r.canceled || !r.filePaths[0]) return { canceled: true, devices: [], links: [] };
+    dir = r.filePaths[0];
+  }
+  try {
+    return readIoFolder(dir);
+  } catch (err) {
+    return { devices: [], links: [], error: String(err?.message || err) };
+  }
+});
 // The PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded when new, else current / differs
 ipcMain.handle('tc:live-project-copy', (event, req) => new Promise((resolve) => liveFor(event.sender).projectCopy(resolve, req)));
 // A folder for a PLC's project (Save to a different location; KSS_PICK_FOLDER: the tests' folder, no dialog)

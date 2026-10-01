@@ -154,7 +154,8 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
   const handleCopy = () => {
     let textToCopy = '';
     if (target.type === 'node') {
-      textToCopy = target.label || target.id;
+      // (the state's name: its label also holds its description)
+      textToCopy = target.id || target.label;
     } else if (target.type === 'edge') {
       textToCopy = `${target.from} --> ${target.to}${target.label ? `: ${target.label}` : ''}`;
     }

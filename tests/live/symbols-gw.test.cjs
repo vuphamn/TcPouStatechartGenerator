@@ -44,6 +44,8 @@ async function run(allowBrowse, port) {
   ws.send(JSON.stringify({ type: 'plcSources', requestId: 6, plcProject: 'Line2' }));
   // The I/O tree (read-only: its boot folder's TwinCAT project)
   ws.send(JSON.stringify({ type: 'ioTree', requestId: 10 }));
+  // The EtherCAT master's slave states: the PLC's own device; another system's refused
+  ws.send(JSON.stringify({ type: 'ecatStates', requestId: 11, netIds: ['127.0.0.1.2.1', '10.9.9.9.2.1'] }));
   // Build with an edit (its error from the stand-in compiler); a write (not allowed); a path outside the project
   const conveyor = require('../fakes/symbols-plc.cjs').PLANT_SOURCES['POUs/Conveyor/SM_Conveyor.TcPOU'];
   ws.send(JSON.stringify({ type: 'plcBuild', requestId: 7, edits: [{ plcProject: 'Plant', path: 'POUs/Conveyor/SM_Conveyor.TcPOU', content: conveyor.replace('doState();', 'doState();\nnoSuchVar := 1;') }] }));
@@ -52,7 +54,7 @@ async function run(allowBrowse, port) {
   await sleep(1500);
   ws.close();
   gw.kill();
-  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult' || m.type === 'ioTreeResult') && m.requestId === id);
+  return (id) => got.find((m) => (m.type === 'liveBrowseResult' || m.type === 'plcSourcesResult' || m.type === 'plcBuildResult' || m.type === 'ioTreeResult' || m.type === 'ecatStatesResult') && m.requestId === id);
 }
 
 (async () => {
@@ -72,7 +74,14 @@ async function run(allowBrowse, port) {
   const io = r(10);
   const term = io?.devices?.[0]?.boxes?.[0]?.boxes?.[0];
   expect(io?.project === 'Plant' && io.devices?.[0]?.name === 'Device 1 (EtherCAT)' && io.devices[0].boxes[0].product === 'EK1100' && term?.product === 'EL1008', `the I/O tree: ${io?.error ?? `${io?.devices?.[0]?.name} > ${io?.devices?.[0]?.boxes?.[0]?.name} > ${term?.name}`}`);
-  expect(term?.pdos?.[0]?.entries?.[0]?.link === `${R}.bEnable` && !term.pdos[1].entries[0].link, `its channel 1 linked to ${term?.pdos?.[0]?.entries?.[0]?.link}`);
+  expect(term?.pdos?.[0]?.entries?.[0]?.link === `${R}.bEnable` && term.pdos[1].entries[0].link === 'MAIN.conveyor.bStart', `its channels linked to ${term?.pdos?.map((p) => p.entries[0].link).join(', ')}`);
+  // (the cabling: each box's Id, its place among the slaves, its port A)
+  const coupler = io?.devices?.[0]?.boxes?.[0];
+  const t3 = coupler?.boxes?.[1];
+  expect(io?.devices?.[0]?.netId === '127.0.0.1.2.1' && coupler?.id === 1 && coupler.slave === 0 && coupler.portA?.master === true && term?.slave === 1 && term.portA?.box === 1 && term.portA.port === 1 && t3?.portA?.box === 2 && t3.slave === 2, `the cabling: ${JSON.stringify([coupler?.portA, term?.portA, t3?.portA])}`);
+  const ec = r(11);
+  const mine = ec?.masters?.['127.0.0.1.2.1'];
+  expect(mine?.count === 3 && mine.slaves?.map((x) => x.name).join() === 'OP,OP,OP' && mine.slaves.every((x) => x.ok) && /Not a device of the connected PLC/.test(ec.masters['10.9.9.9.2.1']?.error ?? ''), `ecatStates: ${JSON.stringify(ec)}`);
   const line2 = r(6);
   expect(line2?.plcProject === 'Line2' && (line2.files ?? []).map((x) => x.path).join() === 'POUs/SM_Line2.TcPOU' && !line2.stale, `plcProject Line2: ${line2?.error ?? (line2?.files ?? []).map((x) => x.path).join()}`);
   const b = r(7);
@@ -82,7 +91,7 @@ async function run(allowBrowse, port) {
   expect(!!auditFile && /"plc\.build"/.test(fs.readFileSync(path.join(h.OUT, 'gw-sym-test', auditFile), 'utf8')), 'the build in the audit log');
   r = await run(false, 8457);
   expect(/Building the PLC's project is turned off/.test(r(7)?.fatal ?? ''), `without allowBuild: "${r(7)?.fatal}"`);
-  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? '') && /turned off/.test(r(10)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}", "${r(10)?.error}"`);
+  expect(/turned off/.test(r(2)?.error ?? '') && /turned off/.test(r(5)?.error ?? '') && /turned off/.test(r(10)?.error ?? '') && /turned off/.test(r(11)?.error ?? ''), `allowBrowse: false: "${r(2)?.error}", "${r(5)?.error}", "${r(10)?.error}", "${r(11)?.error}"`);
   plc.kill();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

@@ -100,6 +100,33 @@ function handle(sock, f) {
     b.writeUInt32LE(code);
     reply(Buffer.concat([b, rest]));
   };
+  const withLength = (payload) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(payload.length);
+    return Buffer.concat([b, payload]);
+  };
+  // config.ecat: EtherCAT masters [{ netId, slaves: [[device state, link state], …], down?: { afterReads, slaves } }]
+  // on port 0xFFFF at their NetIds: the slave count (index group 6), the slaves' states (9); down: after that many
+  // reads of the states, those instead (a terminal gone)
+  if (target.port === 0xffff) {
+    const at = [...target.netId].join('.');
+    const m = (config.ecat || []).find((x) => x.netId === at);
+    if (!m) return result(7);
+    if (cmd !== 2) return result(0x701);
+    const ig = d.readUInt32LE(0);
+    const size = d.readUInt32LE(8);
+    const now = m.down && (m.reads || 0) >= m.down.afterReads ? m.down.slaves : m.slaves;
+    if (ig === 6) {
+      const b = Buffer.alloc(2);
+      b.writeUInt16LE(now.length);
+      return result(0, withLength(b));
+    }
+    if (ig === 9) {
+      m.reads = (m.reads || 0) + 1;
+      return result(0, withLength(Buffer.from(now.flat()).subarray(0, size)));
+    }
+    return result(0x702);
+  }
   // config.configMode: TwinCAT in Config mode (no PLC runtime): its system service (port 10000) says Config, every
   // other port is not there (ADS 6, target port not found)
   // config.plcPorts: the only ADS ports with a PLC runtime (the others: not found; the system service answers Run)
@@ -108,11 +135,6 @@ function handle(sock, f) {
     if (target.port !== 10000) return result(6);
     if (cmd === 4) { const st = Buffer.alloc(4); st.writeUInt16LE(15, 0); return result(0, st); }
   }
-  const withLength = (payload) => {
-    const b = Buffer.alloc(4);
-    b.writeUInt32LE(payload.length);
-    return Buffer.concat([b, payload]);
-  };
   switch (cmd) {
     case 1: {
       const b = Buffer.alloc(20);

@@ -14,10 +14,22 @@ const productOf = (name) => name.match(/\(([^()]+)\)\s*$/)?.[1] ?? '';
 const base = (p) => p.split(/[\\/]/).pop().replace(/\.xti$/i, '');
 
 /**
- * The devices of the I/O configuration: [{ name, netId, boxes: [{ name, product, path, boxes, pdos: [{ name, dir:
- * 'in' | 'out', entries: [{ name, type, path, link? }] }] }] }]; links: [{ path, variable, type, dir }] (path: "device^
- * box^…^pdo^entry", as TwinCAT names it; variable: the PLC's symbol, e.g. MAIN.fb.bIn)
+ * The devices of the I/O configuration: [{ name, netId, disabled?, boxes: [{ name, product, path, id, slave, portA,
+ * disabled?, boxes, pdos: [{ name, dir: 'in' | 'out', entries: [{ name, type, path, link? }] }] }] }]; links: [{ path,
+ * variable, type, dir }] (path: "device^box^…^pdo^entry", as TwinCAT names it; variable: the PLC's symbol, e.g.
+ * MAIN.fb.bIn). A box's id: its Box Id; slave: its place among the master's slaves (the boxes in the order the project
+ * lists them, the disabled ones left out); portA: where its port A is cabled, from its PortABoxInfo (#xPPBBBBBB: the
+ * port P (0 … 3: A … D) of the box of Id B; #x00ffffff: the master): { box, port } or { master: true }
  */
+function portAOf(info) {
+  const m = /^#x([0-9a-f]{1,8})$/i.exec(String(info || '').trim());
+  if (!m) return null;
+  const v = parseInt(m[1], 16) >>> 0;
+  const box = v & 0xffffff;
+  if (box === 0xffffff) return { master: true, port: 0 };
+  return { box, port: (v >>> 24) & 0xff };
+}
+
 function parseIoTree(files) {
   const devices = [];
   const links = [];
@@ -35,8 +47,11 @@ function parseIoTree(files) {
     for (const dev of kids(root, 'Device')) {
       const named = textOf(kid(dev, 'Name'));
       const name = dev.getAttribute('RemoteName') || (named && named !== '__FILENAME__' ? named : base(p));
+      let slave = 0;
       const boxOf = (el, parent) => {
         const bname = textOf(kid(el, 'Name'));
+        const disabled = el.getAttribute('Disabled') === 'true';
+        const order = disabled ? null : slave++;
         const path = `${parent}^${bname}`;
         const ec = kid(el, 'EtherCAT');
         const pdos = kids(ec ?? el, 'Pdo').map((pdo) => {
@@ -49,9 +64,21 @@ function parseIoTree(files) {
               .filter((en) => en.name),
           };
         }).filter((x) => x.entries.length);
-        return { name: bname, product: productOf(bname), path, boxes: kids(el, 'Box').map((b) => boxOf(b, path)), pdos };
+        const id = Number(el.getAttribute('Id'));
+        const portA = portAOf(ec?.getAttribute('PortABoxInfo'));
+        return {
+          name: bname,
+          product: productOf(bname),
+          path,
+          ...(Number.isFinite(id) && el.getAttribute('Id') ? { id } : {}),
+          slave: order,
+          ...(portA ? { portA } : {}),
+          ...(disabled ? { disabled: true } : {}),
+          boxes: kids(el, 'Box').map((b) => boxOf(b, path)),
+          pdos,
+        };
       };
-      devices.push({ name, netId: dev.getAttribute('AmsNetId') || null, boxes: kids(dev, 'Box').map((b) => boxOf(b, name)) });
+      devices.push({ name, netId: dev.getAttribute('AmsNetId') || null, ...(dev.getAttribute('Disabled') === 'true' ? { disabled: true } : {}), boxes: kids(dev, 'Box').map((b) => boxOf(b, name)) });
     }
     // The PLC's links: its variables to the boxes' entries
     // (InputDst / OutputSrc: VarA the variable itself; the project's own mappings, no name: VarA "<task> Inputs^MAIN.x"
@@ -114,10 +141,10 @@ function parseIoTree(files) {
 
 /**
  * The I/O tree of a PLC (read: its boot folder's file by path -> Buffer): its CurrentConfig.tszip's .xti files,
- * its project's name (CurrentProjectInfo.json). { devices, links, project } or { error }
+ * its project's name (CurrentProjectInfo.json, or the .tsproj's). { devices, links, project } or { error }
  */
 async function readIoTree(read) {
-  const { unzip } = require('./tcSources.cjs');
+  const { unzip, projectInfoOf } = require('./tcSources.cjs');
   let zip;
   try {
     zip = await read('CurrentConfig.tszip');
@@ -128,7 +155,7 @@ async function readIoTree(read) {
   for (const f of unzip(zip, (path) => /\.xti$/i.test(path))) files[f.path] = f.data.toString('utf8');
   let project = '';
   try {
-    project = JSON.parse(String(await read('CurrentProjectInfo.json')).replace(/^\uFEFF/, ''))?.project?.name ?? '';
+    project = (await projectInfoOf(read, zip))?.project?.name ?? '';
   } catch {
     // (its name not known)
   }
@@ -137,4 +164,61 @@ async function readIoTree(read) {
   return { ...tree, project };
 }
 
-module.exports = { parseIoTree, readIoTree, productOf };
+/**
+ * The I/O tree of a TwinCAT project on this computer (offline): dir, the folder of its .tsproj (or one above it, a
+ * solution's: its first .tsproj two levels down at most); its _Config's .xti files. { devices, links, project, folder }
+ * or { error }
+ */
+function readIoFolder(dir) {
+  const fs = require('fs');
+  const path = require('path');
+  const tsprojIn = (d) => {
+    try {
+      return fs.readdirSync(d).find((f) => /\.tsproj$/i.test(f)) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  let root = null;
+  let tsproj = null;
+  const look = (d, depth) => {
+    if (root || depth > 2) return;
+    const t = tsprojIn(d);
+    if (t) {
+      root = d;
+      tsproj = t;
+      return;
+    }
+    let subs = [];
+    try {
+      subs = fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() && !/^(\.|_Boot$|node_modules$)/i.test(e.name));
+    } catch {
+      return;
+    }
+    for (const e of subs) look(path.join(d, e.name), depth + 1);
+  };
+  look(path.resolve(String(dir || '')), 0);
+  if (!root) return { error: 'No TwinCAT project (.tsproj) in that folder' };
+  const files = {};
+  let count = 0;
+  const walk = (d, rel, depth) => {
+    if (depth > 6 || count > 400) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) walk(path.join(d, e.name), `${rel}${e.name}/`, depth + 1);
+      else if (/\.xti$/i.test(e.name) && count++ < 400) files[rel + e.name] = fs.readFileSync(path.join(d, e.name), 'utf8');
+    }
+  };
+  walk(path.join(root, '_Config'), '_Config/', 0);
+  const project = tsproj.replace(/\.tsproj$/i, '');
+  const tree = parseIoTree(files);
+  if (!tree.devices.length) return { ...tree, project, folder: root, error: 'No I/O devices in that TwinCAT project (its _Config folder)' };
+  return { ...tree, project, folder: root };
+}
+
+module.exports = { parseIoTree, readIoTree, readIoFolder, productOf, portAOf };

@@ -162,6 +162,27 @@ if (!('error' in nr)) {
   expect(/\t\t\tELSIF q THEN\r\n\t\t\t\t\/\/ next\r\n\t\t\t\tIF t THEN\r\n\t\t\t\t\tmachineState := E_S\.S_B;\r\n\t\t\t\tEND_IF/.test(d), 'nested: the next arm (and its comment) now the IF');
   expect(/inside the IFs it was in: p, q/.test(nr.message), `nested: says so (${nr.message})`);
 }
+// An arm of an IF / ELSE (nested in IF y): moved as an IF of its own; the other arm stays, the ELSE as IF NOT (z)
+const ie = moveTransitionStart(POU, edge('S_E', 'S_A', 1), 'S_B', V);
+expect(!('error' in ie), `IF / ELSE, its IF arm: moved (${'error' in ie ? ie.error : ie.message})`);
+if (!('error' in ie)) {
+  const d = doState(apply(POU, ie));
+  expect(/\tS_B:\r\n\t\tIF x THEN\r\n\t\t\tmachineState := E_S\.S_A;\r\n\t\tEND_IF\r\n\t\tIF y THEN\r\n\t\t\tIF z THEN\r\n\t\t\t\tmachineState := E_S\.S_A;\r\n\t\t\tEND_IF\r\n\t\tEND_IF\r\n\tS_C, S_D:/.test(d), 'IF / ELSE: the IF arm in S_B, inside IF y');
+  expect(/\tS_E:\r\n\t\tIF y THEN\r\n\t\t\tIF NOT \(z\) THEN\r\n\t\t\t\tmachineState := E_S\.S_B;\r\n\t\t\tEND_IF\r\n\t\tEND_IF\r\nEND_CASE/.test(d), `IF / ELSE: the ELSE left as IF NOT (z) (${d.slice(d.indexOf('S_E:'))})`);
+  expect(/ELSE stays in S_E as IF NOT \(z\)/.test(ie.message), `IF / ELSE: says so (${ie.message})`);
+}
+const ee2 = moveTransitionStart(POU, edge('S_E', 'S_B', 2), 'S_A', V);
+expect(!('error' in ee2), `IF / ELSE, its ELSE: moved (${'error' in ee2 ? ee2.error : ee2.message})`);
+if (!('error' in ee2)) {
+  const d = doState(apply(POU, ee2));
+  expect(/\t\tIF y THEN\r\n\t\t\tIF NOT \(z\) THEN\r\n\t\t\t\tmachineState := E_S\.S_B;\r\n\t\t\tEND_IF\r\n\t\tEND_IF\r\n\tS_B:/.test(d) && /\tS_E:\r\n\t\tIF y THEN\r\n\t\t\tIF z THEN\r\n\t\t\t\tmachineState := E_S\.S_A;\r\n\t\t\tEND_IF\r\n\t\tEND_IF\r\nEND_CASE/.test(d), `IF / ELSE: the ELSE moved as IF NOT (z), the IF kept (${d})`);
+}
+// The sample's HALT_FEED → IDLE_FEED_OFF (IF mode = OFF … ELSE … inside IF NOT moving): to HOMMING_READY_TO_START
+{
+  const tm = SAMPLES.find((x) => x.id === 'table-manager-202')!;
+  const hr = moveTransitionStart(tm.pouContent, { from: 'TABLEMANAGER_HALT_FEED', to: 'TABLEMANAGER_IDLE_FEED_OFF', label: '' } as never, 'TABLEMANAGER_HOMMING_READY_TO_START', V);
+  expect(!('error' in hr) && /IF NOT \(\(cmd_eFeedMode = FEEDMODE_OFF\)\) THEN|IF NOT \(cmd_eFeedMode = FEEDMODE_OFF\) THEN/.test(hr.code), `the sample's HALT_FEED → IDLE_FEED_OFF moved (${'error' in hr ? hr.error : hr.message})`);
+}
 // In an ELSE: refused (no condition to carry)
 const INELSE = NESTED.replace('\t\t\tELSIF q THEN', '\t\t\tELSE');
 const er = moveTransitionStart(POU.replace(/<Method Name="doState"[\s\S]*?<\/Method>/, method('doState', INELSE)), edge('S_A', 'S_C', 1), 'S_B', V);

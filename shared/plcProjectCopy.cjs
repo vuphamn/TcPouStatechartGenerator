@@ -131,7 +131,7 @@ async function syncPlcProject(read, opts = {}) {
   if (skip.length) {
     // (its project information first: a few hundred bytes, not the archives)
     try {
-      const info = JSON.parse(String(await read('CurrentProjectInfo.json')).replace(/^﻿/, ''));
+      const info = await require('./tcSources.cjs').projectInfoOf(read);
       const names = [info?.project?.name, ...(info?.sub_projects ?? []).map((x) => x?.name)].filter(Boolean).map((x) => String(x).toLowerCase());
       if (names.some((n) => skip.includes(n))) return { status: 'same-project', project: info?.project?.name ?? '' };
     } catch {

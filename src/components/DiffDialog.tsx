@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronDown, ChevronsDown, ChevronsUp, ChevronUp, Columns2, ExternalLink, GitCompare, PanelRight, Pencil, Redo2, RefreshCw, Rows3, Undo2, X } from 'lucide-react';
-import { diffChanges, diffCounts, diffHunkIndices, diffLines, undoChange, type DiffChange, type DiffRow } from '../utils/textDiff.ts';
+import { diffChanges, diffCounts, diffHunkIndices, diffLines, inlineDiff, undoChange, type DiffChange, type DiffRow, type InlineSeg } from '../utils/textDiff.ts';
 import { useEditorZoom } from '../hooks/useEditorZoom.ts';
 
 /** Asks an editor to show its changes ({ editor: 'method' | 'pou' | 'enum' }): the "*" on its tab */
@@ -401,6 +401,13 @@ export const DiffPanel: React.FC<DiffPanelProps> = ({ title, beforeLabel, afterL
       const current = c >= 0 && c === at;
       const del = L?.type === 'del';
       const add = R?.type === 'add';
+      // (a line changed: what changed within it marked on both sides)
+      // (two lines with little in common, paired only by place: the whole line is the change)
+      const pairInline = del && add && L && R && (L.text || R.text) ? inlineDiff(L.text, R.text) : null;
+      const kept = pairInline ? pairInline.right.filter((s) => !s.changed && /\S/.test(s.text)).reduce((n, s) => n + s.text.trim().length, 0) : 0;
+      const inline = pairInline && kept >= 0.4 * Math.max(L!.text.trim().length, R!.text.trim().length) ? pairInline : null;
+      const segs = (parts: InlineSeg[], cls: string) =>
+        parts.map((s, i) => (s.changed ? <span key={i} data-diff-inline="" className={`${cls} rounded-sm`}>{s.text}</span> : <React.Fragment key={i}>{s.text}</React.Fragment>));
       out.push(
         <tr
           key={k}
@@ -410,9 +417,9 @@ export const DiffPanel: React.FC<DiffPanelProps> = ({ title, beforeLabel, afterL
           style={currentStyle(current)}
         >
           <td className={`w-[3.6em] px-2 text-right text-slate-500 select-none align-top ${del ? 'bg-rose-950/60' : changed && !L ? 'bg-slate-800/30' : ''}`}>{L?.before ?? ''}</td>
-          <td className={`diff-before px-2 whitespace-pre-wrap [overflow-wrap:anywhere] align-top border-r border-slate-800 ${del ? 'bg-rose-950/60 text-rose-100' : changed && !L ? 'bg-slate-800/30' : 'text-slate-300'}`}>{L ? L.text || ' ' : ''}</td>
+          <td className={`diff-before px-2 whitespace-pre-wrap [overflow-wrap:anywhere] align-top border-r border-slate-800 ${del ? 'bg-rose-950/60 text-rose-100' : changed && !L ? 'bg-slate-800/30' : 'text-slate-300'}`}>{L ? (inline ? segs(inline.left, 'bg-rose-700/60 text-white') : L.text || ' ') : ''}</td>
           <td className={`w-[3.6em] px-2 text-right text-slate-500 select-none align-top ${add ? 'bg-emerald-950/60' : changed && !R ? 'bg-slate-800/30' : ''}`}>{R?.after ?? ''}</td>
-          <td className={`diff-after px-2 whitespace-pre-wrap [overflow-wrap:anywhere] align-top ${add ? 'bg-emerald-950/60 text-emerald-100' : changed && !R ? 'bg-slate-800/30' : 'text-slate-300'}`}>{R ? (isEditingLine(part, R) ? lineInput() : R.text || ' ') : ''}</td>
+          <td className={`diff-after px-2 whitespace-pre-wrap [overflow-wrap:anywhere] align-top ${add ? 'bg-emerald-950/60 text-emerald-100' : changed && !R ? 'bg-slate-800/30' : 'text-slate-300'}`}>{R ? (isEditingLine(part, R) ? lineInput() : inline ? segs(inline.right, 'bg-emerald-700/60 text-white') : R.text || ' ') : ''}</td>
         </tr>
       );
     });

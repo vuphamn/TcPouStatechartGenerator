@@ -9,6 +9,7 @@ const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources, readBootFile, unzip } = require('./tcSources.cjs');
 const { readIoTree } = require('./tcIoTree.cjs');
+const { readMasters } = require('./tcEcat.cjs');
 const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
@@ -345,6 +346,22 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /**
+   * The EtherCAT masters' slave states (read-only; NOT YET CONFIRMED ON HARDWARE): req { requestId, netIds } (the
+   * I/O devices' AmsNetIds); answered with ecatStatesResult { requestId, masters: { netId: { count, slaves, at } |
+   * { error } } } or { error }
+   */
+  async function ecatStates(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const s = session;
+    if (!s || !s.connected) return send({ type: 'ecatStatesResult', requestId, error: 'Not connected' });
+    try {
+      send({ type: 'ecatStatesResult', requestId, ...(await readMasters(s.client, s.netId, req?.netIds)) });
+    } catch (err) {
+      send({ type: 'ecatStatesResult', requestId, error: ads.adsErrorText(err) });
+    }
+  }
+
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
@@ -509,7 +526,7 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
-  return { start, stop, watch, browse, sources, ioTree, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  return { start, stop, watch, browse, sources, ioTree, ecatStates, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

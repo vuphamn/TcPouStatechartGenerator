@@ -72,8 +72,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const add = await p.waitForSelector('#state-list-bookmark-btn', { timeout: 3000 }).catch(() => null);
   expect(!!add, `its card's menu: Add bookmark (${await p.evaluate(() => [...document.querySelectorAll('[id*="context-menu"] [id], [role="menu"] [id]')].map((e) => e.id).slice(0, 8).join(', '))})`);
   if (add) await p.evaluate(() => document.getElementById('state-list-bookmark-btn')?.click());
-  await h.sleep(600);
+  // (a slow machine: until it shows, at most a few seconds)
+  for (let i = 0; i < 25 && !(await cards()).includes(S2); i++) await h.sleep(200);
   expect((await cards()).includes(S2), `set from Identified States (${await cards()})`);
+  for (let i = 0; i < 15 && !(await gutter('st-dut-editor', new RegExp(`^\\s*,?\\s*${S2}\\b`)))?.marked; i++) await h.sleep(200);
   expect((await gutter('st-dut-editor', new RegExp(`^\\s*,?\\s*${S2}\\b`)))?.marked, 'the Enum Editor: its member line marked');
 
   // 4. A click on a bookmark badge: off; on the margin's faint one: on (the editors, the canvas, Identified States)

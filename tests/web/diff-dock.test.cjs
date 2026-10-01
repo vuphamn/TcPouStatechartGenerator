@@ -89,6 +89,27 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(300);
   expect(!(await p.$('#diff-dialog')), 'Esc: closed');
 
+  // Split: within a changed line, what changed marked on both sides (here: a condition put in before a THEN)
+  await p.evaluate((id) => {
+    const ta = document.getElementById(id);
+    ta.focus();
+    const at = ta.value.indexOf(' THEN');
+    ta.setSelectionRange(at, at);
+    document.execCommand('insertText', false, ' AND TRUE');
+  }, ID);
+  await h.sleep(300);
+  await p.click('#diff-view-split').catch(() => {});
+  await p.click('#method-diff-btn');
+  await p.waitForSelector('#diff-dialog', { timeout: 3000 }).catch(() => {});
+  await p.click('#diff-view-split').catch(() => {});
+  await h.sleep(300);
+  const inline = await p.evaluate(() => {
+    const row = [...document.querySelectorAll('#diff-dialog tr.diff-del.diff-add')].find((r) => /AND TRUE/.test(r.textContent));
+    return row ? { left: [...row.querySelectorAll('.diff-before [data-diff-inline]')].map((s) => s.textContent), right: [...row.querySelectorAll('.diff-after [data-diff-inline]')].map((s) => s.textContent) } : null;
+  });
+  expect(inline?.left.length === 0 && inline.right.length === 1 && inline.right[0].trim() === 'AND TRUE', `the change within the line: ${JSON.stringify(inline)}`);
+  await p.keyboard.press('Escape');
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

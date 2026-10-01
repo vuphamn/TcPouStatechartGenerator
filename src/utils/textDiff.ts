@@ -117,3 +117,54 @@ export function undoChange(rows: DiffRow[], change: DiffChange, eol = '\n'): str
   });
   return lines.join(eol);
 }
+
+/** A part of a changed line: the same on both sides, or changed (taken out on the left, put in on the right) */
+export interface InlineSeg {
+  text: string;
+  changed: boolean;
+}
+
+/**
+ * What changed within a line (one taken out beside the one put in, Split view): by words, spaces and punctuation
+ * (their longest common run kept); a long line by its common start and end only
+ */
+export function inlineDiff(before: string, after: string): { left: InlineSeg[]; right: InlineSeg[] } {
+  const tok = (s: string) => s.match(/\w+|\s+|[^\w\s]/g) ?? [];
+  const a = tok(before);
+  const b = tok(after);
+  const merge = (parts: InlineSeg[]) =>
+    parts.reduce<InlineSeg[]>((out, p) => {
+      if (!p.text) return out;
+      const last = out[out.length - 1];
+      if (last && last.changed === p.changed) last.text += p.text;
+      else out.push({ ...p });
+      return out;
+    }, []);
+  if (a.length * b.length > 40000) {
+    let s = 0;
+    while (s < before.length && s < after.length && before[s] === after[s]) s++;
+    let e = 0;
+    while (e < before.length - s && e < after.length - s && before[before.length - 1 - e] === after[after.length - 1 - e]) e++;
+    const side = (t: string) => merge([{ text: t.slice(0, s), changed: false }, { text: t.slice(s, t.length - e), changed: true }, { text: t.slice(t.length - e), changed: false }]);
+    return { left: side(before), right: side(after) };
+  }
+  // (the longest common subsequence of the tokens)
+  const n = a.length;
+  const m = b.length;
+  const L: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const left: InlineSeg[] = [];
+  const right: InlineSeg[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) {
+      left.push({ text: a[i++], changed: false });
+      right.push({ text: b[j++], changed: false });
+    } else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) right.push({ text: b[j++], changed: true });
+    else left.push({ text: a[i++], changed: true });
+  }
+  // (a common run of only spaces between two changes: part of the change)
+  const tidy = (segs: InlineSeg[]) => merge(segs).map((s, k, all) => (!s.changed && /^\s+$/.test(s.text) && all[k - 1]?.changed && all[k + 1]?.changed ? { ...s, changed: true } : s));
+  return { left: merge(tidy(left)), right: merge(tidy(right)) };
+}

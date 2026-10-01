@@ -34,6 +34,10 @@ interface DesktopLiveApi {
   sources?: (req: { requestId: number }) => Promise<import('./plcSources.ts').PlcSources>;
   /** The PLC's I/O tree (read-only) */
   ioTree?: (req: { requestId: number }) => Promise<import('../components/IoTreePanel.tsx').IoTree>;
+  /** The EtherCAT masters' slave states (read-only; not yet confirmed on hardware) */
+  ecatStates?: (req: { requestId: number; netIds: string[] }) => Promise<import('../components/IoNetworkView.tsx').EcatStatesResult>;
+  /** A TwinCAT project's I/O tree on this computer (offline): the open POU's project, else a folder chosen */
+  ioTreeFolder?: (req: { pouPath?: string; pick?: boolean }) => Promise<import('../components/IoTreePanel.tsx').IoTree & { canceled?: boolean; folder?: string }>;
   /** The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects, or its own folder) */
   projectCopy?: (req: { requestId: number; folder?: string; chosen?: boolean; choice?: 'override' | 'keep'; skipProjects?: string[] }) => Promise<import('./plcSources.ts').PlcCopyResult>;
   /** A folder chosen (the dialog's title) */

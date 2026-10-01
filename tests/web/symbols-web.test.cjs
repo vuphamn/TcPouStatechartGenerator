@@ -266,6 +266,47 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   }));
   expect(io.devices.includes('Device 1 (EtherCAT)') && io.entry, `the I/O tab: its device and the terminal's channel (${JSON.stringify(io)})`);
   expect(/^(TRUE|FALSE)$/.test(io.value ?? ''), `the channel's linked variable, live: ${io.value}`);
+  // The boxes' states from the EtherCAT master: each one a badge (OP at first)
+  let health = {};
+  for (let i = 0; i < 30 && health['Term 1 (EK1100)'] !== 'OP'; i++) {
+    await sleep(300);
+    health = await a.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-io-box]')].map((b) => [b.getAttribute('data-io-box').split('^').pop(), b.querySelector(':scope > button [data-io-state]')?.getAttribute('data-io-state') ?? null])));
+  }
+  expect(health['Term 1 (EK1100)'] === 'OP', `the master's states on the boxes: ${JSON.stringify(health)}`);
+  // A channel's variable read by a condition: its transition (the loaded SM_Conveyor reads bStart)
+  await a.evaluate(() => { const f = document.getElementById('io-tree-filter'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(f, 'bStart'); f.dispatchEvent(new Event('input', { bubbles: true })); });
+  await sleep(600);
+  const guards = await a.evaluate(() => document.querySelector('[data-io-guards="MAIN.conveyor.bStart"]')?.textContent.trim() ?? null);
+  expect(/2 guards/.test(guards ?? ''), `a channel's variable: the conditions that read it (${guards}; live on ${await a.title()})`);
+  await a.click('[data-io-guards="MAIN.conveyor.bStart"]').catch(() => {});
+  await sleep(300);
+  const list = await a.$$eval('[data-io-guard]', (r) => r.map((x) => x.getAttribute('data-io-guard'))).catch(() => []);
+  expect(list.sort().join() === 'CONVEYOR_RUNNING->CONVEYOR_STOPPED,CONVEYOR_STOPPED->CONVEYOR_RUNNING', `its transitions: ${list.join(', ')}`);
+  await a.click('[data-io-guard="CONVEYOR_STOPPED->CONVEYOR_RUNNING"]').catch(() => {});
+  await sleep(800);
+  const method = await a.evaluate(() => document.querySelector('#dock-tab-method')?.getAttribute('aria-selected') ?? document.querySelector('[data-dock-tab-active="method"]') !== null);
+  expect(method === 'true' || method === true, `one opened: the Method Editor at its code (${method})`);
+  await a.evaluate(() => document.getElementById('dock-tab-io')?.click());
+  await sleep(400);
+  // The Network view (not yet confirmed on hardware): the boxes as cabled; Term 2 goes down, Term 3 behind it cut off
+  await a.click('#io-view-network');
+  await a.waitForSelector('#io-network [data-io-node]', { timeout: 5000 }).catch(() => {});
+  const net = async () => a.evaluate(() => ({
+    unconfirmed: /not yet confirmed on hardware/i.test(document.getElementById('io-network-unconfirmed')?.textContent ?? ''),
+    nodes: Object.fromEntries([...document.querySelectorAll('#io-network [data-io-node]')].map((n) => [n.getAttribute('data-io-node').split('^').pop(), `${n.getAttribute('data-state')}${n.hasAttribute('data-down') ? ':down' : ''}${n.hasAttribute('data-cut') ? ':cut' : ''}`])),
+    cables: document.querySelectorAll('#io-network [data-io-cable]').length,
+    leds: [...document.querySelectorAll('#io-network [data-io-led]')].map((l) => `${l.getAttribute('data-io-led')}=${l.getAttribute('data-on')}`),
+  }));
+  let nw = await net();
+  expect(nw.unconfirmed && Object.keys(nw.nodes).length === 3 && nw.cables === 2 && nw.leds.some((l) => /^MAIN\.mainStateMachine\.bEnable=/.test(l)), `the network: ${JSON.stringify(nw)}`);
+  for (let i = 0; i < 60 && !/down/.test(nw.nodes['Term 2 (EL1008)'] ?? ''); i++) { await sleep(300); nw = await net(); }
+  expect(nw.nodes['Term 1 (EK1100)'] === 'OP' && nw.nodes['Term 2 (EL1008)'] === 'SAFEOP:down' && /:cut$/.test(nw.nodes['Term 3 (EL2008)'] ?? ''), `a box down: red, the one behind it cut off (${JSON.stringify(nw.nodes)})`);
+  await a.screenshot({ path: h.out('io-network.png') });
+  // (a node: shown in the tree)
+  await a.click('#io-network [data-io-node$="Term 2 (EL1008)"]').catch(() => {});
+  await sleep(500);
+  const back = await a.evaluate(() => ({ tree: document.getElementById('io-view-tree')?.getAttribute('aria-pressed'), badge: document.querySelector('[data-io-box$="Term 2 (EL1008)"] > button [data-io-health]')?.getAttribute('data-io-health') ?? null }));
+  expect(back.tree === 'true' && back.badge === 'down', `a node clicked: the tree, at its box (${JSON.stringify(back)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
 

@@ -11,7 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { readBootFile, unzip, readPlcSources } = require('./tcSources.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 const { waitForRun } = require('./tcAppInfo.cjs');
@@ -43,7 +43,7 @@ function unpack(buf, root) {
 async function fetchProjectArchives(read) {
   let info;
   try {
-    info = JSON.parse(text(await read('CurrentProjectInfo.json')));
+    info = await require('./tcSources.cjs').projectInfoOf(read);
   } catch (err) {
     throw new Error(`The PLC has no project information in its boot folder (${err?.adsError?.errorStr ?? err?.message ?? err})`);
   }
@@ -137,7 +137,7 @@ public class KssMessageFilter : IOleMessageFilter {
 // interop assembly. Its items fill in after the build returns and are refilled for a while: read until they settle.
 // Errors and warnings apart: the list's own filters (every item reports the same level)
 const ERROR_LIST = `
-[void][Reflection.Assembly]::LoadFrom($interop)
+$interop | ForEach-Object { [void][Reflection.Assembly]::LoadFrom($_) }
 Add-Type -ReferencedAssemblies $interop -TypeDefinition @"
 using System.Collections.Generic;
 public static class KssErrorList {
@@ -257,7 +257,9 @@ function Start-Kss {
   $clsid = (Get-ItemProperty ('Registry::HKEY_CLASSES_ROOT\\' + ${ps(progId)} + '\\CLSID')).'(default)'
   $server = (Get-ItemProperty ('Registry::HKEY_CLASSES_ROOT\\CLSID\\' + $clsid + '\\LocalServer32')).'(default)'
   $exe = if ($server.StartsWith('"')) { $server.Substring(1, $server.IndexOf('"', 1) - 1) } else { $server.Substring(0, $server.ToLower().IndexOf('.exe') + 4) }
-  $interop = Join-Path (Split-Path $exe) 'PublicAssemblies\\Microsoft.VisualStudio.Interop.dll'
+  $interop = @(Join-Path (Split-Path $exe) 'PublicAssemblies\\Microsoft.VisualStudio.Interop.dll')
+  # (4024's shell, Visual Studio 2017's: EnvDTE in assemblies of its own)
+  if (-not (Test-Path $interop[0])) { $interop = @('envdte.dll', 'envdte80.dll' | ForEach-Object { Join-Path (Split-Path $exe) ('PublicAssemblies\\' + $_) }) }
 ${ERROR_LIST}
 ${PLC_ONLINE}
   Say @{ kind = 'step'; text = 'Starting TwinCAT XAE (in the background)' }
@@ -396,7 +398,7 @@ function xaeRequest({ dir, tsproj, plcProject, write = null, netId = '', changed
  * One build as a script of its own: XAE started, the project opened, built (and written), XAE quit. The
  * KSS_BUILD_DRYRUN stand-in writes it for a look
  */
-function buildScript({ dir, tsproj, plcProject, write = null, netId = '', progId = 'TcXaeShell.DTE.17.0' }) {
+function buildScript({ dir, tsproj, plcProject, write = null, netId = '', progId = xaeProgId() }) {
   const req = xaeRequest({ dir, tsproj, plcProject, write, netId });
   return `${xaeFunctions(progId)}
 try {
@@ -414,7 +416,7 @@ try {
  * XAE kept open between builds: this script reads one request per line on stdin (JSON: a build, or {"cmd":"quit"}),
  * answers each as a build does; XAE started with the first, quit at "quit" or when stdin closes
  */
-function serverScript(progId = 'TcXaeShell.DTE.17.0') {
+function serverScript(progId = xaeProgId()) {
   return `${xaeFunctions(progId)}
 try {
   while ($true) {
@@ -493,7 +495,7 @@ const keepMinutes = () => {
  * when a build breaks it or times out, or with this process
  */
 class XaeWorker {
-  constructor(progId = 'TcXaeShell.DTE.17.0') {
+  constructor(progId = xaeProgId()) {
     this.progId = progId;
     this.child = null;
     this.queue = Promise.resolve();
@@ -664,15 +666,37 @@ function placeOf(item, ws) {
   return null;
 }
 
+/**
+ * XAE's Automation Interface: TwinCAT 4026's shell (Visual Studio 2022's, TcXaeShell.DTE.17.0) or 4024's (Visual
+ * Studio 2017's, TcXaeShell.DTE.15.0; NOT YET TESTED), the first registered; KSS_XAE_PROGID chooses another
+ */
+const XAE_PROGIDS = ['TcXaeShell.DTE.17.0', 'TcXaeShell.DTE.15.0'];
+let progIdFound = null;
+function xaeProgId() {
+  if (process.env.KSS_XAE_PROGID) return process.env.KSS_XAE_PROGID;
+  if (progIdFound) return progIdFound;
+  if (process.platform !== 'win32' || dry()) return XAE_PROGIDS[0];
+  for (const id of XAE_PROGIDS) {
+    try {
+      execFileSync('reg', ['query', `HKCR\\${id}`], { windowsHide: true, stdio: 'ignore' });
+      return (progIdFound = id);
+    } catch {
+      // (not this one)
+    }
+  }
+  // (none: XAE not installed; asked again next time)
+  return XAE_PROGIDS[0];
+}
+
 /** Is TwinCAT XAE's Automation Interface on this computer (its ProgID registered)? */
-function xaeAvailable(progId = 'TcXaeShell.DTE.17.0') {
+function xaeAvailable(progId = xaeProgId()) {
   if (process.platform !== 'win32') return Promise.resolve(false);
   if (dry()) return Promise.resolve(true);
   return new Promise((resolve) => execFile('reg', ['query', `HKCR\\${progId}`], { windowsHide: true }, (err) => resolve(!err)));
 }
 
 /** TcXaeShell.exe: from its registered automation server (as Start-Kss finds it), or null */
-function xaeExecutable(progId = 'TcXaeShell.DTE.17.0') {
+function xaeExecutable(progId = xaeProgId()) {
   if (process.platform !== 'win32') return Promise.resolve(null);
   const query = (key) => new Promise((resolve) => execFile('reg', ['query', key, '/ve'], { windowsHide: true }, (err, out) => resolve(err ? null : /REG_\w+\s+(.+)$/m.exec(String(out))?.[1]?.trim() ?? null)));
   return query(`HKCR\\${progId}\\CLSID`).then((clsid) => (clsid ? query(`HKCR\\CLSID\\${clsid}\\LocalServer32`) : null)).then((server) => {
@@ -1051,4 +1075,4 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   return result;
 }
 
-module.exports = { fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { xaeProgId, XAE_PROGIDS, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

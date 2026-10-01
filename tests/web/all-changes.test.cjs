@@ -40,6 +40,14 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(marked.length === 1 && marked[0] === S, `the canvas: ${S} marked changed (${marked.join(', ')})`);
   const mini = await p.$$eval('.minimap-changed-marker', (m) => m.map((x) => x.getAttribute('data-state-id'))).catch(() => []);
   expect(mini.includes(S), `the minimap: its dot (${mini.join(', ')})`);
+  // The minimap's filter: only the changed states (the others dimmed); back to all
+  await p.select('#minimap-filter', 'changed').catch(() => {});
+  await h.sleep(300);
+  const dim = await p.evaluate(() => ({ kept: [...document.querySelectorAll('#diagram-minimap-canvas g.node[data-state-id]:not([data-minimap-dimmed])')].map((n) => n.getAttribute('data-state-id')), dimmed: document.querySelectorAll('#diagram-minimap-canvas g.node[data-minimap-dimmed]').length }));
+  expect([...new Set(dim.kept)].join() === S && dim.dimmed > 3, `the minimap, Changed only: ${JSON.stringify({ kept: [...new Set(dim.kept)], dimmed: dim.dimmed })}`);
+  await p.select('#minimap-filter', 'all').catch(() => {});
+  await h.sleep(200);
+  expect((await p.$$eval('#diagram-minimap-canvas g.node[data-minimap-dimmed]', (n) => n.length)) === 0, 'All states: none dimmed');
   // The canvas's search: "changed" on its result
   await p.click('#diagram-search-input').catch(() => {});
   await p.keyboard.type('DISABLED');

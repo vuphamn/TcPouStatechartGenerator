@@ -111,6 +111,24 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  // Only some states shown (the others dimmed): the bookmarked ones, the changed ones (kept per viewer)
+  const [filter, setFilterState] = useState<'all' | 'bookmarked' | 'changed'>(() => {
+    try {
+      const v = localStorage.getItem('kss.minimap.filter');
+      return v === 'bookmarked' || v === 'changed' ? v : 'all';
+    } catch {
+      return 'all';
+    }
+  });
+  const setFilter = (v: 'all' | 'bookmarked' | 'changed') => {
+    setFilterState(v);
+    try {
+      localStorage.setItem('kss.minimap.filter', v);
+    } catch {
+      // per-viewer convenience only
+    }
+  };
+  const [cloneTick, setCloneTick] = useState(0);
   const hasMovedRef = useRef<boolean>(false);
   const dragStartRef = useRef<{ clientX: number; clientY: number; initialPan: { x: number; y: number } }>({
     clientX: 0,
@@ -194,10 +212,28 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
       });
 
       clonedSvgContainerRef.current.replaceChildren(cloned);
+      setCloneTick((t) => t + 1);
     } catch (err) {
       console.warn('Failed to clone SVG for minimap:', err);
     }
   }, [svgElement, canvasPositions]);
+  // The filter: the states not in it dimmed in the thumbnail, with the transitions
+  const filterKey = filter === 'bookmarked' ? (bookmarkedStateIds ?? []).join('|') : filter === 'changed' ? (changedStateIds ?? []).join('|') : '';
+  useEffect(() => {
+    const root = clonedSvgContainerRef.current;
+    if (!root) return;
+    const keep = filter === 'all' ? null : new Set(filter === 'bookmarked' ? bookmarkedStateIds ?? [] : changedStateIds ?? []);
+    root.querySelectorAll<SVGGElement>('g.node[data-state-id]').forEach((n) => {
+      const dim = !!keep && !keep.has(n.getAttribute('data-state-id') ?? '');
+      n.style.opacity = dim ? '0.12' : '';
+      if (dim) n.setAttribute('data-minimap-dimmed', 'true');
+      else n.removeAttribute('data-minimap-dimmed');
+    });
+    root.querySelectorAll<SVGElement>('.edgePath, path.tc-edge-path, .edgeLabel').forEach((e) => {
+      e.style.opacity = keep ? '0.15' : '';
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, filterKey, cloneTick]);
 
   // Calculate minimap container dimensions based on diagram aspect ratio
   const minimapDimensions = useMemo(() => {
@@ -552,6 +588,21 @@ export const DiagramMinimap: React.FC<DiagramMinimapProps> = ({
           ref={clonedSvgContainerRef}
           className="absolute inset-2 pointer-events-none opacity-85 select-none"
         />
+        {/* Show: all states, or only the bookmarked / changed ones (the others dimmed) */}
+        <select
+          id="minimap-filter"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value as 'all' | 'bookmarked' | 'changed')}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className={`absolute top-1 left-1 z-30 max-w-[7.5rem] bg-slate-900/90 border rounded px-1 py-0 text-[10px] cursor-pointer ${filter === 'all' ? 'border-slate-700 text-slate-400 opacity-60 hover:opacity-100' : 'border-sky-600 text-sky-200'}`}
+          title="Show all states, or only the bookmarked or changed ones (the others dimmed)"
+          aria-label="Minimap: which states"
+        >
+          <option value="all">All states</option>
+          <option value="bookmarked">Bookmarked ({(bookmarkedStateIds ?? []).length})</option>
+          <option value="changed">Changed ({(changedStateIds ?? []).length})</option>
+        </select>
 
         {/* Selected State Marker & Beacon */}
         {multiMarkers.map((m) => (

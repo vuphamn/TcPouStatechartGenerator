@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree', 'ecatStates'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -284,6 +284,8 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'plcSources') return void session.sources(send, m);
     // The PLC's I/O tree (read-only)
     if (m.type === 'ioTree') return void session.ioTree(send, m);
+    // The EtherCAT masters' slave states (read-only)
+    if (m.type === 'ecatStates') return void session.ecatStates(send, m);
     // The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects)
     if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
     // A POU of that copy (an instance of it opened live)

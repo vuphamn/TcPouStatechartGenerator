@@ -131,7 +131,8 @@ import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, 
 import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
-import { IoTreePanel, type IoTree } from './components/IoTreePanel.tsx';
+import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
+import type { EcatStatesResult } from './components/IoNetworkView.tsx';
 import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
@@ -5565,10 +5566,65 @@ export const App: React.FC = () => {
       r = { devices: [], links: [], error: e instanceof Error ? e.message : String(e) };
     }
     setIoTree({ devices: r.devices ?? [], links: r.links ?? [], project: r.project, error: r.error });
+    setIoEcat(null);
     setIoLoading(false);
   }, [liveStatus.state, liveMode]);
+  // Offline: the I/O of the TwinCAT project on this computer (the open POU's project; pick: a folder chosen)
+  const ioFolderApi = desktopLive()?.ioTreeFolder;
+  const loadIoFolder = useCallback(
+    async (pick: boolean) => {
+      const api = desktopLive()?.ioTreeFolder;
+      if (!api) return;
+      setIoLoading(true);
+      try {
+        const r = await api({ pouPath: pouPath || undefined, pick });
+        if (!r.canceled) setIoTree({ devices: r.devices ?? [], links: r.links ?? [], project: r.project, folder: r.folder ?? '', error: r.error });
+      } catch (e) {
+        setIoTree({ devices: [], links: [], folder: '', error: e instanceof Error ? e.message : String(e) });
+      }
+      setIoEcat(null);
+      setIoLoading(false);
+    },
+    [pouPath]
+  );
+  // The EtherCAT masters' slave states (read-only; not yet confirmed on hardware): polled while the I/O tab shows a
+  // tree read from the PLC
+  const [ioEcat, setIoEcat] = useState<EcatStatesResult | null>(null);
+  const [ioStatesWanted, setIoStatesWanted] = useState(false);
+  const handleIoStatesWanted = useCallback((on: boolean) => setIoStatesWanted(on), []);
+  useEffect(() => {
+    if (!ioStatesWanted || liveStatus.state !== 'connected' || !ioTree || ioTree.folder !== undefined) return;
+    const netIds = [...new Set(ioTree.devices.filter((d) => d.netId && d.boxes.length).map((d) => d.netId!))];
+    if (!netIds.length) return;
+    let stopped = false;
+    let timer = 0;
+    const poll = async () => {
+      const req = { requestId: Date.now() % 1e9, netIds };
+      let r: EcatStatesResult;
+      try {
+        if (liveMode === 'desktop') r = (await desktopLive()?.ecatStates?.(req)) ?? { error: 'Update the desktop app: it cannot read the EtherCAT states' };
+        else if (gatewayRef.current) r = await gatewayRef.current.request<EcatStatesResult>({ type: 'ecatStates', ...req }, 'ecatStatesResult', 10000);
+        else r = { error: 'Not connected' };
+      } catch (e) {
+        r = { error: e instanceof Error ? e.message : String(e) };
+      }
+      if (stopped) return;
+      setIoEcat(r);
+      // (a host that cannot answer them: not asked again until the tree is read again)
+      if (r.error && /^(Update|No answer)/.test(r.error)) return;
+      timer = window.setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [ioStatesWanted, liveStatus.state, ioTree, liveMode]);
   // (another PLC: its tree read again when asked)
-  useEffect(() => setIoTree(null), [liveStatus.target]);
+  useEffect(() => {
+    setIoTree(null);
+    setIoEcat(null);
+  }, [liveStatus.target]);
   const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
     const target = `${liveMode}|${liveStatus.target ?? ''}`;
     if (plcSourcesTargetRef.current !== target) {
@@ -6577,6 +6633,49 @@ export const App: React.FC = () => {
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
+  );
+  // The I/O tab: the transitions whose conditions read a linked variable (the guards' variables, by lower-case path)
+  const ioGuardIndex = useMemo(() => {
+    if (!ioTree) return null;
+    let edges = liveGuardEdges?.edges ?? null;
+    if (!edges) {
+      try {
+        const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+        edges = buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums);
+      } catch {
+        return null;
+      }
+    }
+    const index = new Map<string, IoGuardUse[]>();
+    for (const e of edges) for (const r of e.refs) {
+      const k = r.toLowerCase();
+      const list = index.get(k) ?? [];
+      if (!list.some((g) => g.from === e.from && g.to === e.to)) list.push({ from: e.from, to: e.to });
+      index.set(k, list);
+    }
+    return index;
+  }, [ioTree, liveGuardEdges, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  const ioGuardsOf = useCallback(
+    (variable: string): IoGuardUse[] => {
+      if (!ioGuardIndex) return [];
+      const v = variable.toLowerCase();
+      const inst = (liveStatus.instance ?? '').toLowerCase();
+      const out: IoGuardUse[] = [];
+      for (const [ref, uses] of ioGuardIndex) {
+        // (a member of the instance followed; a global path itself; not live: a member of that name anywhere)
+        const hit = v === ref || (inst ? v === `${inst}.${ref}` : !ref.includes('.') && v.endsWith(`.${ref}`));
+        if (hit) for (const g of uses) if (!out.some((x) => x.from === g.from && x.to === g.to)) out.push(g);
+      }
+      return out;
+    },
+    [ioGuardIndex, liveStatus.instance]
+  );
+  const ioValueOf = useCallback(
+    (v: string) => {
+      const x = liveVarValues[symbolWatchId(v)];
+      return x === undefined ? undefined : { v: x };
+    },
+    [liveVarValues]
   );
   // ---- Offline simulation: a state, the values its transitions' conditions read, the steps taken ----
   const [sim, setSim] = useState<{ active: boolean; current: string | null; history: { from: string; to: string; label: string }[]; values: Record<string, LiveValue> }>({
@@ -8522,11 +8621,13 @@ export const App: React.FC = () => {
             loading={ioLoading}
             connected={liveStatus.state === 'connected'}
             onLoad={() => void loadIoTree()}
+            onLoadFolder={ioFolderApi ? (pick) => void loadIoFolder(pick) : undefined}
             onVisibleVariables={handleIoVars}
-            valueOf={(v) => {
-              const x = liveVarValues[symbolWatchId(v)];
-              return x === undefined ? undefined : { v: x };
-            }}
+            valueOf={ioValueOf}
+            ecat={ioEcat}
+            onStatesWanted={handleIoStatesWanted}
+            guardsOf={ioGuardsOf}
+            onOpenGuard={(g) => handleOpenTransitionCode(g.from, g.to)}
           />,
           dockRegistry.nodes.io
         )}

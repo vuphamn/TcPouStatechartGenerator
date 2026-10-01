@@ -85,6 +85,19 @@ function client(boot: Record<string, Buffer>, calls: string[] = []) {
   expect(JSON.stringify([...bt.values()]) === '[{"name":"SM_Line","size":8,"members":["bGo","machineState"]}]', `builtTypes: ${JSON.stringify([...bt.values()])}`);
   expect(JSON.stringify(libraryTypesOf(tmc)) === '{"mc_power":"Tc2_MC2","t_amsnetid":"Tc2_System"}', `libraryTypesOf: ${JSON.stringify(libraryTypesOf(tmc))}`);
 
+  // 7. No CurrentProjectInfo.json (TwinCAT 4024): the project and its PLC projects from CurrentConfig.tszip (the
+  // .tsproj's name; each PLC .xti's Name and AmsPort; a safety project left out)
+  const tszip = writeZip({
+    'Plant.tsproj': '<TcSmProject/>',
+    '_Config/PLC/PlantPlc.xti': '<TcSmItem><Project GUID="{1}" Name="PlantPlc" PrjFilePath="..\\..\\PlantPlc\\PlantPlc.plcproj" AmsPort="851"></Project></TcSmItem>',
+    '_Config/PLC/Other.xti': '<TcSmItem><Project GUID="{2}" Name="Other" PrjFilePath="..\\..\\Other\\Other.plcproj" AmsPort="852"></Project></TcSmItem>',
+    '_Config/SPLC/Safety.xti': '<TcSmItem><Project GUID="{3}" Name="Safety" PrjFilePath="Safety.splcproj"></Project></TcSmItem>',
+  });
+  const old = await readPlcSources(client({ 'CurrentConfig.tszip': tszip, 'CurrentConfig/PlantPlc.tpzip': zip }), 851);
+  expect(!old.error && old.project === 'Plant' && old.plcProject === 'PlantPlc' && old.files?.length === 3 && JSON.stringify(old.projects) === '[{"name":"PlantPlc","port":851},{"name":"Other","port":852}]', `4024, no project information: ${old.error ?? `${old.project} / ${old.plcProject}, ${JSON.stringify(old.projects)}`}`);
+  const old852 = await readPlcSources(client({ 'CurrentConfig.tszip': tszip, 'CurrentConfig/Other.tpzip': writeZip({ 'POUs/FB_Other.TcPOU': '<POU Name="FB_Other"/>' }) }), 852);
+  expect(old852.plcProject === 'Other', `4024: port 852's project (${old852.error ?? old852.plcProject})`);
+
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);
 })();

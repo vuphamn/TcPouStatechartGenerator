@@ -1,7 +1,7 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
 // The editors' Diff (src/utils/textDiff.ts): lines put in, taken out, changed (one out, one in), their line numbers
 // before and after; the hunks: the changes with 3 lines around them, a gap marked between them
-import { diffChanges, diffCounts, diffHunks, diffLines, undoChange } from '../../src/utils/textDiff.ts';
+import { diffChanges, diffCounts, diffHunks, diffLines, inlineDiff, undoChange } from '../../src/utils/textDiff.ts';
 
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -33,6 +33,15 @@ expect(no3.includes('line 3\r\n') && !no3.includes('line three') && !no3.include
 const no15 = undoChange(rows, changes[1], '\r\n');
 expect(no15.includes('line 14\r\nline 15\r\nline 16') && no15.includes('line three'), 'the second undone: line 15 back where it was');
 expect(diffChanges(diffLines(before, undoChange(rows, changes[2], '\r\n'))).length === 2, 'the third undone: two changes left');
+
+// Within a changed line (Split view): what changed marked, by words; the rest the same on both sides
+const show = (segs: { text: string; changed: boolean }[]) => segs.map((x) => (x.changed ? `[${x.text}]` : x.text)).join('');
+const w = inlineDiff('IF bStart AND nCount > 3 THEN', 'IF bStart OR nCount > 5 THEN');
+expect(show(w.left) === 'IF bStart [AND] nCount > [3] THEN' && show(w.right) === 'IF bStart [OR] nCount > [5] THEN', `inlineDiff: ${show(w.left)} | ${show(w.right)}`);
+const ins = inlineDiff('x := 1;', 'x := 1 + y;');
+expect(show(ins.left) === 'x := 1;' && show(ins.right) === 'x := 1[ + y];', `put in only: ${show(ins.left)} | ${show(ins.right)}`);
+const long = inlineDiff('a'.repeat(10) + ' b'.repeat(300), 'a'.repeat(10) + ' c'.repeat(300));
+expect(long.left.map((x) => x.text).join('') === 'a'.repeat(10) + ' b'.repeat(300) && long.left.some((x) => x.changed), 'a long line: its common start and end');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);
