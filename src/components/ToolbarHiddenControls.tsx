@@ -4,6 +4,7 @@ import {
   MoreHorizontal,
   ChevronDown,
   SlidersHorizontal,
+  MessageSquare,
   Palette,
   Code2,
   FileCode,
@@ -32,6 +33,7 @@ import { SnapConfig } from '../utils/snapToGrid.ts';
 export type ToolbarItemId =
   | 'interactive'
   | 'labels'
+  | 'hover'
   | 'code'
   | 'autoAlign'
   | 'lock'
@@ -56,6 +58,9 @@ export interface ToolbarHiddenControlsProps {
   setIsInteractiveMode: (valOrFn: boolean | ((prev: boolean) => boolean)) => void;
   isCompactLabels: boolean;
   setIsCompactLabels: React.Dispatch<React.SetStateAction<boolean>>;
+  /** The popups on hovering a state, a transition's label or a badge (on by default) */
+  hoverPopups?: boolean;
+  setHoverPopups?: (on: boolean) => void;
   isInspectorOpen: boolean;
   handleToggleInspector: () => void;
   handleOpenMethodEditor: (methodName?: string) => void;
@@ -101,6 +106,8 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
   setIsInteractiveMode,
   isCompactLabels,
   setIsCompactLabels,
+  hoverPopups = true,
+  setHoverPopups,
   isInspectorOpen,
   handleToggleInspector,
   handleOpenMethodEditor,
@@ -298,7 +305,7 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
           </div>
 
           {/* SECTION 1: Display Mode & Labels */}
-          <div className={`flex flex-col gap-1.5 ${['interactive', 'labels', 'styles', 'fullscreen', 'code'].some((id) => has(id as ToolbarItemId)) ? '' : 'hidden'}`}>
+          <div className={`flex flex-col gap-1.5 ${['interactive', 'labels', 'hover', 'styles', 'fullscreen', 'code'].some((id) => has(id as ToolbarItemId)) ? '' : 'hidden'}`}>
             <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
               Display & Editors
             </div>
@@ -343,6 +350,27 @@ export const ToolbarHiddenControls: React.FC<ToolbarHiddenControlsProps> = ({
                   <span className="text-[9px] font-bold px-1 rounded bg-slate-900 border border-slate-700">
                     {isCompactLabels ? 'Clean' : 'Full'}
                   </span>
+                </button>
+              )}
+
+              {/* The hover popups (states, labels, badges) on or off */}
+              {has('hover') && setHoverPopups && (
+                <button
+                  id="hidden-hover-popups-btn"
+                  type="button"
+                  onClick={() => setHoverPopups(!hoverPopups)}
+                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+                    hoverPopups
+                      ? 'bg-sky-950/80 text-sky-300 border-sky-600/70 shadow-xs'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="The popups shown on hovering a state (its code), a transition's label or a badge (its guard): on or off"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Hover popups</span>
+                  </div>
+                  <span className="text-[9px] font-bold px-1 rounded bg-slate-900 border border-slate-700">{hoverPopups ? 'ON' : 'OFF'}</span>
                 </button>
               )}
 

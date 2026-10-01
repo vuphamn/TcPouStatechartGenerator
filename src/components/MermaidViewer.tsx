@@ -26,6 +26,7 @@ import {
   Sliders,
   MousePointerClick,
   SlidersHorizontal,
+  MessageSquare,
   Map,
   Grid,
   Magnet,
@@ -1829,6 +1830,23 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   };
 
   const [isCompactLabels, setIsCompactLabels] = useState<boolean>(true);
+  // The popups on hovering a state (its code, its complexity), a transition's label or a badge (its guard): on by
+  // default, off on the toolbar (kept in this browser)
+  const [hoverPopups, setHoverPopupsState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.canvas.hoverPopups') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const setHoverPopups = useCallback((on: boolean) => {
+    setHoverPopupsState(on);
+    try {
+      localStorage.setItem('kss.canvas.hoverPopups', on ? 'on' : 'off');
+    } catch {
+      // (this session only)
+    }
+  }, []);
   const [activeConditionOverlay, setActiveConditionOverlay] = useState<{
     edge: EdgeInfo;
     anchorPos: { x: number; y: number };
@@ -4977,6 +4995,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       // (pinned: it stays, whatever is hovered, until unpinned, Esc or a click elsewhere)
     } else if (
       labelOrBadgeEl &&
+      hoverPopups &&
       !isDraggingNodeRef.current &&
       !isDraggingEdgeHandleRef.current &&
       !activeConditionOverlay &&
@@ -5021,6 +5040,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     // 4. Hover tracking for Complexity Heat-map Tooltip & Refactor Badges
     const shouldTrackComplexityHover =
+      hoverPopups &&
       (isHeatmapActive || showComplexityBadges) &&
       !isDraggingNodeRef.current &&
       !isDraggingEdgeHandleRef.current;
@@ -5067,7 +5087,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     }
 
     // 5. A state's actions (entry / do / exit), as soon as the pointer is on it
-    if (stateTooltips && !isDraggingNodeRef.current && !isDraggingEdgeHandleRef.current) {
+    if (!hoverPopups) {
+      if (hoveredActions) setHoveredActions(null);
+    } else if (stateTooltips && !isDraggingNodeRef.current && !isDraggingEdgeHandleRef.current) {
       const nodeEl = target?.closest('g.node[data-state-id]');
       const sId = nodeEl?.getAttribute('data-state-id') || '';
       const tip = sId ? stateTooltips[sId] : undefined;
@@ -6253,7 +6275,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const hasCodeEditors = Boolean(tcPouContent || tcDutContent || onOpenEnumEditorProp);
   const toolbarItems: ToolbarItemId[] = (
     [
-      'interactive', 'labels', 'code',
+      'interactive', 'labels', 'hover', 'code',
       'autoAlign', 'lock', 'snap', 'resetLayout',
       'heatmap', 'refactor',
       'stats', 'legend', 'notes', 'minimap', 'styles',
@@ -6261,7 +6283,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     ] as ToolbarItemId[]
   ).filter((id) => (id === 'code' ? hasCodeEditors : id === 'resetLayout' ? movedElementsCount > 0 : true));
   const TOOLBAR_GROUP: Record<ToolbarItemId, number> = {
-    interactive: 0, labels: 0, code: 0,
+    interactive: 0, labels: 0, hover: 0, code: 0,
     autoAlign: 1, lock: 1, snap: 1, resetLayout: 1,
     heatmap: 2, refactor: 2,
     stats: 3, legend: 3, notes: 3, minimap: 3, styles: 3,
@@ -6270,7 +6292,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // First to stay visible -> last to move into the Hidden menu
   const TOOLBAR_PRIORITY: ToolbarItemId[] = [
     'zoom', 'fullscreen', 'interactive', 'code', 'autoAlign', 'heatmap', 'lock', 'resetLayout',
-    'stats', 'legend', 'notes', 'minimap', 'styles', 'refactor', 'snap', 'labels',
+    'stats', 'legend', 'notes', 'minimap', 'styles', 'refactor', 'snap', 'hover', 'labels',
   ];
 
   // Callback ref: the toolbar is portaled into a container that may not exist on the first render
@@ -6540,6 +6562,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             setIsInteractiveMode={setIsInteractiveMode}
             isCompactLabels={isCompactLabels}
             setIsCompactLabels={setIsCompactLabels}
+            hoverPopups={hoverPopups}
+            setHoverPopups={setHoverPopups}
             isInspectorOpen={isInspectorOpen}
             handleToggleInspector={handleToggleInspector}
             handleOpenMethodEditor={handleOpenMethodEditor}
@@ -6617,6 +6641,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             title={`Transition labels: ${isCompactLabels ? 'Clean (shortened)' : 'Full condition text'} - click to toggle`}
           >
             <SlidersHorizontal className="w-3.5 h-3.5 text-sky-400" />
+          </button>
+        );
+      case 'hover':
+        return (
+          <button
+            id="toolbar-hover-popups-btn"
+            type="button"
+            aria-pressed={hoverPopups}
+            onClick={() => setHoverPopups(!hoverPopups)}
+            className={toolbarButtonClass(hoverPopups, 'bg-sky-950/80 text-sky-300 border border-sky-600/70')}
+            title={`Hover popups ${hoverPopups ? 'on' : 'off'}: the popups on hovering a state (its code), a transition's label or a badge (its guard) - click to turn them ${hoverPopups ? 'off' : 'on'}`}
+          >
+            <MessageSquare className={`w-3.5 h-3.5 ${hoverPopups ? 'text-sky-400' : 'text-slate-500'}`} />
           </button>
         );
       case 'code':
