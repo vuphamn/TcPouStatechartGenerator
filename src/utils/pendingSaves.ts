@@ -69,6 +69,11 @@ export function pendingParts(): { label: string; parts: PendingPart[] }[] {
   return pendingEditors().map((e) => ({ label: e.label, parts: entries.get(e.id)?.parts?.() ?? [] }));
 }
 
+/** An editor's parts (as the Diff shows them) by its id, edits or not; [] when it is not shown */
+export function editorParts(id: string): PendingPart[] {
+  return entries.get(id)?.parts?.() ?? [];
+}
+
 /** Their edits put into the POU (the editor used last only, or all); how many */
 export function savePendingEditors(which: 'active' | 'all'): number {
   const list = pendingEditors().filter((e) => which === 'all' || e.active);

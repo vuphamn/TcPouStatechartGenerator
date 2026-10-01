@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save, SaveAll, GitCompare } from 'lucide-react';
+import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriangle, FileUp, Save, SaveAll } from 'lucide-react';
 import { usePendingEditors } from '../utils/pendingSaves.ts';
 import { DockMenu, DockMenuItem } from './dock/DockMenu.tsx';
 import { DutMatch } from '../utils/dutMatcher.ts';
@@ -40,7 +40,7 @@ export interface SourceFilesHeaderItemProps {
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
 /** The header's Save and Save All icons: an editor's edits (the one used last / all of them) into the POU, then the files */
-const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => void; fileCount: number; onDiffAll?: () => void }> = ({ onSaveEditor, fileCount, onDiffAll }) => {
+const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => void; fileCount: number }> = ({ onSaveEditor, fileCount }) => {
   const editors = usePendingEditors();
   const active = editors.find((e) => e.active) ?? editors[0];
   const files = fileCount > 0 ? `${fileCount} file${fileCount === 1 ? '' : 's'}` : '';
@@ -51,19 +51,6 @@ const HeaderSaveIcons: React.FC<{ onSaveEditor: (which: 'active' | 'all') => voi
   const hereToSave = editors.length > 0 || fileCount > 0;
   return (
     <>
-      {/* (shown only with something to compare: the header keeps its room) */}
-      {onDiffAll && hereToSave && (
-        <button
-          id="header-diff-all-btn"
-          type="button"
-          disabled={!hereToSave}
-          onClick={onDiffAll}
-          className={btn(hereToSave)}
-          title={hereToSave ? `All changes: ${[editors.length ? `the edits of ${editors.map((e) => e.label).join(', ')}` : '', files ? `the ${files} since saved` : ''].filter(Boolean).join(', and ')}, in one Diff` : 'All changes: none'}
-        >
-          <GitCompare className="w-3.5 h-3.5" />
-        </button>
-      )}
       <button
         id="header-save-btn"
         type="button"
@@ -107,6 +94,11 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [saveMenuAnchor, setSaveMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  // The Save ▾ menu: the host's (Save As, Download, …) and All changes (every editor's edits and the files' since saved)
+  const saveMenu: DockMenuItem[] = [
+    ...(hostSave?.menu ?? []),
+    ...(hostSave?.onDiffAll ? [{ id: 'save-menu-diff-all', label: 'All changes (Diff)…', onSelect: hostSave.onDiffAll } as DockMenuItem] : []),
+  ];
   const [isDragOver, setIsDragOver] = useState(false);
   const closedAtRef = useRef(0);
 
@@ -238,7 +230,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
       </button>
       <span
         id="tcpou-file-name"
-        className="font-mono text-slate-200 text-[11px] truncate max-w-[180px]"
+        className="font-mono text-slate-200 text-[11px] truncate max-w-[130px]"
         title={pouPath || pouFileName}
       >
         {pouFileName || 'No file loaded'}
@@ -295,9 +287,9 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           {hostSave.dirtyCount > 0 ? ` (${hostSave.dirtyCount})` : ''}
         </button>
         {hostSave.onSaveEditor && (
-          <HeaderSaveIcons onSaveEditor={hostSave.onSaveEditor} fileCount={hostSave.dirtyCount} onDiffAll={hostSave.onDiffAll} />
+          <HeaderSaveIcons onSaveEditor={hostSave.onSaveEditor} fileCount={hostSave.dirtyCount} />
         )}
-        {hostSave.menu && hostSave.menu.length > 0 && (
+        {saveMenu.length > 0 && (
           <button
             id="save-sources-menu-btn"
             type="button"
@@ -306,15 +298,15 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
               setSaveMenuAnchor({ x: r.left, y: r.bottom + 4 });
             }}
             className="px-0.5 py-0.5 rounded-md text-slate-300 hover:text-white hover:bg-slate-800"
-            title="Save As / Download"
+            title="Save As / Download, All changes (Diff)"
           >
             <ChevronDown className="w-3 h-3" />
           </button>
         )}
         </>
       )}
-      {saveMenuAnchor && hostSave?.menu && (
-        <DockMenu id="save-sources-menu" x={saveMenuAnchor.x} y={saveMenuAnchor.y} items={hostSave.menu} onClose={() => setSaveMenuAnchor(null)} />
+      {saveMenuAnchor && saveMenu.length > 0 && (
+        <DockMenu id="save-sources-menu" x={saveMenuAnchor.x} y={saveMenuAnchor.y} items={saveMenu} onClose={() => setSaveMenuAnchor(null)} />
       )}
       {menuAnchor && (
         <DockMenu

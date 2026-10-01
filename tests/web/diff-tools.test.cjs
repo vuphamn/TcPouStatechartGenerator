@@ -41,7 +41,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(['diff-first', 'diff-prev', 'diff-next', 'diff-last', 'diff-undo-change', 'diff-redo-change'].every((x) => ids.includes(x)), `the toolbar: ${ids.join(', ')}`);
   expect((await pos()) === 'Change 1 of 2', `at the first change (${await pos()})`);
   // Context: the whole code by default (no lines left out); 3 lines: the rest left out
-  const rowsShown = () => p.$$eval('#diff-body tr', (r) => ({ rows: r.filter((x) => x.classList.contains('diff-row')).length, gaps: r.filter((x) => !x.classList.contains('diff-row')).length }));
+  const rowsShown = () => p.$$eval('#diff-body tr', (r) => ({ rows: r.filter((x) => x.classList.contains('diff-row')).length, gaps: r.filter((x) => x.classList.contains('diff-gap')).length }));
   const whole = await rowsShown();
   expect((await p.$eval('#diff-context', (e) => e.value)) === 'all' && whole.gaps === 0 && whole.rows > 50, `the whole code shown (${whole.rows} lines, ${whole.gaps} gaps)`);
   await p.select('#diff-context', '3');

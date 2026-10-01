@@ -127,9 +127,9 @@ import { allStateActions, readStateCode, writeStateCode } from './utils/stateAct
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
-import { pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
+import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
-import { DiffDialog, SHOW_FILE_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart } from './components/DiffDialog.tsx';
+import { DiffDialog, DiffPanel, OPEN_DIFF_EVENT, setFilesChanged, showEditorDiff, type DiffPart, type DiffRequest } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
@@ -273,6 +273,7 @@ import {
   loadDockLayout,
   revealDockTab,
   getDockGroupOfTab,
+  splitDockTab,
   saveDockLayout,
 } from './utils/dockLayout.ts';
 import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
@@ -4793,7 +4794,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:save', group: 'File', label: 'Save to project', hint: 'Ctrl+S', run: () => handleSaveToProjectRef.current() });
     cmds.push({ id: 'app:undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => stepHistory(true) });
     cmds.push({ id: 'app:tidy-edges', group: 'Canvas', label: 'Tidy up edges', hint: 'the states stay: the edges drawn again from them', run: () => { const n = mermaidViewerRef.current?.tidyEdges() ?? 0; showCopyToast(n ? `Edges tidied up: ${n} drawn again from their states` : 'Edges tidied up (none had a route of its own)', 'success'); } });
-    cmds.push({ id: 'app:diff-all', group: 'Edit', label: 'All changes (Diff)', hint: "every editor's edits and the files' since saved", run: () => setAllDiffOpen(true) });
+    cmds.push({ id: 'app:diff-all', group: 'Edit', label: 'All changes (Diff)', hint: "every editor's edits and the files' since saved", run: () => showDiff({ source: 'all' }) });
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
@@ -6797,7 +6798,15 @@ export const App: React.FC = () => {
   // (its "*" clicked: the editor's diff, or its file's against its saved version)
   // A file's changes since it was saved (its parts from the sources as they are now: a change undone or a line edited
   // in the Diff goes into them, as an edit, Ctrl+Z undoes it)
-  const [fileDiff, setFileDiff] = useState<{ title: string; tab: 'pou' | 'enum' } | null>(null);
+  // The Diff (one at a time): what it shows, and whether it is docked (its tab, beside the Diagram Canvas) or a popup
+  const [diffView, setDiffView] = useState<{ req: DiffRequest; docked: boolean } | null>(null);
+  const showDiff = useCallback((req: DiffRequest) => {
+    setDiffView((d) => ({ req, docked: d?.docked ?? false }));
+    // (docked: its tab shown)
+    if (diffViewRef.current?.docked) setDockLayout((l) => activateDockTab(l, 'diff'));
+  }, []);
+  const diffViewRef = useRef(diffView);
+  diffViewRef.current = diffView;
   const pouParts = (before: string, after: string): DiffPart[] => {
     const b = getPouBody(before);
     const a = getPouBody(after);
@@ -6850,32 +6859,64 @@ export const App: React.FC = () => {
   // The PLC's project and its local copy, compared (asked about before Override / Keep local)
   const [plcCopyDiff, setPlcCopyDiff] = useState<{ title: string; parts: DiffPart[] } | null>(null);
   // All changes (the header's Diff): every editor's edits not in the POU yet, then the files' since they were saved
-  const [allDiffOpen, setAllDiffOpen] = useState(false);
   const allChangesParts = (): DiffPart[] => [
     ...pendingParts().flatMap((e) => e.parts.map((p) => ({ ...p, name: `${e.label}: ${p.name} (in the editor, not in the POU yet)` }))),
     ...fileDiffParts('pou').map((p) => ({ ...p, name: `${pouFileName}: ${p.name} (since saved)` })),
     ...(dutContent ? fileDiffParts('enum').map((p) => ({ ...p, name: `${dutFileName}: ${p.name} (since saved)` })) : []),
   ];
-  // An editor's Diff with no edits of its own: its file's changes since saved
+  // A Diff asked for (an editor's, a file's since saved, all changes)
   useEffect(() => {
     const on = (e: Event) => {
-      const file = (e as CustomEvent<{ file: 'pou' | 'enum' }>).detail?.file === 'enum' ? 'enum' : 'pou';
-      setFileDiff({ title: `${file === 'enum' ? dutFileName : pouFileName}: since it was saved`, tab: file });
+      const req = (e as CustomEvent<DiffRequest>).detail;
+      if (req) showDiff(req);
     };
-    window.addEventListener(SHOW_FILE_DIFF_EVENT, on);
-    return () => window.removeEventListener(SHOW_FILE_DIFF_EVENT, on);
-  }, [dutFileName, pouFileName]);
+    window.addEventListener(OPEN_DIFF_EVENT, on);
+    return () => window.removeEventListener(OPEN_DIFF_EVENT, on);
+  }, [showDiff]);
+  // What a Diff shows, its labels and its parts as they are now
+  const diffInfo = (req: DiffRequest): { title: string; beforeLabel: string; afterLabel: string; getParts: () => DiffPart[] } =>
+    req.source === 'editor'
+      ? { title: req.title, beforeLabel: req.beforeLabel, afterLabel: req.afterLabel, getParts: () => editorParts(req.editorId) }
+      : req.source === 'file'
+        ? { title: `${req.file === 'enum' ? dutFileName : pouFileName}: since it was saved`, beforeLabel: 'saved', afterLabel: 'now', getParts: () => fileDiffPartsRef.current(req.file) }
+        : { title: 'All changes', beforeLabel: 'before', afterLabel: 'now', getParts: () => allChangesRef.current() };
+  // (the docked Diff: in its tab, beside the Diagram Canvas in a group of its own)
+  const dockDiff = () => {
+    setDiffView((d) => (d ? { ...d, docked: true } : d));
+    setDockLayout((l) => {
+      let next = activateDockTab(l, 'diff');
+      const canvas = getDockGroupOfTab(next, 'diagram');
+      if (canvas && canvas.tabs.includes('diff')) next = splitDockTab(next, 'diff', canvas.id, 'after');
+      return activateDockTab(next, 'diagram');
+    });
+  };
+  const floatDiff = () => {
+    setDiffView((d) => (d ? { ...d, docked: false } : d));
+    setDockLayout((l) => closeDockTab(l, 'diff'));
+  };
+  const closeDiff = () => {
+    if (diffViewRef.current?.docked) setDockLayout((l) => closeDockTab(l, 'diff'));
+    setDiffView(null);
+  };
+  // (its tab closed from the tab strip: the docked Diff closed too)
+  useEffect(() => {
+    if (diffView?.docked && !isDockTabOpen(dockLayout, 'diff')) setDiffView(null);
+  }, [diffView?.docked, dockLayout]);
   const fileDiffParts = (tab: 'pou' | 'enum'): DiffPart[] =>
     tab === 'enum'
       ? [{ name: 'Declaration', before: savedSources.dut ? parseDutContent(savedSources.dut).declaration : '', after: dutContent ? parseDutContent(dutContent).declaration : '', apply: dutContent ? (t) => handleReplaceSources(null, updateDutDeclaration(dutContent, t)) : undefined }]
       : pouParts(savedSources.pou, pouContent);
+  const fileDiffPartsRef = useRef(fileDiffParts);
+  fileDiffPartsRef.current = fileDiffParts;
+  const allChangesRef = useRef(allChangesParts);
+  allChangesRef.current = allChangesParts;
   const openTabDiff = (tab: 'method' | 'pou' | 'enum') => {
     setDockLayout((l) => activateDockTab(l, tab));
     if ({ method: methodEdits, pou: pouEdits, enum: enumEdits }[tab]) {
       window.setTimeout(() => showEditorDiff(tab), 150);
       return;
     }
-    setFileDiff({ title: `${tab === 'enum' ? dutFileName : pouFileName}: since it was saved`, tab: tab === 'enum' ? 'enum' : 'pou' });
+    showDiff({ source: 'file', file: tab === 'enum' ? 'enum' : 'pou' });
   };
   const dirtyMark = (tab: 'method' | 'pou' | 'enum', why: (string | false)[]) => {
     const list = why.filter((x): x is string => !!x);
@@ -6987,6 +7028,7 @@ export const App: React.FC = () => {
           ) : undefined,
       },
       changes: { title: 'Changes', icon: <GitCompare />, tooltip: 'Compare the chart with the saved or committed version' },
+      diff: { title: 'Diff', icon: <GitCompare />, tooltip: "The Diff docked: an editor's or a file's changes, beside the Diagram Canvas" },
       paths: { title: 'Paths', icon: <Route />, tooltip: 'Every path between two states, with the guards along it' },
     }),
     [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message, methodEdits, pouEdits, enumEdits, pouUnsaved, dutUnsaved, pouContent, dutContent, savedSources]
@@ -7070,7 +7112,7 @@ export const App: React.FC = () => {
             hostSave={
               isXaeHost()
                 ? pouPath
-                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, onSaveEditor: handleHeaderSave, onDiffAll: () => setAllDiffOpen(true), menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
+                  ? { dirtyCount: hostDirtyFiles.length, onSave: handleSaveToProject, onSaveEditor: handleHeaderSave, onDiffAll: () => showDiff({ source: 'all' }), menu: [{ id: 'review-save', label: 'Review and save…', onSelect: openReview }] }
                   : undefined
                 : pouContent
                 ? {
@@ -7079,7 +7121,7 @@ export const App: React.FC = () => {
                     dirtyCount: localDirtyCount,
                     onSave: () => void handleSaveSources(),
                     onSaveEditor: handleHeaderSave,
-                    onDiffAll: () => setAllDiffOpen(true),
+                    onDiffAll: () => showDiff({ source: 'all' }),
                     title: desktopSave()?.saveSources
                       ? `Write the edits back to ${[pouDirty && (pouPath ? pouFileName : `${pouFileName} (Save As)`), dutDirty && dutFileName].filter(Boolean).join(' and ')} (Ctrl+S)`
                       : canWriteBack()
@@ -8365,6 +8407,18 @@ export const App: React.FC = () => {
           dockRegistry.nodes.changes
         )}
 
+      {isDockTabMounted('diff') &&
+        createPortal(
+          diffView?.docked ? (
+            <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} docked onClose={closeDiff} onFloat={floatDiff} />
+          ) : (
+            <div id="diff-tab-empty" className="h-full flex items-center justify-center p-6 text-xs text-slate-400 text-center">
+              No Diff here: open one (an editor's Diff, the "*" on its tab, the header's All changes) and dock it with its Dock button.
+            </div>
+          ),
+          dockRegistry.nodes.diff
+        )}
+
       {isDockTabMounted('paths') &&
         createPortal(
           <PathsPanel
@@ -8596,9 +8650,8 @@ export const App: React.FC = () => {
           }}
         />
       )}
-      {fileDiff && <DiffDialog title={fileDiff.title} beforeLabel="saved" afterLabel="now" parts={fileDiffParts(fileDiff.tab)} onClose={() => setFileDiff(null)} />}
+      {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
-      {allDiffOpen && <DiffDialog title="All changes" beforeLabel="before" afterLabel="now" parts={allChangesParts} onClose={() => setAllDiffOpen(false)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">

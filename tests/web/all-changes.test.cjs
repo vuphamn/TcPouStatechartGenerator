@@ -54,8 +54,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(500);
   await p.evaluate(() => { const ta = document.getElementById('pou-implementation-editor'); ta.focus(); ta.setSelectionRange(0, 0); document.execCommand('insertText', false, '// pou edit\n'); });
   await h.sleep(500);
-  const btn = await p.$('#header-diff-all-btn');
-  expect(!!btn && !(await p.$eval('#header-diff-all-btn', (b) => b.disabled)), 'the header: All changes');
+  // (the Save ▾ menu: All changes)
+  await p.click('#save-sources-menu-btn');
+  const btn = await p.waitForSelector('#dock-menu-save-menu-diff-all', { timeout: 3000 }).catch(() => null);
+  expect(!!btn, "the Save menu: All changes");
   if (btn) await btn.click();
   await p.waitForSelector('#diff-dialog', { timeout: 3000 }).catch(() => {});
   const parts = await p.$$eval('#diff-dialog [data-diff-part]', (d) => d.map((x) => x.getAttribute('data-diff-part')));

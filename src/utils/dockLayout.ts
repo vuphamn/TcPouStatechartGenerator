@@ -25,6 +25,7 @@ export type DockTabId =
   | 'logger'
   | 'overview'
   | 'symbols'
+  | 'diff'
   | 'docs'
   | 'problems'
   | 'live'
@@ -49,6 +50,7 @@ export const DOCK_TAB_ORDER: DockTabId[] = [
   'logger',
   'overview',
   'symbols',
+  'diff',
   'docs',
   'problems',
   'live',
@@ -73,6 +75,7 @@ export const DOCK_TAB_HOME: Record<DockTabId, DockPanelId> = {
   logger: 'middle',
   overview: 'middle',
   symbols: 'middle',
+  diff: 'middle',
   docs: 'right',
   problems: 'right',
   live: 'right',
@@ -592,6 +595,8 @@ function addNewTabs(layout: DockLayout, defaults: DockLayout, known: DockTabId[]
     if (known.includes(tabId) || isDockTabOpen(next, tabId)) continue;
     const panel = DOCK_TAB_HOME[tabId];
     const defaultGroup = defaults[panel].groups.find((g) => g.tabs.includes(tabId));
+    // (a tab the default layout has closed, e.g. the Diff: opened when it is wanted)
+    if (!defaultGroup) continue;
     // Prefer the default group, else the group holding a default neighbour, else the panel's first group
     const neighbour = defaultGroup?.tabs.find((t) => t !== tabId && getDockGroupOfTab(next, t));
     const target =

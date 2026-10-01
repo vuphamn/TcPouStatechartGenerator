@@ -14,7 +14,7 @@ import { declarationVariables, declareInDeclaration, guessType, undeclaredNames 
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { markersFor } from '../utils/variableLint.ts';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
-import { DiffDialog, SHOW_EDITOR_DIFF_EVENT, showFileDiff, useFileChanged } from './DiffDialog.tsx';
+import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 
@@ -54,7 +54,11 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const dirty = decl !== baseRef.current.decl || impl !== baseRef.current.impl;
   // Its changes, line by line (its Diff button; the "*" on its tab)
-  const [diffOpen, setDiffOpen] = useState(false);
+  // Its Diff: opened by the app (a popup, or its dock tab beside the canvas), from this editor's parts in the pending
+  // saves' registry (so it sees what is typed here meanwhile)
+  const setDiffOpen = (on: boolean) => {
+    if (on) openDiff({ source: 'editor', editorId: 'pou-editor', title: `${pouFileName}: the POU Editor's edits`, beforeLabel: 'in the POU', afterLabel: 'in the editor' });
+  };
   // (its file changed since saved: the Diff shows that when this editor has no edits of its own)
   const fileChanged = useFileChanged('pou');
   // (its Diff, and the header's All changes)
@@ -485,15 +489,6 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           </button>
           <button type="button" id="pou-editor-diff" onClick={() => (((dirty)) ? setDiffOpen(true) : showFileDiff('pou'))} disabled={!((dirty) || fileChanged)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title={((dirty)) ? "This editor's edits, line by line (against what is in the POU now)" : "The POU's changes since it was saved (the canvas' edits too); this editor has none of its own"}><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
           <SaveToFileButton id="pou-editor-save-file" what="the POU" />
-          {diffOpen && (
-            <DiffDialog
-              title={`${pouFileName}: the POU Editor's edits`}
-              beforeLabel="in the POU"
-              afterLabel="in the editor"
-              parts={diffParts}
-              onClose={() => setDiffOpen(false)}
-            />
-          )}
         </div>
       </div>
 

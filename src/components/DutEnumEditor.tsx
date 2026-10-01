@@ -3,7 +3,7 @@ import { usePendingSave } from '../utils/pendingSaves.ts';
 import { bookmarkedLines, clearBookmarks, ENUM_KEY, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
-import { DiffDialog, SHOW_EDITOR_DIFF_EVENT, showFileDiff, useFileChanged } from './DiffDialog.tsx';
+import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { GitCompare } from 'lucide-react';
 import { editorServices } from '../utils/openType.ts';
 import { createPortal } from 'react-dom';
@@ -203,7 +203,11 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     return stCode !== initialStCode;
   }, [viewMode, rawXmlCode, initialRawXmlCode, stCode, initialStCode]);
   // Its changes, line by line (its Diff button; the "*" on its tab)
-  const [diffOpen, setDiffOpen] = useState(false);
+  // Its Diff: opened by the app (a popup, or its dock tab beside the canvas), from this editor's parts in the pending
+  // saves' registry (so it sees what is typed here meanwhile)
+  const setDiffOpen = (on: boolean) => {
+    if (on) openDiff({ source: 'editor', editorId: 'enum-editor', title: `${dutFileName}: the Enum Editor's edits`, beforeLabel: 'in the enum', afterLabel: 'in the editor' });
+  };
   // (its file changed since saved: the Diff shows that when this editor has no edits of its own)
   const fileChanged = useFileChanged('enum');
   // (its Diff, and the header's All changes)
@@ -827,15 +831,6 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
           </button>
           <button type="button" id="enum-diff-btn" onClick={() => (((isDirty)) ? setDiffOpen(true) : showFileDiff('enum'))} disabled={!((isDirty) || fileChanged)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title={((isDirty)) ? "This editor's edits, line by line (against what is in the enum now)" : "The enum's changes since it was saved (the canvas' edits too); this editor has none of its own"}><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
           <SaveToFileButton id="enum-save-file-btn" what="the enum" />
-          {diffOpen && (
-            <DiffDialog
-              title={`${dutFileName}: the Enum Editor's edits`}
-              beforeLabel="in the enum"
-              afterLabel="in the editor"
-              parts={diffParts}
-              onClose={() => setDiffOpen(false)}
-            />
-          )}
 
           {/* Reset / Revert Button */}
           <button

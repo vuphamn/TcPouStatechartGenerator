@@ -230,7 +230,9 @@ const MIME = 'application/x-kss-statechart-element';
   expect(/machineState := TABLEMANAGER_IDLE_FEED_OFF; \/\/ completion transition/.test(code) && !(await p.$('#text-prompt-dialog')), 'completion: an assignment with no condition, no prompt');
 
   // 9. Exception transition from the composite Waiting → ERROR: in preProcess()
+  // (each box waited for: Go to State may redraw the chart, slower on CI)
   await goTo(NEW);
+  await waitFor(() => clusterBox('Waiting'), 15000);
   const cw = await clusterBox('Waiting');
   b = await nodeBox(NEW);
   // (a point in the composite off its states: its top edge, under the label)
@@ -238,17 +240,19 @@ const MIME = 'application/x-kss-statechart-element';
   const hintText = await p.$eval('#connect-mode-hint', (e) => e.textContent).catch(() => '');
   expect(/Waiting/.test(hintText), `connect mode from the composite: "${hintText.trim()}"`);
   await goTo(S('ERROR'));
+  await waitFor(() => nodeBox(S('ERROR')), 15000);
   t = await nodeBox(S('ERROR'));
   await p.mouse.click(t.x, t.y);
   await answer('bAbortWaiting');
-  expect(await waitFor(() => hasEdge('Waiting', S('ERROR'))), 'the chart: Waiting → ERROR');
+  expect(await waitFor(() => hasEdge('Waiting', S('ERROR')), 15000), 'the chart: Waiting → ERROR');
 
   // 10. Fork / Join on CLAMPED: two parallel regions, then HALT_FEED; a transition drawn in region A
   const F = S('CLAMPED');
   await goTo(F);
+  await waitFor(() => nodeBox(F), 15000);
   b = await nodeBox(F);
   await drop('forkjoin', b.x, b.y);
-  await p.waitForSelector('#forkjoin-dialog', { timeout: 5000 });
+  await p.waitForSelector('#forkjoin-dialog', { timeout: 15000 });
   const vars = await p.$$eval('[id^="forkjoin-variable-"]', (e) => e.map((x) => x.value));
   const sts = await p.$$eval('[id^="forkjoin-states-"]', (e) => e.map((x) => x.value));
   expect(vars.join() === 'regionA,regionB' && sts[0] === `${F}_A_RUN, ${F}_A_DONE`, `the regions offered: ${vars.join(', ')} | ${sts.join(' | ')}`);
