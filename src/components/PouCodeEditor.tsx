@@ -13,6 +13,9 @@ import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
 import { declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { markersFor } from '../utils/variableLint.ts';
+import { SaveToFileButton } from './SaveToFileButton.tsx';
+import { DiffDialog, SHOW_EDITOR_DIFF_EVENT } from './DiffDialog.tsx';
+import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 
 /**
@@ -50,6 +53,15 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   const baseRef = useRef({ decl: body.declaration, impl: body.implementation });
   const [changedElsewhere, setChangedElsewhere] = useState(false);
   const dirty = decl !== baseRef.current.decl || impl !== baseRef.current.impl;
+  // Its changes, line by line (its Diff button; the "*" on its tab)
+  const [diffOpen, setDiffOpen] = useState(false);
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent<{ editor: string }>).detail?.editor === 'pou') setDiffOpen(true);
+    };
+    window.addEventListener(SHOW_EDITOR_DIFF_EVENT, on);
+    return () => window.removeEventListener(SHOW_EDITOR_DIFF_EVENT, on);
+  }, []);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   useEffect(() => {
@@ -464,6 +476,20 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           <button id="pou-editor-save" onClick={save} disabled={!dirty} className="flex items-center gap-1 px-2.5 py-1 rounded bg-sky-700 hover:bg-sky-600 text-white font-semibold disabled:opacity-40" title="Write the declaration and the body into the .TcPOU (Ctrl+S)">
             <Save className="w-3.5 h-3.5" /> Save to POU
           </button>
+          <button type="button" id="pou-editor-diff" onClick={() => setDiffOpen(true)} disabled={!(dirty)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title="This editor's edits, line by line (against what is in the file now)"><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
+          <SaveToFileButton id="pou-editor-save-file" what="the POU" />
+          {diffOpen && (
+            <DiffDialog
+              title={`${pouFileName}: the POU Editor's edits`}
+              beforeLabel="in the POU"
+              afterLabel="in the editor"
+              parts={[
+                { name: 'Declaration', before: baseRef.current.decl, after: decl },
+                { name: 'Implementation', before: baseRef.current.impl, after: impl },
+              ]}
+              onClose={() => setDiffOpen(false)}
+            />
+          )}
         </div>
       </div>
 

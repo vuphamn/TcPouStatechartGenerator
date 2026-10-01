@@ -32,6 +32,16 @@ const MIME = 'application/x-kss-statechart-element';
   const real = Math.round((box.w / box.vbw) * 100);
   expect(Number(box.label) === real && real < 100, `the zoom shows its real size: ${box.label}% (${real}%)`);
 
+  // The zoom shown clicked: the chart at its own size (100%); again: fitted
+  const label = () => p.$eval('#zoom-label-button', (e) => e.textContent.trim()).catch(() => '');
+  await p.click('#zoom-label-button');
+  await h.sleep(500);
+  const own = await label();
+  await p.click('#zoom-label-button');
+  await h.sleep(500);
+  const back = await label();
+  expect(own === '100%' && back === `${real}%`, `the zoom clicked: its own size (${own}), again: fitted (${back})`);
+
   // A state dropped beside the chart's box (below it, in the canvas)
   const at = { x: Math.round((box.l + box.r) / 2), y: Math.round(Math.min(box.b + 90, box.area.b - 40)) };
   expect(at.y > box.b + 20, `a point beside the chart's box (${at.x}, ${at.y}; its box ends at ${Math.round(box.b)})`);

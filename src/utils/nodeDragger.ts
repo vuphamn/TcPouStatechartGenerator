@@ -1963,6 +1963,23 @@ export function applyDiagramOffsetsToSvg(
     }
   }
 
+  // 1b. A composite dragged by its title: its box (and title) moved by its own offset (keyed by its name)
+  if (!onlyEdgeId && !onlyNodeId) {
+    for (const c of Array.from(svg.querySelectorAll('g.cluster, g.statediagram-cluster')) as SVGGElement[]) {
+      const name = c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
+      if (!c.hasAttribute('data-orig-transform')) c.setAttribute('data-orig-transform', c.getAttribute('transform') || '');
+      const off = nodeOffsets[name];
+      const orig = c.getAttribute('data-orig-transform') || '';
+      if (!off || (off.x === 0 && off.y === 0)) {
+        if (orig) c.setAttribute('transform', orig);
+        else c.removeAttribute('transform');
+      } else {
+        const { x, y } = parseTranslation(orig);
+        c.setAttribute('transform', `translate(${x + off.x}, ${y + off.y})`);
+      }
+    }
+  }
+
   // 2. Update edge paths, hitboxes, labels, and handles
   const allPaths = (Array.from(svg.querySelectorAll('g.edgePaths path')).filter(
     (p) => !p.closest('defs') && !p.closest('marker') && p.getAttribute('d') && !p.classList.contains('tc-edge-hitbox')
@@ -2284,7 +2301,158 @@ export function applyDiagramOffsetsToSvg(
       }
     }
   }
+  // Dagre: the ends of edges that meet at one point of a state's side fanned out along it, and labels on top of
+  // each other moved along their edges (ELK routes them apart itself)
+  if ((layoutEngine || 'elk').toLowerCase() === 'dagre' && !onlyNodeId && !onlyEdgeId) {
+    spreadEdgeEnds(svg, nodeOffsets, edgeOffsets);
+    spreadEdgeLabels(svg, edgeOffsets);
+  }
   spreadBadges(svg);
+}
+
+const NUM_RX = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi;
+
+/**
+ * Dagre draws several edges to one point of a state's side (its middle): those ends spread along the side, about
+ * 10 apart, in the order of their other ends (no crossing); each end's neighbouring point moved with it, so the edge
+ * still meets the side square. An edge handle at a moved end moves too. A choice's diamond: left as it is
+ */
+export function spreadEdgeEnds(svg: SVGSVGElement, nodeOffsets: NodeOffsetsMap, edgeOffsets: EdgeOffsetsMap = {}) {
+  type End = { path: SVGPathElement; nums: number[]; at: 'start' | 'end'; x: number; y: number; ox: number; oy: number };
+  const groups = new Map<string, { box: NodeBox; side: 'left' | 'right' | 'top' | 'bottom'; ends: End[] }>();
+  const boxes = new Map<string, NodeBox | null>();
+  const boxOf = (id: string) => {
+    if (!boxes.has(id)) {
+      const el = findNodeElement(svg, id);
+      boxes.set(id, el && !isDiamondNode(el) && el.matches('g.node') ? nodeBoxOf(el, svg, resolveNodeOffset(id, el, nodeOffsets)) : null);
+    }
+    return boxes.get(id) ?? null;
+  };
+  for (const path of Array.from(svg.querySelectorAll('path.tc-edge-path')) as SVGPathElement[]) {
+    const d = path.getAttribute('d') || '';
+    if (/[HVAhva]/.test(d)) continue;
+    const nums = (d.match(NUM_RX) ?? []).map(Number);
+    if (nums.length < 6 || nums.some((n) => !Number.isFinite(n))) continue;
+    const src = path.getAttribute('data-source-id');
+    const tgt = path.getAttribute('data-target-id');
+    if (!src || !tgt || src === tgt) continue;
+    const pid = path.getAttribute('data-path-id') || '';
+    const off = edgeOffsets[pid] || edgeOffsets[pid.replace(/#\d+$/, '')];
+    const last = nums.length - 2;
+    for (const [at, id, x, y, ox, oy] of [['start', src, nums[0], nums[1], nums[last], nums[last + 1]], ['end', tgt, nums[last], nums[last + 1], nums[0], nums[1]]] as const) {
+      // (an end the user placed: kept)
+      if (at === 'start' ? off?.startDx || off?.startDy : off?.endDx || off?.endDy) continue;
+      const box = boxOf(id);
+      if (!box) continue;
+      const rx = x - box.cx;
+      const ry = y - box.cy;
+      // (on the box's border, a few units out at most: the arrowhead's gap)
+      if (Math.abs(rx) > box.hw + 8 || Math.abs(ry) > box.hh + 8) continue;
+      const side = Math.abs(rx) / box.hw >= Math.abs(ry) / box.hh ? (rx > 0 ? 'right' : 'left') : ry > 0 ? 'bottom' : 'top';
+      const key = `${id}|${side}`;
+      if (!groups.has(key)) groups.set(key, { box, side, ends: [] });
+      groups.get(key)!.ends.push({ path, nums, at, x, y, ox, oy });
+    }
+  }
+  const changed = new Map<SVGPathElement, number[]>();
+  for (const { box, side, ends } of groups.values()) {
+    if (ends.length < 2) continue;
+    const horizontal = side === 'top' || side === 'bottom';
+    const along = (e: End) => (horizontal ? e.x : e.y);
+    const sorted = [...ends].sort((a, b) => along(a) - along(b));
+    // (runs of ends less than 3 apart: on one point)
+    const runs: End[][] = [];
+    for (const e of sorted) {
+      const run = runs[runs.length - 1];
+      if (run && Math.abs(along(e) - along(run[run.length - 1])) < 3) run.push(e);
+      else runs.push([e]);
+    }
+    const half = (horizontal ? box.hw : box.hh) * 0.85;
+    const center = horizontal ? box.cx : box.cy;
+    for (const run of runs) {
+      if (run.length < 2) continue;
+      const sp = Math.min(10, (2 * half) / run.length);
+      const mid = run.reduce((n, e) => n + along(e), 0) / run.length;
+      const lo = Math.max(center - half + ((run.length - 1) * sp) / 2, Math.min(center + half - ((run.length - 1) * sp) / 2, mid));
+      // (in the order of their other ends: no crossing)
+      [...run].sort((a, b) => (horizontal ? a.ox - b.ox : a.oy - b.oy)).forEach((e, i) => {
+        const to = lo + (i - (run.length - 1) / 2) * sp;
+        const delta = to - along(e);
+        if (Math.abs(delta) < 0.5) return;
+        const nums = changed.get(e.path) ?? [...e.nums];
+        const idx = e.at === 'start' ? [0, 2] : [nums.length - 2, nums.length - 4];
+        for (const k of idx) nums[k + (horizontal ? 0 : 1)] += delta;
+        changed.set(e.path, nums);
+        // (its handle, if shown, on its end again)
+        for (const h of Array.from(svg.querySelectorAll(`.tc-edge-handle[data-handle-type="${e.at}"]`))) {
+          const t = parseTranslation(h.getAttribute('transform') || '');
+          if (Math.abs(t.x - e.x) < 0.6 && Math.abs(t.y - e.y) < 0.6) h.setAttribute('transform', `translate(${(e.x + (horizontal ? delta : 0)).toFixed(1)}, ${(e.y + (horizontal ? 0 : delta)).toFixed(1)})`);
+        }
+      });
+    }
+  }
+  for (const [path, nums] of changed) {
+    let i = 0;
+    const d = (path.getAttribute('d') || '').replace(NUM_RX, () => String(Math.round(nums[i++] * 10) / 10));
+    path.setAttribute('d', d);
+    const pid = path.getAttribute('data-path-id');
+    if (pid) svg.querySelectorAll(`path.tc-edge-hitbox[data-path-id="${CSS.escape(pid)}"]`).forEach((hb) => hb.setAttribute('d', d));
+  }
+}
+
+/**
+ * Edge labels on top of each other (Dagre): the later ones moved along their own edges (to a third of it, two thirds,
+ * …) until they are clear of the ones placed before
+ */
+export function spreadEdgeLabels(svg: SVGSVGElement, edgeOffsets: EdgeOffsetsMap = {}) {
+  const moved = (l: Element) => {
+    const o = edgeOffsets[l.getAttribute('data-linked-path-id') || ''];
+    return !!(o?.labelDx || o?.labelDy);
+  };
+  type Box = { l: number; t: number; r: number; b: number };
+  // (a label's box in the drawing's units, from its translate: its screen rect lags while its move is animated)
+  const items = (Array.from(svg.querySelectorAll('g.edgeLabel[data-linked-path-id]')) as SVGGElement[])
+    .filter((l) => (l.textContent ?? '').trim())
+    .map((l) => {
+      let bb: DOMRect | null = null;
+      try {
+        bb = l.getBBox();
+      } catch {
+        // (not drawn)
+      }
+      return { l, bb };
+    })
+    .filter((x): x is { l: SVGGElement; bb: DOMRect } => !!x.bb && x.bb.width > 0 && x.bb.height > 0)
+    // (labels the user moved first: they stay where they were put)
+    .sort((a, b) => Number(moved(b.l)) - Number(moved(a.l)));
+  const boxAt = (bb: DOMRect, x: number, y: number): Box => ({ l: x + bb.x, t: y + bb.y, r: x + bb.x + bb.width, b: y + bb.y + bb.height });
+  const placed: Box[] = [];
+  // (the area a box shares with the labels placed so far)
+  const overlap = (r: Box) => placed.reduce((n, q) => n + Math.max(0, Math.min(r.r, q.r) - Math.max(r.l, q.l) - 1) * Math.max(0, Math.min(r.b, q.b) - Math.max(r.t, q.t) - 1), 0);
+  // (along the edge: from its middle out, a twentieth at a time)
+  const fractions = [0.5, ...Array.from({ length: 8 }, (_, i) => [0.5 - (i + 1) * 0.05, 0.5 + (i + 1) * 0.05]).flat()];
+  for (const { l: label, bb } of items) {
+    const at = parseTranslation(label.getAttribute('transform') || '');
+    let box = boxAt(bb, at.x, at.y);
+    if (overlap(box) > 0 && !moved(label)) {
+      const path = svg.querySelector(`path.tc-edge-path[data-path-id="${CSS.escape(label.getAttribute('data-linked-path-id') || '')}"]`) as SVGPathElement | null;
+      if (path && typeof path.getTotalLength === 'function') {
+        let best = { q: at, area: overlap(box), box };
+        const len = path.getTotalLength();
+        for (const f of fractions) {
+          const q = path.getPointAtLength(len * f);
+          const b2 = boxAt(bb, q.x, q.y);
+          const area = overlap(b2);
+          if (area < best.area) best = { q, area, box: b2 };
+          if (!area) break;
+        }
+        // (clear of the others, or the place it is least on top of them)
+        if (best.q !== at) label.setAttribute('transform', `translate(${best.q.x.toFixed(1)}, ${best.q.y.toFixed(1)})`);
+        box = best.box;
+      }
+    }
+    placed.push(box);
+  }
 }
 
 /**

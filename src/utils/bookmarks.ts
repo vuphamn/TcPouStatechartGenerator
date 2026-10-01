@@ -18,6 +18,8 @@ export interface LineBookmark {
 export interface PouBookmarks {
   states: string[];
   lines: LineBookmark[];
+  /** A bookmark's name (note), by its key (an entry's key) */
+  notes?: Record<string, string>;
 }
 
 const EMPTY: PouBookmarks = { states: [], lines: [] };
@@ -32,7 +34,7 @@ export function getBookmarks(pou: string): PouBookmarks {
   let value = EMPTY;
   try {
     const raw = JSON.parse(localStorage.getItem(key) || 'null');
-    if (raw && Array.isArray(raw.states) && Array.isArray(raw.lines)) value = { states: raw.states.filter((s: unknown) => typeof s === 'string'), lines: raw.lines.filter((l: LineBookmark) => l && typeof l.method === 'string' && typeof l.line === 'number') };
+    if (raw && Array.isArray(raw.states) && Array.isArray(raw.lines)) value = { states: raw.states.filter((s: unknown) => typeof s === 'string'), lines: raw.lines.filter((l: LineBookmark) => l && typeof l.method === 'string' && typeof l.line === 'number'), notes: raw.notes && typeof raw.notes === 'object' ? (Object.fromEntries(Object.entries(raw.notes).filter(([, v]) => typeof v === 'string')) as Record<string, string>) : undefined };
   } catch {
     // (none kept)
   }
@@ -44,7 +46,7 @@ function setBookmarks(pou: string, next: PouBookmarks): void {
   const key = keyOf(pou);
   cache.set(key, next);
   try {
-    if (!next.states.length && !next.lines.length) localStorage.removeItem(key);
+    if (!next.states.length && !next.lines.length && !Object.keys(next.notes ?? {}).length) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(next));
   } catch {
     // (not kept: still shown in this session)
@@ -150,6 +152,9 @@ export const ENUM_KEY = '(enum)';
 
 export interface BookmarkEntry {
   kind: 'state' | 'line';
+  /** Its key (its name is kept under it), and its name if given */
+  key: string;
+  note?: string;
   state?: string;
   /** The method (BODY: the POU's body) */
   method: string;
@@ -167,13 +172,25 @@ export function listBookmarks(pou: string, codeOf: (method: string) => string | 
   const raw = doState.split(/\r?\n/);
   for (const s of b.states) {
     const i = labels.findIndex((l) => labelNames(l).includes(s));
-    out.push({ kind: 'state', state: s, method: 'doState', line: i + 1, text: (raw[i] ?? s).trim() });
+    out.push({ kind: 'state', key: `state:${s}`, note: b.notes?.[`state:${s}`], state: s, method: 'doState', line: i + 1, text: (raw[i] ?? s).trim() });
   }
   const methods = [...new Set(b.lines.map((l) => l.method))];
   for (const m of methods) {
     const code = codeOf(m);
     if (code === null) continue;
-    for (const r of resolveLines(b, m, code)) out.push({ kind: 'line', method: m, line: r.line, text: (code.split(/\r?\n/)[r.line - 1] ?? r.bookmark.text).trim() });
+    for (const r of resolveLines(b, m, code)) {
+      const key = `line:${m}:${r.bookmark.text}`;
+      out.push({ kind: 'line', key, note: b.notes?.[key], method: m, line: r.line, text: (code.split(/\r?\n/)[r.line - 1] ?? r.bookmark.text).trim() });
+    }
   }
   return out;
+}
+
+/** A bookmark named (its note; empty: its name taken off) */
+export function setBookmarkNote(pou: string, key: string, note: string): void {
+  const b = getBookmarks(pou);
+  const notes = { ...(b.notes ?? {}) };
+  if (note.trim()) notes[key] = note.trim();
+  else delete notes[key];
+  setBookmarks(pou, { ...b, notes });
 }

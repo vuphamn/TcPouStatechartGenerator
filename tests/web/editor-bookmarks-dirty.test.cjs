@@ -83,8 +83,28 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.waitForSelector('#bookmarks-dialog', { timeout: 5000 }).catch(() => {});
   const rows = await p.$$eval('#bookmarks-dialog .bookmark-row', (r) => r.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
   expect(rows.length >= 4, `the Bookmarks list: ${rows.length} (${rows.slice(0, 5).join(' | ')})`);
+  // A bookmark named (its pencil): shown in the list
+  await p.click('#bookmarks-dialog .bookmark-name-btn');
+  await p.waitForSelector('#bookmark-note-input', { timeout: 3000 }).catch(() => {});
+  await p.type('#bookmark-note-input', 'start here');
+  await p.keyboard.press('Enter');
+  await h.sleep(400);
+  const named = await p.$$eval('#bookmarks-dialog .bookmark-note', (r) => r.map((x) => x.textContent.trim()));
+  expect(named.includes('start here'), `named: ${named.join(', ')}`);
+  // Next (its button, Alt+F2): through every section in the list's order
+  await p.click('#bookmarks-next');
+  await h.sleep(800);
+  const first = await p.$eval('#status-message', (e) => e.textContent).catch(() => '');
+  expect(/Bookmark 1 of \d+: start here/.test(first), `Next: the first, by its name (${first})`);
   await p.keyboard.press('Escape');
   await h.sleep(300);
+  await p.keyboard.down('Alt'); await p.keyboard.press('F2'); await p.keyboard.up('Alt');
+  await h.sleep(800);
+  const second = await p.$eval('#status-message', (e) => e.textContent).catch(() => '');
+  expect(/Bookmark 2 of \d+/.test(second), `Alt+F2: the next one (${second})`);
+  await p.keyboard.down('Shift'); await p.keyboard.down('Alt'); await p.keyboard.press('F2'); await p.keyboard.up('Alt'); await p.keyboard.up('Shift');
+  await h.sleep(800);
+  expect(/Bookmark 1 of \d+/.test(await p.$eval('#status-message', (e) => e.textContent).catch(() => '')), 'Shift+Alt+F2: back to the first');
 
   // An edit in the Method Editor: its tab marked; Ctrl+S in it: the mark gone
   await p.click('#dock-tab-method');
@@ -99,6 +119,26 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(500);
   const mark = await p.$eval('#dock-tab-dirty-method', (e) => ({ text: e.textContent.trim(), title: e.getAttribute('title') })).catch(() => null);
   expect(mark?.text === '*' && /Method Editor/.test(mark.title), `an edit: "*" on the Method Editor tab (${mark?.title})`);
+  // Its changes: the Diff button, and the "*" clicked
+  const diffShown = async () => p.evaluate(() => {
+    const d = document.getElementById('diff-dialog');
+    if (!d) return null;
+    return { counts: document.getElementById('diff-counts')?.textContent.replace(/\s+/g, ' ').trim(), added: [...d.querySelectorAll('.diff-add')].map((r) => r.textContent.trim()) };
+  });
+  await p.click('#method-diff-btn');
+  await p.waitForSelector('#diff-dialog', { timeout: 3000 }).catch(() => {});
+  let shownDiff = await diffShown();
+  expect(!!shownDiff && /\+1 −0/.test(shownDiff.counts) && shownDiff.added.some((t) => /\/\/ note/.test(t)), `Diff: the line put in (${JSON.stringify(shownDiff)})`);
+  await p.keyboard.press('Escape');
+  await h.sleep(300);
+  expect(!(await p.$('#diff-dialog')), 'Esc: closed');
+  await p.click('#dock-tab-dirty-method');
+  await p.waitForSelector('#diff-dialog', { timeout: 3000 }).catch(() => {});
+  shownDiff = await diffShown();
+  expect(!!shownDiff && shownDiff.added.some((t) => /\/\/ note/.test(t)), 'the "*" clicked: the same changes');
+  await p.keyboard.press('Escape');
+  await h.sleep(300);
+  await p.evaluate(() => document.getElementById('method-implementation-editor').focus());
   await p.keyboard.down('Control');
   await p.keyboard.press('s');
   await p.keyboard.up('Control');
@@ -117,6 +157,22 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.keyboard.type('// note\n');
   await h.sleep(500);
   expect(!!(await p.$('#dock-tab-dirty-enum')), 'an edit in the Enum Editor: "*" on its tab');
+  // Save to file (one step): its edits in the enum, then the files written (the header's Save for it)
+  await p.click('#enum-save-file-btn');
+  await h.sleep(1200);
+  const enumMark = await p.$eval('#dock-tab-dirty-enum', (e) => e.getAttribute('title')).catch(() => null);
+  expect(!enumMark || !/Enum Editor/.test(enumMark), `Save to file: the Enum Editor's edits put in (${enumMark ?? 'no "*"'})`);
+  // Ctrl+Alt+S in the POU Editor: the same
+  await p.click('#dock-tab-pou');
+  await h.sleep(500);
+  await p.evaluate(() => { const ta = document.getElementById('pou-implementation-editor'); ta.focus(); ta.setSelectionRange(0, 0); });
+  await p.keyboard.type('// note\n');
+  await h.sleep(400);
+  expect(/POU Editor/.test(await p.$eval('#dock-tab-dirty-pou', (e) => e.getAttribute('title')).catch(() => '')), 'an edit in the POU Editor: "*" on its tab');
+  await p.keyboard.down('Control'); await p.keyboard.down('Alt'); await p.keyboard.press('s'); await p.keyboard.up('Alt'); await p.keyboard.up('Control');
+  await h.sleep(1200);
+  const pouMark = await p.$eval('#dock-tab-dirty-pou', (e) => e.getAttribute('title')).catch(() => null);
+  expect(!pouMark || !/POU Editor/.test(pouMark), `Ctrl+Alt+S: the POU Editor's edits put in (${pouMark ?? 'no "*"'})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

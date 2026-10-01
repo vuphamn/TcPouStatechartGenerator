@@ -72,6 +72,9 @@ import { MethodEditorContextMenu } from './MethodEditorContextMenu.tsx';
 import { editorServices, openTypeHandlerFor } from '../utils/openType.ts';
 import { NewVariable, declarationVariables, declareInDeclaration, guessType, undeclaredNames } from '../utils/pouVariables.ts';
 import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
+import { SaveToFileButton } from './SaveToFileButton.tsx';
+import { DiffDialog, SHOW_EDITOR_DIFF_EVENT } from './DiffDialog.tsx';
+import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
 import { getProjectSymbols } from '../utils/projectSymbols.ts';
@@ -697,6 +700,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   }, []);
 
   const isDirty = code !== initialCode || declaration !== initialDeclaration;
+  // Its changes, line by line (its Diff button; the "*" on its tab)
+  const [diffOpen, setDiffOpen] = useState(false);
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent<{ editor: string }>).detail?.editor === 'method') setDiffOpen(true);
+    };
+    window.addEventListener(SHOW_EDITOR_DIFF_EVENT, on);
+    return () => window.removeEventListener(SHOW_EDITOR_DIFF_EVENT, on);
+  }, []);
 
   // Real-time parsed transitions from current code
   const currentTransitions = useMemo(() => {
@@ -2179,7 +2191,22 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             <Save className="w-3.5 h-3.5" />
             <span>Save to POU</span>
           </button>
+          <button type="button" id="method-diff-btn" onClick={() => setDiffOpen(true)} disabled={!(isDirty || pouDeclaration !== initialPouDeclaration)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title="This editor's edits, line by line (against what is in the file now)"><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
+          <SaveToFileButton id="method-save-file-btn" what="the POU" />
         </div>
+        {diffOpen && (
+          <DiffDialog
+            title={`${cleanMethodName}(): its edits`}
+            beforeLabel="in the POU"
+            afterLabel="in the editor"
+            parts={[
+              { name: `${cleanMethodName}() declaration`, before: initialDeclaration, after: declaration },
+              { name: `${cleanMethodName}() implementation`, before: initialCode, after: code },
+              { name: "The POU's declaration", before: initialPouDeclaration, after: pouDeclaration },
+            ]}
+            onClose={() => setDiffOpen(false)}
+          />
+        )}
       </div>
 
       {declaring && (

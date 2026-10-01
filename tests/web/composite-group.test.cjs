@@ -142,6 +142,36 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   dut = await enumText();
   expect(!/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in no composite/.test(await status()), `dropped outside: out of it (${await status()})`);
 
+  // Startup dragged by its title: its box and its states moved alike
+  const titleAt = async () => p.evaluate(() => {
+    const c = [...document.querySelectorAll('#mermaid-canvas-area svg g.cluster')].find((x) => (x.querySelector('.cluster-label')?.textContent ?? '').trim() === 'Startup');
+    const t = c?.querySelector('.cluster-label')?.getBoundingClientRect();
+    return t ? { x: t.x + t.width / 2, y: t.y + t.height / 2 } : null;
+  });
+  const t0 = await titleAt();
+  const c0 = await cluster('Startup');
+  const d0 = await box('DISABLED');
+  const n0 = await box('ENABLING');
+  if (t0) await drag(t0, { x: t0.x + 60, y: t0.y + 40 });
+  const c1 = await cluster('Startup');
+  const d1 = await box('DISABLED');
+  const n1 = await box('ENABLING');
+  const moved = (a, b) => [Math.round(b.x - a.x), Math.round(b.y - a.y)];
+  const cm = c0 && c1 ? [Math.round(c1.left - c0.left), Math.round(c1.top - c0.top)] : null;
+  expect(!!t0 && !!cm && cm[0] > 20 && cm[1] > 10 && moved(d0, d1).join() === cm.join() && moved(n0, n1).join() === cm.join(), `Startup dragged by its title: its box ${cm?.join(', ')}, DISABLED ${moved(d0, d1).join(', ')}, ENABLING ${moved(n0, n1).join(', ')}`);
+  dut = await enumText();
+  expect(/\{region "Startup"\}\s*\n\s*DISABLED,\s*\n\s*ENABLING,\s*\n\s*\{endregion\}/.test(dut), 'moved, not regrouped: the enum as it was');
+
+  // Ungroup (its menu): its markers out, its states kept
+  const t2 = await titleAt();
+  if (t2) await p.mouse.click(t2.x, t2.y, { button: 'right' });
+  const ung = await p.waitForSelector('#context-menu-composite-ungroup-btn', { timeout: 4000 }).catch(() => null);
+  expect(!!ung, "Startup's menu: Ungroup");
+  if (ung) await ung.click();
+  await h.sleep(1800);
+  dut = await enumText();
+  expect(!/\{region "Startup"\}/.test(dut) && /DISABLED,/.test(dut) && /ENABLING,/.test(dut) && !(await cluster('Startup')), 'Ungroup: its markers gone, its states kept');
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

@@ -126,4 +126,32 @@ async function syncPlcProject(read, opts = {}) {
   }
 }
 
-module.exports = { syncPlcProject, baseDirOf, MANIFEST, localChanges, readManifest };
+/**
+ * A POU of a copy's PLC project (plcproj: its .plcproj), as a POU opened from its folder: { name, path, content,
+ * dutCandidates: the project's .TcDUT files } or { error }. Going live on an instance of it (Link: the page has no files)
+ */
+function readCopyPou(plcproj, typeName) {
+  if (typeof plcproj !== 'string' || !/\.plcproj$/i.test(plcproj) || !fs.existsSync(plcproj)) return { error: 'Not a PLC project of the copy' };
+  if (!/^[A-Za-z_]\w*$/.test(String(typeName || ''))) return { error: 'Not a POU name' };
+  const root = path.dirname(path.resolve(plcproj));
+  const strip = (t) => (t.charCodeAt(0) === 0xfeff ? t.slice(1) : t);
+  const wanted = `${typeName}.tcpou`.toLowerCase();
+  let pou = null;
+  const duts = [];
+  for (const rel of filesIn(root)) {
+    const lower = rel.toLowerCase();
+    if (/(^|\/)(_boot|_compileinfo|_libraries|_deployment)\//.test(lower)) continue;
+    if (!pou && path.posix.basename(lower) === wanted) pou = rel;
+    else if (lower.endsWith('.tcdut') && duts.length < 500) duts.push(rel);
+  }
+  if (!pou) return { error: `${typeName}.TcPOU is not in ${path.basename(plcproj)}` };
+  const full = path.join(root, pou);
+  return {
+    name: path.basename(full),
+    path: full,
+    content: strip(fs.readFileSync(full, 'utf8')),
+    dutCandidates: duts.map((rel) => ({ name: path.posix.basename(rel), relativePath: rel, path: path.join(root, rel), content: strip(fs.readFileSync(path.join(root, rel), 'utf8')) })),
+  };
+}
+
+module.exports = { syncPlcProject, baseDirOf, MANIFEST, localChanges, readManifest, readCopyPou };

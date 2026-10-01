@@ -125,6 +125,8 @@ import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
 import { pendingEditors, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
+import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
+import { DiffDialog, showEditorDiff, type DiffPart } from './components/DiffDialog.tsx';
 import { checkMethodRename, checkRename, findReferences, renameMemberInFile, renameMethod, renameVariable, renameWordInFile, type Reference } from './utils/renameVariable.ts';
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
@@ -135,7 +137,7 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, ENUM_KEY, clearBookmarks, declarationOf, isDeclarationKey, listBookmarks, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BODY, ENUM_KEY, clearBookmarks, declarationOf, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
 import { parseDutContent } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
@@ -185,6 +187,7 @@ import {
   compositeColorsOf,
   setCompositeColor,
   groupInComposite,
+  ungroupComposite,
   moveToComposite,
   writeCompositeMarkers,
   isValidCompositeName,
@@ -1968,6 +1971,23 @@ export const App: React.FC = () => {
   pouFileNameRef.current = pouFileName;
   const handleHeaderSaveRef = useRef(handleHeaderSave);
   handleHeaderSaveRef.current = handleHeaderSave;
+  // An editor's "Save to file" (its button, Ctrl+Alt+S in it): its edits put in, then the files written
+  useEffect(() => {
+    const save = () => handleHeaderSaveRef.current('active');
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey && e.altKey && e.key.toLowerCase() === 's')) return;
+      if (!(e.target as HTMLElement | null)?.closest?.('[data-save-scope]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      save();
+    };
+    window.addEventListener(SAVE_TO_FILE_EVENT, save);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener(SAVE_TO_FILE_EVENT, save);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, []);
   useEffect(() => {
     if (typeof BroadcastChannel === 'undefined') return;
     const ch = new BroadcastChannel('kss-save-all');
@@ -2146,21 +2166,68 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // Every bookmark of the POU, where it is now (the code of each section: a declaration, the enum, an implementation)
+  const listAllBookmarks = () =>
+    listBookmarks(pouFileName, (m) => {
+      // (the bookmarks of a declaration, of the enum, of an implementation)
+      if (m === ENUM_KEY) return dutContent.trim() ? parseDutContent(dutContent).declaration : null;
+      if (isDeclarationKey(m)) {
+        const base = declarationOf(m);
+        if (base === BODY) return getPouBody(pouContent).declaration;
+        const c = getMethodCodeFromPou(pouContent, base);
+        return c.methodFound ? c.declaration : null;
+      }
+      return m === BODY ? getPouBody(pouContent).implementation : getMethodCodeFromPou(pouContent, m).methodFound ? getMethodCodeFromPou(pouContent, m).code : null;
+    });
+  // A bookmark opened where it is (a state: the state and its CASE label; a line: its editor at that line)
+  const openBookmark = (e: BookmarkEntry) => {
+    if (e.kind === 'state' && e.state) handleJumpToState(e.state);
+    if (e.method === ENUM_KEY) {
+      // (the enum: its member on that line selected in the Enum Editor)
+      const member = /^\s*,?\s*([A-Za-z_]\w*)/.exec(e.text)?.[1];
+      handleOpenEnumEditorModal(member);
+    } else if (isDeclarationKey(e.method)) {
+      const base = declarationOf(e.method);
+      if (base === BODY) {
+        setDockLayout((l) => activateDockTab(l, 'pou'));
+        setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'declaration' });
+      } else {
+        handleOpenInspectorPanel('method', { method: `${base}()` });
+        setCodeJump({ method: base, line: e.line, nonce: Date.now(), part: 'declaration' });
+      }
+    } else if (e.method === BODY) {
+      setDockLayout((l) => activateDockTab(l, 'pou'));
+      setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'implementation' });
+    } else if (e.line > 0) {
+      handleOpenInspectorPanel('method', { method: `${e.method}()` });
+      setCodeJump({ method: e.method, line: e.line, nonce: Date.now() });
+    }
+  };
+  // Alt+F2 / Shift+Alt+F2: the next / previous bookmark of any section, in the Bookmarks list's order
+  const bookmarkStepRef = useRef(-1);
+  const stepBookmark = (dir: 1 | -1) => {
+    const all = listAllBookmarks();
+    if (!all.length) return showCopyToast('No bookmarks yet: right-click a state, or a line of a code editor (Toggle Bookmark)', 'error');
+    const i = ((bookmarkStepRef.current + dir) % all.length + all.length) % all.length;
+    bookmarkStepRef.current = i;
+    const e = all[i];
+    openBookmark(e);
+    showCopyToast(`Bookmark ${i + 1} of ${all.length}: ${e.note ? `${e.note} (${e.state ?? `line ${e.line}`})` : e.state ?? `line ${e.line}: ${e.text.slice(0, 40)}`}`, 'success', 4000);
+  };
+  const stepBookmarkRef = useRef(stepBookmark);
+  stepBookmarkRef.current = stepBookmark;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F2' || !e.altKey || e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      stepBookmarkRef.current(e.shiftKey ? -1 : 1);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
   const bookmarkEntries = useMemo(
-    () =>
-      bookmarksOpen
-        ? listBookmarks(pouFileName, (m) => {
-            // (the bookmarks of a declaration, of the enum, of an implementation)
-            if (m === ENUM_KEY) return dutContent.trim() ? parseDutContent(dutContent).declaration : null;
-            if (isDeclarationKey(m)) {
-              const base = declarationOf(m);
-              if (base === BODY) return getPouBody(pouContent).declaration;
-              const c = getMethodCodeFromPou(pouContent, base);
-              return c.methodFound ? c.declaration : null;
-            }
-            return m === BODY ? getPouBody(pouContent).implementation : getMethodCodeFromPou(pouContent, m).methodFound ? getMethodCodeFromPou(pouContent, m).code : null;
-          })
-        : [],
+    () => (bookmarksOpen ? listAllBookmarks() : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [bookmarksOpen, bookmarks, pouContent, pouFileName, dutContent]
   );
@@ -4357,6 +4424,18 @@ export const App: React.FC = () => {
             }),
         });
         if (own) items.push({ id: 'composite-color-default', label: `The Composites colour (${compositeColor})`, icon: <X className="w-3.5 h-3.5" />, title: 'Its own colour taken out of its {region} line', onSelect: () => handleCompositeColor(name, null) });
+        items.push({
+          id: 'composite-ungroup-btn',
+          label: 'Ungroup (keep its states)',
+          icon: <SquareStack className="w-3.5 h-3.5" />,
+          title: 'Its {region} markers taken out of the enum: its states stay, no longer in a composite (Ctrl+Z undoes)',
+          onSelect: () => {
+            const next = ungroupComposite(dutContent, name);
+            if (!next) return showCopyToast(`${name}: its {region} was not found in the enum`, 'error');
+            handleReplaceSources(null, next);
+            showCopyToast(`${name} ungrouped: its states stay, in no composite (Ctrl+Z undoes)`, 'success', 6000);
+          },
+        });
         return items;
       }
       // A free note (from the palette): only the viewer's note items
@@ -5079,6 +5158,7 @@ export const App: React.FC = () => {
   // Through the gateway when this page is served by one, else through the helper on this computer
   const liveVia: 'link' | 'gateway' = liveSettings.via || (gatewayOrigin ? 'gateway' : 'link');
   const gatewayRef = useRef<GatewayConnection | null>(null);
+  const linkBuildRef = useRef<HelperBuild | null>(null);
   // What the gateway can do beyond going live (its welcome: projectBuild, plcStart, ...)
   const [gatewayFeatures, setGatewayFeatures] = useState<string[]>([]);
   const gatewayConnection = useCallback(() => {
@@ -5646,14 +5726,21 @@ export const App: React.FC = () => {
           } : undefined,
         });
       };
-      // The PLC runs another project, kept on this computer: its own POU from that copy (the desktop app; Link: the
-      // PLC's sources, the same files)
+      // The PLC runs another project, kept on this computer: its own POU from that copy (the desktop app; Link: read
+      // by Link, the copy on its computer)
       const fromCopy = !on && !loadedFromLivePlc ? livePlcCopy?.plcProjects ?? [] : [];
       const openInProject = d?.openPouInProject;
-      if (openInProject && fromCopy.length) {
+      // (Link: the copy is on its computer, the POU read there)
+      const gw = gatewayRef.current;
+      const openInCopy: ((plcproj: string, type: string) => Promise<PouSource | { error: string }>) | undefined =
+        openInProject ??
+        (liveMode === 'web' && liveVia === 'link' && gw && linkBuildRef.current?.features?.includes('projectPou')
+          ? (plcproj, type) => gw.request<PouSource & { error?: string }>({ type: 'projectPou', plcproj, typeName: type }, 'projectPouResult', 30000).then((r) => (r.error ? { error: r.error } : r)).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }))
+          : undefined);
+      if (openInCopy && fromCopy.length) {
         void (async () => {
           for (const plc of fromCopy) {
-            const src = await openInProject(plc.plcproj, typeName);
+            const src = await openInCopy(plc.plcproj, typeName);
             if (!('error' in src)) {
               showCopyToast(`${typeName} from ${livePlcCopy?.project} (the PLC's project, ${plc.name}), live on ${node.path}`, 'success', 6000);
               return handOver(src);
@@ -5673,7 +5760,7 @@ export const App: React.FC = () => {
       pick();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources, applyLoadedPou, loadedFromLivePlc, livePlcCopy]
+    [pouTypeName, pouPath, handleOpenInstance, showCopyToast, liveSettings, liveStateVar, liveStatus.state, fetchPlcSources, applyLoadedPou, loadedFromLivePlc, livePlcCopy, liveMode, liveVia]
   );
   // Stop following the window's values when it closes or the connection ends
   useEffect(() => {
@@ -5863,6 +5950,8 @@ export const App: React.FC = () => {
   // Which code Link runs (from its welcome): another stamp than this page's: another version of Link, said in the
   // Live tab (a Link started from an old install, as the Start menu's)
   const [linkBuild, setLinkBuild] = useState<HelperBuild | null>(null);
+  // (for the callbacks declared above: what this Link can do)
+  linkBuildRef.current = linkBuild;
   const linkNotice = linkBuild && linkBuild.stamp !== __KSS_LINK_STAMP__
     ? linkBuild.from === 'old'
       ? 'The Link on this computer is an older version (from before it said which). Update it: npm run build:link, or the installer, then start Link again.'
@@ -6619,10 +6708,41 @@ export const App: React.FC = () => {
   const methodEdits = pendingNow.some((e) => e.id.startsWith('method') || e.id === 'state-code');
   const pouEdits = pendingNow.some((e) => e.id === 'pou-editor');
   const enumEdits = pendingNow.some((e) => e.id === 'enum-editor');
-  const dirtyMark = (tab: string, why: (string | false)[]) => {
+  // (its "*" clicked: the editor's diff, or its file's against its saved version)
+  const [fileDiff, setFileDiff] = useState<{ title: string; parts: DiffPart[] } | null>(null);
+  const pouParts = (before: string, after: string): DiffPart[] => {
+    const b = getPouBody(before);
+    const a = getPouBody(after);
+    const parts: DiffPart[] = [
+      { name: "The POU's declaration", before: b.declaration, after: a.declaration },
+      { name: "The POU's body", before: b.implementation, after: a.implementation },
+    ];
+    for (const m of [...new Set([...getAllMethodsFromPou(before), ...getAllMethodsFromPou(after)])]) {
+      const x = getMethodCodeFromPou(before, m);
+      const y = getMethodCodeFromPou(after, m);
+      parts.push({ name: `${m}() declaration`, before: x.methodFound ? x.declaration : '', after: y.methodFound ? y.declaration : '' }, { name: `${m}() implementation`, before: x.methodFound ? x.code : '', after: y.methodFound ? y.code : '' });
+    }
+    return parts;
+  };
+  const openTabDiff = (tab: 'method' | 'pou' | 'enum') => {
+    setDockLayout((l) => activateDockTab(l, tab));
+    if ({ method: methodEdits, pou: pouEdits, enum: enumEdits }[tab]) {
+      window.setTimeout(() => showEditorDiff(tab), 150);
+      return;
+    }
+    if (tab === 'enum') setFileDiff({ title: `${dutFileName}: since it was saved`, parts: [{ name: 'Declaration', before: savedSources.dut ? parseDutContent(savedSources.dut).declaration : '', after: dutContent ? parseDutContent(dutContent).declaration : '' }] });
+    else setFileDiff({ title: `${pouFileName}: since it was saved`, parts: pouParts(savedSources.pou, pouContent) });
+  };
+  const dirtyMark = (tab: 'method' | 'pou' | 'enum', why: (string | false)[]) => {
     const list = why.filter((x): x is string => !!x);
     return list.length ? (
-      <span id={`dock-tab-dirty-${tab}`} className="text-amber-300 font-bold leading-none" title={`Not saved: ${list.join('; ')}`}>
+      <span
+        id={`dock-tab-dirty-${tab}`}
+        role="button"
+        onClick={() => openTabDiff(tab)}
+        className="text-amber-300 font-bold leading-none cursor-pointer hover:text-amber-200"
+        title={`Not saved: ${list.join('; ')}. Click: the changes`}
+      >
         *
       </span>
     ) : undefined;
@@ -6725,7 +6845,7 @@ export const App: React.FC = () => {
       changes: { title: 'Changes', icon: <GitCompare />, tooltip: 'Compare the chart with the saved or committed version' },
       paths: { title: 'Paths', icon: <Route />, tooltip: 'Every path between two states, with the guards along it' },
     }),
-    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message, methodEdits, pouEdits, enumEdits, pouUnsaved, dutUnsaved]
+    [pouFileName, dutFileName, selectedStateId, pouComplexityReport.refactorCandidatesCount, notesCount, activeLintFindings, liveActive, liveStatus.message, methodEdits, pouEdits, enumEdits, pouUnsaved, dutUnsaved, pouContent, dutContent, savedSources]
   );
 
   // Canvas tool windows live in the RightPanel; the canvas renders them into these dock slots
@@ -8319,31 +8439,12 @@ export const App: React.FC = () => {
           entries={bookmarkEntries}
           onClose={() => setBookmarksOpen(false)}
           onClear={() => clearBookmarks(pouFileName)}
-          onOpen={(e: BookmarkEntry) => {
-            if (e.kind === 'state' && e.state) handleJumpToState(e.state);
-            if (e.method === ENUM_KEY) {
-              // (the enum: its member on that line selected in the Enum Editor)
-              const member = /^\s*,?\s*([A-Za-z_]\w*)/.exec(e.text)?.[1];
-              handleOpenEnumEditorModal(member);
-            } else if (isDeclarationKey(e.method)) {
-              const base = declarationOf(e.method);
-              if (base === BODY) {
-                setDockLayout((l) => activateDockTab(l, 'pou'));
-                setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'declaration' });
-              } else {
-                handleOpenInspectorPanel('method', { method: `${base}()` });
-                setCodeJump({ method: base, line: e.line, nonce: Date.now(), part: 'declaration' });
-              }
-            } else if (e.method === BODY) {
-              setDockLayout((l) => activateDockTab(l, 'pou'));
-              setPouReveal({ symbol: '', nonce: Date.now(), line: e.line, part: 'implementation' });
-            } else if (e.line > 0) {
-              handleOpenInspectorPanel('method', { method: `${e.method}()` });
-              setCodeJump({ method: e.method, line: e.line, nonce: Date.now() });
-            }
-          }}
+          onOpen={openBookmark}
+          onNote={(e, note) => setBookmarkNote(pouFileName, e.key, note)}
+          onStep={stepBookmark}
         />
       )}
+      {fileDiff && <DiffDialog title={fileDiff.title} beforeLabel="saved" afterLabel="now" parts={fileDiff.parts} onClose={() => setFileDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">

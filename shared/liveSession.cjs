@@ -8,7 +8,7 @@ const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources, readBootFile } = require('./tcSources.cjs');
-const { syncPlcProject } = require('./plcProjectCopy.cjs');
+const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 const { plcAppInfo, startPlc } = require('./tcAppInfo.cjs');
@@ -373,6 +373,24 @@ function createLiveSession(hooks = {}) {
   }
 
   /**
+   * A POU of the PLC's project kept on this computer (an instance of it opened live): req { requestId, plcproj,
+   * typeName }; answered with projectPouResult { requestId, name, path, content, dutCandidates } or { error }. Only
+   * from the PLC projects' place in the Documents folder, or a folder the copy may be in (hooks.folderAllowed)
+   */
+  function projectPou(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const plcproj = typeof req?.plcproj === 'string' ? path.resolve(req.plcproj) : '';
+    const base = path.resolve(baseDirOf(hooks.documents?.())).toLowerCase() + path.sep;
+    const allowed = plcproj && (plcproj.toLowerCase().startsWith(base) || (hooks.folderAllowed && hooks.folderAllowed(path.dirname(plcproj))));
+    if (!allowed) return send({ type: 'projectPouResult', requestId, error: 'Not a PLC project kept on this computer' });
+    try {
+      send({ type: 'projectPouResult', requestId, ...readCopyPou(plcproj, req?.typeName) });
+    } catch (err) {
+      send({ type: 'projectPouResult', requestId, error: err.message });
+    }
+  }
+
+  /**
    * Rebuild the PLC's project with the POUs edited here (plcBuild), in TwinCAT XAE on this computer; write it back when
    * asked (write: 'online' or 'activate', only without errors). Progress: plcBuildProgress { requestId, text }; the
    * result: plcBuildResult { requestId, ok, items, errors, warnings, fatal, written }. One at a time
@@ -474,7 +492,7 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
-  return { start, stop, watch, browse, sources, projectCopy, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  return { start, stop, watch, browse, sources, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

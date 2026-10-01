@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -284,6 +284,8 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'plcSources') return void session.sources(send, m);
     // The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects)
     if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
+    // A POU of that copy (an instance of it opened live)
+    if (m.type === 'projectPou') return void session.projectPou(send, m);
     // Rebuild the PLC's project with the page's edits (XAE on this computer), and write it back when asked
     if (m.type === 'plcBuildClose') return void session.closeBuild(send, m);
     if (m.type === 'plcLicense') return void session.license(send, m);

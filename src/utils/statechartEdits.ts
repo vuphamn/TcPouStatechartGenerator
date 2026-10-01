@@ -247,6 +247,37 @@ export function groupInComposite(dutContent: string, members: string[], name: st
 }
 
 /**
+ * A composite ungrouped: its {region} and {endregion} lines taken out, its states (and the composites in it) left
+ * where they are, in the composite around it if any. null: no such composite
+ */
+export function ungroupComposite(dutContent: string, name: string): string | null {
+  const { decl, wrap } = declOf(dutContent);
+  const range = enumListRange(decl);
+  if (!range) return null;
+  const lines = decl.slice(range.start + 1, range.end).split('\n');
+  let n = 0;
+  const start = lines.findIndex((l) => {
+    const r = l.match(REGION_RX);
+    if (!r) return false;
+    n++;
+    return ((r[1] ?? r[2] ?? r[3] ?? '').trim() || `Composite${n}`) === name;
+  });
+  if (start < 0) return null;
+  let depth = 0;
+  let end = -1;
+  for (let i = start; i < lines.length; i++) {
+    if (REGION_RX.test(lines[i])) depth++;
+    else if (END_REGION_RX.test(lines[i]) && --depth === 0) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return null;
+  const out = lines.filter((_, i) => i !== start && i !== end);
+  return wrap(decl.slice(0, range.start + 1) + fixMemberCommas(out).join('\n') + decl.slice(range.end));
+}
+
+/**
  * Members moved into a composite (their lines last in it, before its {endregion}), or out of their composites (target
  * null: after the outermost one they are in). Composites left empty removed. reordered: they moved past other members
  */

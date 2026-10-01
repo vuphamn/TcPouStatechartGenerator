@@ -10,7 +10,7 @@ import { enumMembers, lintStateMachine } from '../../src/utils/stateMachineLint.
 import { removeEnumMember } from '../../src/utils/stateCopyDelete.ts';
 import {
   enumMarksOf, setEnumMark, addChoice, addCompletionTransition, addEnumMemberIn, addExceptionTransition, addForkJoinRegions, addStateDescription, regionVariables, compositeOf, describeName, dropEmptyComposites, enumComposites, initialStateOf,
-  isFinalState, setFinalState, setInitialState, wrapInComposite, compositeColorsOf, setCompositeColor, groupInComposite, moveToComposite,
+  isFinalState, setFinalState, setInitialState, wrapInComposite, compositeColorsOf, setCompositeColor, groupInComposite, moveToComposite, ungroupComposite,
 } from '../../src/utils/statechartEdits.ts';
 
 let fails = 0;
@@ -225,6 +225,13 @@ expect(lintKeys(noFinal, fj.dut).includes('region-no-final:S_B.regionB'), 'no (*
   const up = moveToComposite(nestedIn.dut, ['S_B'], 'Work') as { dut: string };
   expect(compositeOf(up.dut, 'S_B') === 'Work' && enumComposites(up.dut).some((c) => c.name === 'Inner'), 'from the inner one back into Work');
   expect('error' in moveToComposite(g.dut, ['S_A'], 'Nope'), 'no such composite: refused');
+
+  // Ungrouped: its markers out, its states (and a composite in it) where they are, the commas right
+  const un = ungroupComposite(nested.dut, 'Work')!;
+  expect(!!un && !/\{region "Work"\}/.test(un) && enumComposites(un).map((c) => `${c.name}:${c.parent}`).join() === 'Inner:null' && enumMembers(un).join() === 'S_A,S_B,S_D,S_C', `Work ungrouped: Inner left, top level (${enumComposites(un).map((c) => c.name).join()}; ${enumMembers(un).join()})`);
+  const plain = ungroupComposite(g.dut, 'Work')!;
+  expect(/\tS_A := 0,\r\n\tS_B, \/\/ busy @final\r\n\tS_D := 7, \(\* last \*\)\r\n\tS_C\r\n\);/.test(plain), `ungrouped: the lines as they were around it (${JSON.stringify(plain.match(/\(\r\n[\s\S]*?\);/)?.[0])})`);
+  expect(ungroupComposite(g.dut, 'Nope') === null, 'no such composite: null');
 }
 
 console.log(`${fails} failures`);

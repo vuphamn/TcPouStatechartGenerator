@@ -66,6 +66,31 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.evaluate((s) => [...(document.getElementById(`state-list-item-${s}`)?.querySelectorAll('button') ?? [])].find((b) => /Go to State/.test(b.textContent))?.click(), busy);
   await h.sleep(1200);
   const before = await ends(busy);
+  // (as laid out: the ends Dagre put on one point of a side spread along it; the labels clear of each other)
+  // (in the drawing's units: the wide chart is drawn small)
+  const svgEnds = (id) => p.evaluate((id) => {
+    const out = [];
+    for (const path of document.querySelectorAll('#mermaid-diagram-svg-container path.tc-edge-path')) {
+      if (path.getAttribute('data-source-id') === id) out.push(path.getPointAtLength(0));
+      if (path.getAttribute('data-target-id') === id) out.push(path.getPointAtLength(path.getTotalLength()));
+    }
+    return out.map((q) => ({ x: q.x, y: q.y }));
+  }, id);
+  const laidOut = await svgEnds(busy);
+  const together0 = together({ pts: laidOut });
+  expect(laidOut.length >= 4 && together0 === 0, `${busy} as laid out: no two of its ${laidOut.length} edge ends on one point (${together0} pairs)`);
+  const labelOverlaps = await p.evaluate(() => {
+    const rs = [...document.querySelectorAll('#mermaid-diagram-svg-container g.edgeLabel[data-linked-path-id]')].filter((l) => l.textContent.trim()).map((l) => {
+      const m = (l.getAttribute('transform') || '').match(/translate\(\s*(-?[\d.]+)[,\s]+(-?[\d.]+)/);
+      const bb = l.getBBox();
+      const x = m ? +m[1] : 0, y = m ? +m[2] : 0;
+      return { left: x + bb.x, top: y + bb.y, right: x + bb.x + bb.width, bottom: y + bb.y + bb.height, w: bb.width };
+    }).filter((r) => r.w > 0);
+    let n = 0;
+    for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) if (rs[i].left < rs[j].right - 1 && rs[i].right > rs[j].left + 1 && rs[i].top < rs[j].bottom - 1 && rs[i].bottom > rs[j].top + 1) n++;
+    return { n, of: rs.length };
+  });
+  expect(labelOverlaps.n === 0, `the ${labelOverlaps.of} edge labels clear of each other (${labelOverlaps.n} overlapping)`);
   const moved = await drag(busy, 120, 60);
   expect(!!moved && moved.pts.length >= 4, `${busy} dragged, ${moved?.pts.length} edge ends`);
   if (moved && before) {

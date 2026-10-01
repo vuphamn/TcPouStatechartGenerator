@@ -6,7 +6,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { syncPlcProject, baseDirOf, MANIFEST } = require('../../shared/plcProjectCopy.cjs');
+const { syncPlcProject, baseDirOf, MANIFEST, readCopyPou } = require('../../shared/plcProjectCopy.cjs');
+const { createLiveSession } = require('../../shared/liveSession.cjs');
 const { writeZip } = require('../lib/zip.cjs');
 
 let fails = 0;
@@ -86,6 +87,23 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   // No project on the PLC: an error, nothing written
   const none = await syncPlcProject(async () => { throw new Error('Not found'); }, { documents: fs.mkdtempSync(path.join(os.tmpdir(), 'kss-docs-')) });
   expect(!!none.error && /project information/.test(none.error), `no project on the PLC: ${none.error}`);
+
+  // An instance's POU from the copy (Link: the page has no files): its content, the project's enums
+  const plcproj = path.join(dir, 'EdgePlc', 'EdgePlc.plcproj');
+  const got = readCopyPou(plcproj, 'SM_TableManager');
+  expect(got.name === 'SM_TableManager.TcPOU' && /SM_TableManager/.test(got.content) && got.dutCandidates?.map((d: { relativePath: string }) => d.relativePath).join() === 'DUTs/E_TableManager.TcDUT', `a POU of the copy: ${got.name ?? got.error}, its enums ${got.dutCandidates?.map((d: { relativePath: string }) => d.relativePath).join()}`);
+  expect(!!readCopyPou(plcproj, 'FB_Missing').error && !!readCopyPou(plcproj, '../x').error && !!readCopyPou(path.join(dir, 'EdgeSS.tsproj'), 'SM_TableManager').error, 'not there, not a name, not a .plcproj: an error');
+  // ... through Link's session: only from the PLC projects' place (or a folder the copy may be in)
+  const sent: { type: string; requestId: number; content?: string; error?: string }[] = [];
+  const session = createLiveSession({ documents: () => documents, folderAllowed: () => false });
+  session.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 7, plcproj, typeName: 'SM_TableManager' });
+  const elsewhere = path.join(other, 'EdgePlc', 'EdgePlc.plcproj');
+  session.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 8, plcproj: elsewhere, typeName: 'SM_TableManager' });
+  expect(sent[0]?.type === 'projectPouResult' && sent[0].requestId === 7 && /SM_TableManager/.test(sent[0].content ?? ''), `Link: from Documents\\Kval StateScope\\PLC projects (${sent[0]?.error ?? 'read'})`);
+  expect(!!sent[1]?.error && !sent[1].content, `Link: a folder it may not read (${sent[1]?.error})`);
+  const session2 = createLiveSession({ documents: () => documents, folderAllowed: (d: string) => d.toLowerCase().startsWith(documents.toLowerCase()) });
+  session2.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 9, plcproj: elsewhere, typeName: 'SM_TableManager' });
+  expect(sent[2]?.requestId === 9 && /v2/.test(sent[2].content ?? ''), `Link: a copy saved to a different location in the user's folders (${sent[2]?.error ?? 'read'})`);
 
   fs.rmSync(documents, { recursive: true, force: true });
   console.log(`${fails} failures`);

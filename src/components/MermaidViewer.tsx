@@ -4082,6 +4082,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // The other selected states' offsets when one of them is dragged (they move with it)
   const groupInitialRef = useRef<Record<string, { x: number; y: number }> | null>(null);
+  // (a composite dragged by its title: its name; its release is no drop of a state into or out of a composite)
+  const compositeDragRef = useRef<string | null>(null);
   // (Snap each to the grid, the selection's menu: each of them snapped when moved, not only the one dragged)
   const groupSnapEachRef = useRef(false);
   groupSnapEachRef.current = !!groupSnapEach;
@@ -4336,6 +4338,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       }
       if (stateId && !stateId.startsWith('note_')) {
         nodeSelectedBeforePressRef.current = effectiveSelectedStateId === stateId;
+        compositeDragRef.current = null;
         isDraggingNodeRef.current = true;
         draggedNodeIdRef.current = stateId;
         draggedNodeElRef.current = nodeEl;
@@ -4360,6 +4363,39 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         };
 
         nodeEl.classList.add('dragging-state-node');
+        setIsNodeDragging(true);
+        return;
+      }
+    }
+
+    // B2. A composite's title: the composite dragged, with its states and the composites inside it (their offsets
+    // moved together: the composite's box follows by its own offset)
+    const clusterOfTitle = target.closest('.cluster-label')?.closest('g.cluster, .statediagram-cluster') as SVGGElement | null;
+    if (clusterOfTitle) {
+      const svgRoot = getDiagramSvg();
+      const box = clusterOfTitle.querySelector(':scope > rect, :scope > g > rect.outer')?.getBoundingClientRect();
+      const nameOf = (c: Element) => c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
+      const inside = (r: DOMRect) => !!box && r.width > 0 && r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+      const states = [...(svgRoot?.querySelectorAll('g.node[data-state-id]') ?? [])].filter((n) => inside(n.getBoundingClientRect())).map((n) => n.getAttribute('data-state-id')!).filter((id) => !id.startsWith('note_'));
+      const inner = [...(svgRoot?.querySelectorAll('g.cluster, .statediagram-cluster') ?? [])].filter((c) => c !== clusterOfTitle && inside((c.querySelector(':scope > rect, :scope > g > rect.outer') ?? c).getBoundingClientRect())).map(nameOf);
+      const name = nameOf(clusterOfTitle);
+      const lead = states[0];
+      const leadEl = lead ? svgRoot?.querySelector(`g.node[data-state-id="${CSS.escape(lead)}"]`) as SVGGElement | null : null;
+      if (name && lead && leadEl) {
+        e.preventDefault();
+        compositeDragRef.current = name;
+        isDraggingNodeRef.current = true;
+        draggedNodeIdRef.current = lead;
+        draggedNodeElRef.current = leadEl;
+        dragUnitScaleRef.current = getSvgUnitScale(leadEl.parentElement, zoom);
+        nodeDragStartPosRef.current = { x: e.clientX, y: e.clientY };
+        nodeMovedRef.current = false;
+        const currentOffset = effectiveNodeOffsets[lead] || { x: 0, y: 0 };
+        nodeInitialOffsetRef.current = { ...currentOffset };
+        groupInitialRef.current = Object.fromEntries([...states.slice(1), name, ...inner].map((id) => [id, { ...(effectiveNodeOffsets[id] || { x: 0, y: 0 }) }]));
+        const geom = getNodeGeometry(leadEl, svgRoot);
+        nodeInitialCenterRef.current = { x: geom.origCenterX + currentOffset.x, y: geom.origCenterY + currentOffset.y, origCenterX: geom.origCenterX, origCenterY: geom.origCenterY };
+        clusterOfTitle.classList.add('dragging-composite');
         setIsNodeDragging(true);
         return;
       }
@@ -5089,7 +5125,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           }
         }
         // (after its position is kept: a move into a composite drops it again, for the layout to place it there)
-        onStateDropped?.(stateId, dropComposites, e.altKey);
+        // (a composite dragged by its title: moved, not dropped into another one)
+        if (compositeDragRef.current) {
+          getDiagramSvg()?.querySelectorAll('.dragging-composite').forEach((c) => c.classList.remove('dragging-composite'));
+          compositeDragRef.current = null;
+        } else onStateDropped?.(stateId, dropComposites, e.altKey);
         return;
       }
 
@@ -6756,9 +6796,21 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
-            <span className="px-0.5 font-mono text-[11px] text-slate-400 select-none" title="The chart's size shown (100%: its own size; the reset fits it to the canvas)">
+            <button
+              id="zoom-label-button"
+              type="button"
+              onClick={() => {
+                onSwitchToDiagramTab?.();
+                // (fitted: its own size; else fitted again)
+                const atFit = Math.abs(zoom - 1) < 0.01;
+                setZoom(atFit && fitScale < 0.999 ? Math.min(maxZoomRef.current, 1 / fitScale) : 1);
+                setPan({ x: 0, y: 0 });
+              }}
+              className="px-0.5 font-mono text-[11px] text-slate-400 hover:text-slate-200 rounded select-none cursor-pointer"
+              title="The chart's size shown (100%: its own size). Click: its own size / fitted to the canvas"
+            >
               {Math.round(zoom * fitScale * 100)}%
-            </span>
+            </button>
             <button
               id="zoom-in-button"
               type="button"
@@ -6779,7 +6831,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                 handleResetZoom();
               }}
               className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-              title="Reset View"
+              title="Fit the chart to the canvas (the view reset: zoom and position)"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
