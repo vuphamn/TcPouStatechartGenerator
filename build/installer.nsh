@@ -1,7 +1,7 @@
 ; Kval StateScope desktop installer: additions to electron-builder's NSIS installer (package.json build.nsis.include)
 ;  - "Open in Kval StateScope" in Windows Explorer's context menu of .TcPOU files
-;  - optional components: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell, and the web
-;    edition's live view helpers Kval StateScope Link and the gateway
+;  - optional components on two pages: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell (on by
+;    default when found), and the web edition's live view helpers Kval StateScope Link and the gateway (off)
 ; The components' files are staged in release\installer-extras by scripts\prepare-installer.cjs (npm run build:exe).
 
 !include nsDialogs.nsh
@@ -39,7 +39,7 @@
   Var kssGatewayBox
   Var kssGatewayDir
 
-  ; The previous installation's choices (the context menu is on by default)
+  ; The previous installation's choices (by default: the context menu and the XAE extension on, Link and the gateway off)
   !macro kssReadChoice name var default
     StrCpy ${var} ${default}
     ClearErrors
@@ -57,17 +57,40 @@
 
   !macro customInit
     !insertmacro kssReadChoice "ContextMenu" $kssMenu 1
-    !insertmacro kssReadChoice "VisualStudio" $kssVs 0
-    !insertmacro kssReadChoice "TcXaeShell" $kssXae 0
+    ; (the TwinCAT XAE extension: on by default, when its IDE is found; a silent first install leaves it out: TcXaeShell's
+    ; asks for administrator rights)
+    ${If} ${Silent}
+      !insertmacro kssReadChoice "VisualStudio" $kssVs 0
+      !insertmacro kssReadChoice "TcXaeShell" $kssXae 0
+    ${Else}
+      !insertmacro kssReadChoice "VisualStudio" $kssVs 1
+      !insertmacro kssReadChoice "TcXaeShell" $kssXae 1
+    ${EndIf}
     !insertmacro kssReadChoice "Link" $kssLink 0
     !insertmacro kssReadChoice "LinkStartup" $kssLinkStartup 0
     !insertmacro kssReadChoice "Gateway" $kssGateway 0
     StrCpy $kssDetected 0
   !macroend
 
-  ; The page and its functions: inserted where the pages are declared, after the Modern UI is loaded
+  ; A heading, and the text under an option (grey)
+  !macro kssHeading y text
+    ${NSD_CreateLabel} 0 ${y} 100% 10u "${text}"
+    Pop $0
+    CreateFont $1 "$(^Font)" "$(^FontSize)" 700
+    SendMessage $0 ${WM_SETFONT} $1 0
+  !macroend
+  !macro kssNote x y h text
+    ${NSD_CreateLabel} ${x} ${y} -${x} ${h} "${text}"
+    Pop $0
+    SetCtlColors $0 0x5A5A5A transparent
+  !macroend
+
+  ; The pages and their functions: inserted where the pages are declared, after the Modern UI is loaded. Two pages:
+  ; the desktop app and the TwinCAT XAE edition (what an engineer with a laptop at the PLC uses: on by default), then
+  ; the web edition's helpers (off by default). Each option with what it is for.
   !macro customPageAfterChangeDir
     Page custom kssPageCreate kssPageLeave
+    Page custom kssPage2Create kssPage2Leave
 
     ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit
     Function kssDetect
@@ -102,67 +125,49 @@
       ${EndIf}
     FunctionEnd
 
+    ; Page 1: the desktop app, the TwinCAT XAE edition
     Function kssPageCreate
       Call kssDetect
-      !insertmacro MUI_HEADER_TEXT "Additional components" "Choose what to install with Kval StateScope."
+      !insertmacro MUI_HEADER_TEXT "Desktop and TwinCAT XAE editions" "For the engineer at the PLC: the app on this computer, and inside TwinCAT XAE."
       nsDialogs::Create 1018
       Pop $0
       ${If} $0 == error
         Abort
       ${EndIf}
 
-      ${NSD_CreateLabel} 0 0 100% 10u "Windows Explorer"
-      Pop $0
-      ${NSD_CreateCheckbox} 8u 11u -8u 10u "&Open in Kval StateScope, in the right-click menu of .TcPOU files"
+      !insertmacro kssHeading 0 "Desktop app (always installed)"
+      !insertmacro kssNote 8u 10u 18u "Opens a TwinCAT project's POUs (.TcPOU): the statechart, editors, simulation, and Live view of a PLC through this PC's ADS router."
+      ${NSD_CreateCheckbox} 8u 30u -8u 10u "&Explorer: Open in Kval StateScope (right-click a .TcPOU file)"
       Pop $kssMenuBox
       ${NSD_SetState} $kssMenuBox $kssMenu
 
-      ${NSD_CreateLabel} 0 28u 100% 10u "TwinCAT XAE extension: open a POU in a document tab, Save to project, Live view"
-      Pop $0
+      !insertmacro kssHeading 45u "TwinCAT XAE edition (the extension)"
+      !insertmacro kssNote 8u 55u 18u "The app inside XAE: a POU opens in a document tab, Save writes to the project, Build shows XAE's errors, Live uses XAE's PLC."
       ${If} $kssVsNames != ""
-        ${NSD_CreateCheckbox} 8u 39u -8u 10u "&Visual Studio ($kssVsNames)"
+        ${NSD_CreateCheckbox} 8u 74u -8u 10u "&Visual Studio ($kssVsNames)"
         Pop $kssVsBox
         ${NSD_SetState} $kssVsBox $kssVs
       ${Else}
-        ${NSD_CreateCheckbox} 8u 39u -8u 10u "&Visual Studio 2022 / 2026 (not found on this computer)"
+        ${NSD_CreateCheckbox} 8u 74u -8u 10u "&Visual Studio 2022 / 2026 (not found on this computer)"
         Pop $kssVsBox
         EnableWindow $kssVsBox 0
       ${EndIf}
+      !insertmacro kssNote 20u 85u 18u "TwinCAT 3.1 build 4026 and later, in Visual Studio 2022 / 2026. Close Visual Studio before installing."
       ${If} $kssXaeFound == 1
-        ${NSD_CreateCheckbox} 8u 51u -8u 10u "&TcXaeShell 64-bit (asks for administrator rights)"
+        ${NSD_CreateCheckbox} 8u 105u -8u 10u "&TcXaeShell 64-bit (asks for administrator rights)"
         Pop $kssXaeBox
         ${NSD_SetState} $kssXaeBox $kssXae
       ${Else}
-        ${NSD_CreateCheckbox} 8u 51u -8u 10u "&TcXaeShell 64-bit (not found on this computer)"
+        ${NSD_CreateCheckbox} 8u 105u -8u 10u "&TcXaeShell 64-bit (not found on this computer)"
         Pop $kssXaeBox
         EnableWindow $kssXaeBox 0
       ${EndIf}
-
-      ${NSD_CreateLabel} 0 68u 100% 10u "Web edition: live view from a browser"
-      Pop $0
-      ${NSD_CreateCheckbox} 8u 79u -8u 10u "Kval StateScope &Link: the helper for a browser on this computer"
-      Pop $kssLinkBox
-      ${NSD_SetState} $kssLinkBox $kssLink
-      ${NSD_CreateCheckbox} 20u 90u -20u 10u "&Start Link when I sign in (minimized; on its page: Start with Windows)"
-      Pop $kssLinkStartupBox
-      ${NSD_SetState} $kssLinkStartupBox $kssLinkStartup
-      ${NSD_CreateCheckbox} 8u 102u -8u 10u "Kval StateScope &gateway: a shared server for a team (needs Node.js 20 or later)"
-      Pop $kssGatewayBox
-      ${NSD_SetState} $kssGatewayBox $kssGateway
-
-      ${NSD_CreateLabel} 8u 118u -8u 30u "Close Visual Studio and TcXaeShell before installing their extension. The gateway is set up after installing: see README.md in its folder (Start menu: Kval StateScope Gateway)."
-      Pop $0
+      !insertmacro kssNote 20u 116u 18u "Beckhoff's TcXaeShell (TwinCAT 3.1 build 4026); its extensions are under Program Files. Close it before installing."
       nsDialogs::Show
     FunctionEnd
 
     Function kssPageLeave
       ${NSD_GetState} $kssMenuBox $kssMenu
-      ${NSD_GetState} $kssLinkBox $kssLink
-      ${NSD_GetState} $kssLinkStartupBox $kssLinkStartup
-      ${If} $kssLink != 1
-        StrCpy $kssLinkStartup 0
-      ${EndIf}
-      ${NSD_GetState} $kssGatewayBox $kssGateway
       ${If} $kssVsNames != ""
         ${NSD_GetState} $kssVsBox $kssVs
       ${Else}
@@ -173,6 +178,40 @@
       ${Else}
         StrCpy $kssXae 0
       ${EndIf}
+    FunctionEnd
+
+    ; Page 2: the web edition's helpers (off by default)
+    Function kssPage2Create
+      !insertmacro MUI_HEADER_TEXT "Web edition helpers (optional)" "Only for using Kval StateScope in a browser; not needed with the desktop app or XAE."
+      nsDialogs::Create 1018
+      Pop $0
+      ${If} $0 == error
+        Abort
+      ${EndIf}
+
+      !insertmacro kssHeading 0 "Web edition (nothing to install)"
+      !insertmacro kssNote 8u 10u 18u "The app in a browser (its web page, or a gateway's). A browser cannot reach a PLC by itself: Live view needs a helper below."
+      ${NSD_CreateCheckbox} 8u 31u -8u 10u "Kval StateScope &Link: live view for a browser on this computer"
+      Pop $kssLinkBox
+      ${NSD_SetState} $kssLinkBox $kssLink
+      !insertmacro kssNote 20u 42u 26u "A program in the notification area: lets the web edition in this PC's browser reach PLCs through this PC's TwinCAT router, and open and save the project's files."
+      ${NSD_CreateCheckbox} 20u 69u -20u 10u "&Start Link when I sign in (minimized)"
+      Pop $kssLinkStartupBox
+      ${NSD_SetState} $kssLinkStartupBox $kssLinkStartup
+      ${NSD_CreateCheckbox} 8u 84u -8u 10u "Kval StateScope &gateway: the web edition and live view for a team"
+      Pop $kssGatewayBox
+      ${NSD_SetState} $kssGatewayBox $kssGateway
+      !insertmacro kssNote 20u 95u 35u "A server (on a machine's or the office's PC) that serves the web edition, with Live view of its PLCs, to browsers on other computers (HTTPS, access tokens). Needs Node.js 20+; set up after installing: README.md in its folder (Start menu)."
+      nsDialogs::Show
+    FunctionEnd
+
+    Function kssPage2Leave
+      ${NSD_GetState} $kssLinkBox $kssLink
+      ${NSD_GetState} $kssLinkStartupBox $kssLinkStartup
+      ${If} $kssLink != 1
+        StrCpy $kssLinkStartup 0
+      ${EndIf}
+      ${NSD_GetState} $kssGatewayBox $kssGateway
     FunctionEnd
 
   !macroend

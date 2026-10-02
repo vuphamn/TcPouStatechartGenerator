@@ -353,18 +353,25 @@ Compiled executables are output to the `release/` directory:
 
 ### What the installer sets up
 
-After the install folder, the installer offers **Additional components**:
+After the install folder, the installer offers its components on two pages, each option with a description of what it is for. The defaults suit an engineer at the PLC with a laptop: the desktop app and the TwinCAT XAE edition. The web edition's helpers are off.
+
+**Desktop and TwinCAT XAE editions**: the desktop app is always installed.
 
 | Option | What it does |
 |---|---|
-| **Open in Kval StateScope** (on by default) | Adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files in Windows Explorer. It works whatever program `.TcPOU` files open with. On Windows 11 it is under **Show more options** (or Shift+right-click). |
-| **Visual Studio** | Installs the TwinCAT XAE extension in every Visual Studio 2022 / 2026 found (listed on the page). Close Visual Studio first; the installer asks you to. |
-| **TcXaeShell 64-bit** | Installs the extension in TcXaeShell (asks for administrator rights). Close TcXaeShell first. |
+| **Explorer: Open in Kval StateScope** (on by default) | Adds **Open in Kval StateScope** to the right-click menu of `.TcPOU` files in Windows Explorer. It works whatever program `.TcPOU` files open with. On Windows 11 it is under **Show more options** (or Shift+right-click). |
+| **Visual Studio** (on by default, when found) | Installs the TwinCAT XAE extension in every Visual Studio 2022 / 2026 found (listed on the page): a POU opens in a document tab, Save writes into the project, Build shows XAE's errors, Live uses XAE's PLC. Close Visual Studio first; the installer asks you to. |
+| **TcXaeShell 64-bit** (on by default, when found) | Installs the extension in TcXaeShell (asks for administrator rights). Close TcXaeShell first. |
+
+**Web edition helpers (optional)**: the web edition itself needs no install (its page, or a gateway's). A browser cannot reach a PLC by itself: for Live view it needs one of these.
+
+| Option | What it does |
+|---|---|
 | **Kval StateScope Link** | The web edition's helper for a browser on this computer, with a Start menu shortcut. |
 | **Start Link when I sign in** (under Link) | A shortcut in your Startup folder starts Link minimized, without its page, each time you sign in. It's the same as *Start when I sign in* on Link's page, and either can turn it off. Uninstalling removes it. |
 | **Kval StateScope gateway** | The web edition's shared server, in `%LocalAppData%\KvalStateScope\Gateway` (or `C:\ProgramData\KvalStateScope\Gateway` for all users), with its dependencies. It runs on Node.js 20+; set it up with [gateway/README.md](gateway/README.md) (`node gateway.cjs init`). |
 
-Options for software that is not on the computer are greyed out. Running the installer again shows your earlier choices; an update keeps them.
+Options for software that is not on the computer are greyed out. Running the installer again shows your earlier choices; an update keeps them. A silent first install (`/S`) leaves the XAE extensions out (TcXaeShell's asks for administrator rights).
 
 - **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in a new window, or brings forward the window that already shows it.
 - **Uninstalling** removes the menu entry, the extensions and Link. It removes the gateway's program files but keeps its `config.json`, certificate and key.
