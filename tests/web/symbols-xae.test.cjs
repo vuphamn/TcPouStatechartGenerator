@@ -1,5 +1,5 @@
 // XAE edition (stand-in bridge): PLC Symbols' type filter. At first the loaded POU's type (the instances of it under
-// the root, searched level by level); another type's instance opens a new StateScope on it (openInstance with its
+// the root, searched level by level); another type's instance opens a new MachineScope on it (openInstance with its
 // type and path, the extension finds its POU in the PLC project); Here follows another instance of the loaded POU in
 // this tab (live again on it); Search in MAIN, Stop, and the filter kept per POU type
 const h = require('../lib/harness.cjs');
@@ -121,7 +121,7 @@ const TREE = {
   const doorOpen = !!(await page.$(`.symbol-row[data-path="${R}.fbLine.smDoor"] .symbol-open-other`));
   expect(tree.includes('nCount') && tree.includes('smDoor') && doorOpen, `cleared: the whole tree (${tree.join(', ')}); smDoor (SM_DoorDasher): Open`);
 
-  // 3. Another type in the filter; Open: a new StateScope for SM_DoorDasher, live on it
+  // 3. Another type in the filter; Open: a new MachineScope for SM_DoorDasher, live on it
   await set('symbol-browser-type-filter', 'SM_DoorDasher');
   const doors = await list();
   expect(doors.join() === `${R}.fbLine.smDoor:open`, `SM_DoorDasher: ${doors.join(', ')}`);

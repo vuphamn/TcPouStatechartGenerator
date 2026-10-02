@@ -43,7 +43,7 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="110" xml:space="preserve">
-    <value>Kval StateScope</value>
+    <value>Kval MachineScope</value>
   </data>
   <data name="112" xml:space="preserve">
     <value>Kval SM_*.TcPOU state machines as interactive diagrams inside TwinCAT XAE</value>

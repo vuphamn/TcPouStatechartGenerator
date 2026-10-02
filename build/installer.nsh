@@ -1,7 +1,7 @@
-; Kval StateScope desktop installer: additions to electron-builder's NSIS installer (package.json build.nsis.include)
-;  - "Open in Kval StateScope" in Windows Explorer's context menu of .TcPOU files
-;  - optional components on two pages: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell (on by
-;    default when found), and the web edition's live view helpers Kval StateScope Link and the gateway (off)
+; Kval MachineScope desktop installer: additions to electron-builder's NSIS installer (package.json build.nsis.include)
+;  - "Open in Kval MachineScope" in Windows Explorer's context menu of .TcPOU files
+;  - optional components on two pages: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell, 4026's
+;    and 4024's (on by default when found), and the web edition's live view helpers Kval MachineScope Link and the gateway (off)
 ; The components' files are staged in release\installer-extras by scripts\prepare-installer.cjs (npm run build:exe).
 
 !include nsDialogs.nsh
@@ -15,6 +15,9 @@
 ; Where earlier versions put it (removed on install and uninstall)
 !define KSS_MENU_KEY_OLD "Software\Classes\SystemFileAssociations\.TcPOU\shell\KvalStateScope.Open"
 !define KSS_PS 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
+; TcXaeShell: TwinCAT 4026's (64-bit), TwinCAT 4024's (32-bit, the Visual Studio 2017 shell)
+!define KSS_XAE64 "$PROGRAMFILES64\Beckhoff\TcXaeShell"
+!define KSS_XAE32 "$PROGRAMFILES32\Beckhoff\TcXaeShell"
 
 !macro kssRefreshShell
   ; SHCNE_ASSOCCHANGED: Explorer re-reads the context menu registrations
@@ -25,15 +28,18 @@
   Var kssMenu
   Var kssVs
   Var kssXae
+  Var kssXae24
   Var kssLink
   Var kssLinkStartup
   Var kssGateway
   Var kssVsNames
   Var kssXaeFound
+  Var kssXae24Found
   Var kssDetected
   Var kssMenuBox
   Var kssVsBox
   Var kssXaeBox
+  Var kssXae24Box
   Var kssLinkBox
   Var kssLinkStartupBox
   Var kssGatewayBox
@@ -62,9 +68,11 @@
     ${If} ${Silent}
       !insertmacro kssReadChoice "VisualStudio" $kssVs 0
       !insertmacro kssReadChoice "TcXaeShell" $kssXae 0
+      !insertmacro kssReadChoice "TcXaeShell4024" $kssXae24 0
     ${Else}
       !insertmacro kssReadChoice "VisualStudio" $kssVs 1
       !insertmacro kssReadChoice "TcXaeShell" $kssXae 1
+      !insertmacro kssReadChoice "TcXaeShell4024" $kssXae24 1
     ${EndIf}
     !insertmacro kssReadChoice "Link" $kssLink 0
     !insertmacro kssReadChoice "LinkStartup" $kssLinkStartup 0
@@ -92,7 +100,7 @@
     Page custom kssPageCreate kssPageLeave
     Page custom kssPage2Create kssPage2Leave
 
-    ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit
+    ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit (4026) and 32-bit (4024)
     Function kssDetect
       ${If} $kssDetected == 1
         Return
@@ -120,8 +128,12 @@
         StrCpy $kssVsNames ""
       ${EndIf}
       StrCpy $kssXaeFound 0
-      ${If} ${FileExists} "$PROGRAMFILES64\Beckhoff\TcXaeShell\Common7\IDE\TcXaeShell.exe"
+      ${If} ${FileExists} "${KSS_XAE64}\Common7\IDE\TcXaeShell.exe"
         StrCpy $kssXaeFound 1
+      ${EndIf}
+      StrCpy $kssXae24Found 0
+      ${If} ${FileExists} "${KSS_XAE32}\Common7\IDE\TcXaeShell.exe"
+        StrCpy $kssXae24Found 1
       ${EndIf}
     FunctionEnd
 
@@ -137,32 +149,42 @@
 
       !insertmacro kssHeading 0 "Desktop app (always installed)"
       !insertmacro kssNote 8u 10u 18u "Opens a TwinCAT project's POUs (.TcPOU): the statechart, editors, simulation, and Live view of a PLC through this PC's ADS router."
-      ${NSD_CreateCheckbox} 8u 30u -8u 10u "&Explorer: Open in Kval StateScope (right-click a .TcPOU file)"
+      ${NSD_CreateCheckbox} 8u 30u -8u 10u "&Explorer: Open in Kval MachineScope (right-click a .TcPOU file)"
       Pop $kssMenuBox
       ${NSD_SetState} $kssMenuBox $kssMenu
 
-      !insertmacro kssHeading 45u "TwinCAT XAE edition (the extension)"
-      !insertmacro kssNote 8u 55u 18u "The app inside XAE: a POU opens in a document tab, Save writes to the project, Build shows XAE's errors, Live uses XAE's PLC."
+      !insertmacro kssHeading 44u "TwinCAT XAE edition (the extension; close the IDE before installing)"
+      !insertmacro kssNote 8u 54u 18u "The app inside XAE: a POU opens in a document tab, Save writes to the project, Build shows XAE's errors, Live uses XAE's PLC."
       ${If} $kssVsNames != ""
-        ${NSD_CreateCheckbox} 8u 74u -8u 10u "&Visual Studio ($kssVsNames)"
+        ${NSD_CreateCheckbox} 8u 73u -8u 10u "&Visual Studio ($kssVsNames)"
         Pop $kssVsBox
         ${NSD_SetState} $kssVsBox $kssVs
       ${Else}
-        ${NSD_CreateCheckbox} 8u 74u -8u 10u "&Visual Studio 2022 / 2026 (not found on this computer)"
+        ${NSD_CreateCheckbox} 8u 73u -8u 10u "&Visual Studio 2022 / 2026 (not found on this computer)"
         Pop $kssVsBox
         EnableWindow $kssVsBox 0
       ${EndIf}
-      !insertmacro kssNote 20u 85u 18u "TwinCAT 3.1 build 4026 and later, in Visual Studio 2022 / 2026. Close Visual Studio before installing."
+      !insertmacro kssNote 20u 83u 10u "TwinCAT 3.1 build 4026 and later, integrated in Visual Studio."
       ${If} $kssXaeFound == 1
-        ${NSD_CreateCheckbox} 8u 105u -8u 10u "&TcXaeShell 64-bit (asks for administrator rights)"
+        ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4026 (asks for administrator rights)"
         Pop $kssXaeBox
         ${NSD_SetState} $kssXaeBox $kssXae
       ${Else}
-        ${NSD_CreateCheckbox} 8u 105u -8u 10u "&TcXaeShell 64-bit (not found on this computer)"
+        ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4026 (not found on this computer)"
         Pop $kssXaeBox
         EnableWindow $kssXaeBox 0
       ${EndIf}
-      !insertmacro kssNote 20u 116u 18u "Beckhoff's TcXaeShell (TwinCAT 3.1 build 4026); its extensions are under Program Files. Close it before installing."
+      !insertmacro kssNote 20u 105u 10u "Beckhoff's TcXaeShell of TwinCAT 3.1 build 4026, in Program Files."
+      ${If} $kssXae24Found == 1
+        ${NSD_CreateCheckbox} 8u 117u -8u 10u "TcXaeShell &32-bit, TwinCAT 4024 (asks for administrator rights)"
+        Pop $kssXae24Box
+        ${NSD_SetState} $kssXae24Box $kssXae24
+      ${Else}
+        ${NSD_CreateCheckbox} 8u 117u -8u 10u "TcXaeShell &32-bit, TwinCAT 4024 (not found on this computer)"
+        Pop $kssXae24Box
+        EnableWindow $kssXae24Box 0
+      ${EndIf}
+      !insertmacro kssNote 20u 127u 10u "TwinCAT 3.1 build 4024's TcXaeShell (a Visual Studio 2017 shell), in Program Files (x86)."
       nsDialogs::Show
     FunctionEnd
 
@@ -173,6 +195,11 @@
       ${Else}
         StrCpy $kssVs 0
       ${EndIf}
+      ${If} $kssXae24Found == 1
+        ${NSD_GetState} $kssXae24Box $kssXae24
+      ${Else}
+        StrCpy $kssXae24 0
+      ${EndIf}
       ${If} $kssXaeFound == 1
         ${NSD_GetState} $kssXaeBox $kssXae
       ${Else}
@@ -182,7 +209,7 @@
 
     ; Page 2: the web edition's helpers (off by default)
     Function kssPage2Create
-      !insertmacro MUI_HEADER_TEXT "Web edition helpers (optional)" "Only for using Kval StateScope in a browser; not needed with the desktop app or XAE."
+      !insertmacro MUI_HEADER_TEXT "Web edition helpers (optional)" "Only for using Kval MachineScope in a browser; not needed with the desktop app or XAE."
       nsDialogs::Create 1018
       Pop $0
       ${If} $0 == error
@@ -191,14 +218,14 @@
 
       !insertmacro kssHeading 0 "Web edition (nothing to install)"
       !insertmacro kssNote 8u 10u 18u "The app in a browser (its web page, or a gateway's). A browser cannot reach a PLC by itself: Live view needs a helper below."
-      ${NSD_CreateCheckbox} 8u 31u -8u 10u "Kval StateScope &Link: live view for a browser on this computer"
+      ${NSD_CreateCheckbox} 8u 31u -8u 10u "Kval MachineScope &Link: live view for a browser on this computer"
       Pop $kssLinkBox
       ${NSD_SetState} $kssLinkBox $kssLink
       !insertmacro kssNote 20u 42u 26u "A program in the notification area: lets the web edition in this PC's browser reach PLCs through this PC's TwinCAT router, and open and save the project's files."
       ${NSD_CreateCheckbox} 20u 69u -20u 10u "&Start Link when I sign in (minimized)"
       Pop $kssLinkStartupBox
       ${NSD_SetState} $kssLinkStartupBox $kssLinkStartup
-      ${NSD_CreateCheckbox} 8u 84u -8u 10u "Kval StateScope &gateway: the web edition and live view for a team"
+      ${NSD_CreateCheckbox} 8u 84u -8u 10u "Kval MachineScope &gateway: the web edition and live view for a team"
       Pop $kssGatewayBox
       ${NSD_SetState} $kssGatewayBox $kssGateway
       !insertmacro kssNote 20u 95u 35u "A server (on a machine's or the office's PC) that serves the web edition, with Live view of its PLCs, to browsers on other computers (HTTPS, access tokens). Needs Node.js 20+; set up after installing: README.md in its folder (Start menu)."
@@ -228,7 +255,7 @@
         ${EndIf}
       ${Else}
         ${If} $0 != 0
-          MessageBox MB_OK|MB_ICONEXCLAMATION "The ${what} could not be installed (code $0). Kval StateScope itself is installed; run this setup again to retry." /SD IDOK
+          MessageBox MB_OK|MB_ICONEXCLAMATION "The ${what} could not be installed (code $0). Kval MachineScope itself is installed; run this setup again to retry." /SD IDOK
         ${EndIf}
         ${Break}
       ${EndIf}
@@ -245,12 +272,15 @@
       ${If} $kssXaeFound != 1
         StrCpy $kssXae 0
       ${EndIf}
+      ${If} $kssXae24Found != 1
+        StrCpy $kssXae24 0
+      ${EndIf}
     ${EndIf}
 
     ; Explorer's context menu of .TcPOU files (HKCU for this user, HKLM for all users)
     DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
     ${If} $kssMenu == 1
-      WriteRegStr SHCTX "${KSS_MENU_KEY}" "" "Open in Kval StateScope"
+      WriteRegStr SHCTX "${KSS_MENU_KEY}" "" "Open in Kval MachineScope"
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "Icon" '"$appExe",0'
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "AppliesTo" 'System.FileName:"*.TcPOU"'
       WriteRegStr SHCTX "${KSS_MENU_KEY}\command" "" '"$appExe" "%1"'
@@ -272,24 +302,38 @@
       !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\vs-extension.ps1" -Action Install -Vsix "$INSTDIR\installer\KvalStateScope.Xae.vsix"' "Visual Studio extension" "Visual Studio"
     ${EndIf}
     ${If} $kssXae == 1
-      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Vsix "$INSTDIR\installer\KvalStateScope.Xae.vsix"' "TcXaeShell extension" "TcXaeShell"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE64}" -Vsix "$INSTDIR\installer\KvalStateScope.Xae.vsix"' "TcXaeShell extension" "TcXaeShell"
+    ${EndIf}
+    ${If} $kssXae24 == 1
+      File "${KSS_EXTRAS}\KvalStateScope.Xae.Vs2017.vsix"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE32}" -Vsix "$INSTDIR\installer\KvalStateScope.Xae.Vs2017.vsix"' "TcXaeShell (TwinCAT 4024) extension" "TcXaeShell"
     ${EndIf}
 
-    ; Kval StateScope Link: the exe and a Start menu shortcut
+    ; (installed before the product was renamed: Kval StateScope Link and its shortcuts)
+    Delete "$INSTDIR\Link\Kval StateScope Link.exe"
+    Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
+    Delete "$SMPROGRAMS\Kval StateScope Gateway.lnk"
+    SetShellVarContext current
+    Delete "$SMSTARTUP\Kval StateScope Link.lnk"
+    ${If} $installMode == "all"
+      SetShellVarContext all
+    ${EndIf}
+
+    ; Kval MachineScope Link: the exe and a Start menu shortcut
     ${If} $kssLink == 1
       SetOutPath "$INSTDIR\Link"
-      File "${KSS_EXTRAS}\link\Kval StateScope Link.exe"
-      CreateShortCut "$SMPROGRAMS\Kval StateScope Link.lnk" "$INSTDIR\Link\Kval StateScope Link.exe"
+      File "${KSS_EXTRAS}\link\Kval MachineScope Link.exe"
+      CreateShortCut "$SMPROGRAMS\Kval MachineScope Link.lnk" "$INSTDIR\Link\Kval MachineScope Link.exe"
     ${Else}
-      Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
+      Delete "$SMPROGRAMS\Kval MachineScope Link.lnk"
     ${EndIf}
     ; Start Link when this user signs in: the same shortcut as Link's page makes (this user's Startup folder, even when
     ; installed for all users: minimized, without opening its page)
     SetShellVarContext current
     ${If} $kssLinkStartup == 1
-      CreateShortCut "$SMSTARTUP\Kval StateScope Link.lnk" "$INSTDIR\Link\Kval StateScope Link.exe" "--no-open" "" "" SW_SHOWMINIMIZED "" "Kval StateScope Link (started when you sign in: set on its page)"
+      CreateShortCut "$SMSTARTUP\Kval MachineScope Link.lnk" "$INSTDIR\Link\Kval MachineScope Link.exe" "--no-open" "" "" SW_SHOWMINIMIZED "" "Kval MachineScope Link (started when you sign in: set on its page)"
     ${ElseIf} $kssLink != 1
-      Delete "$SMSTARTUP\Kval StateScope Link.lnk"
+      Delete "$SMSTARTUP\Kval MachineScope Link.lnk"
     ${EndIf}
     ${If} $installMode == "all"
       SetShellVarContext all
@@ -305,7 +349,7 @@
       ${EndIf}
       SetOutPath "$kssGatewayDir"
       File /r "${KSS_EXTRAS}\gateway\*.*"
-      CreateShortCut "$SMPROGRAMS\Kval StateScope Gateway.lnk" "$kssGatewayDir"
+      CreateShortCut "$SMPROGRAMS\Kval MachineScope Gateway.lnk" "$kssGatewayDir"
       WriteRegStr SHCTX "${KSS_REG}" "GatewayDir" "$kssGatewayDir"
       nsExec::ExecToStack 'cmd.exe /c node --version'
       Pop $0
@@ -318,6 +362,7 @@
     WriteRegDWORD SHCTX "${KSS_REG}" "ContextMenu" $kssMenu
     WriteRegDWORD SHCTX "${KSS_REG}" "VisualStudio" $kssVs
     WriteRegDWORD SHCTX "${KSS_REG}" "TcXaeShell" $kssXae
+    WriteRegDWORD SHCTX "${KSS_REG}" "TcXaeShell4024" $kssXae24
     WriteRegDWORD SHCTX "${KSS_REG}" "Link" $kssLink
     WriteRegDWORD SHCTX "${KSS_REG}" "LinkStartup" $kssLinkStartup
     WriteRegDWORD SHCTX "${KSS_REG}" "Gateway" $kssGateway
@@ -329,6 +374,7 @@
   DeleteRegKey SHCTX "${KSS_MENU_KEY}"
   DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
   !insertmacro kssRefreshShell
+  Delete "$SMPROGRAMS\Kval MachineScope Link.lnk"
   Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
   ; An update runs the old version's uninstaller first: the extensions and the gateway stay
   ${IfNot} ${isUpdated}
@@ -341,11 +387,18 @@
     ReadRegDWORD $0 SHCTX "${KSS_REG}" "TcXaeShell"
     ${If} $0 == 1
       DetailPrint "Removing the TcXaeShell extension..."
-      nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Uninstall'
+      nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Uninstall -ShellRoot "${KSS_XAE64}"'
+      Pop $0
+    ${EndIf}
+    ReadRegDWORD $0 SHCTX "${KSS_REG}" "TcXaeShell4024"
+    ${If} $0 == 1
+      DetailPrint "Removing the TcXaeShell (TwinCAT 4024) extension..."
+      nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Uninstall -ShellRoot "${KSS_XAE32}"'
       Pop $0
     ${EndIf}
     ; Link's start at sign-in (this user's)
     SetShellVarContext current
+    Delete "$SMSTARTUP\Kval MachineScope Link.lnk"
     Delete "$SMSTARTUP\Kval StateScope Link.lnk"
     ${If} $installMode == "all"
       SetShellVarContext all
@@ -363,6 +416,7 @@
       Delete "$1\package-lock.json"
       Delete "$1\README.md"
       RMDir "$1"
+      Delete "$SMPROGRAMS\Kval MachineScope Gateway.lnk"
       Delete "$SMPROGRAMS\Kval StateScope Gateway.lnk"
     ${EndIf}
     DeleteRegKey SHCTX "${KSS_REG}"

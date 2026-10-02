@@ -167,13 +167,13 @@ export const OperatorBoard: React.FC = () => {
   };
 
   useEffect(() => {
-    document.title = `${title} · Kval StateScope`;
+    document.title = `${title} · Kval MachineScope`;
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, [title]);
   useEffect(() => {
     if (origin) return;
-    void detectGatewayOrigin().then((o) => (o ? setOrigin(o) : setStatus({ state: 'error', message: 'This page is not served by a Kval StateScope gateway: add &gateway=<host:port> to the address' })));
+    void detectGatewayOrigin().then((o) => (o ? setOrigin(o) : setStatus({ state: 'error', message: 'This page is not served by a Kval MachineScope gateway: add &gateway=<host:port> to the address' })));
   }, [origin]);
   useEffect(() => {
     if (origin) void fetchGatewaySso(origin).then(setSso);

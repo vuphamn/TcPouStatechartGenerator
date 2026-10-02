@@ -52,7 +52,7 @@ export type HostMessage =
   | { type: 'editorCaret'; method: string; line: number; lineCount: number }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
-  /** Save All from another StateScope tab of this XAE (relayed by the extension), and the answers to ours */
+  /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
   | { type: 'saveAll'; id: string; relayed?: boolean }
   | { type: 'saveAllDone'; id: string; name?: string; count?: number; relayed?: boolean }
   /** Build for the PLC (desktop app, Link, gateway): what XAE does now */
@@ -145,7 +145,7 @@ export type AppMessage =
   | { type: 'saveDocument'; name: string; content: string }
   /** Build: XAE's own build of the open solution (answered with xaeBuildResult) */
   | { type: 'buildProject'; requestId: number }
-  /** Save All: to the other StateScope tabs of this XAE, and this tab's answer to theirs */
+  /** Save All: to the other MachineScope tabs of this XAE, and this tab's answer to theirs */
   | { type: 'saveAllRelay'; id: string }
   | { type: 'saveAllDoneRelay'; id: string; name: string; count: number };
 

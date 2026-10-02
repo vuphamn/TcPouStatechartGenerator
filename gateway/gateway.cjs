@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kval StateScope gateway: serves the web edition over HTTPS and gives its Live tab read-only access to the PLCs in
+// Kval MachineScope gateway: serves the web edition over HTTPS and gives its Live tab read-only access to the PLCs in
 // its configuration, over ADS (one connection per PLC, one change notification per variable shared by all viewers).
 //
 //   node gateway.cjs init [--host <name>]   create config.json and a self-signed certificate
@@ -297,7 +297,8 @@ function serveStatic(config, req, res) {
   const headers = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
   if (url.pathname === '/gateway.json') {
     res.writeHead(200, { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ gateway: 'Kval StateScope', version: VERSION, live: '/live' }));
+    // (gateway: the protocol's name, as older pages look for it; name: the product's)
+    return res.end(JSON.stringify({ gateway: 'Kval StateScope', name: 'Kval MachineScope', version: VERSION, live: '/live' }));
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, headers);
@@ -473,7 +474,7 @@ function start() {
     audit,
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
-    alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval StateScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
+    alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
   const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
   const handleRequest = async (req, res) => {
@@ -989,7 +990,7 @@ function start() {
 
   server.listen(config.port ?? 8443, () => {
     const scheme = config.insecure && !config.tls ? 'http' : 'https';
-    log(`Kval StateScope gateway ${VERSION} on ${scheme}://${os.hostname()}:${config.port ?? 8443}/ (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
+    log(`Kval MachineScope gateway ${VERSION} on ${scheme}://${os.hostname()}:${config.port ?? 8443}/ (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
     if (config.admin?.enabled !== false) log(`Setup page (PLCs, tokens), on this computer: ${scheme}://localhost:${config.port ?? 8443}/admin`);
   });
   // A malformed reply from a device can throw inside the ADS client's socket handling: drop the PLC connections

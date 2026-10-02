@@ -1,6 +1,6 @@
-# Kval StateScope: Onboarding
+# Kval MachineScope: Onboarding
 
-Kval StateScope turns Kval Inc. TwinCAT PLC state machines (`SM_*.TcPOU` function blocks plus their `E_*_States.TcDUT` enums) into interactive Mermaid diagrams. The GitHub repo is still named `TcPouStatechartGenerator`.
+Kval MachineScope turns Kval Inc. TwinCAT PLC state machines (`SM_*.TcPOU` function blocks plus their `E_*_States.TcDUT` enums) into interactive Mermaid diagrams. The GitHub repo is still named `TcPouStatechartGenerator`.
 
 The same React app ships in three hosts:
 
@@ -10,7 +10,7 @@ The same React app ships in three hosts:
 | **Desktop app** | Electron on Windows; reads files and talks ADS to PLCs itself | `electron/` |
 | **TwinCAT XAE extension** | C# VSIX that shows the app in a WebView2 document tab inside TcXaeShell / Visual Studio (prototype) | `xae-extension/` |
 
-For live PLC data in the web edition there are two small Node helpers: **Kval StateScope Link** (`link/`, runs on the user's own PC) and the **gateway** (`gateway/`, one server in the PLC network that also serves the app over HTTPS).
+For live PLC data in the web edition there are two small Node helpers: **Kval MachineScope Link** (`link/`, runs on the user's own PC) and the **gateway** (`gateway/`, one server in the PLC network that also serves the app over HTTPS).
 
 ## Quick start
 
@@ -32,7 +32,7 @@ npm run dev            # web app on http://localhost:3000
 | `build.cmd` | Everything the Desktop installer ships (VSIX, web app, Link, gateway), then the installer; `build.cmd noxae` keeps the existing VSIX |
 | `npm run build:exe` | Web build, the installer's components (`scripts/prepare-installer.cjs`), then the Windows installer and portable exe into `release/` |
 | `npm run build:gateway` | Web build + the gateway package (see `gateway/README.md`) |
-| `npm run build:link` | `Kval StateScope Link.exe`, a single-file Node executable (see `link/README.md`, which also covers code signing) |
+| `npm run build:link` | `Kval MachineScope Link.exe`, a single-file Node executable (see `link/README.md`, which also covers code signing) |
 | `xae-extension\build.ps1` | Web build, copied into the VSIX, then the VSIX (needs Visual Studio's MSBuild; see `xae-extension/README.md`) |
 
 The app opens on a bundled sample, so you can use it without any PLC files. Pick others from the **Sample** dropdown in the header. They live in `src/samples/samplesData.ts`.
@@ -69,7 +69,7 @@ The app detects its host and uses one bridge per host. Features that need files,
 | Host | Bridge | Notes |
 |---|---|---|
 | Desktop | `window.tcDesktop` from `electron/preload.cjs`, handled by `ipcMain.handle('tc:...')` in `electron/main.cjs` | Full file system and git access |
-| XAE | `postMessage` over WebView2; message types in `src/utils/xaeHost.ts` (`HostMessage` / `AppMessage`), handled in `xae-extension/KvalStateScope.Xae/StateScopeControl.cs` | The extension only serves files StateScope loaded or files of the loaded POU's PLC project |
+| XAE | `postMessage` over WebView2; message types in `src/utils/xaeHost.ts` (`HostMessage` / `AppMessage`), handled in `xae-extension/KvalStateScope.Xae/StateScopeControl.cs` | The extension only serves files MachineScope loaded or files of the loaded POU's PLC project |
 | Web | Browser APIs only (folder picker, downloads); live data via Link or the gateway (`utils/liveGateway.ts`) | No git; "open referenced POU" shows a message |
 
 Examples of wrappers that hide the difference: `utils/projectFiles.ts` (all POUs of a project, save a document), `utils/hostGit.ts` (committed version of a file), `utils/liveHost.ts` (live sessions).
@@ -144,7 +144,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
    - drag states, edges, labels and notes;
    - right-click a state for Paths, Add transition and Rename, and check the Problems, Paths and Changes tabs;
    - export.
-4. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval StateScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval StateScope, and its options change Visual Studio, TcXaeShell and Explorer.
+4. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval MachineScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval MachineScope, and its options change Visual Studio, TcXaeShell and Explorer.
 5. For XAE changes: build with `xae-extension\build.ps1`, then run `tests/xae` (see its README), and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
 6. Without a PLC, the live view is tested against `tests/fakes/fake-ams2.cjs`, a simulated PLC. It covers symbols, values, notifications, symbol upload and data types, including enums. Test against a real PLC before relying on it.
 

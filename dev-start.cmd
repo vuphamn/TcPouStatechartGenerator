@@ -16,5 +16,5 @@ if errorlevel 1 (
   exit /b 0
 )
 
-start "Kval StateScope dev server" cmd /c "npm run dev"
+start "Kval MachineScope dev server" cmd /c "npm run dev"
 echo Dev server starting in its own window: http://localhost:3000   (dev-stop.cmd stops it)

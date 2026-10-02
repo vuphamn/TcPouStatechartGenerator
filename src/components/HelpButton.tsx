@@ -91,7 +91,7 @@ export const HelpButton: React.FC = () => {
         <div
           id="help-card"
           role="dialog"
-          aria-label="How Kval StateScope works"
+          aria-label="How Kval MachineScope works"
           className="absolute right-0 top-full mt-1.5 w-[360px] max-w-[calc(100vw-1rem)] max-h-[75vh] overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-3.5 z-50 text-[11px] text-slate-400 leading-relaxed space-y-3"
         >
           <section>

@@ -854,7 +854,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         return;
       }
 
-      // A type (another POU of the project): opened in StateScope
+      // A type (another POU of the project): opened in MachineScope
       const typeTarget = findTypeTarget([declaration, pouDeclaration], sym, memberOf);
       const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
       if (typeTarget && opener) {

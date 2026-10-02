@@ -237,7 +237,7 @@ export const MachineOverview: React.FC<MachineOverviewProps> = ({
       const key = `${r.m.path}@${r.since}`;
       if (notified.current.has(key)) continue;
       notified.current.add(key);
-      void notifyStuck(`Kval StateScope: ${r.m.path} is stuck`, `In ${r.name ?? `#${r.value}`} for more than ${formatLimit(r.limit)}`, `kss-stuck-${r.m.path}`);
+      void notifyStuck(`Kval MachineScope: ${r.m.path} is stuck`, `In ${r.name ?? `#${r.value}`} for more than ${formatLimit(r.limit)}`, `kss-stuck-${r.m.path}`);
     }
   }, [rows, notifyOn, currentInstance]);
   const errorCount = followed.filter((m) => {

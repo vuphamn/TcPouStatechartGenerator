@@ -85,7 +85,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   if (add) await p.evaluate(() => document.getElementById('state-list-bookmark-btn')?.click());
   // (a slow machine: until it shows, at most a few seconds)
   for (let i = 0; i < 25 && !(await cards()).includes(S2); i++) await h.sleep(200);
-  expect((await cards()).includes(S2), `set from Identified States (${await cards()})`);
+  // (not set: what the page holds, for the next time it happens; seen once in a while in a full run, never alone)
+  const why = (await cards()).includes(S2) ? '' : await p.evaluate(() => JSON.stringify({ menu: !!document.getElementById('state-list-bookmark-btn'), menus: document.querySelectorAll('#state-list-bookmark-btn').length, status: document.getElementById('status-message')?.textContent ?? '', stored: Object.fromEntries(Object.keys(localStorage).filter((k) => /bookmark/i.test(k)).map((k) => [k, localStorage.getItem(k)?.slice(0, 200)])) }));
+  expect((await cards()).includes(S2), `set from Identified States (${await cards()}${why ? `; ${why}` : ''})`);
   for (let i = 0; i < 15 && !(await gutter('st-dut-editor', new RegExp(`^\\s*,?\\s*${S2}\\b`)))?.marked; i++) await h.sleep(200);
   expect((await gutter('st-dut-editor', new RegExp(`^\\s*,?\\s*${S2}\\b`)))?.marked, 'the Enum Editor: its member line marked');
 

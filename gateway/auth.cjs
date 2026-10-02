@@ -117,7 +117,7 @@ function createAuth({ getConfig, log, secure }) {
   const page = (res, status, title, text) => {
     res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'", 'X-Frame-Options': 'DENY' });
     const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
-    res.end(`<!doctype html><meta charset="utf-8"><title>${esc(title)}</title><body style="font:14px system-ui;background:#020617;color:#e2e8f0;padding:32px"><h1 style="font-size:18px">${esc(title)}</h1><p>${esc(text)}</p><p><a style="color:#38bdf8" href="/">Back to Kval StateScope</a></p>`);
+    res.end(`<!doctype html><meta charset="utf-8"><title>${esc(title)}</title><body style="font:14px system-ui;background:#020617;color:#e2e8f0;padding:32px"><h1 style="font-size:18px">${esc(title)}</h1><p>${esc(text)}</p><p><a style="color:#38bdf8" href="/">Back to Kval MachineScope</a></p>`);
   };
   const json = (res, status, value, headers = {}) => {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });

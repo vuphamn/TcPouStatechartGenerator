@@ -1,5 +1,5 @@
 const h = require('../lib/harness.cjs');
-// Web edition: several StateScope tabs, each with its own POU; notes per POU, shared between tabs of the same POU
+// Web edition: several MachineScope tabs, each with its own POU; notes per POU, shared between tabs of the same POU
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -60,7 +60,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
   await sleep(800);
   expect(/legacy clamp note/.test(await stored(a, TM)) && !(await a.evaluate(() => localStorage.getItem('tc_statechart_diagram_notes_metadata'))), 'old notes moved to the Table Manager POU that they fit');
   expect(await shows(a, 'legacy clamp note'), 'and shown on its diagram');
-  expect((await a.title()) === 'SM_TableManager - Kval StateScope', `tab title: "${await a.title()}"`);
+  expect((await a.title()) === 'SM_TableManager - Kval MachineScope', `tab title: "${await a.title()}"`);
 
   // Tab A: a note on Table Manager
   await addNote(a, 'TABLEMANAGER_HOMMING', 'homing note A');
@@ -75,7 +75,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
   await addNote(bTab, 'DOOR_DASHER_DISABLED', 'dasher note B');
   expect(/dasher note B/.test(await stored(bTab, DD)) && !/dasher note B/.test(await stored(bTab, TM)), 'tab B: note saved for SM_DoorDasher only');
   expect(/homing note A/.test(await stored(bTab, TM)) && /legacy clamp note/.test(await stored(bTab, TM)), 'switching sample did not overwrite the Table Manager notes');
-  expect((await bTab.title()) === 'SM_DoorDasher - Kval StateScope', `tab B title: "${await bTab.title()}"`);
+  expect((await bTab.title()) === 'SM_DoorDasher - Kval MachineScope', `tab B title: "${await bTab.title()}"`);
 
   // Tab C: Table Manager too: shows A's notes, and picks up a new one without reloading
   const c = await open();
@@ -102,7 +102,7 @@ const DD = 'tc_statechart_diagram_notes_metadata:SM_DoorDasher.TcPOU';
   await sleep(300);
   await a.evaluate(() => [...document.querySelectorAll('button, [role="menuitem"]')].find((x) => /New Tab/.test(x.textContent))?.click());
   const url = await Promise.race([opened, sleep(4000).then(() => null)]);
-  expect(url && url.startsWith(URL_), `Window > New Tab opens another StateScope: ${url}`);
+  expect(url && url.startsWith(URL_), `Window > New Tab opens another MachineScope: ${url}`);
 
   console.log('page errors:', errors.slice(0, 5));
   await b.close().catch(() => {}); edge.kill();

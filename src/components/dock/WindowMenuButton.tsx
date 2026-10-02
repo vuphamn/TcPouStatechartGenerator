@@ -17,7 +17,7 @@ interface WindowMenuButtonProps {
   layout: DockLayout;
   onLayoutChange: DockLayoutUpdater;
   tabMeta: Record<DockTabId, DockTabMeta>;
-  /** Another StateScope for another POU (desktop app: a window; web edition: a browser tab) */
+  /** Another MachineScope for another POU (desktop app: a window; web edition: a browser tab) */
   onNewWindow?: () => void;
   newWindowLabel?: string;
   /** Desktop app, XAE: look for a newer release */

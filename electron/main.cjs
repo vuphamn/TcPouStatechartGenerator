@@ -4,7 +4,7 @@ const path = require('path');
 const { readPouWithDutCandidates, saveSources, writeSource } = require('./tcSourceFiles.cjs');
 const createLiveSession = require('./tcLive.cjs');
 
-// ---- Opening a .TcPOU from Windows Explorer ("Open in Kval StateScope", or a file dropped on the exe) ----
+// ---- Opening a .TcPOU from Windows Explorer ("Open in Kval MachineScope", or a file dropped on the exe) ----
 
 /** The .TcPOU in a command line (the packaged exe gets it as its first argument, `electron .` after the dot) */
 function pouFromArgs(argv) {
@@ -26,6 +26,13 @@ async function readPouForApp(file) {
 // ---- Windows: one per POU ----
 // One process: a second start (a file opened from Explorer) hands its file over. A POU already open in a window
 // brings that window forward; another one opens in a new window, with its own diagram and live session.
+// The settings where they were before the product was renamed Kval MachineScope (its window places and the page's
+// storage: layouts, recent files, bookmarks): that folder while it is there; not when one is given (--user-data-dir).
+// Before the lock below, which keeps its file there too
+if (!app.commandLine.hasSwitch('user-data-dir')) {
+  const was = path.join(app.getPath('appData'), 'Kval StateScope');
+  if (fs.existsSync(was)) app.setPath('userData', was);
+}
 const isFirstInstance = app.requestSingleInstanceLock();
 if (!isFirstInstance) app.quit();
 /**
@@ -116,7 +123,7 @@ function createWindow(startupPou = null, launch = null, query = null) {
     height: 850,
     minWidth: 960,
     minHeight: 600,
-    title: 'Kval StateScope',
+    title: 'Kval MachineScope',
     // Window & taskbar icon (the packaged .exe also carries it, from build/icon.ico)
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     backgroundColor: '#020617', // slate-950
@@ -150,7 +157,7 @@ function createWindow(startupPou = null, launch = null, query = null) {
       buttons: ['Close without saving', 'Cancel'],
       defaultId: 1,
       cancelId: 1,
-      title: 'Kval StateScope',
+      title: 'Kval MachineScope',
       message: 'The POU or the enum has unsaved edits.',
       detail: 'Save writes them to the files. Close anyway and lose them?',
     });
@@ -292,7 +299,7 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
 function liveFor(contents) {
   let s = liveSessions.get(contents.id);
   if (!s) {
-    // (a PLC's project kept in Documents\Kval StateScope\PLC projects; KSS_DOCUMENTS: the tests' folder)
+    // (a PLC's project kept in Documents\Kval MachineScope\PLC projects; KSS_DOCUMENTS: the tests' folder)
     s = createLiveSession({ documents: () => process.env.KSS_DOCUMENTS || app.getPath('documents') });
     liveSessions.set(contents.id, s);
   }
@@ -319,7 +326,7 @@ ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveF
 // The PLC's I/O tree (read-only: its boot folder's TwinCAT project), for the window's session
 ipcMain.handle('tc:live-io-tree', (event, req) => new Promise((resolve) => liveFor(event.sender).ioTree(resolve, req)));
 // A device's details for the I/O tab: TwinCAT's device descriptions (ESI), the user's pictures of it
-// (Documents\Kval StateScope\Devices; KSS_DOCUMENTS: the tests' folder)
+// (Documents\Kval MachineScope\Devices; KSS_DOCUMENTS: the tests' folder)
 const devicesDocuments = () => process.env.KSS_DOCUMENTS || app.getPath('documents');
 ipcMain.handle('tc:device-info', (event, req) => require('../shared/tcDeviceInfo.cjs').deviceInfo(req ?? {}, devicesDocuments()));
 // That pictures folder opened in Explorer (made first when missing)

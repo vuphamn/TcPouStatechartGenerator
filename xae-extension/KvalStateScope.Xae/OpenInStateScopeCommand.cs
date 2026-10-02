@@ -7,7 +7,7 @@ using Task = System.Threading.Tasks.Task;
 
 namespace KvalStateScope.Xae
 {
-    /// <summary>"Open in Kval StateScope" (context menus) and "Tools > Kval StateScope..."</summary>
+    /// <summary>"Open in Kval MachineScope" (context menus) and "Tools > Kval MachineScope..."</summary>
     internal static class OpenInStateScopeCommand
     {
         public static async Task InitializeAsync(KvalStateScopePackage package)
@@ -73,11 +73,11 @@ namespace KvalStateScope.Xae
                 dynamic controls = menu.Controls;
                 for (var i = 1; i <= (int)controls.Count; i++)
                 {
-                    if (((string)controls[i].Caption ?? "").Contains("Kval StateScope")) return;
+                    if (((string)controls[i].Caption ?? "").Contains("Kval MachineScope") || ((string)controls[i].Caption ?? "").Contains("Kval StateScope")) return;
                 }
                 var command = dte.Commands.Item(PackageGuids.CommandSet.ToString("B"), CommandIds.OpenSelected);
                 command.AddControl(menu, 1);
-                Log.Write("added Open in Kval StateScope to TwinCAT's POU menu (PlcFile)");
+                Log.Write("added Open in Kval MachineScope to TwinCAT's POU menu (PlcFile)");
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
@@ -101,7 +101,7 @@ namespace KvalStateScope.Xae
                 catch (Exception ex)
                 {
                     await package.JoinableTaskFactory.SwitchToMainThreadAsync();
-                    VsShellUtilities.ShowMessageBox(package, ex.Message, "Kval StateScope",
+                    VsShellUtilities.ShowMessageBox(package, ex.Message, "Kval MachineScope",
                         OLEMSGICON.OLEMSGICON_CRITICAL, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
                 }
             }).FileAndForget("KvalStateScope/Open");

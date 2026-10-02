@@ -21,6 +21,6 @@ Without a TwinCAT system running on this computer, going live fails. `instance-t
 live on its instance, not that it connects. Checks against a real PLC (live view, guard values, Symbols) are still
 manual.
 
-The helpers: `dte.ps1` finds the instance's automation object (DTE) by process. `tabs.ps1` lists StateScope tabs
+The helpers: `dte.ps1` finds the instance's automation object (DTE) by process. `tabs.ps1` lists MachineScope tabs
 through UI Automation. `winhelpers.ps1` dismisses Visual Studio's start-up dialogs. `post.cjs` sends a message as
 the app would, through WebView2's debugging port (9444).

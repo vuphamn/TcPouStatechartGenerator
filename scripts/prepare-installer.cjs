@@ -1,6 +1,7 @@
 // Stages the desktop installer's optional components in release/installer-extras (build/installer.nsh packs them):
 //   KvalStateScope.Xae.vsix, vs-extension.ps1, install-tcxaeshell.ps1   the TwinCAT XAE extension (VS 2022 / 2026, TcXaeShell)
-//   link/Kval StateScope Link.exe                                        the web edition's local helper
+//   KvalStateScope.Xae.Vs2017.vsix                                     the same for TwinCAT 4024's TcXaeShell (VS 2017 shell)
+//   link/Kval MachineScope Link.exe                                        the web edition's local helper
 //   gateway/                                                             the gateway, with its runtime dependencies
 // Run after "npm run build" (npm run build:exe does both). The VSIX is built with xae-extension/build.ps1 when missing.
 const fs = require('fs');
@@ -38,13 +39,18 @@ if (!fs.existsSync(vsix)) {
   }
 }
 fs.copyFileSync(vsix, path.join(out, 'KvalStateScope.Xae.vsix'));
+// (the same extension built for TwinCAT 4024's TcXaeShell, the Visual Studio 2017 shell: by build.ps1 with the other)
+const vsix2017 = path.join(root, 'xae-extension', 'KvalStateScope.Xae.Vs2017', 'bin', 'Release', 'KvalStateScope.Xae.Vs2017.vsix');
+if (!fs.existsSync(vsix2017)) throw new Error(`${vsix2017} is missing: run xae-extension\\build.ps1`);
+if (fs.statSync(vsix2017).mtimeMs < fs.statSync(vsix).mtimeMs - 10 * 60 * 1000) throw new Error(`${vsix2017} is older than the main VSIX: run xae-extension\\build.ps1`);
+fs.copyFileSync(vsix2017, path.join(out, 'KvalStateScope.Xae.Vs2017.vsix'));
 fs.copyFileSync(path.join(root, 'build', 'installer', 'vs-extension.ps1'), path.join(out, 'vs-extension.ps1'));
 fs.copyFileSync(path.join(root, 'xae-extension', 'install-tcxaeshell.ps1'), path.join(out, 'install-tcxaeshell.ps1'));
 
-// 2. Kval StateScope Link (a single exe)
+// 2. Kval MachineScope Link (a single exe)
 run(process.execPath, [path.join(root, 'scripts', 'build-link.cjs')]);
 fs.mkdirSync(path.join(out, 'link'));
-fs.copyFileSync(path.join(root, 'release', 'link', 'Kval StateScope Link.exe'), path.join(out, 'link', 'Kval StateScope Link.exe'));
+fs.copyFileSync(path.join(root, 'release', 'link', 'Kval MachineScope Link.exe'), path.join(out, 'link', 'Kval MachineScope Link.exe'));
 
 // 3. The gateway with its dependencies (the gateway machine then needs only Node.js)
 run(process.execPath, [path.join(root, 'scripts', 'build-gateway.cjs')]);

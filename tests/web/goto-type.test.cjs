@@ -1,6 +1,6 @@
 // Go to Definition on a type (XAE stand-in bridge): right-clicking a variable of another POU's type, or the type
-// itself, in the POU Editor and the Method Editor offers "Open <Type> in StateScope" (openPou, with Back) and "in the
-// TwinCAT editor" (openInXae); Go to Definition (and F12) on the type opens it in StateScope. Elementary types and
+// itself, in the POU Editor and the Method Editor offers "Open <Type> in MachineScope" (openPou, with Back) and "in the
+// TwinCAT editor" (openInXae); Go to Definition (and F12) on the type opens it in MachineScope. Elementary types and
 // the standard function blocks offer nothing; the web edition (no project to open from) neither
 const h = require('../lib/harness.cjs');
 let fails = 0;
@@ -70,7 +70,7 @@ const MENU = '[aria-label="Editor Context Menu"]';
   await h.sleep(400);
   expect(await rightClickAt(p, 'pou-declaration-editor', 'smAxis'), 'POU Editor: the menu on smAxis');
   let list = await items(p);
-  expect(list.some((x) => /^editor-menu-open-type-statescope:Open SM_KAxis in StateScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis in the TwinCAT editor/.test(x)), `smAxis : SM_KAxis offers its type: ${list.filter((x) => /open-type/.test(x)).join(' | ')}`);
+  expect(list.some((x) => /^editor-menu-open-type-statescope:Open SM_KAxis in MachineScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis in the TwinCAT editor/.test(x)), `smAxis : SM_KAxis offers its type: ${list.filter((x) => /open-type/.test(x)).join(' | ')}`);
   expect(list.some((x) => /Go to Definition.*Highlight in Top Panel/.test(x)), 'Go to Definition on the variable still goes to its declaration');
   await p.click('#editor-menu-open-type-xae');
   expect(await waitSent((m) => m.type === 'openInXae' && m.typeName === 'SM_KAxis'), 'Open in the TwinCAT editor: openInXae SM_KAxis sent');
@@ -78,7 +78,7 @@ const MENU = '[aria-label="Editor Context Menu"]';
   // ARRAY [..] OF REFERENCE TO T; TON (standard FB) and BOOL offer nothing
   await rightClickAt(p, 'pou-declaration-editor', 'aCylinders');
   list = await items(p);
-  expect(list.some((x) => /Open SM_KCylinder in StateScope/.test(x)), 'aCylinders : ARRAY[1..3] OF REFERENCE TO SM_KCylinder: SM_KCylinder');
+  expect(list.some((x) => /Open SM_KCylinder in MachineScope/.test(x)), 'aCylinders : ARRAY[1..3] OF REFERENCE TO SM_KCylinder: SM_KCylinder');
   await closeMenu(p);
   await rightClickAt(p, 'pou-declaration-editor', 'tonWait');
   const tonItems = (await items(p)).filter((x) => /open-type/.test(x));
@@ -89,10 +89,10 @@ const MENU = '[aria-label="Editor Context Menu"]';
   await closeMenu(p);
   expect(tonItems.length === 0 && boolItems.length === 0, `TON and ${boolVar} : BOOL: no type to open (${tonItems.length}, ${boolItems.length})`);
 
-  // Go to Definition on the type itself (EXTENDS base, the type after ':'): opened here, in StateScope, Back returns
+  // Go to Definition on the type itself (EXTENDS base, the type after ':'): opened here, in MachineScope, Back returns
   await rightClickAt(p, 'pou-declaration-editor', 'KvalStateMachineBase');
   list = await items(p);
-  expect(list.some((x) => /Go to Definition.*Open KvalStateMachineBase in StateScope/.test(x)), 'EXTENDS KvalStateMachineBase: Go to Definition opens it in StateScope');
+  expect(list.some((x) => /Go to Definition.*Open KvalStateMachineBase in MachineScope/.test(x)), 'EXTENDS KvalStateMachineBase: Go to Definition opens it in MachineScope');
   await closeMenu(p);
   await rightClickAt(p, 'pou-declaration-editor', 'SM_KAxis');
   await p.evaluate(() => [...document.querySelectorAll('[aria-label="Editor Context Menu"] button')].find((b) => /Go to Definition/.test(b.textContent))?.click());
@@ -140,7 +140,7 @@ const MENU = '[aria-label="Editor Context Menu"]';
   await h.sleep(400);
   await rightClickAt(w, 'pou-declaration-editor', 'KvalStateMachineBase');
   const web = (await items(w)).filter((x) => /open-type/.test(x));
-  expect(web.length === 0, 'web edition: no "Open ... in StateScope"');
+  expect(web.length === 0, 'web edition: no "Open ... in MachineScope"');
   await browser.close();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

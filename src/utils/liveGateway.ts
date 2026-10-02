@@ -1,6 +1,6 @@
 /**
- * Web edition: the live view through a Kval StateScope gateway (gateway/gateway.cjs) on the PLC network, or through
- * the local helper Kval StateScope Link (link/link.cjs, ws://127.0.0.1): both speak this protocol.
+ * Web edition: the live view through a Kval MachineScope gateway (gateway/gateway.cjs) on the PLC network, or through
+ * the local helper Kval MachineScope Link (link/link.cjs, ws://127.0.0.1): both speak this protocol.
  * WebSocket protocol: hello {token} -> welcome {user, plcs} | denied; then liveStart / liveStop, answered with the
  * same liveStatus / liveValues messages as the XAE extension and the desktop app.
  */
@@ -19,7 +19,7 @@ export interface GatewayStartOptions {
   stateVar: string;
   typeName?: string;
   instance?: string;
-  /** Local helper (Kval StateScope Link): the PLC's address, as in the desktop app */
+  /** Local helper (Kval MachineScope Link): the PLC's address, as in the desktop app */
   netId?: string;
   ip?: string;
   port?: number;
@@ -52,7 +52,7 @@ export function gatewaySocketUrl(address: string): string {
   return `wss://${a}/live`;
 }
 
-/** The local helper (Kval StateScope Link) rather than a gateway */
+/** The local helper (Kval MachineScope Link) rather than a gateway */
 const isLocalHelper = (url: string) => /^ws:\/\/(127\.0\.0\.1|localhost)[:/]/.test(url);
 
 /** Is this page served by a gateway? Then it is the default gateway (same origin) */
@@ -62,7 +62,8 @@ export async function detectGatewayOrigin(): Promise<string | null> {
     const res = await fetch('gateway.json', { cache: 'no-store' });
     if (!res.ok) return null;
     const info = (await res.json()) as { gateway?: string };
-    return info.gateway === 'Kval StateScope' ? location.origin : null;
+    // (its protocol's name: the same since the product was renamed Kval MachineScope)
+    return info.gateway === 'Kval StateScope' || info.gateway === 'Kval MachineScope' ? location.origin : null;
   } catch {
     return null;
   }
@@ -148,7 +149,7 @@ export class GatewayConnection {
         if (!settled) {
           settled = true;
           reject(new Error(isLocalHelper(url)
-            ? 'Kval StateScope Link is not running on this computer: start it, then go live'
+            ? 'Kval MachineScope Link is not running on this computer: start it, then go live'
             : `Could not reach the gateway at ${url} (is it running? is its certificate trusted by this browser?)`));
         }
       };
@@ -159,7 +160,7 @@ export class GatewayConnection {
         }
         if (!settled) {
           settled = true;
-          reject(new Error(e.code === 4401 ? (isLocalHelper(url) ? 'The pairing code does not match the one shown by Kval StateScope Link' : 'The access token was not accepted by the gateway') : e.code === 4429 ? 'Too many failed sign-ins: wait a minute' : `The gateway closed the connection (${e.code})`));
+          reject(new Error(e.code === 4401 ? (isLocalHelper(url) ? 'The pairing code does not match the one shown by Kval MachineScope Link' : 'The access token was not accepted by the gateway') : e.code === 4429 ? 'Too many failed sign-ins: wait a minute' : `The gateway closed the connection (${e.code})`));
         } else if (signedIn && e.code !== 1000) {
           this.onEvent({ type: 'closed', message: 'The connection to the gateway was closed' });
         }

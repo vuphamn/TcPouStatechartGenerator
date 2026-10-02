@@ -729,7 +729,7 @@ export const App: React.FC = () => {
   }, [notesKey]);
 
   // (The window title and the POU reported to the desktop app are set next to the live view, with the instance)
-  // Window menu: another StateScope for another POU (desktop app: a window; web edition: a browser tab). In XAE each
+  // Window menu: another MachineScope for another POU (desktop app: a window; web edition: a browser tab). In XAE each
   // POU opened from the PLC tree gets its own tab.
   const desktopNewWindow = (window as unknown as { tcDesktop?: { newWindow?: (p?: string) => Promise<void> } }).tcDesktop?.newWindow;
   const openNewInstance = isXaeHost()
@@ -1417,7 +1417,7 @@ export const App: React.FC = () => {
   }, [applyLoadedPou, showCopyToast]);
   const handleBrowsePou = useCallback(() => confirmDiscard(() => void browseNow()), [browseNow]);
 
-  // Desktop: a .TcPOU opened from Windows Explorer ("Open in Kval StateScope"): at start-up, or later in this window
+  // Desktop: a .TcPOU opened from Windows Explorer ("Open in Kval MachineScope"): at start-up, or later in this window
   useEffect(() => {
     // launch: the window was opened to follow one PLC instance (Live: Open instance)
     type Opened = (PouSource & { launch?: InstanceLaunch }) | { error: string } | null;
@@ -3855,7 +3855,7 @@ export const App: React.FC = () => {
     },
     [pouPath, pouFileName, openPouInProject]
   );
-  // The code editors' Go to Definition on a type (another POU): here in StateScope (with Back), or in TwinCAT's
+  // The code editors' Go to Definition on a type (another POU): here in MachineScope (with Back), or in TwinCAT's
   // editor; a member: that POU at the member (its declaration line, or its method)
   const [pendingReveal, setPendingReveal] = useState<{ type: string; member: string } | null>(null);
   const [pouReveal, setPouReveal] = useState<{ symbol: string; nonce: number; line?: number; part?: 'declaration' | 'implementation' } | null>(null);
@@ -4093,7 +4093,7 @@ export const App: React.FC = () => {
         return;
       }
       if (info && !['FUNCTION_BLOCK', 'PROGRAM', 'FUNCTION'].includes(info.kind)) {
-        showCopyToast(`${type} is ${info.kind === 'GVL' ? 'a GVL' : info.kind === 'INTERFACE' ? 'an interface' : 'a DUT'}: StateScope opens POUs${isXaeHost() ? ' (Open in the TwinCAT editor)' : ''}`, 'error');
+        showCopyToast(`${type} is ${info.kind === 'GVL' ? 'a GVL' : info.kind === 'INTERFACE' ? 'an interface' : 'a DUT'}: MachineScope opens POUs${isXaeHost() ? ' (Open in the TwinCAT editor)' : ''}`, 'error');
         return;
       }
       const from = pouPath ? { path: pouPath, name: pouFileName } : null;
@@ -4860,8 +4860,8 @@ export const App: React.FC = () => {
         id: `sym-type:${tp.name}`,
         group: kind,
         label: tp.name,
-        hint: pou ? 'open in StateScope' : isXaeHost() ? 'open in the TwinCAT editor' : undefined,
-        run: () => (pou ? void handleOpenType(tp.name, 'statescope') : isXaeHost() ? void handleOpenType(tp.name, 'xae') : showCopyToast(`${tp.name} is a ${kind}: StateScope opens POUs`, 'error')),
+        hint: pou ? 'open in MachineScope' : isXaeHost() ? 'open in the TwinCAT editor' : undefined,
+        run: () => (pou ? void handleOpenType(tp.name, 'statescope') : isXaeHost() ? void handleOpenType(tp.name, 'xae') : showCopyToast(`${tp.name} is a ${kind}: MachineScope opens POUs`, 'error')),
       });
       if (tp.kind === 'GVL')
         for (const m of tp.members)
@@ -5320,7 +5320,7 @@ export const App: React.FC = () => {
       else if (m.type === 'plcBuildProgress') setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: String(m.text ?? '') } : b));
     });
   }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
-  // Web edition: through a Kval StateScope gateway on the PLC network (by default the one serving this page)
+  // Web edition: through a Kval MachineScope gateway on the PLC network (by default the one serving this page)
   const liveMode: 'xae' | 'desktop' | 'web' | null = canNavigateInXae ? 'xae' : isXaeHost() ? null : desktopLive() ? 'desktop' : 'web';
   const [gatewayOrigin, setGatewayOrigin] = useState<string | null>(null);
   // (known: whether a gateway serves this page, and then whether it signs in with company accounts; a page opened to
@@ -5440,11 +5440,11 @@ export const App: React.FC = () => {
         return;
       }
       if (!linkCode) {
-        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter the pairing code shown by Kval StateScope Link' }));
+        setLiveStatus((prev) => ({ ...prev, state: 'error', message: 'Enter the pairing code shown by Kval MachineScope Link' }));
         return;
       }
       setLiveSession(EMPTY_LIVE_SESSION);
-      setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting to Kval StateScope Link...' }));
+      setLiveStatus((prev) => ({ ...prev, state: 'connecting', message: 'Connecting to Kval MachineScope Link...' }));
       const connection = gatewayConnection();
       connection
         .connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode)
@@ -5817,7 +5817,7 @@ export const App: React.FC = () => {
     return p;
   }, [liveMode, liveStatus.target]);
   // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
-  // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval StateScope\PLC projects\<project>; a copy
+  // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval MachineScope\PLC projects\<project>; a copy
   // there that differs from the PLC's: Override, Save to a different location (remembered for this PLC), or Keep
   // local. Its instances then open with their own POU from it (the same name in another project is another type)
   const [plcCopy, setPlcCopy] = useState<PlcCopy | null>(null);
@@ -5886,7 +5886,7 @@ export const App: React.FC = () => {
         label: `The PLC runs another version of ${copy.project} than the copy in ${r.dir}${r.downloaded ? ` (downloaded ${new Date(r.downloaded).toLocaleString()})` : ''}.`,
         details:
           r.changes == null
-            ? ['That folder was not downloaded by Kval StateScope: its own edits are not known (Override writes the PLC\'s files over it)']
+            ? ['That folder was not downloaded by Kval MachineScope: its own edits are not known (Override writes the PLC\'s files over it)']
             : r.changes.length
               ? [`Edited here since it was downloaded (Override loses these):`, ...r.changes.slice(0, 12).map((c) => `  ${c}`), ...(r.changes.length > 12 ? [`  … and ${r.changes.length - 12} more`] : [])]
               : ['Not edited here since it was downloaded'],
@@ -6149,7 +6149,7 @@ export const App: React.FC = () => {
   const shownInstance = (liveStatus.state === 'connected' || liveStatus.state === 'lost' ? liveStatus.instance : undefined) ?? windowInstance ?? undefined;
   useEffect(() => {
     const pou = pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : '';
-    document.title = pou ? `${pou}${shownInstance ? ` (${shownInstance})` : ''} - Kval StateScope` : 'Kval StateScope';
+    document.title = pou ? `${pou}${shownInstance ? ` (${shownInstance})` : ''} - Kval MachineScope` : 'Kval MachineScope';
   }, [pouFileName, shownInstance]);
   // Desktop app: the main process opens a POU (and an instance of it) in the window that shows it
   useEffect(() => {
@@ -6339,7 +6339,7 @@ export const App: React.FC = () => {
   // Browse through Link (web edition): the search and Add Route run in Link, on this computer
   const linkRequest = useCallback(
     async <T,>(message: Record<string, unknown>, replyType: string): Promise<T> => {
-      if (!linkCode) throw new Error('Enter the pairing code shown by Kval StateScope Link first');
+      if (!linkCode) throw new Error('Enter the pairing code shown by Kval MachineScope Link first');
       const c = gatewayConnection();
       const w = await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
       setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
@@ -6584,7 +6584,7 @@ export const App: React.FC = () => {
         if (quiet && settings.skipped === r.version) return;
         setUpdateOffer({ edition: info.edition, version: r.version, current: info.version, url: r.url });
       } else if (!quiet) {
-        if (r.state === 'current') showCopyToast(`Kval StateScope ${info.edition === 'xae' ? 'for XAE' : 'desktop'} ${info.version} is the newest`, 'success');
+        if (r.state === 'current') showCopyToast(`Kval MachineScope ${info.edition === 'xae' ? 'for XAE' : 'desktop'} ${info.version} is the newest`, 'success');
         else if (r.state === 'no-access') {
           setPromptRequest({
             title: 'Updates: GitHub access',
@@ -6645,7 +6645,7 @@ export const App: React.FC = () => {
     if (notifiedStuckRef.current === key) return;
     notifiedStuckRef.current = key;
     const who = liveStatus.instance ?? (pouTypeName || 'The state machine');
-    void notifyStuck(`Kval StateScope: ${who} is stuck`, `In ${liveSession.current.state} for more than ${formatLimit(liveLimit)}`, `kss-stuck-${who}`);
+    void notifyStuck(`Kval MachineScope: ${who} is stuck`, `In ${liveSession.current.state} for more than ${formatLimit(liveLimit)}`, `kss-stuck-${who}`);
   }, [liveStuck, notifyOn, liveSession, liveLimit, liveStatus.instance, pouTypeName]);
   const handleStateLimit = useCallback(
     (state: string, ms: number | null) => {
@@ -7876,15 +7876,15 @@ export const App: React.FC = () => {
           </button>
 
             {/* Relative to the app (BASE_URL): the desktop app loads it from file:// */}
-            <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Kval StateScope" className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" draggable={false} />
+            <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Kval MachineScope" className="w-7 h-7 sm:w-8 sm:h-8 shrink-0" draggable={false} />
           </div>
             {/* Title shrinks and truncates first when the header runs out of room */}
             <div className="min-w-0 overflow-hidden">
               <h1 className="text-xs sm:text-sm font-bold tracking-tight text-white flex items-center gap-1.5 sm:gap-2 truncate">
-                <span className="truncate">Kval StateScope</span>
+                <span className="truncate">Kval MachineScope</span>
               </h1>
               <p className="text-[11px] text-slate-400 truncate hidden 2xl:block">
-                Design, edit and debug Kval TwinCAT state machines, live on the PLC
+                Design, simulate and debug TwinCAT state machines and their I/O, live on the PLC.
               </p>
             </div>
         </div>
@@ -7967,7 +7967,7 @@ export const App: React.FC = () => {
                   className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500 cursor-pointer"
                   title="The theme of the whole app and of the diagram: dark, a light one (default, base, neutral, forest), or one after a popular IDE's (VS Code, Visual Studio, JetBrains …)"
                 >
-                  <optgroup label="StateScope">
+                  <optgroup label="MachineScope">
                     <option value="dark">dark</option>
                     <option value="base">base</option>
                     <option value="forest">forest</option>
@@ -9083,7 +9083,7 @@ export const App: React.FC = () => {
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>
-            Kval StateScope {updateOffer.edition === 'xae' ? 'for XAE' : 'desktop'} <b>{updateOffer.version}</b> is available (this is {updateOffer.current})
+            Kval MachineScope {updateOffer.edition === 'xae' ? 'for XAE' : 'desktop'} <b>{updateOffer.version}</b> is available (this is {updateOffer.current})
           </span>
           <a id="update-open" href={updateOffer.url} target="_blank" rel="noreferrer" onClick={() => setUpdateOffer(null)} className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
             Get it

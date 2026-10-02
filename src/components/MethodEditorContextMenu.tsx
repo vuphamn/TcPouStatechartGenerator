@@ -24,7 +24,7 @@ export interface MethodEditorContextMenuProps {
   onFindReferences?: (symbol: string) => void;
   onCopySymbol?: (symbol: string) => void;
   onToggleFoldCurrent?: () => void;
-  /** The POU type of the symbol (see findTypeTarget): it can be opened in StateScope / TwinCAT's editor */
+  /** The POU type of the symbol (see findTypeTarget): it can be opened in MachineScope / TwinCAT's editor */
   typeTarget?: { type: string; isTypeItself: boolean; member?: string } | null;
   /** PLC Bookmarks for the line right-clicked (in its section: an implementation, a declaration, the enum) */
   bookmarks?: {
@@ -208,7 +208,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
               <span className="font-medium text-[11px] leading-tight">Go to Definition</span>
               {hasSymbol && (
                 <span className="text-[10px] text-sky-400/80 truncate font-mono">
-                  {openType && member ? `Open ${openType}.${member} in StateScope` : openType && typeTarget?.isTypeItself ? `Open ${openType} in StateScope` : 'Highlight in Top Panel'}
+                  {openType && member ? `Open ${openType}.${member} in MachineScope` : openType && typeTarget?.isTypeItself ? `Open ${openType} in MachineScope` : 'Highlight in Top Panel'}
                 </span>
               )}
             </div>
@@ -218,7 +218,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
           </span>
         </button>
 
-        {/* The symbol's POU type: open it in StateScope, or in TwinCAT's editor */}
+        {/* The symbol's POU type: open it in MachineScope, or in TwinCAT's editor */}
         {openType && opener && (
           <>
             <div className="my-1 border-t border-slate-800" />
@@ -235,7 +235,7 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
             >
               <FileCode2 className="w-3.5 h-3.5 text-violet-400 shrink-0" />
               <span className="font-medium text-[11px] leading-tight truncate">
-                Open <span className="font-mono">{member ? `${openType}.${member}` : openType}</span> in StateScope
+                Open <span className="font-mono">{member ? `${openType}.${member}` : openType}</span> in MachineScope
               </span>
             </button>
             {opener.xae && (

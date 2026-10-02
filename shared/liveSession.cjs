@@ -84,7 +84,7 @@ function localTwinCatNetId() {
 
 /**
  * The AMS NetId this computer uses towards the PLC: its IP + ".1.1", unless TwinCAT on this computer already has
- * that NetId (answers to it would go to TwinCAT's router, not to StateScope): then ".1.2"
+ * that NetId (answers to it would go to TwinCAT's router, not to MachineScope): then ".1.2"
  */
 function defaultLocalNetId(localIp) {
   const id = `${localIp}.1.1`;

@@ -1,4 +1,4 @@
-# One StateScope tab per PLC instance: the app's openInstance message (as Live's Open sends it) opens a tab that
+# One MachineScope tab per PLC instance: the app's openInstance message (as Live's Open sends it) opens a tab that
 # follows that instance and goes live; the same instance again brings it forward; bad requests are ignored.
 # Runs without a PLC: going live fails there, the request to go live is what is checked. (after launch.ps1)
 . "$PSScriptRoot\config.ps1"
@@ -22,8 +22,8 @@ Post $XaePouName @{ type = 'openInstance'; path = $pou; instance = $instance }
 for ($i = 0; $i -lt 30 -and -not ((LogSince) -match "following $([regex]::Escape($instance))"); $i++) { Start-Sleep 1 }
 Start-Sleep 3
 $t = Tabs
-$tab = "StateScope: $XaePouName ($instance)"
-Expect ($t -contains $tab -and ($t -contains "StateScope: $XaePouName")) "a second $XaePouName tab for the instance: $($t -join ' | ')"
+$tab = "MachineScope: $XaePouName ($instance)"
+Expect ($t -contains $tab -and ($t -contains "MachineScope: $XaePouName")) "a second $XaePouName tab for the instance: $($t -join ' | ')"
 Expect ((Selected $tab) -eq $true) 'the new tab is active'
 Expect ((LogSince) -match "live: start $XaePouName\.\w+ .*instance $([regex]::Escape($instance))") 'the new tab went live on its instance'
 

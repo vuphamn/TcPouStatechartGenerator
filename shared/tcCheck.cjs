@@ -78,7 +78,7 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
     id: 'adapter', ok: profile?.category === 'Public' ? null : true,
     title: `This computer: ${myIp}${profile ? ` (${profile.alias}, ${profile.category} network)` : ''}, AMS NetId ${myNetId}`,
     detail: profile?.category === 'Public'
-      ? 'Windows treats this network as Public: it blocks connections coming in. StateScope connects out, so it is not stopped by it, but XAE\'s routes (the PLC connecting back) are. Set it to Private: Settings > Network > the network > Private.'
+      ? 'Windows treats this network as Public: it blocks connections coming in. MachineScope connects out, so it is not stopped by it, but XAE\'s routes (the PLC connecting back) are. Set it to Private: Settings > Network > the network > Private.'
       : 'The address the PLC sees, and the NetId its route must name.',
   });
   // (no address on the PLC's network: the way goes through a router, which must let ADS through; the search's broadcast
@@ -123,7 +123,7 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   }
   const target = suggest?.netId ?? netId;
 
-  // 4. This computer's TwinCAT router: a route it already has (XAE's) serves StateScope too
+  // 4. This computer's TwinCAT router: a route it already has (XAE's) serves MachineScope too
   const routerNetId = !(localNetId || '').trim() && tcpPort === 48898 ? localTwinCatNetId() : null;
   let viaRouter = null;
   if (routerNetId && NETID.test(target)) {
@@ -151,13 +151,13 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
     });
   };
   if (viaRouter?.code === 6) {
-    add({ id: 'router', ok: true, title: 'This computer\'s TwinCAT router reaches it: StateScope uses its route', detail: '' });
+    add({ id: 'router', ok: true, title: 'This computer\'s TwinCAT router reaches it: MachineScope uses its route', detail: '' });
     await noPlc({ targetAmsNetId: target, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
   } else if (viaRouter) {
     add({
       id: 'router', ok: viaRouter.ok ? true : null,
-      title: viaRouter.ok ? `This computer's TwinCAT router reaches it (${viaRouter.state}): StateScope uses its route` : 'This computer\'s TwinCAT router has no route to it',
-      detail: viaRouter.ok ? '' : `Not needed: StateScope connects directly with ${myNetId}. (XAE's Add Route would make one here and on the PLC.)`,
+      title: viaRouter.ok ? `This computer's TwinCAT router reaches it (${viaRouter.state}): MachineScope uses its route` : 'This computer\'s TwinCAT router has no route to it',
+      detail: viaRouter.ok ? '' : `Not needed: MachineScope connects directly with ${myNetId}. (XAE's Add Route would make one here and on the PLC.)`,
     });
   }
 

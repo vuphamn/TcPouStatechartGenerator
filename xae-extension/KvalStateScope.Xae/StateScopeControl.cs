@@ -19,7 +19,7 @@ using Task = System.Threading.Tasks.Task;
 namespace KvalStateScope.Xae
 {
     /// <summary>
-    /// Hosts the Kval StateScope web app in WebView2 and answers its requests (messages as JSON objects):
+    /// Hosts the Kval MachineScope web app in WebView2 and answers its requests (messages as JSON objects):
     ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch, discoverPlcs
     ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars, plcList
     /// </summary>
@@ -51,7 +51,7 @@ namespace KvalStateScope.Xae
         {
             _pane = pane;
             Background = new SolidColorBrush(Color.FromRgb(0x02, 0x06, 0x17));
-            _status.Text = "Starting Kval StateScope...";
+            _status.Text = "Starting Kval MachineScope...";
             // WebView2 only initializes once it is in the visual tree (it needs a window handle), so it is part of
             // the layout from the start. It is a native window WPF cannot draw over: the status line gets its own row.
             _grid.RowDefinitions.Add(new RowDefinition { Height = System.Windows.GridLength.Auto });
@@ -108,7 +108,7 @@ namespace KvalStateScope.Xae
         /// WebView2 that is shutting down (e.g. an IDE that just closed): wait and retry with a fresh control, and in the
         /// end fall back to a profile of this session only.
         /// </summary>
-        // Shared by every StateScope tab of this IDE: one browser process and one profile for all of them
+        // Shared by every MachineScope tab of this IDE: one browser process and one profile for all of them
         private static CoreWebView2Environment _environment;
 
         private async Task StartWebViewAsync(string userData)
@@ -143,7 +143,7 @@ namespace KvalStateScope.Xae
                 catch (System.Runtime.InteropServices.COMException ex) when (ex.HResult == ProfileBusy && attempt <= 6)
                 {
                     Log.Write($"browser profile busy (attempt {attempt}), retrying");
-                    _status.Text = "Starting Kval StateScope... (waiting for a previous session to close)";
+                    _status.Text = "Starting Kval MachineScope... (waiting for a previous session to close)";
                     NewWebView();
                     await Task.Delay(1500);
                 }
@@ -160,7 +160,7 @@ namespace KvalStateScope.Xae
                 if (_web.CoreWebView2 != null) return;
                 var appDir = Path.Combine(ExtensionDir, "StateScopeApp");
                 if (!File.Exists(Path.Combine(appDir, "index.html")))
-                    throw new FileNotFoundException("The StateScope app files are missing from the extension", Path.Combine(appDir, "index.html"));
+                    throw new FileNotFoundException("The MachineScope app files are missing from the extension", Path.Combine(appDir, "index.html"));
                 // The IDE's install folder is read-only: keep the browser profile per user
                 var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalStateScope", "WebView2");
                 Log.Write($"creating WebView2 environment (runtime {CoreWebView2Environment.GetAvailableBrowserVersionString()}, profile {userData})");
@@ -172,7 +172,7 @@ namespace KvalStateScope.Xae
                 core.Settings.IsStatusBarEnabled = false;
                 core.Settings.AreDevToolsEnabled = true; // prototype: F12 for diagnostics
                 core.WebMessageReceived += OnWebMessage;
-                // Save All from another StateScope tab reaches this one (and its answer goes back)
+                // Save All from another MachineScope tab reaches this one (and its answer goes back)
                 SaveAllRelay.Register(this);
                 core.NewWindowRequested += (s, e) =>
                 {
@@ -191,12 +191,12 @@ namespace KvalStateScope.Xae
             catch (Exception ex) when (ex is WebView2RuntimeNotFoundException)
             {
                 Log.Write("WebView2 runtime not found: " + ex.Message);
-                _status.Text = "Kval StateScope needs the Microsoft Edge WebView2 Runtime. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and reopen this window.";
+                _status.Text = "Kval MachineScope needs the Microsoft Edge WebView2 Runtime. Install it from https://developer.microsoft.com/microsoft-edge/webview2/ and reopen this window.";
             }
             catch (Exception ex)
             {
                 Log.Write("start failed: " + ex);
-                _status.Text = $"Kval StateScope could not start: {ex.GetType().Name}: {ex.Message}. Close and reopen this tab to try again.";
+                _status.Text = $"Kval MachineScope could not start: {ex.GetType().Name}: {ex.Message}. Close and reopen this tab to try again.";
                 NewWebView();
                 _initialization = null;
             }
@@ -208,12 +208,12 @@ namespace KvalStateScope.Xae
         /// <summary>The PLC instance of the POU this tab follows (or was opened for); null when none yet</summary>
         internal string Instance => _pendingPou != null ? _pendingInstance : _instance;
 
-        /// <summary>"StateScope: SM_X", with the followed instance: "StateScope: SM_X (MAIN.fbLine1.smX)"</summary>
+        /// <summary>"MachineScope: SM_X", with the followed instance: "MachineScope: SM_X (MAIN.fbLine1.smX)"</summary>
         private void UpdateCaption()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (_pouPath == null) return;
-            _pane.Caption = "StateScope: " + Path.GetFileNameWithoutExtension(_pouPath) + (string.IsNullOrEmpty(_instance) ? "" : $" ({_instance})");
+            _pane.Caption = "MachineScope: " + Path.GetFileNameWithoutExtension(_pouPath) + (string.IsNullOrEmpty(_instance) ? "" : $" ({_instance})");
         }
 
         /// <summary>
@@ -380,7 +380,7 @@ namespace KvalStateScope.Xae
                     case "buildProject":
                         HandleBuildProject(msg);
                         break;
-                    // Save All: to the other StateScope tabs; their answers back (the app matches them by id)
+                    // Save All: to the other MachineScope tabs; their answers back (the app matches them by id)
                     case "saveAllRelay":
                     case "saveAllDoneRelay":
                         {
@@ -848,7 +848,7 @@ namespace KvalStateScope.Xae
             var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
             if (path == null || !_lastSeen.ContainsKey(path))
             {
-                Post(new { type = "gitShowResult", requestId, error = "Not a file loaded in StateScope" });
+                Post(new { type = "gitShowResult", requestId, error = "Not a file loaded in MachineScope" });
                 return;
             }
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>

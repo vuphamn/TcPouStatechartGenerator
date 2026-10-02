@@ -6,7 +6,9 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const NAME = 'Kval StateScope Link.lnk';
+const NAME = 'Kval MachineScope Link.lnk';
+// (an earlier Link's, before the product was renamed: counted as on, removed when set)
+const OLD_NAME = 'Kval StateScope Link.lnk';
 const dry = () => process.env.KSS_SERVICE_DRYRUN === '1';
 // (a PowerShell string: single quotes doubled)
 const ps = (s) => `'${String(s).replace(/'/g, "''")}'`;
@@ -28,6 +30,7 @@ const quote = (a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
 function createStartup({ port, log }) {
   const folder = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
   const file = path.join(folder, NAME);
+  const oldFile = path.join(folder, OLD_NAME);
   let dryOn = false;
   const extra = ['--no-open', ...(port !== 48960 ? ['--port', String(port)] : [])];
 
@@ -42,7 +45,7 @@ function createStartup({ port, log }) {
     status() {
       if (process.platform !== 'win32') return { supported: false, on: false, message: 'Only on Windows (elsewhere: your desktop\'s autostart settings)' };
       const { target, args } = selfCommand(extra);
-      return { supported: true, on: dry() ? dryOn : fs.existsSync(file), shortcut: file, command: [target, ...args].map(quote).join(' ') };
+      return { supported: true, on: dry() ? dryOn : fs.existsSync(file) || fs.existsSync(oldFile), shortcut: file, command: [target, ...args].map(quote).join(' ') };
     },
     async set(on) {
       if (process.platform !== 'win32') throw new Error('Only on Windows');
@@ -53,6 +56,7 @@ function createStartup({ port, log }) {
           return { ok: true, dry: `del ${file}`, message: 'Link no longer starts when you sign in.' };
         }
         fs.rmSync(file, { force: true });
+        fs.rmSync(oldFile, { force: true });
         log('startup: removed from this user\'s Startup folder');
         return { ok: true, message: 'Link no longer starts when you sign in.' };
       }
@@ -64,13 +68,16 @@ function createStartup({ port, log }) {
         `$s.Arguments = ${ps(args.map(quote).join(' '))}`,
         `$s.WorkingDirectory = ${ps(path.dirname(target))}`,
         '$s.WindowStyle = 7',
-        `$s.Description = ${ps('Kval StateScope Link (started when you sign in: set on its page)')}`,
+        `$s.Description = ${ps('Kval MachineScope Link (started when you sign in: set on its page)')}`,
         '$s.Save()',
       ].join('; ');
       const r = await run(command);
       if (r.code !== 0) throw new Error(`Could not add it: ${(r.err || '').trim().split('\n')[0]}`);
       if (dry()) dryOn = true;
-      else log(`startup: added to this user's Startup folder (${file})`);
+      else {
+        fs.rmSync(oldFile, { force: true });
+        log(`startup: added to this user's Startup folder (${file})`);
+      }
       return { ok: true, dry: r.dry, message: 'Link starts (minimized) when you sign in to Windows.' };
     },
   };

@@ -1,5 +1,5 @@
 const h = require('../lib/harness.cjs');
-// Web edition (through Kval StateScope Link): Open instance opens a browser tab with the POU handed over, live on it
+// Web edition (through Kval MachineScope Link): Open instance opens a browser tab with the POU handed over, live on it
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
 const fs = require('fs');

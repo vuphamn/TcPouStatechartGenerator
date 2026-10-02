@@ -33,7 +33,7 @@ const hex = (rgb) => { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(rgb || ''
     expect(l.ide === id && (dark ? l.app === null : l.app === 'default') && l.slate950 === bg && l.sky500 === accent && hex(l.canvas) === bg && !!l.node && hex(l.node) !== '#ececff', `${id}: the app's greys (${l.slate950}) and accent (${l.sky500}), the canvas the editor's (${hex(l.canvas)}), the chart's nodes its own (${hex(l.node)})`);
     await p.screenshot({ path: h.out(`ide-theme-${id}.png`) });
   }
-  // Back to StateScope's own: none of an IDE theme's left
+  // Back to MachineScope's own: none of an IDE theme's left
   await p.select('#mermaid-theme-select', 'dark');
   await h.sleep(1500);
   const back = await look();

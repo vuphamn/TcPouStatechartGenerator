@@ -22,7 +22,7 @@
   },
   "build": {
     "appId": "com.kval.statescope",
-    "productName": "Kval StateScope",
+    "productName": "Kval MachineScope",
     "directories": {
       "output": "release"
     },

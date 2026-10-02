@@ -1,4 +1,4 @@
-# Builds the Kval StateScope extension for TwinCAT XAE (TcXaeShell 64-bit, Visual Studio 2022 / 2026), and its build
+# Builds the Kval MachineScope extension for TwinCAT XAE (TcXaeShell 64-bit, Visual Studio 2022 / 2026), and its build
 # for TwinCAT 4024's TcXaeShell (the 32-bit Visual Studio 2017 shell) and Visual Studio 2017 / 2019 (not yet tested).
 # Output: xae-extension\KvalStateScope.Xae\bin\<Configuration>\KvalStateScope.Xae.vsix,
 #         xae-extension\KvalStateScope.Xae.Vs2017\bin\<Configuration>\KvalStateScope.Xae.Vs2017.vsix

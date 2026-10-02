@@ -3,14 +3,14 @@ using System.Collections.Generic;
 
 namespace KvalStateScope.Xae
 {
-    /// <summary>A StateScope tab that the relay can send an app message to</summary>
+    /// <summary>A MachineScope tab that the relay can send an app message to</summary>
     internal interface ISaveAllTab
     {
         void PostToApp(object message);
     }
 
     /// <summary>
-    /// Save All across the StateScope tabs of this XAE: a tab's "saveAll" goes to the others, their "saveAllDone"
+    /// Save All across the MachineScope tabs of this XAE: a tab's "saveAll" goes to the others, their "saveAllDone"
     /// replies back. The app does this itself through a BroadcastChannel when the tabs share one WebView2 profile; a
     /// tab with a profile of its own (the shared one was in use) only hears it through here. The app ignores a
     /// request it has already answered (the same id), so a tab reached both ways saves once.

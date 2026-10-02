@@ -37,7 +37,7 @@ export interface LiveSettings {
   gateway: string;
   /** Web edition: the gateway's PLC id */
   plc: string;
-  /** Web edition: through the local helper on this computer (Kval StateScope Link) or a gateway */
+  /** Web edition: through the local helper on this computer (Kval MachineScope Link) or a gateway */
   via: 'link' | 'gateway' | '';
   /** Web edition: the local helper's port (empty: 48960) */
   linkPort: string;
@@ -49,7 +49,7 @@ interface LivePanelProps {
   onUnwatch?: (name: string) => void;
   /**
    * xae: TwinCAT XAE with a POU from an open TwinCAT project; desktop: the desktop app (ADS straight to the PLC);
-   * web: the web edition, through the local helper (Kval StateScope Link) or a gateway (settings.via)
+   * web: the web edition, through the local helper (Kval MachineScope Link) or a gateway (settings.via)
    */
   mode: 'xae' | 'desktop' | 'web' | null;
   /** Web edition: "link" or "gateway" when settings.via is not chosen yet */
@@ -343,7 +343,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       const since = checker.lost[p.netId];
       if (!since || notifiedLost.current[p.netId] === since) continue;
       notifiedLost.current[p.netId] = since;
-      void notifyStuck(`Kval StateScope: ${p.name || p.netId} stopped answering`, `Since ${new Date(since).toLocaleTimeString()}: ${checker.checks[p.netId]?.verdict ?? 'it no longer answers'}`, `kss-plc-lost-${p.netId}`);
+      void notifyStuck(`Kval MachineScope: ${p.name || p.netId} stopped answering`, `Since ${new Date(since).toLocaleTimeString()}: ${checker.checks[p.netId]?.verdict ?? 'it no longer answers'}`, `kss-plc-lost-${p.netId}`);
     }
   }, [checker.lost, checker.checks, notify, rememberedPlcs]);
   // The license notice's Renew: the steps shown, what Open XAE said
@@ -685,8 +685,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <div className="flex gap-1" role="radiogroup" aria-label="How to reach the PLC">
                 {(
                   [
-                    ['link', 'This computer', 'Kval StateScope Link, the helper on this computer, talks to the PLC'],
-                    ['gateway', 'Gateway', 'A Kval StateScope gateway on the PLC network talks to the PLC'],
+                    ['link', 'This computer', 'Kval MachineScope Link, the helper on this computer, talks to the PLC'],
+                    ['gateway', 'Gateway', 'A Kval MachineScope gateway on the PLC network talks to the PLC'],
                   ] as const
                 ).map(([id, label, title]) => (
                   <button
@@ -716,7 +716,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   autoComplete="off"
                   value={token}
                   onChange={(e) => onTokenChange?.(e.target.value.trim())}
-                  placeholder="code shown by Kval StateScope Link"
+                  placeholder="code shown by Kval MachineScope Link"
                   className="flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
                 />
                 <input
@@ -777,7 +777,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 value={settings.gateway}
                 onChange={(e) => onSettingsChange({ ...settings, gateway: e.target.value.trim() })}
                 placeholder={gatewayOrigin ? `this page's gateway (${new URL(gatewayOrigin).host})` : 'gateway address (e.g. statescope-gw:8443)'}
-                title="The Kval StateScope gateway on the PLC network"
+                title="The Kval MachineScope gateway on the PLC network"
                 className="min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
               />
               {sso && (
@@ -970,7 +970,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <div id="live-license-steps" className="mt-1 space-y-1 text-slate-300">
                 <ol className="list-decimal pl-4 space-y-0.5">
                   <li>In TwinCAT XAE, with this PLC chosen as the target: Solution Explorer › <b>SYSTEM › License</b>.</li>
-                  <li><b>7 Days Trial License…</b>, and type the characters it shows (TwinCAT asks a person, so StateScope cannot do it).</li>
+                  <li><b>7 Days Trial License…</b>, and type the characters it shows (TwinCAT asks a person, so MachineScope cannot do it).</li>
                   <li>Activate the configuration, or restart TwinCAT on the target, so the PLC takes the new license.</li>
                 </ol>
                 <div className="flex items-center gap-2">

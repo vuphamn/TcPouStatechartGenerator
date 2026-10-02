@@ -8,7 +8,7 @@ using Task = System.Threading.Tasks.Task;
 namespace KvalStateScope.Xae
 {
     /// <summary>
-    /// Kval StateScope inside TwinCAT XAE: a command on .TcPOU items opens the StateScope web app (WebView2) in a
+    /// Kval MachineScope inside TwinCAT XAE: a command on .TcPOU items opens the MachineScope web app (WebView2) in a
     /// document tab.
     /// </summary>
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
@@ -33,11 +33,11 @@ namespace KvalStateScope.Xae
             await OpenInStateScopeCommand.InitializeAsync(this);
         }
 
-        /// <summary>Most StateScope tabs looked for (and created)</summary>
+        /// <summary>Most MachineScope tabs looked for (and created)</summary>
         private const int MaxTabs = 64;
 
         /// <summary>
-        /// Shows the .TcPOU's StateScope tab: the one that already shows it, else an empty tab, else a new one
+        /// Shows the .TcPOU's MachineScope tab: the one that already shows it, else an empty tab, else a new one
         /// (null: show a tab, the first one if there is any). With an instance (a POU can be declared several times),
         /// the tab that follows that PLC instance of it, else a new tab that goes live on it.
         /// </summary>
@@ -66,9 +66,9 @@ namespace KvalStateScope.Xae
                 }
             }
             var target = showing ?? empty ?? (string.IsNullOrEmpty(pouPath) ? any : null) ?? free
-                ?? throw new NotSupportedException($"At most {MaxTabs} Kval StateScope tabs can be open");
+                ?? throw new NotSupportedException($"At most {MaxTabs} Kval MachineScope tabs can be open");
             var window = await ShowToolWindowAsync(typeof(StateScopeToolWindow), target, true, DisposalToken) as StateScopeToolWindow;
-            if (window?.Control == null) throw new NotSupportedException("Cannot create the Kval StateScope window");
+            if (window?.Control == null) throw new NotSupportedException("Cannot create the Kval MachineScope window");
             // Already shown in that tab: just bring it forward
             if (!string.IsNullOrEmpty(pouPath) && showing == null) window.Control.LoadPou(pouPath, instance, connection);
         }

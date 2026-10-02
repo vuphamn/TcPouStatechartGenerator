@@ -96,7 +96,7 @@ namespace KvalStateScope.Xae
         {
             var dialog = new Microsoft.Win32.OpenFileDialog
             {
-                Title = "Open a TwinCAT function block in Kval StateScope",
+                Title = "Open a TwinCAT function block in Kval MachineScope",
                 Filter = "TwinCAT POU (*.TcPOU)|*.TcPOU|All files (*.*)|*.*",
                 InitialDirectory = startFolder != null && Directory.Exists(startFolder) ? startFolder : null,
             };
@@ -129,7 +129,7 @@ namespace KvalStateScope.Xae
             return dialog.FileNames.Select(f => new DutFile { name = Path.GetFileName(f), relativePath = Path.GetFileName(f), path = f, content = ReadText(f) }).ToList();
         }
 
-        /// <summary>A file to write back: its new text, the content key when StateScope loaded it, and whether a change made
+        /// <summary>A file to write back: its new text, the content key when MachineScope loaded it, and whether a change made
         /// in XAE since then may be overwritten (the user chose to keep their edits)</summary>
         internal sealed class SaveRequest
         {
@@ -142,7 +142,7 @@ namespace KvalStateScope.Xae
         /// <summary>
         /// Writes edited files back. A file of an open TwinCAT project goes through the Automation Interface
         /// (DocumentXml), so XAE's project is updated and TwinCAT writes the file; other files are written directly.
-        /// Refused when XAE holds unsaved changes for a file, or when it changed in XAE / on disk since StateScope loaded it
+        /// Refused when XAE holds unsaved changes for a file, or when it changed in XAE / on disk since MachineScope loaded it
         /// (unless Force). A copy of each original is kept under %LocalAppData%\KvalStateScope\Backups.
         /// Returns null on success, else the reason; <paramref name="viaXae"/> lists the files written through XAE.
         /// </summary>
@@ -165,7 +165,7 @@ namespace KvalStateScope.Xae
                 items[f.Path] = item;
                 var current = item != null ? TwinCATProject.ReadXml(item) : ReadText(f.Path);
                 if (!f.Force && f.LoadedKey != null && ContentKey(current) != f.LoadedKey)
-                    return $"{name} was changed in XAE since it was loaded into Kval StateScope. Reload it first, or keep your edits to overwrite it.";
+                    return $"{name} was changed in XAE since it was loaded into Kval MachineScope. Reload it first, or keep your edits to overwrite it.";
             }
 
             var backupDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

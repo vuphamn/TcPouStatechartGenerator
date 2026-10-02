@@ -319,7 +319,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
 @media (max-width: 700px) { .hide-sm { display: none; } }
 </style></head>
 <body><main>
-<h1>Kval StateScope gateway: setup</h1>
+<h1>Kval MachineScope gateway: setup</h1>
 <p class="sub" id="admin-sub">Loading...</p>
 
 <section>

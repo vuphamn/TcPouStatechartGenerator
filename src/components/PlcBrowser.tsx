@@ -295,7 +295,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       </div>
                       {result?.localTwinCat && mode !== 'xae' && (
                         <div className="space-y-1">
-                          <label className="flex items-center gap-1.5 text-slate-300" title={`TwinCAT runs on this PC too (${result.localTwinCat}): the route pair XAE's Add Route makes, so XAE and StateScope both reach the PLC`}>
+                          <label className="flex items-center gap-1.5 text-slate-300" title={`TwinCAT runs on this PC too (${result.localTwinCat}): the route pair XAE's Add Route makes, so XAE and MachineScope both reach the PLC`}>
                             <input id="live-route-both" type="checkbox" checked={routeBoth} onChange={(e) => setRouteBoth(e.target.checked)} />
                             Both ways, for this PC's TwinCAT too (XAE)
                           </label>

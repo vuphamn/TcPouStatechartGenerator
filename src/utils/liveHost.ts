@@ -41,7 +41,7 @@ interface DesktopLiveApi {
   openDevicesFolder?: () => Promise<{ folder: string; error?: string }>;
   /** A TwinCAT project's I/O tree on this computer (offline): the open POU's project, else a folder chosen */
   ioTreeFolder?: (req: { pouPath?: string; pick?: boolean }) => Promise<import('../components/IoTreePanel.tsx').IoTree & { canceled?: boolean; folder?: string }>;
-  /** The PLC's project kept on this computer (Documents\Kval StateScope\PLC projects, or its own folder) */
+  /** The PLC's project kept on this computer (Documents\Kval MachineScope\PLC projects, or its own folder) */
   projectCopy?: (req: { requestId: number; folder?: string; chosen?: boolean; choice?: 'override' | 'keep'; skipProjects?: string[] }) => Promise<import('./plcSources.ts').PlcCopyResult>;
   /** A folder chosen (the dialog's title) */
   pickFolder?: (title: string) => Promise<{ path?: string; canceled?: boolean }>;

@@ -1,6 +1,6 @@
 const h = require('../lib/harness.cjs');
 // Desktop app: going live on a PLC that runs another project (the fake PLC's "Plant") than the loaded POU's ("Mini"):
-// the PLC's whole project downloaded into Documents\Kval StateScope\PLC projects\Plant; its SM_TableManager instance
+// the PLC's whole project downloaded into Documents\Kval MachineScope\PLC projects\Plant; its SM_TableManager instance
 // (the same name as the loaded POU, another type: Plant's own) opened with Plant's SM_TableManager from that copy.
 // Going live again with the copy there but the PLC's differing: asked, Keep local (left as it is), Override (the
 // PLC's written over it), Save to a different location (another folder, remembered for the PLC)
@@ -24,7 +24,7 @@ const table = path.join(proj, 'POUs', 'SM_TableManager.TcPOU');
 // Documents (KSS_DOCUMENTS) and a folder for Save to a different location (KSS_PICK_FOLDER)
 const docs = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-copy-docs-'));
 const elsewhere = path.join(docs, 'Elsewhere');
-const copy = path.join(docs, 'Kval StateScope', 'PLC projects', 'Plant');
+const copy = path.join(docs, 'Kval MachineScope', 'PLC projects', 'Plant');
 const copiedPou = path.join(copy, 'Plant', 'POUs', 'Table', 'SM_TableManager.TcPOU');
 
 const { R, writeSymbolsPlc } = require('../fakes/symbols-plc.cjs');
@@ -72,7 +72,7 @@ const cfg = writeSymbolsPlc('fake-ams2-copy.json', [], { sources: true });
   await goLive();
   const said = await waitStatus(w1, /Plant: the PLC's project downloaded/);
   expect(/Plant: the PLC's project downloaded/.test(said), `going live: "${said}"`);
-  expect(await waitFor(() => fs.existsSync(copiedPou)) && fs.existsSync(path.join(copy, 'Plant.tsproj')) && fs.existsSync(path.join(copy, '.kss-plc-project.json')), 'the whole project in Documents\\Kval StateScope\\PLC projects\\Plant (its .tsproj, its PLC project, the manifest)');
+  expect(await waitFor(() => fs.existsSync(copiedPou)) && fs.existsSync(path.join(copy, 'Plant.tsproj')) && fs.existsSync(path.join(copy, '.kss-plc-project.json')), 'the whole project in Documents\\Kval MachineScope\\PLC projects\\Plant (its .tsproj, its PLC project, the manifest)');
   expect(/TABLE_PLC_IDLE/.test(fs.readFileSync(copiedPou, 'utf8')), 'with Plant\'s own SM_TableManager (TABLE_PLC_IDLE)');
   // (edited in the copy: its instances' POU is read from there, not from the PLC)
   fs.writeFileSync(copiedPou, fs.readFileSync(copiedPou, 'utf8').replace('machineState := E_TableManager_States.TABLE_PLC_READY;', 'machineState := E_TableManager_States.TABLE_PLC_READY_HERE;'));

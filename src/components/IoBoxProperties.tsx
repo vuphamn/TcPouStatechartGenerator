@@ -156,7 +156,7 @@ export const IoBoxProperties: React.FC<{
         return `  ${e.pdo === '(other links)' ? '' : `${e.pdo} / `}${e.name}: ${e.link}${v === undefined ? '' : ` = ${show(v.v)}`}`;
       })] : []),
       ...(events.length ? ['Recent events:', ...events.slice(0, 20).map((ev) => `  ${new Date(ev.at).toLocaleString()} ${ev.text}`)] : []),
-      `(Kval StateScope, ${new Date().toLocaleString()})`,
+      `(Kval MachineScope, ${new Date().toLocaleString()})`,
     ];
     return lines.join('\n');
   };

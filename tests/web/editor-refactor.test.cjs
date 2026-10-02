@@ -69,12 +69,12 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   await h.sleep(600);
   expect(await rightClickAt('method-implementation-editor', 'config_fHomePosition'), 'the menu on smOutfeedStopAxis.config_fHomePosition');
   let list = await items();
-  expect(list.some((x) => /Go to Definition.*Open SM_KAxis\.config_fHomePosition in StateScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis\.config_fHomePosition in the TwinCAT editor/.test(x)), `the member offered: ${list.filter((x) => /Open|Definition/.test(x)).join(' | ')}`);
+  expect(list.some((x) => /Go to Definition.*Open SM_KAxis\.config_fHomePosition in MachineScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis\.config_fHomePosition in the TwinCAT editor/.test(x)), `the member offered: ${list.filter((x) => /Open|Definition/.test(x)).join(' | ')}`);
   // In TwinCAT's editor: at its declaration line
   await p.click('#editor-menu-open-type-xae');
   const xae = await waitSent((m) => m.type === 'openInXae');
   expect(xae?.typeName === 'SM_KAxis' && xae.line > 1 && /config_fHomePosition : LREAL;/.test(xae.text || '') && !xae.method, `openInXae: ${JSON.stringify(xae)}`);
-  // In StateScope: F12
+  // In MachineScope: F12
   await caretAt('method-implementation-editor', 'config_fHomePosition');
   await p.keyboard.press('F12');
   expect(!!(await waitSent((m) => m.type === 'openPou' && m.typeName === 'SM_KAxis')), 'F12: openPou SM_KAxis');

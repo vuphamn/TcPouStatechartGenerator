@@ -6,6 +6,7 @@
 const { execFile, spawn } = require('child_process');
 const path = require('path');
 
+// (the scheduled task's name: as it was before the product was renamed Kval MachineScope, so an installed one is found)
 const TASK = 'Kval StateScope gateway';
 const dry = () => process.env.KSS_SERVICE_DRYRUN === '1';
 
@@ -49,7 +50,7 @@ function createService({ configPath, log, audit }) {
         '$t = New-ScheduledTaskTrigger -AtStartup',
         "$p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
         '$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries',
-        `Register-ScheduledTask -TaskName ${ps(TASK)} -Action $a -Trigger $t -Principal $p -Settings $s -Force -Description ${ps('Kval StateScope gateway (setup page: Run at startup)')} | Out-Null`,
+        `Register-ScheduledTask -TaskName ${ps(TASK)} -Action $a -Trigger $t -Principal $p -Settings $s -Force -Description ${ps('Kval MachineScope gateway (setup page: Run at startup)')} | Out-Null`,
       ].join('; ');
       const r = await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command]);
       if (r.code !== 0) throw new Error(`Could not install it: ${(r.err || r.out).trim().split('\n')[0]}`);

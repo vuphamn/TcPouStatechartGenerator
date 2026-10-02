@@ -251,7 +251,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
         onOpenMethod(property ? `${method}.Get()` : `${method}()`);
         return;
       }
-      // A type (another POU of the project): opened in StateScope
+      // A type (another POU of the project): opened in MachineScope
       const typeTarget = findTypeTarget([decl], sym, memberOf);
       const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
       if (typeTarget && opener) {

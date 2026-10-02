@@ -78,7 +78,7 @@
     <Content Include="Resources\icon.png">
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
-    <!-- The Kval StateScope web app (copied from the repo's dist/ by build.ps1) -->
+    <!-- The Kval MachineScope web app (copied from the repo's dist/ by build.ps1) -->
     <Content Include="StateScopeApp\**\*">
       <IncludeInVSIX>true</IncludeInVSIX>
       <VSIXSubPath>StateScopeApp\%(RecursiveDir)</VSIXSubPath>

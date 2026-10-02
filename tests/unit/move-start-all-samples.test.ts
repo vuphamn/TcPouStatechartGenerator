@@ -1,4 +1,5 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
+// runner-timeout: 300 (791 moves; CI's machines take half as long again)
 // Every sample's every transition (the code's, also those drawn to or from a composite's border): its start moved to
 // another state (moveTransitionStart, the canvas' drop of a start endpoint): none refused, each one then leaving the
 // new state (the generator's own model), in an IF, an ELSIF, an IF / ELSE, an ELSE or nested in them

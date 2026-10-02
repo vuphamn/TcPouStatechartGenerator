@@ -9,7 +9,7 @@ import { sameInstance } from '../utils/instanceLaunch.ts';
  * a time, with the values of numbers, booleans and strings. A member that holds the state variable is a state
  * machine: Watch follows it in its own tab / window, live, recording its transitions.
  * The type filter (at first the loaded POU's type): the instances of that type found under the root, searched
- * level by level, in one list; cleared, the whole tree. An instance of another type opens in a new StateScope.
+ * level by level, in one list; cleared, the whole tree. An instance of another type opens in a new MachineScope.
  */
 
 export const DEFAULT_SYMBOL_ROOT = 'MAIN.mainStateMachine';
@@ -464,7 +464,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                   data-kind={c.kind}
                   data-other-type={other ? 'true' : undefined}
                   onDoubleClick={open}
-                  title={here ? `${c.path}: this ${openTarget} follows it` : other ? `${c.path} is a ${bareType(c.type)}: double-click or Open for a new StateScope on it, live` : `${c.path}: double-click or Watch to follow it in a new ${openTarget}`}
+                  title={here ? `${c.path}: this ${openTarget} follows it` : other ? `${c.path} is a ${bareType(c.type)}: double-click or Open for a new MachineScope on it, live` : `${c.path}: double-click or Watch to follow it in a new ${openTarget}`}
                 >
                   <span className={`truncate ${c.stateMachine ? 'text-sky-200 font-semibold' : 'text-slate-200'}`}>{c.path}</span>
                   <span className="text-slate-500 truncate min-w-0 flex-1">{c.type}</span>
@@ -476,7 +476,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                       <button
                         onClick={open}
                         className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
-                        title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                        title={`A new MachineScope for ${bareType(c.type)}, live on ${c.path}`}
                       >
                         <ExternalLink className="w-3 h-3" /> Open
                       </button>
@@ -560,7 +560,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                           <button
                             onClick={() => onWatch(c)}
                             className="symbol-open-other shrink-0 flex items-center gap-1 px-1.5 rounded font-sans text-[11px] text-amber-200 hover:bg-slate-700"
-                            title={`A new StateScope for ${bareType(c.type)}, live on ${c.path}`}
+                            title={`A new MachineScope for ${bareType(c.type)}, live on ${c.path}`}
                           >
                             <ExternalLink className="w-3 h-3" /> Open
                           </button>
@@ -605,7 +605,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
         {loadedType && (
           <>
             {' '}
-            Another type's have <span className="text-amber-200">Open</span>: a new StateScope for that type, live on it (<span className="text-emerald-300">Here</span>: in this one instead).
+            Another type's have <span className="text-amber-200">Open</span>: a new MachineScope for that type, live on it (<span className="text-emerald-300">Here</span>: in this one instead).
           </>
         )}
       </div>

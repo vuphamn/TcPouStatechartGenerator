@@ -1,4 +1,4 @@
-// Builds release/link/Kval StateScope Link.exe: link/link.cjs bundled into one file (esbuild) and packed into a
+// Builds release/link/Kval MachineScope Link.exe: link/link.cjs bundled into one file (esbuild) and packed into a
 // copy of node.exe (Node.js single executable application), so the laptop needs no Node.js.
 const fs = require('fs');
 const path = require('path');
@@ -7,7 +7,7 @@ const { execFileSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const out = path.join(root, 'release', 'link');
 const bundle = path.join(out, 'statescope-link.cjs');
-const exe = path.join(out, 'Kval StateScope Link.exe');
+const exe = path.join(out, 'Kval MachineScope Link.exe');
 fs.mkdirSync(out, { recursive: true });
 
 // 1. One CommonJS file (ws's optional native add-ons are left out: it works without them)

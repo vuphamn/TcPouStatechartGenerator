@@ -1,4 +1,4 @@
-// Sends a message from the StateScope app in an XAE tab to the extension (as the app would), through WebView2's
+// Sends a message from the MachineScope app in an XAE tab to the extension (as the app would), through WebView2's
 // debugging port. Usage: node post.cjs <tab title part> <file with the JSON message>
 const puppeteer = require('puppeteer-core');
 (async () => {

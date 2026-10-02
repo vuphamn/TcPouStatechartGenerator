@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Kval StateScope desktop installer: installs or removes the TwinCAT XAE extension (VSIX) in Visual Studio 2022 / 2026.
+  Kval MachineScope desktop installer: installs or removes the TwinCAT XAE extension (VSIX) in Visual Studio 2022 / 2026.
 
 .DESCRIPTION
   Finds Visual Studio 2022 and 2026 (17.x, 18.x) with vswhere, and runs the newest one's VSIXInstaller for all of

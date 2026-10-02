@@ -1,7 +1,7 @@
 const h = require('../lib/harness.cjs');
 // Desktop app: a .TcPOU on the command line opens at start-up; a second start hands its file to the running app,
 // which opens it in a window of its own (one per POU); a start without a file opens nothing new
-// Usage: node open-file-test.cjs [path to Kval StateScope.exe]   (default: electron . against the dev server)
+// Usage: node open-file-test.cjs [path to Kval MachineScope.exe]   (default: electron . against the dev server)
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
 const path = require('path');

@@ -20,7 +20,7 @@
         <CommandFlag>DynamicVisibility</CommandFlag>
         <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings>
-          <ButtonText>Open in Kval StateScope</ButtonText>
+          <ButtonText>Open in Kval MachineScope</ButtonText>
           <CanonicalName>KvalStateScope.OpenSelected</CanonicalName>
           <LocCanonicalName>KvalStateScope.OpenSelected</LocCanonicalName>
         </Strings>
@@ -30,7 +30,7 @@
         <!-- Command Window: KvalStateScope.Open C:\Path\SM_X.TcPOU -->
         <CommandFlag>AllowParams</CommandFlag>
         <Strings>
-          <ButtonText>Kval StateScope...</ButtonText>
+          <ButtonText>Kval MachineScope...</ButtonText>
           <CanonicalName>KvalStateScope.Open</CanonicalName>
           <LocCanonicalName>KvalStateScope.Open</LocCanonicalName>
         </Strings>

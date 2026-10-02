@@ -1,5 +1,5 @@
 const h = require('../lib/harness.cjs');
-// Web edition through Kval StateScope Link: Live > Symbols, values, Watch (same POU: a new tab with the connection)
+// Web edition through Kval MachineScope Link: Live > Symbols, values, Watch (same POU: a new tab with the connection)
 const puppeteer = require('puppeteer-core');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -24,10 +24,10 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   fs.rmSync(esiDir, { recursive: true, force: true });
   fs.rmSync(docsDir, { recursive: true, force: true });
   fs.mkdirSync(esiDir, { recursive: true });
-  fs.mkdirSync(path.join(docsDir, 'Kval StateScope', 'Devices'), { recursive: true });
+  fs.mkdirSync(path.join(docsDir, 'Kval MachineScope', 'Devices'), { recursive: true });
   fs.writeFileSync(path.join(esiDir, 'Beckhoff EL1xxx.xml'), '<?xml version="1.0" encoding="ISO-8859-1"?><EtherCATInfo><Vendor><Id>2</Id><Name>Beckhoff Automation GmbH &amp; Co. KG</Name></Vendor><Descriptions><Groups><Group><Type>DigIn</Type><Name LcId="1033">Digital Input Terminals (ED1xxx, EL1xxx)</Name></Group></Groups><Devices><Device Physics="YY"><Type ProductCode="#x03f03052" RevisionNo="#x00110000">EL1008</Type><Name LcId="1033"><![CDATA[EL1008 8Ch. Dig. Input 24V, 3ms]]></Name><URL LcId="1033"><![CDATA[http://www.beckhoff.com/EL1008]]></URL><GroupType>DigIn</GroupType></Device></Devices></Descriptions></EtherCATInfo>');
   // (a 1x1 PNG)
-  fs.writeFileSync(path.join(docsDir, 'Kval StateScope', 'Devices', 'EL1008 front.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
+  fs.writeFileSync(path.join(docsDir, 'Kval MachineScope', 'Devices', 'EL1008 front.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64'));
   const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48964'], { env: { ...process.env, APPDATA: path.join(h.OUT, 'link-appdata'), KSS_ESI_DIR: esiDir, KSS_DOCUMENTS: docsDir }, stdio: ['ignore', out, out] });
   await sleep(2500);
   const code = (await h.waitForText(path.join(h.OUT, 'link-sym-run.txt'), /Pairing code:\s+(\S+)/))?.[1];
@@ -77,7 +77,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-sym.j
   expect(kept.includes('kss.symbols.found.127.0.0.1.1.1:851|main.mainstatemachine|sm_tablemanager=smTable1,smTable2'),`the results kept for the PLC: ${kept.join(' ')}`);
   await set(a, 'symbol-browser-type-filter', 'SM_DoorDasher');
   const doors = await instances();
-  expect(doors.join() === 'aDoors[1]:open,aDoors[2]:open', `another type: ${doors.join(', ')} (Open: a new StateScope)`);
+  expect(doors.join() === 'aDoors[1]:open,aDoors[2]:open', `another type: ${doors.join(', ')} (Open: a new MachineScope)`);
   await a.click('#symbol-browser-type-clear');
   await sleep(300);
   expect(!(await a.$('#symbol-browser-instances')) && !!(await a.$('#symbol-browser-tree .symbol-row')), 'cleared: the whole tree');

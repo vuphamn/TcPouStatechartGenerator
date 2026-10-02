@@ -1,5 +1,5 @@
 # Test bed: a copy of the TwinCAT project in Visual Studio's experimental instance (/rootsuffix Exp) with the
-# built extension, StateScope open on the test POU. WebView2's debugging port is 9444 (post.cjs uses it).
+# built extension, MachineScope open on the test POU. WebView2's debugging port is 9444 (post.cjs uses it).
 # Build the extension first: xae-extension\build.ps1
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\config.ps1"
@@ -43,8 +43,8 @@ for ($k = 0; $k -lt 90 -and -not $loaded; $k++) {
 }
 "solution loaded: $loaded ($($k * 2) s)"
 
-# 4. StateScope on the test POU
+# 4. MachineScope on the test POU
 Add-Content $XaeLog '---- xae test launch ----'
-for ($k = 0; $k -lt 10; $k++) { try { $dte.ExecuteCommand('Tools.KvalStateScope.Open', (Join-Path $XaeCopy $XaePou)); 'StateScope command sent'; break } catch { Start-Sleep 2 } }
+for ($k = 0; $k -lt 10; $k++) { try { $dte.ExecuteCommand('Tools.KvalStateScope.Open', (Join-Path $XaeCopy $XaePou)); 'MachineScope command sent'; break } catch { Start-Sleep 2 } }
 for ($k = 0; $k -lt 30; $k++) { Start-Sleep 2; if ((Get-Content $XaeLog -Tail 3) -match 'loaded ') { break } }
 Get-Content $XaeLog -Tail 3

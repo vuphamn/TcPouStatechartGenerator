@@ -91,7 +91,7 @@ export function parseRecording(text: string): LiveRecording | { error: string } 
   } catch {
     return { error: 'Not a live recording (not JSON)' };
   }
-  if (r?.kind !== RECORDING_KIND || !Array.isArray(r.values)) return { error: 'Not a Kval StateScope live recording' };
+  if (r?.kind !== RECORDING_KIND || !Array.isArray(r.values)) return { error: 'Not a Kval MachineScope live recording' };
   const values = r.values.filter((v) => v && Number.isFinite(v.t) && Number.isFinite(v.value)).sort((a, b) => a.t - b.t);
   if (!values.length) return { error: 'The recording has no samples' };
   const vars = (Array.isArray(r.vars) ? r.vars : []).filter((v) => v && typeof v.id === 'string' && Number.isFinite(v.t)).sort((a, b) => a.t - b.t);

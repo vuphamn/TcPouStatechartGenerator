@@ -26,7 +26,7 @@ export interface CheckResult {
 export function checkAsText(target: { netId: string; ip: string }, r: CheckResult): string {
   const mark = (ok: boolean | null) => (ok === true ? '[ok]' : ok === false ? '[X] ' : '[!] ');
   return [
-    `Kval StateScope connection check: ${target.netId || '(no NetId)'} at ${target.ip || '(from the NetId)'} (${new Date().toLocaleString()})`,
+    `Kval MachineScope connection check: ${target.netId || '(no NetId)'} at ${target.ip || '(from the NetId)'} (${new Date().toLocaleString()})`,
     ...r.steps.map((s) => `${mark(s.ok)} ${s.title}${s.detail && s.ok !== true ? `\n       ${s.detail}` : ''}`),
     `=> ${r.verdict}`,
   ].join('\n');

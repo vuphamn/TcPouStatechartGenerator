@@ -1,5 +1,5 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
-// A PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded into Documents\Kval StateScope\PLC
+// A PLC's project kept on this computer (shared/plcProjectCopy.cjs): downloaded into Documents\Kval MachineScope\PLC
 // projects\<project> (the whole TwinCAT project, as it opens in XAE), the same the next time (nothing asked), the
 // PLC's changed: "differs" with the local edits listed; Override writes the PLC's over it, Keep local leaves it, a
 // folder of its own ("Save to a different location") gets its own copy
@@ -33,7 +33,7 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
 
   // First time: downloaded, the whole project
   let r = await syncPlcProject(read, { documents, netId: '10.10.10.50.1.1' });
-  expect(r.status === 'downloaded' && r.dir === dir, `downloaded into Documents\\Kval StateScope\\PLC projects\\EdgeSS (${r.status}, ${r.dir})`);
+  expect(r.status === 'downloaded' && r.dir === dir, `downloaded into Documents\\Kval MachineScope\\PLC projects\\EdgeSS (${r.status}, ${r.dir})`);
   expect(fs.existsSync(path.join(dir, 'EdgeSS.tsproj')) && fs.readFileSync(pou, 'utf8').includes('v1') && fs.existsSync(path.join(dir, 'EdgePlc', 'EdgePlc.plcproj')), 'the .tsproj, the PLC project where its .xti says, its POUs');
   expect(r.plcProjects?.length === 1 && r.plcProjects[0].name === 'EdgePlc' && /EdgeSS\.tsproj$/.test(r.tsproj), `its projects told (${JSON.stringify(r.plcProjects?.map((p: { name: string }) => p.name))})`);
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, MANIFEST), 'utf8'));
@@ -103,7 +103,7 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   session.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 7, plcproj, typeName: 'SM_TableManager' });
   const elsewhere = path.join(other, 'EdgePlc', 'EdgePlc.plcproj');
   session.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 8, plcproj: elsewhere, typeName: 'SM_TableManager' });
-  expect(sent[0]?.type === 'projectPouResult' && sent[0].requestId === 7 && /SM_TableManager/.test(sent[0].content ?? ''), `Link: from Documents\\Kval StateScope\\PLC projects (${sent[0]?.error ?? 'read'})`);
+  expect(sent[0]?.type === 'projectPouResult' && sent[0].requestId === 7 && /SM_TableManager/.test(sent[0].content ?? ''), `Link: from Documents\\Kval MachineScope\\PLC projects (${sent[0]?.error ?? 'read'})`);
   expect(!!sent[1]?.error && !sent[1].content, `Link: a folder it may not read (${sent[1]?.error})`);
   const session2 = createLiveSession({ documents: () => documents, folderAllowed: (d: string) => d.toLowerCase().startsWith(documents.toLowerCase()) });
   session2.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 9, plcproj: elsewhere, typeName: 'SM_TableManager' });

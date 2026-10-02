@@ -1,5 +1,5 @@
 const h = require('../lib/harness.cjs');
-// Kval StateScope Link (the built exe) against fake-ams.cjs: pairing, host / input checks, a live session
+// Kval MachineScope Link (the built exe) against fake-ams.cjs: pairing, host / input checks, a live session
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -38,7 +38,7 @@ function session(url, messages, headers = {}, waitMs = 2500) {
   const URL_ = 'ws://127.0.0.1:48961/live';
 
   const page = await new Promise((r) => http.get('http://127.0.0.1:48961/', (res) => { let b = ''; res.on('data', (d) => (b += d)); res.on('end', () => r(b)); }));
-  expect(/Kval StateScope Link/.test(page) && /Pairing code/.test(page), 'its page');
+  expect(/Kval MachineScope Link/.test(page) && /Pairing code/.test(page), 'its page');
   const rebinding = await session(URL_, [], { Host: 'evil.example:48961' });
   expect(rebinding.status === 403, `foreign Host refused (${rebinding.status})`);
   const wrong = await session(URL_, [{ type: 'hello', token: 'AAAAA-BBBBB-CCCCC' }], { Origin: 'https://statescope.example' });

@@ -114,7 +114,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   // Notifications: one per machine
   const notes = await a.evaluate(() => window.__notes);
   const tags = notes.map((n) => n.tag);
-  expect(notes.length >= 4 && new Set(tags).size === tags.length && notes.every((n) => /is stuck/.test(n.title)), `notifications: ${notes.map((n) => n.title.replace('Kval StateScope: ', '')).join(' | ')}`);
+  expect(notes.length >= 4 && new Set(tags).size === tags.length && notes.every((n) => /is stuck/.test(n.title)), `notifications: ${notes.map((n) => n.title.replace('Kval MachineScope: ', '')).join(' | ')}`);
 
   // Clearing a limit: back to the default (1 s: still stuck); clearing the default too: not stuck
   await setLimitFromMenu('TABLEMANAGER_HOMMING_READY_TO_START', '');

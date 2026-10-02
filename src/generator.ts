@@ -1820,10 +1820,10 @@ function buildMermaid(
     }
     // A state no line names yet (no transition, no description, outside the composites): drawn all the same, as the
     // flowchart draws it (a state moved out of its composite, no longer the first member, is still on the canvas)
-    const named = lines.join('\n');
+    const named = new Set(lines.join('\n').match(/\w+/g) ?? []);
     for (const s of Array.from(states).sort()) {
       if (s === 'AnyState' || groups.stateToGroup.has(s) || regions.has(s)) continue;
-      if (!new RegExp(`(^|[^\\w])${san(s)}([^\\w]|$)`, 'm').test(named)) lines.push(`    ${san(s)}`);
+      if (!named.has(san(s))) lines.push(`    ${san(s)}`);
     }
 
     return lines.join('\n');

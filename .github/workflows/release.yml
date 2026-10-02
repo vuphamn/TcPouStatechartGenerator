@@ -4,7 +4,7 @@ name: Release
 # (patch + 1) and a GitHub Release with its installers. An edition without code changes gets no new version.
 #   XAE      tag xae-v*      KvalStateScope.Xae.vsix
 #   Desktop  tag desktop-v*  the installer and the portable exe
-#   Web      tag web-v*      the web app (any static host), the gateway, Kval StateScope Link
+#   Web      tag web-v*      the web app (any static host), the gateway, Kval MachineScope Link
 # Which files belong to which edition: scripts/release-plan.cjs. "[skip release]" in the commit message: no release.
 # Run it by hand (Actions > Release > Run workflow) to release editions even without changes.
 
@@ -121,7 +121,7 @@ jobs:
           node scripts/build-link.cjs
           Compress-Archive -Path dist/* -DestinationPath "out/KvalStateScope-WebApp-$env:WEB_VERSION.zip"
           Compress-Archive -Path release/gateway/* -DestinationPath "out/KvalStateScope-Gateway-$env:WEB_VERSION.zip"
-          Copy-Item "release/link/Kval StateScope Link.exe" "out/KvalStateScope-Link-$env:WEB_VERSION.exe"
+          Copy-Item "release/link/Kval MachineScope Link.exe" "out/KvalStateScope-Link-$env:WEB_VERSION.exe"
 
       - name: Desktop installer
         if: env.DESKTOP == 'true'

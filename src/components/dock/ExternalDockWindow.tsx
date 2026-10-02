@@ -29,7 +29,7 @@ interface ExternalDockWindowProps {
 /** A new window made ready for a tab: the app's style sheets (kept in step), its classes, a root element */
 function setUpWindow(w: Window, title: string) {
   const doc = w.document;
-  doc.title = `${title} - Kval StateScope`;
+  doc.title = `${title} - Kval MachineScope`;
   // The app's style sheets, kept in step (the dev server replaces them on edits)
   const copyStyles = () => {
     doc.head.querySelectorAll('[data-kss-copied]').forEach((n) => n.remove());

@@ -70,7 +70,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   const badge = await a.$eval('#live-plc-lost', (e) => e.textContent + '|' + e.getAttribute('title')).catch(() => '');
   expect(/^1 down\|Stopped answering: Fake line/.test(badge), `Browse closed, its button: "${badge.slice(0, 80)}"`);
   const notes = await a.evaluate(() => window.__notes);
-  expect(notes.length === 1 && /^Kval StateScope: Fake line stopped answering \| Since /.test(notes[0]), `Notify on: a notification (${notes.join(' / ') || 'none'})`);
+  expect(notes.length === 1 && /^Kval MachineScope: Fake line stopped answering \| Since /.test(notes[0]), `Notify on: a notification (${notes.join(' / ') || 'none'})`);
   await a.screenshot({ path: h.out('plc-check-timer.png') });
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

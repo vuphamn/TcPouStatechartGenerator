@@ -1,5 +1,5 @@
 // A PLC's project kept on this computer (desktop app, Link): the TwinCAT project as the PLC keeps it in its boot folder
-// (CurrentConfig.tszip, each PLC / safety project's .tpzip / .tfzip) unpacked into Documents\Kval StateScope\PLC
+// (CurrentConfig.tszip, each PLC / safety project's .tpzip / .tfzip) unpacked into Documents\Kval MachineScope\PLC
 // projects\<project>, as a build's work folder is (it opens in XAE too). A manifest (.kss-plc-project.json) says what
 // was downloaded (the archives' fingerprint, each file's), so going live again knows whether the PLC's project is the
 // same and whether the local copy was edited:
@@ -17,8 +17,14 @@ const MANIFEST = '.kss-plc-project.json';
 const SAFE = (s) => String(s || 'PLC project').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '').slice(0, 80) || 'PLC project';
 const sha1 = (b) => crypto.createHash('sha1').update(b).digest('hex');
 
-/** Documents\Kval StateScope\PLC projects (documents: the host's Documents folder) */
-const baseDirOf = (documents) => path.join(documents || path.join(os.homedir(), 'Documents'), 'Kval StateScope', 'PLC projects');
+/** Documents\Kval MachineScope\PLC projects (documents: the host's Documents folder) */
+// (Documents\Kval StateScope\PLC projects, from before the product was renamed: used while only it is there)
+const baseDirOf = (documents) => {
+  const docs = documents || path.join(os.homedir(), 'Documents');
+  const now = path.join(docs, 'Kval MachineScope', 'PLC projects');
+  const was = path.join(docs, 'Kval StateScope', 'PLC projects');
+  return !fs.existsSync(now) && fs.existsSync(was) ? was : now;
+};
 
 /** Every file under a folder (relative, / separated), the manifest left out */
 function filesIn(dir, rel = '') {

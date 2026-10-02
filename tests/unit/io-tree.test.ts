@@ -184,7 +184,7 @@ expect(op.name === 'OP' && op.ok && bad.name === 'SAFEOP' && !bad.ok && bad.flag
   fs.rmSync(esi, { recursive: true, force: true });
   // The user's pictures: those named for the type (not those of a longer type's name)
   const docs = fs.mkdtempSync(path.join(os.tmpdir(), 'kss-docs-'));
-  const pics = path.join(docs, 'Kval StateScope', 'Devices');
+  const pics = path.join(docs, 'Kval MachineScope', 'Devices');
   fs.mkdirSync(pics, { recursive: true });
   for (const f of ['EL1008.png', 'el1008 front.jpg', 'EL1008-back.webp', 'EL10080.png', 'EL1008.txt']) fs.writeFileSync(path.join(pics, f), 'x');
   const imgs = deviceImages(docs, 'EL1008');

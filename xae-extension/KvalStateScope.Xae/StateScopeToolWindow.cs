@@ -3,13 +3,13 @@ using Microsoft.VisualStudio.Shell;
 
 namespace KvalStateScope.Xae
 {
-    /// <summary>The Kval StateScope document tab</summary>
+    /// <summary>The Kval MachineScope document tab</summary>
     [Guid(PackageGuids.ToolWindowString)]
     public sealed class StateScopeToolWindow : ToolWindowPane
     {
         public StateScopeToolWindow() : base(null)
         {
-            Caption = "Kval StateScope";
+            Caption = "Kval MachineScope";
             Control = new StateScopeControl(this);
             Content = Control;
         }

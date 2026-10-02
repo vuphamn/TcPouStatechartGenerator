@@ -1,6 +1,6 @@
 // A device's details for the I/O tab's properties (read-only, this computer): TwinCAT's device descriptions (the
 // ESI files, Config\Io\EtherCAT\*.xml: its full name, group, vendor and web page), and the user's own pictures of it
-// (Documents\Kval StateScope\Devices\<type>*.png / .jpg / .webp). Beckhoff's files are named by family
+// (Documents\Kval MachineScope\Devices\<type>*.png / .jpg / .webp). Beckhoff's files are named by family
 // ("Beckhoff EL1xxx.xml"): only those that can hold the type are read.
 const fs = require('fs');
 const os = require('os');
@@ -116,7 +116,13 @@ function findDevice(req) {
 const IMAGE = /\.(png|jpe?g|webp|gif)$/i;
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
 /** The user's folder of device pictures (documents: their Documents folder) */
-const devicesDirOf = (documents) => path.join(documents || path.join(os.homedir(), 'Documents'), 'Kval StateScope', 'Devices');
+// (Documents\Kval StateScope\Devices, from before the product was renamed: used while only it is there)
+const devicesDirOf = (documents) => {
+  const docs = documents || path.join(os.homedir(), 'Documents');
+  const now = path.join(docs, 'Kval MachineScope', 'Devices');
+  const was = path.join(docs, 'Kval StateScope', 'Devices');
+  return !fs.existsSync(now) && fs.existsSync(was) ? was : now;
+};
 
 /**
  * The user's pictures of a type (its name at the start of the file's: "EL1008.png", "EL1008 front.jpg",

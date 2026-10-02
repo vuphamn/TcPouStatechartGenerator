@@ -1,4 +1,4 @@
-// Kval StateScope Link's page (http://127.0.0.1:<port>/): the pairing code, the paired pages; a new code only from
+// Kval MachineScope Link's page (http://127.0.0.1:<port>/): the pairing code, the paired pages; a new code only from
 // its own page; another host name refused; started again while it runs: it points at the running one; Start when I
 // sign in (a shortcut in the Startup folder: its command only, KSS_SERVICE_DRYRUN); updates: a newer released Link
 // (a stand-in release list here) found at start, updated by itself (dry run: nothing replaced), Update now, auto off
@@ -56,7 +56,7 @@ const pair = (code) =>
   expect(!!code && /http:\/\/127\.0\.0\.1:48985\//.test(fs.readFileSync(outFile, 'utf8')), `started: code ${code}, its page announced`);
 
   const page = await request('GET', '/');
-  expect(page.status === 200 && /Kval StateScope Link/.test(page.body) && /Pairing code/.test(page.body) && page.headers['x-frame-options'] === 'DENY', 'the page (not framed by other sites)');
+  expect(page.status === 200 && /Kval MachineScope Link/.test(page.body) && /Pairing code/.test(page.body) && page.headers['x-frame-options'] === 'DENY', 'the page (not framed by other sites)');
   let status = JSON.parse((await request('GET', '/status')).body);
   expect(status.code === code && status.clients.length === 0 && status.port === PORT, `status: the code, no pages yet`);
   // Which code it runs: run from source, its stamp computed (the same as the app build's)
@@ -96,7 +96,7 @@ const pair = (code) =>
   expect(pageErrors.length === 0, `no errors in the page ${pageErrors.slice(0, 2).join(' | ')}`);
   // Start when I sign in: off, turned on from the page (the shortcut's command: this Link, minimized, not opening its page)
   const before = JSON.parse((await request('GET', '/status')).body).startup;
-  expect(before.supported && before.on === false && /Startup[\\/]Kval StateScope Link\.lnk$/.test(before.shortcut) && before.shortcut.startsWith(appdata), `startup: off, in this user's Startup folder (${before.shortcut})`);
+  expect(before.supported && before.on === false && /Startup[\\/]Kval MachineScope Link\.lnk$/.test(before.shortcut) && before.shortcut.startsWith(appdata), `startup: off, in this user's Startup folder (${before.shortcut})`);
   expect(/link\.cjs"? --no-open --port 48985$/.test(before.command), `its command: ${before.command}`);
   expect((await request('POST', '/startup', { origin: 'https://evil.example' })).status === 403, 'startup: refused from another origin');
   const vis = () => bp.evaluate(() => ({ on: !document.getElementById('startup-on').hidden, off: !document.getElementById('startup-off').hidden, state: document.getElementById('startup-state').textContent }));

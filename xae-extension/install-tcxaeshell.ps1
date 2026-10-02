@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Installs (or removes) Kval StateScope in TcXaeShell 64-bit without TcXaeShell's VSIXInstaller.
+  Installs (or removes) Kval MachineScope in TcXaeShell 64-bit without TcXaeShell's VSIXInstaller.
 
 .DESCRIPTION
   TcXaeShell's VSIXInstaller.exe can crash with "The type initializer for 'PerTypeValues`1' threw an exception":
@@ -17,7 +17,7 @@
 .EXAMPLE
   .\install-tcxaeshell.ps1 -Uninstall
 .EXAMPLE
-  .\install-tcxaeshell.ps1 -Quiet   (from the Kval StateScope installer: no prompts, the exit code tells the result)
+  .\install-tcxaeshell.ps1 -Quiet   (from the Kval MachineScope installer: no prompts, the exit code tells the result)
 #>
 param(
   # (none given: TwinCAT 4026's 64-bit TcXaeShell with the main VSIX; only 4024's 32-bit one there: it, with the
@@ -42,6 +42,7 @@ if (-not $Vsix) {
 }
 
 $shellExe = Join-Path $ShellRoot 'Common7\IDE\TcXaeShell.exe'
+# (the folder as it was before the product was renamed Kval MachineScope: an update replaces it, not a second copy)
 $target = Join-Path $ShellRoot 'Common7\IDE\Extensions\Kval Inc\Kval StateScope'
 # Touched after a change: TcXaeShell compares its timestamp at start-up and then re-merges the extension registrations
 $marker = Join-Path $ShellRoot 'Common7\IDE\Extensions\extensions.configurationchanged'
@@ -100,5 +101,5 @@ if (Test-Admin) {
 }
 if (-not $Uninstall -and -not (Test-Path (Join-Path $target 'KvalStateScope.Xae.pkgdef'))) { throw "Install failed: nothing in $target" }
 
-if ($Uninstall) { Write-Host 'Kval StateScope removed from TcXaeShell. It is gone after the next TcXaeShell start.' }
-else { Write-Host "Kval StateScope installed in TcXaeShell ($target). Start TcXaeShell and right-click a .TcPOU (or use Tools > Kval StateScope...)." }
+if ($Uninstall) { Write-Host 'Kval MachineScope removed from TcXaeShell. It is gone after the next TcXaeShell start.' }
+else { Write-Host "Kval MachineScope installed in TcXaeShell ($target). Start TcXaeShell and right-click a .TcPOU (or use Tools > Kval MachineScope...)." }

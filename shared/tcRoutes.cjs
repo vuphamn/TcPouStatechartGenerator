@@ -1,7 +1,7 @@
 // Add Route from the Live tab's Browse (desktop app, Link): on the PLC, a route to this computer; and, when TwinCAT
 // runs on this computer too (both), the route pair XAE's Add Route makes: on the PLC for this computer's TwinCAT
 // router (its NetId), and in that router for the PLC (with this computer's Windows user: the same UDP Add Route
-// request, sent to this computer's own TwinCAT). StateScope then reaches the PLC through the router, as XAE does.
+// request, sent to this computer's own TwinCAT). MachineScope then reaches the PLC through the router, as XAE does.
 // The passwords are only passed on, never kept.
 const os = require('os');
 const { addRoute } = require('./tcDiscovery.cjs');
@@ -35,7 +35,7 @@ async function addRoutes(req, { port = Number(process.env.KSS_DISCOVERY_PORT) ||
   // 2. In this computer's router: a route to the PLC (this computer's Windows user)
   const here = await addRoute({ plcIp: '127.0.0.1', localNetId: plcNetId, hostAddress: plcIp, routeName: String(req.plcName || plcIp).replace(/[^\w .()-]/g, '').slice(0, 60) || plcIp, user: String(req.localUser ?? ''), password: String(req.localPassword ?? ''), port });
   if (!here.ok) return { ok: false, both: true, localTwinCat: router, message: `On the PLC: added (for this PC's TwinCAT, ${router}). On this PC: ${here.message}` };
-  return { ok: true, both: true, localTwinCat: router, message: `Added both ways, as XAE does: on the PLC for this PC's TwinCAT (${router}, ${hostAddress}), and here for the PLC (${plcNetId}, ${plcIp}). XAE and StateScope both reach it.` };
+  return { ok: true, both: true, localTwinCat: router, message: `Added both ways, as XAE does: on the PLC for this PC's TwinCAT (${router}, ${hostAddress}), and here for the PLC (${plcNetId}, ${plcIp}). XAE and MachineScope both reach it.` };
 }
 
 module.exports = { addRoutes };

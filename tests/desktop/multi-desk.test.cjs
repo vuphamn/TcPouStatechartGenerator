@@ -53,7 +53,7 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-multi.json'), JSON.stringify({
   await sleep(1500);
   expect((await appPages()).length === 2, 'the same POU again: no new window');
   const titles = await Promise.all((await appPages()).map((p) => p.title()));
-  expect(titles.includes('SM_DoorDasher - Kval StateScope') && titles.includes('SM_TableManager - Kval StateScope'), `window titles: ${titles.join(' | ')}`);
+  expect(titles.includes('SM_DoorDasher - Kval MachineScope') && titles.includes('SM_TableManager - Kval MachineScope'), `window titles: ${titles.join(' | ')}`);
 
   // Live in both windows at once
   const goLive = async (p, instance) => {

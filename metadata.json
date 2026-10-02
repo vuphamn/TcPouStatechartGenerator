@@ -1,6 +1,6 @@
 {
-  "name": "Kval StateScope",
-  "description": "Generates Mermaid stateDiagram-v2 and flowchart diagrams from Beckhoff TwinCAT PLC state machines (.TcPOU and .TcDUT files).",
+  "name": "Kval MachineScope",
+  "description": "Design, simulate and debug TwinCAT state machines and their I/O, live on the PLC.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

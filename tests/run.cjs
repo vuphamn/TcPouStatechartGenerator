@@ -55,6 +55,14 @@ for (let i = 0; i < argv.length; i++) {
 if (suites.length === 0) suites = ['unit', 'web', 'live'];
 if (suites.includes('all')) suites = ['unit', 'web', 'live', 'desktop'];
 const TIMEOUT = { unit: 120000, web: 300000, live: 180000, desktop: 600000 };
+// A long test's own limit: '// runner-timeout: <seconds>' in its first lines (ms; 0: none)
+const ownTimeout = (file) => {
+  try {
+    return Number(fs.readFileSync(file, 'utf8').slice(0, 2000).match(/runner-timeout:\s*(\d+)/)?.[1] ?? 0) * 1000;
+  } catch {
+    return 0;
+  }
+};
 
 const files = (suite, ext) =>
   fs.existsSync(path.join(__dirname, suite))
@@ -189,14 +197,12 @@ function failuresOf(log) {
             console.log(`  x ${name} (does not build)`);
             return;
           }
-          r = await run(process.execPath, [bundle], { timeout: TIMEOUT.unit, log });
+          r = await run(process.execPath, [bundle], { timeout: ownTimeout(path.join(__dirname, suite, f)) || TIMEOUT.unit, log });
         } else {
           // (the built app has no /src/: a test importing from it gets the dev server)
           const needsDev = preview && app && !GIVEN_URL && fs.readFileSync(path.join(__dirname, suite, f), 'utf8').includes("'/src/");
           if (needsDev && !devApp) devApp = await (devStarting ??= startApp({ dev: true }));
-          // (a long test: its own limit, '// runner-timeout: <seconds>' in its first lines)
-          const own = Number(fs.readFileSync(path.join(__dirname, suite, f), 'utf8').slice(0, 2000).match(/runner-timeout:\s*(\d+)/)?.[1]) * 1000;
-          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: own || TIMEOUT[suite] || 300000, log });
+          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: ownTimeout(path.join(__dirname, suite, f)) || TIMEOUT[suite] || 300000, log });
         }
         const text = fs.readFileSync(log, 'utf8');
         // A test fails on a non-zero exit, and on any "FAIL" line (some tests only print them)

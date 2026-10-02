@@ -1,6 +1,6 @@
-# Kval StateScope gateway
+# Kval MachineScope gateway
 
-The gateway lets the **web edition** of Kval StateScope follow state machines in running PLCs. It runs on one machine in the PLC network, for example a server or an industrial PC. It does two things:
+The gateway lets the **web edition** of Kval MachineScope follow state machines in running PLCs. It runs on one machine in the PLC network, for example a server or an industrial PC. It does two things:
 
 - serves the web app over HTTPS, so people open `https://<gateway>:8443/` in a browser and install nothing;
 - gives the app's **Live** tab read-only access, over ADS, to the PLCs listed in its configuration.
@@ -9,7 +9,7 @@ The gateway lets the **web edition** of Kval StateScope follow state machines in
 browser ──HTTPS / WSS (token)──► gateway ──ADS (TCP 48898)──► PLC 1, PLC 2, ...
 ```
 
-For a single person on a computer that can reach the PLC, the local helper [Kval StateScope Link](../link/README.md) is simpler: no server, and the web app's *Via: This computer* option.
+For a single person on a computer that can reach the PLC, the local helper [Kval MachineScope Link](../link/README.md) is simpler: no server, and the web app's *Via: This computer* option.
 
 **What it does and doesn't do:**
 - **PLCs:** browsers can only choose from the PLCs in `config.json`, never an arbitrary address.

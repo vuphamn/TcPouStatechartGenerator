@@ -156,7 +156,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       type="button"
       onClick={onOpenReleaseNotes}
       className="flex items-center gap-1 shrink-0 text-slate-500 hover:text-slate-200"
-      title={`Kval StateScope ${host} edition${version ? ` ${version}` : ''}: the release notes (change history)`}
+      title={`Kval MachineScope ${host} edition${version ? ` ${version}` : ''}: the release notes (change history)`}
     >
       <CircleDot className="w-3 h-3" /> {host}
       {version && <span className="font-mono">{version}</span>}

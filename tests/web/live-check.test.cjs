@@ -56,7 +56,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   await a.click('#live-check-copy');
   await sleep(200);
   const copied = await a.evaluate(() => window.__copied);
-  expect(/^Kval StateScope connection check: 10\.9\.9\.9\.1\.1 at 127\.0\.0\.1:48972/.test(copied) && /\[X\]  The AMS NetId does not match/.test(copied) && /=> The AMS NetId does not match/.test(copied), `Copy: the check as text (${copied.split('\n').length} lines)`);
+  expect(/^Kval MachineScope connection check: 10\.9\.9\.9\.1\.1 at 127\.0\.0\.1:48972/.test(copied) && /\[X\]  The AMS NetId does not match/.test(copied) && /=> The AMS NetId does not match/.test(copied), `Copy: the check as text (${copied.split('\n').length} lines)`);
   await a.click('#live-check-fix');
   await sleep(300);
   const target = await a.$eval('#live-netid-input', (e) => e.value);

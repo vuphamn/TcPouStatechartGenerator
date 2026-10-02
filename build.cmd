@@ -1,8 +1,8 @@
 @echo off
 rem Builds everything the Desktop installer ships, then the installer itself:
 rem   1. the TwinCAT XAE extension (VSIX for Visual Studio 2022 / 2026 and TcXaeShell), which also builds the web app
-rem   2. Kval StateScope Link and the gateway (the web edition's live view helpers), staged for the installer
-rem   3. the Desktop installer and portable exe (release\Kval StateScope Setup <version>.exe)
+rem   2. Kval MachineScope Link and the gateway (the web edition's live view helpers), staged for the installer
+rem   3. the Desktop installer and portable exe (release\Kval MachineScope Setup <version>.exe)
 rem
 rem   build.cmd            everything
 rem   build.cmd noxae      keep the existing VSIX (a PC without Visual Studio's build tools)
@@ -28,7 +28,7 @@ if /i "%~1"=="noxae" (
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0xae-extension\build.ps1" || exit /b 1
 )
 
-echo === [2/3] Kval StateScope Link, gateway and the installer's components
+echo === [2/3] Kval MachineScope Link, gateway and the installer's components
 node scripts\prepare-installer.cjs || exit /b 1
 
 echo === [3/3] Desktop installer

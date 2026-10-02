@@ -1,6 +1,6 @@
 /**
  * What the code editors can ask of the app (they are rendered in several places, so the app registers it here
- * instead of passing it down): open a POU type from Go to Definition, in StateScope (XAE, desktop) or in TwinCAT's
+ * instead of passing it down): open a POU type from Go to Definition, in MachineScope (XAE, desktop) or in TwinCAT's
  * editor (XAE), a member of it too; the names a method's code sees (completion, the undeclared check); rename a
  * variable; declare variables in the POU.
  */
