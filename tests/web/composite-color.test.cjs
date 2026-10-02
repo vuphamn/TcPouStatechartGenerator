@@ -36,14 +36,20 @@ const MIME = 'application/x-kss-statechart-element';
   // Two composites from the palette: Clamp around CLAMPED, Unclamp around UNCLAMP_START
   const addComposite = async (state, name) => {
     await goTo(state);
-    const b = await box(state);
-    await p.evaluate((x, y, MIME) => {
-      const dt = new DataTransfer();
-      dt.setData(MIME, 'composite');
-      const el = document.elementFromPoint(x, y);
-      for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }));
-    }, b.x, b.y, MIME);
-    await p.waitForSelector('#text-prompt-input', { timeout: 5000 });
+    // (a slow machine: the canvas may still be panning to it when its place is read: read again, dropped again)
+    let prompt = null;
+    for (let k = 0; k < 3 && !prompt; k++) {
+      if (k) await h.sleep(800);
+      const b = await box(state);
+      await p.evaluate((x, y, MIME) => {
+        const dt = new DataTransfer();
+        dt.setData(MIME, 'composite');
+        const el = document.elementFromPoint(x, y);
+        for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }));
+      }, b.x, b.y, MIME);
+      prompt = await p.waitForSelector('#text-prompt-input', { timeout: 5000 }).catch(() => null);
+    }
+    if (!prompt) await p.waitForSelector('#text-prompt-input', { timeout: 1000 });
     await p.evaluate(() => document.getElementById('text-prompt-input').select());
     await p.keyboard.type(name);
     await p.keyboard.press('Enter');
