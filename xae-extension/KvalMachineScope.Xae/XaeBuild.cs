@@ -5,7 +5,7 @@ using Microsoft.VisualStudio.Shell;
 // (the Visual Studio 2017 SDK also has a Shell.Task)
 using Task = System.Threading.Tasks.Task;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Build (the app's Live tab, XAE edition): XAE's own build of the open solution, its Error List sent back to the
@@ -13,7 +13,7 @@ namespace KvalStateScope.Xae
     ///   app -> host: buildProject { requestId }
     ///   host -> app: plcBuildProgress { requestId, text }, xaeBuildResult { requestId, ok, errors, warnings, items, fatal }
     /// </summary>
-    internal sealed partial class StateScopeControl
+    internal sealed partial class MachineScopeControl
     {
         private EnvDTE.BuildEvents _buildEvents;
         private int _buildRequest = -1;

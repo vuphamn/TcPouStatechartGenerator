@@ -3,9 +3,9 @@ using System.IO;
 using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("KvalStateScope.Xae.Tests")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("KvalMachineScope.Xae.Tests")]
 
-namespace KvalStateScope.Xae.Tests
+namespace KvalMachineScope.Xae.Tests
 {
     /// <summary>The PLC project's files as XAE sends them to the app: a small project folder made for each test</summary>
     [TestClass]

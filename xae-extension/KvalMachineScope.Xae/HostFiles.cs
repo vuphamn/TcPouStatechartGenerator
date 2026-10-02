@@ -8,7 +8,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>A .TcDUT next to (or below) the .TcPOU; the web app picks the one whose enum matches doState()</summary>
     internal sealed class DutFile
@@ -143,7 +143,7 @@ namespace KvalStateScope.Xae
         /// Writes edited files back. A file of an open TwinCAT project goes through the Automation Interface
         /// (DocumentXml), so XAE's project is updated and TwinCAT writes the file; other files are written directly.
         /// Refused when XAE holds unsaved changes for a file, or when it changed in XAE / on disk since MachineScope loaded it
-        /// (unless Force). A copy of each original is kept under %LocalAppData%\KvalStateScope\Backups.
+        /// (unless Force). A copy of each original is kept under %LocalAppData%\KvalMachineScope\Backups.
         /// Returns null on success, else the reason; <paramref name="viaXae"/> lists the files written through XAE.
         /// </summary>
         public static string Save(IServiceProvider services, IList<SaveRequest> files, out List<string> viaXae)
@@ -169,7 +169,7 @@ namespace KvalStateScope.Xae
             }
 
             var backupDir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "KvalStateScope", "Backups", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                "KvalMachineScope", "Backups", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
             Directory.CreateDirectory(backupDir);
             foreach (var f in files)
             {

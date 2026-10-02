@@ -3,36 +3,36 @@
   <Extern href="stdidcmd.h" />
   <Extern href="vsshlids.h" />
 
-  <Commands package="guidKvalStateScopePackage">
+  <Commands package="guidKvalMachineScopePackage">
     <Groups>
       <!-- Right-click on a project item (Solution Explorer); extra parents are added in CommandPlacements -->
-      <Group guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
+      <Group guid="guidKvalMachineScopeCmdSet" id="grpContext" priority="0x0200">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
       </Group>
-      <Group guid="guidKvalStateScopeCmdSet" id="grpTools" priority="0x0600">
+      <Group guid="guidKvalMachineScopeCmdSet" id="grpTools" priority="0x0600">
         <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
       </Group>
     </Groups>
 
     <Buttons>
-      <Button guid="guidKvalStateScopeCmdSet" id="cmdOpenSelected" priority="0x0100" type="Button">
-        <Parent guid="guidKvalStateScopeCmdSet" id="grpContext" />
+      <Button guid="guidKvalMachineScopeCmdSet" id="cmdOpenSelected" priority="0x0100" type="Button">
+        <Parent guid="guidKvalMachineScopeCmdSet" id="grpContext" />
         <CommandFlag>DynamicVisibility</CommandFlag>
         <CommandFlag>DefaultInvisible</CommandFlag>
         <Strings>
           <ButtonText>Open in Kval MachineScope</ButtonText>
-          <CanonicalName>KvalStateScope.OpenSelected</CanonicalName>
-          <LocCanonicalName>KvalStateScope.OpenSelected</LocCanonicalName>
+          <CanonicalName>KvalMachineScope.OpenSelected</CanonicalName>
+          <LocCanonicalName>KvalMachineScope.OpenSelected</LocCanonicalName>
         </Strings>
       </Button>
-      <Button guid="guidKvalStateScopeCmdSet" id="cmdOpenFromTools" priority="0x0100" type="Button">
-        <Parent guid="guidKvalStateScopeCmdSet" id="grpTools" />
-        <!-- Command Window: KvalStateScope.Open C:\Path\SM_X.TcPOU -->
+      <Button guid="guidKvalMachineScopeCmdSet" id="cmdOpenFromTools" priority="0x0100" type="Button">
+        <Parent guid="guidKvalMachineScopeCmdSet" id="grpTools" />
+        <!-- Command Window: KvalMachineScope.Open C:\Path\SM_X.TcPOU -->
         <CommandFlag>AllowParams</CommandFlag>
         <Strings>
           <ButtonText>Kval MachineScope...</ButtonText>
-          <CanonicalName>KvalStateScope.Open</CanonicalName>
-          <LocCanonicalName>KvalStateScope.Open</LocCanonicalName>
+          <CanonicalName>KvalMachineScope.Open</CanonicalName>
+          <LocCanonicalName>KvalMachineScope.Open</LocCanonicalName>
         </Strings>
       </Button>
     </Buttons>
@@ -40,18 +40,18 @@
 
   <CommandPlacements>
     <!-- Right-click on an open document's tab (e.g. a POU opened in the TwinCAT editor) -->
-    <CommandPlacement guid="guidKvalStateScopeCmdSet" id="grpContext" priority="0x0200">
+    <CommandPlacement guid="guidKvalMachineScopeCmdSet" id="grpContext" priority="0x0200">
       <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_EZDOCWINTAB" />
     </CommandPlacement>
     <!--
       TwinCAT's PLC tree: the POU context menu ("PlcFile") gets the command at run time, by name
-      (OpenInStateScopeCommand.AddToTwinCATPouMenu): its numeric id is internal to Beckhoff's package.
+      (OpenInMachineScopeCommand.AddToTwinCATPouMenu): its numeric id is internal to Beckhoff's package.
     -->
   </CommandPlacements>
 
   <Symbols>
-    <GuidSymbol name="guidKvalStateScopePackage" value="{e0718790-a072-4c96-ba71-67161c7fdaa6}" />
-    <GuidSymbol name="guidKvalStateScopeCmdSet" value="{98c96b86-2fe9-4ee8-b8c5-1bcb0d95d6c5}">
+    <GuidSymbol name="guidKvalMachineScopePackage" value="{e0718790-a072-4c96-ba71-67161c7fdaa6}" />
+    <GuidSymbol name="guidKvalMachineScopeCmdSet" value="{98c96b86-2fe9-4ee8-b8c5-1bcb0d95d6c5}">
       <IDSymbol name="grpContext" value="0x1020" />
       <IDSymbol name="grpTools" value="0x1021" />
       <IDSymbol name="cmdOpenSelected" value="0x0100" />

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>A MachineScope tab that the relay can send an app message to</summary>
     internal interface ISaveAllTab

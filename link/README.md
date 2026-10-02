@@ -14,14 +14,14 @@ Use it when the web edition runs on a computer that can reach the PLC. When a te
 npm run build:link
 ```
 
-This builds `release/link/Kval MachineScope Link.exe`. It's a single file that needs no Node.js on the laptop: the bundle is packed into a copy of `node.exe`, which is why it's about 90 MB. `release/link/statescope-link.cjs` is the same program as one plain JavaScript file, runnable with `node`.
+This builds `release/link/Kval MachineScope Link.exe`. It's a single file that needs no Node.js on the laptop: the bundle is packed into a copy of `node.exe`, which is why it's about 90 MB. `release/link/machinescope-link.cjs` is the same program as one plain JavaScript file, runnable with `node`.
 
 **Signing:** packing the bundle into `node.exe` invalidates Node's own signature, so Windows treats the exe as unsigned. SmartScreen may warn when it's downloaded. Sign it with your company's code-signing certificate before handing it out (`signtool sign /fd sha256 ...`).
 
 ## Use
 
 1. **Start `Kval MachineScope Link.exe`** and keep its window open while you go live. It opens **its page** in your browser, `http://127.0.0.1:48960/`, which shows:
-   - the **pairing code**, with a *Copy* button (the code is kept in `%APPDATA%\KvalStateScope\link.json`);
+   - the **pairing code**, with a *Copy* button (the code is kept in `%APPDATA%\KvalMachineScope\link.json`);
    - the **paired pages**: each web app page connected to Link, since when, and the variable it follows;
    - **Make a new code**: pages paired with the old code have to enter the new one;
    - **Start when I sign in**: a shortcut in your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) starts Link minimized, without its page, each time you sign in to Windows. It's per user and needs no administrator. *Don't start when I sign in* removes the shortcut.

@@ -21,7 +21,7 @@
 #>
 param(
   # (none given: TwinCAT 4026's 64-bit TcXaeShell with the main VSIX; only 4024's 32-bit one there: it, with the
-  # Visual Studio 2017 build, KvalStateScope.Xae.Vs2017.vsix, NOT YET TESTED in it)
+  # Visual Studio 2017 build, KvalMachineScope.Xae.Vs2017.vsix, NOT YET TESTED in it)
   [string]$Vsix = '',
   [string]$ShellRoot = '',
   [switch]$Uninstall,
@@ -38,12 +38,11 @@ if (-not $ShellRoot) {
   $ShellRoot = if (-not (Test-Path (Join-Path $shell4026 'Common7\IDE\TcXaeShell.exe')) -and (Test-Path (Join-Path $shell4024 'Common7\IDE\TcXaeShell.exe'))) { $shell4024 } else { $shell4026 }
 }
 if (-not $Vsix) {
-  $Vsix = if ($ShellRoot -like '*Program Files (x86)*') { Join-Path $PSScriptRoot 'KvalStateScope.Xae.Vs2017\bin\Release\KvalStateScope.Xae.Vs2017.vsix' } else { Join-Path $PSScriptRoot 'KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix' }
+  $Vsix = if ($ShellRoot -like '*Program Files (x86)*') { Join-Path $PSScriptRoot 'KvalMachineScope.Xae.Vs2017\bin\Release\KvalMachineScope.Xae.Vs2017.vsix' } else { Join-Path $PSScriptRoot 'KvalMachineScope.Xae\bin\Release\KvalMachineScope.Xae.vsix' }
 }
 
 $shellExe = Join-Path $ShellRoot 'Common7\IDE\TcXaeShell.exe'
-# (the folder as it was before the product was renamed Kval MachineScope: an update replaces it, not a second copy)
-$target = Join-Path $ShellRoot 'Common7\IDE\Extensions\Kval Inc\Kval StateScope'
+$target = Join-Path $ShellRoot 'Common7\IDE\Extensions\Kval Inc\Kval MachineScope'
 # Touched after a change: TcXaeShell compares its timestamp at start-up and then re-merges the extension registrations
 $marker = Join-Path $ShellRoot 'Common7\IDE\Extensions\extensions.configurationchanged'
 if (-not (Test-Path $shellExe)) {
@@ -99,7 +98,7 @@ if (Test-Admin) {
   $p = Start-Process powershell.exe -Verb RunAs -ArgumentList $copyArgs -Wait -PassThru
   if ($p.ExitCode -ne 0) { throw 'Copying into the TcXaeShell folder failed (or the UAC prompt was declined).' }
 }
-if (-not $Uninstall -and -not (Test-Path (Join-Path $target 'KvalStateScope.Xae.pkgdef'))) { throw "Install failed: nothing in $target" }
+if (-not $Uninstall -and -not (Test-Path (Join-Path $target 'KvalMachineScope.Xae.pkgdef'))) { throw "Install failed: nothing in $target" }
 
 if ($Uninstall) { Write-Host 'Kval MachineScope removed from TcXaeShell. It is gone after the next TcXaeShell start.' }
 else { Write-Host "Kval MachineScope installed in TcXaeShell ($target). Start TcXaeShell and right-click a .TcPOU (or use Tools > Kval MachineScope...)." }

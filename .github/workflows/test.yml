@@ -30,7 +30,7 @@ jobs:
         run: node tests/run.cjs unit
       # The XAE extension's code that needs no Visual Studio (the PLC project files it sends the app)
       - name: XAE extension tests (C#)
-        run: dotnet test xae-extension/KvalStateScope.Xae.Tests
+        run: dotnet test xae-extension/KvalMachineScope.Xae.Tests
       # The web app the gateway serves (dist/): the live suite's board and setup pages open it in a browser
       - name: Build
         run: npm run build

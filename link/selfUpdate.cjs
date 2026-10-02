@@ -29,14 +29,14 @@ function compareVersions(a, b) {
 
 /** The newest released Link: { version, tag, url, size, sha256, page } or null (none) */
 async function latestRelease() {
-  const r = await fetch(RELEASES(), { headers: { 'User-Agent': 'KvalStateScope-Link', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20000) });
+  const r = await fetch(RELEASES(), { headers: { 'User-Agent': 'KvalMachineScope-Link', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20000) });
   if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
   const list = await r.json();
   let best = null;
   for (const rel of Array.isArray(list) ? list : []) {
     if (rel.draft || rel.prerelease) continue;
     const m = /^web-v(\d+\.\d+\.\d+)$/.exec(rel.tag_name ?? '');
-    const asset = (rel.assets ?? []).find((a) => /^KvalStateScope-Link-[\d.]+\.exe$/i.test(a.name ?? ''));
+    const asset = (rel.assets ?? []).find((a) => /^KvalMachineScope-Link-[\d.]+\.exe$/i.test(a.name ?? ''));
     if (!m || !asset) continue;
     if (!best || compareVersions(m[1], best.version) > 0) {
       best = { version: m[1], tag: rel.tag_name, url: asset.browser_download_url, size: asset.size, sha256: /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? '')?.[1]?.toLowerCase() ?? null, page: rel.html_url };
@@ -48,7 +48,7 @@ async function latestRelease() {
 /** The release's Link downloaded to a file of its own, its size and SHA-256 checked: its path */
 async function download(rel) {
   if (!rel.sha256) throw new Error('The release gives no SHA-256 for its Link: download it by hand');
-  const r = await fetch(rel.url, { headers: { 'User-Agent': 'KvalStateScope-Link' }, signal: AbortSignal.timeout(10 * 60000) });
+  const r = await fetch(rel.url, { headers: { 'User-Agent': 'KvalMachineScope-Link' }, signal: AbortSignal.timeout(10 * 60000) });
   if (!r.ok) throw new Error(`The download answered ${r.status}`);
   const data = Buffer.from(await r.arrayBuffer());
   if (Number.isFinite(rel.size) && data.length !== rel.size) throw new Error(`The download is ${data.length} bytes, not ${rel.size}`);

@@ -10,7 +10,7 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Finds the .TcPOU file behind the current selection. TwinCAT's PLC tree is its own hierarchy, so several

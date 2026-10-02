@@ -1,20 +1,20 @@
 using System.Runtime.InteropServices;
 using Microsoft.VisualStudio.Shell;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>The Kval MachineScope document tab</summary>
     [Guid(PackageGuids.ToolWindowString)]
-    public sealed class StateScopeToolWindow : ToolWindowPane
+    public sealed class MachineScopeToolWindow : ToolWindowPane
     {
-        public StateScopeToolWindow() : base(null)
+        public MachineScopeToolWindow() : base(null)
         {
             Caption = "Kval MachineScope";
-            Control = new StateScopeControl(this);
+            Control = new MachineScopeControl(this);
             Content = Control;
         }
 
-        internal StateScopeControl Control { get; }
+        internal MachineScopeControl Control { get; }
 
         protected override void Dispose(bool disposing)
         {

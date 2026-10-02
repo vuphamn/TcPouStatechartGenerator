@@ -62,8 +62,7 @@ export async function detectGatewayOrigin(): Promise<string | null> {
     const res = await fetch('gateway.json', { cache: 'no-store' });
     if (!res.ok) return null;
     const info = (await res.json()) as { gateway?: string };
-    // (its protocol's name: the same since the product was renamed Kval MachineScope)
-    return info.gateway === 'Kval StateScope' || info.gateway === 'Kval MachineScope' ? location.origin : null;
+    return info.gateway === 'Kval MachineScope' ? location.origin : null;
   } catch {
     return null;
   }

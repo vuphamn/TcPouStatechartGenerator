@@ -155,6 +155,17 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const written = await buildFromPlc(client, { edits: [{ plcProject: 'LinePlc', path: 'POUs/SM_Line.TcPOU', content: '<POU Name="SM_Line"><Implementation><ST><![CDATA[x := 1;]]></ST></Implementation></POU>' }], write: 'online' });
   expect(written.ok && written.written === 'online' && written.verified?.ok === true && /runs the code written/.test(written.verified.text), `after the write: ${JSON.stringify(written.verified ?? written.fatal)}`);
   expect(written.plcRun?.ok === true && written.plcRun.state === 'Run', `after the write, the PLC in Run: ${JSON.stringify(written.plcRun)}`);
+  // A PLC on TwinCAT 3.1.4024 with only 4026's XAE here: built by it, said so; with 4024's here too: by 4024's
+  const plc24 = { ...client, readDeviceInfo: async () => ({ majorVersion: 3, minorVersion: 1, versionBuild: 4024, deviceName: 'TwinCAT System' }) };
+  process.env.KSS_XAE_INSTALLED = 'TcXaeShell.DTE.17.0';
+  const on26 = await buildFromPlc(plc24, { edits: [], write: null });
+  expect(on26.xae?.progId === 'TcXaeShell.DTE.17.0' && on26.xae.targetBuild === 4024 && on26.items.some((i: { level: string; text: string }) => i.level === 'warning' && /3\.1\.4024/.test(i.text) && /4024's XAE/.test(i.text)), `a 4024 PLC, only 4026's XAE: built by it, a warning (${JSON.stringify(on26.xae)}; ${on26.items[0]?.text})`);
+  process.env.KSS_XAE_INSTALLED = 'TcXaeShell.DTE.17.0,TcXaeShell.DTE.15.0';
+  const on24 = await buildFromPlc(plc24, { edits: [], write: null });
+  expect(on24.xae?.progId === 'TcXaeShell.DTE.15.0' && !on24.items.some((i: { text: string }) => /3\.1\.4024/.test(i.text)), `both XAEs: 4024's builds it, nothing said (${JSON.stringify(on24.xae)})`);
+  delete process.env.KSS_XAE_INSTALLED;
+  // (4024's XAE for it: a worker of its own, closed again for the counts below)
+  for (const x of xaeOpenList()) if (x.key.endsWith('|TcXaeShell.DTE.15.0')) closeXae(x.key);
   // Not back in Run (the application stopped): said, with the time waited set short
   adsState = 6;
   process.env.KSS_BUILD_RUN_WAIT_MS = '300';
@@ -272,7 +283,7 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const srv = require('http').createServer((req, res) => {
     if (req.url === '/releases') {
       res.setHeader('Content-Type', 'application/json');
-      const asset = (v: string, digest: string) => ({ name: `KvalStateScope-Link-${v}.exe`, browser_download_url: `http://127.0.0.1:${(srv.address() as { port: number }).port}/link-${v}.exe`, size: exe.length, digest });
+      const asset = (v: string, digest: string) => ({ name: `KvalMachineScope-Link-${v}.exe`, browser_download_url: `http://127.0.0.1:${(srv.address() as { port: number }).port}/link-${v}.exe`, size: exe.length, digest });
       return res.end(JSON.stringify([
         { tag_name: 'web-v1.0.2', assets: [asset('1.0.2', `sha256:${sha}`)] },
         { tag_name: 'web-v1.1.0', draft: true, assets: [asset('1.1.0', `sha256:${sha}`)] },

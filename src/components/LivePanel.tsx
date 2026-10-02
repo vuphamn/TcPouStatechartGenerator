@@ -8,6 +8,7 @@ import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { formatLimit, notifyStuck, parseDuration } from '../utils/stateLimits.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
+import { versionWarning } from '../utils/twincatVersions.ts';
 
 export interface LiveStatus {
   state: 'idle' | 'connecting' | 'connected' | 'error' | 'lost' | 'stopped';
@@ -20,6 +21,8 @@ export interface LiveStatus {
   route?: { localNetId: string; localIp: string };
   /** Nothing on the chosen ADS port: the ports that have a PLC */
   ports?: { port: number; state: string }[];
+  /** XAE: the PLC's TwinCAT build and the XAE's (null: not known) */
+  versions?: { plc: number | null; xae: number | null };
   /** Web edition: the PLCs the gateway offers, and who is signed in */
   plcs?: { id: string; name: string }[];
   user?: string;
@@ -433,6 +436,15 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {status.state === 'connected' && <span className="live-dot shrink-0" />}
             <span className="truncate">{status.message || 'Not connected'}</span>
           </span>
+          {/* XAE: the PLC's TwinCAT build beside this XAE's; amber when they are not of one family (4024 / 4026) */}
+          {status.state === 'connected' && status.versions?.plc && (() => {
+            const warn = versionWarning(status.versions.plc, status.versions.xae);
+            return (
+              <span id="live-versions" data-plc={status.versions.plc} data-xae={status.versions.xae ?? undefined} data-warn={warn ? 'true' : undefined} className={`shrink-0 px-1.5 rounded border text-[11px] ${warn ? 'border-amber-500/70 bg-amber-950/60 text-amber-200' : 'border-slate-700 text-slate-400'}`} title={warn ?? `The PLC runs TwinCAT 3.1.${status.versions.plc}${status.versions.xae ? `; this XAE is TwinCAT ${status.versions.xae}'s` : ''}`}>
+                {warn ? '⚠ ' : ''}TwinCAT 3.1.{status.versions.plc}{status.versions.xae ? ` · XAE ${status.versions.xae}` : ''}
+              </span>
+            );
+          })()}
           {status.state === 'connected' && status.plcState === 'Stop' && onStartPlc && !startPlc && (
             <button type="button" id="live-start-plc" onClick={() => setStartPlc({ phase: 'ask', safe: false })} className="shrink-0 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[11px]" title="The PLC application is in Stop: start it (asks first)">
               Start PLC…
@@ -776,7 +788,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 id="live-gateway-input"
                 value={settings.gateway}
                 onChange={(e) => onSettingsChange({ ...settings, gateway: e.target.value.trim() })}
-                placeholder={gatewayOrigin ? `this page's gateway (${new URL(gatewayOrigin).host})` : 'gateway address (e.g. statescope-gw:8443)'}
+                placeholder={gatewayOrigin ? `this page's gateway (${new URL(gatewayOrigin).host})` : 'gateway address (e.g. machinescope-gw:8443)'}
                 title="The Kval MachineScope gateway on the PLC network"
                 className="min-w-0 bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600"
               />

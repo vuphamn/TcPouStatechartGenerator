@@ -803,7 +803,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
         const tt = findTypeTarget([declaration, pouDeclaration], sym, memberOf);
         const opener = tt?.member ? openTypeHandlerFor(tt.type) : null;
         if (tt?.member && opener) {
-          opener.open(tt.type, 'statescope', tt.member);
+          opener.open(tt.type, 'machinescope', tt.member);
           return;
         }
       }
@@ -858,7 +858,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       const typeTarget = findTypeTarget([declaration, pouDeclaration], sym, memberOf);
       const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
       if (typeTarget && opener) {
-        opener.open(typeTarget.type, 'statescope');
+        opener.open(typeTarget.type, 'machinescope');
         return;
       }
 

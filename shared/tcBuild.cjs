@@ -289,7 +289,7 @@ function Open-Kss($r) {
   if ($script:openTsproj) { try { $script:sln.Close($false) } catch { } }
   $script:openTsproj = $null
   Say @{ kind = 'step'; text = 'Opening the project in XAE' }
-  $script:sln.Create($r.dir, 'StateScopeBuild')
+  $script:sln.Create($r.dir, 'MachineScopeBuild')
   $proj = $script:sln.AddFromFile($r.tsproj)
   $script:sm = $proj.Object
   $script:openTsproj = $r.tsproj
@@ -606,7 +606,9 @@ const dropWorkspace = (w) => {
   if (w.ws) fs.rm(w.ws.dir, { recursive: true, force: true }, () => {});
   w.ws = null;
 };
-function xaeWorker(key) {
+function xaeWorker(key, progId = xaeProgId()) {
+  // (one XAE a project and a version: a PLC of another TwinCAT build is built by that build's XAE)
+  key = `${key}|${progId}`;
   let w = workers.get(key);
   if (w) {
     // (the most recently used last)
@@ -621,7 +623,7 @@ function xaeWorker(key) {
     dropWorkspace(oldest[1]);
     workers.delete(oldest[0]);
   }
-  w = new XaeWorker();
+  w = new XaeWorker(progId);
   w.ws = null;
   workers.set(key, w);
   return w;
@@ -693,6 +695,83 @@ function xaeAvailable(progId = xaeProgId()) {
   if (process.platform !== 'win32') return Promise.resolve(false);
   if (dry()) return Promise.resolve(true);
   return new Promise((resolve) => execFile('reg', ['query', `HKCR\\${progId}`], { windowsHide: true }, (err) => resolve(!err)));
+}
+
+/** The XAEs on this computer (their ProgIDs registered); KSS_BUILD_DRYRUN: KSS_XAE_INSTALLED's (comma-separated), else 4026's */
+function installedXaes() {
+  if (dry()) return (process.env.KSS_XAE_INSTALLED || XAE_PROGIDS[0]).split(',').map((s) => s.trim()).filter(Boolean);
+  if (process.platform !== 'win32') return [];
+  return XAE_PROGIDS.filter((id) => {
+    try {
+      execFileSync('reg', ['query', `HKCR\\${id}`], { windowsHide: true, stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+/**
+ * This computer's TwinCAT build (TwinCAT3\System's Build: 4024, 4026, ...), or null; KSS_BUILD_DRYRUN:
+ * KSS_LOCAL_TC_BUILD's
+ */
+let localTcBuild;
+function localTwinCatBuild() {
+  if (dry()) return Number(process.env.KSS_LOCAL_TC_BUILD) || null;
+  if (localTcBuild !== undefined) return localTcBuild;
+  localTcBuild = null;
+  if (process.platform !== 'win32') return localTcBuild;
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Beckhoff\\TwinCAT3\\System', '/v', 'Build'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const m = /Build\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(out);
+    if (m) localTcBuild = parseInt(m[1], 16) || null;
+  } catch {
+    // (no TwinCAT here)
+  }
+  return localTcBuild;
+}
+/**
+ * Each XAE's TwinCAT build: 4024's TcXaeShell (Visual Studio 2017, 32-bit) is 4024; the 64-bit one (Visual Studio
+ * 2022) is 4024's or 4026's, as this computer's TwinCAT is
+ */
+const xaeBuildOf = (progId) => (progId === 'TcXaeShell.DTE.15.0' ? 4024 : progId === 'TcXaeShell.DTE.17.0' ? ((localTwinCatBuild() ?? 4026) >= 4026 ? 4026 : 4024) : null);
+const XAE_BUILDS = new Proxy({}, { get: (_, id) => xaeBuildOf(String(id)) });
+
+/**
+ * The connected PLC's TwinCAT build (its system service's device info: TwinCAT 3.1.4024 → 4024), or null (not
+ * known: an older router, a stand-in)
+ */
+async function targetBuildOf(client, netId = '') {
+  if (!client?.readDeviceInfo) return null;
+  try {
+    const i = await client.readDeviceInfo({ ...(netId ? { amsNetId: netId } : {}), adsPort: 10000 });
+    return i && i.majorVersion === 3 && i.minorVersion === 1 && i.versionBuild > 4000 ? i.versionBuild : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The XAE that builds and writes for a PLC of that TwinCAT build: the one of its build when it is installed (4024.x:
+ * 4024's TcXaeShell, 4026.x: 4026's), else the one there is, with a note why that one (a newer XAE may save the
+ * project in a format 4024's XAE does not open; an older one may not write to a newer runtime). KSS_XAE_PROGID: that
+ * one, always. → { progId, xaeBuild, targetBuild, note }
+ */
+function xaeForTarget(targetBuild) {
+  if (process.env.KSS_XAE_PROGID) return { progId: process.env.KSS_XAE_PROGID, xaeBuild: XAE_BUILDS[process.env.KSS_XAE_PROGID] ?? null, targetBuild, note: null };
+  const installed = installedXaes();
+  const fallback = installed[0] ?? XAE_PROGIDS[0];
+  if (!targetBuild) return { progId: fallback, xaeBuild: XAE_BUILDS[fallback] ?? null, targetBuild: null, note: null };
+  // (its own family's XAE: 4026 and later on a 4026 XAE, older ones on a 4024 one; the 64-bit shell first)
+  const family = (b) => (b >= 4026 ? 4026 : 4024);
+  const wanted = installed.find((id) => xaeBuildOf(id) && family(xaeBuildOf(id)) === family(targetBuild));
+  if (wanted) return { progId: wanted, xaeBuild: xaeBuildOf(wanted), targetBuild, note: null };
+  const xaeBuild = XAE_BUILDS[fallback] ?? null;
+  const note = !installed.length
+    ? null
+    : xaeBuild > targetBuild
+    ? `The PLC runs TwinCAT 3.1.${targetBuild}; only TwinCAT ${xaeBuild}'s XAE is on this computer, so it builds and writes for it. It may save the project in a newer format than ${targetBuild}'s XAE opens: install TwinCAT ${targetBuild >= 4024 ? 4024 : targetBuild}'s XAE here to keep the project as it is.`
+    : `The PLC runs TwinCAT 3.1.${targetBuild}; only TwinCAT ${xaeBuild}'s XAE is on this computer, older than the PLC's runtime: it may not write to it. Install TwinCAT 4026's XAE here.`;
+  return { progId: fallback, xaeBuild, targetBuild, note };
 }
 
 /** TcXaeShell.exe: from its registered automation server (as Start-Kss finds it), or null */
@@ -781,7 +860,9 @@ async function afterWrite(client, written, items, onStep) {
  * (build only), 'online', 'activate'. → { ok, items: [{ level, text, file, line, place }], ... }
  */
 async function buildFromPlc(client, { edits = [], plcProject = '', write = null, netId = '', adsPort = 851, onStep } = {}) {
-  if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
+  // (the XAE of the PLC's own TwinCAT build, when it is here)
+  const xae = xaeForTarget(await targetBuildOf(client, netId));
+  if (!(await xaeAvailable(xae.progId))) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
   // A write that starts the application again (download, activate) on a trial license that ran out would leave the
   // PLC stopped: refused before anything is built; one running out soon: said
   let licenseNote = null;
@@ -794,7 +875,7 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   const archives = await fetchProjectArchives((rel) => readBootFile(client, rel));
   const key = `${netId}|${archives.info?.project?.name ?? ''}`;
   const hash = archivesHash(archives);
-  const w = xaeWorker(`plc|${key}`);
+  const w = xaeWorker(`plc|${key}`, xae.progId);
   w.label = `${archives.info?.project?.name || 'The PLC\'s project'} (from the PLC${netId ? ` ${netId}` : ''})`;
   let ws;
   let changed = false;
@@ -848,7 +929,8 @@ async function buildFromPlc(client, { edits = [], plcProject = '', write = null,
   if (dry()) w.dryUntil = Date.now() + keepMinutes() * 60000;
   const openUntil = openUntilOf(w);
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
-  const result = { ...r, items, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
+  if (xae.note) items.unshift({ level: 'warning', text: xae.note, file: '', line: 0, column: 0, project: '', place: null });
+  const result = { ...r, items, xae: { progId: xae.progId, build: xae.xaeBuild, targetBuild: xae.targetBuild }, plcProject: plc.name, applied: ws.applied, workspace: dry() ? ws.dir : undefined, ...(verified ? { verified } : {}), ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
   delete result.broken;
   return result;
 }
@@ -989,7 +1071,9 @@ function saveIntoProject({ root, plcProject = '', path: rel, content }) {
  * { ok, items, ..., compileInfoCopied, compileInfoFiles: their paths in the project, plcRun }
  */
 async function buildFromProject(client, { file, edits = [], plcProject = '', write = null, netId = '', adsPort = 851, syncCompileInfo = true, onStep } = {}) {
-  if (!(await xaeAvailable())) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
+  // (live: the XAE of the PLC's own TwinCAT build, when it is here)
+  const xae = xaeForTarget(client ? await targetBuildOf(client, netId) : null);
+  if (!(await xaeAvailable(xae.progId))) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
   const root = file ? projectRootOf(file) : null;
   if (!root) return { ok: false, fatal: 'This POU is not in a TwinCAT project folder (no .tsproj above it)', items: [] };
   let licenseNote = null;
@@ -998,7 +1082,7 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
     if (lic?.state === 'expired' && write !== 'online') return { ok: false, fatal: `Nothing was written: ${lic.text}`, items: [], license: lic };
     if (lic && lic.state !== 'ok') licenseNote = lic;
   }
-  const w = xaeWorker(`project|${root.toLowerCase()}`);
+  const w = xaeWorker(`project|${root.toLowerCase()}`, xae.progId);
   w.label = `${path.basename(root)} (a project folder)`;
   onStep?.('Copying the project');
   // (the same project, its copy still open in XAE: only the changed files copied again)
@@ -1069,10 +1153,11 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   const plcRun = r.ok && r.written && client ? await afterWrite(client, r.written, items, onStep) : undefined;
   if (dry()) w.dryUntil = Date.now() + keepMinutes() * 60000;
   const openUntil = openUntilOf(w);
-  const result = { ...r, items, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, compileInfoFiles, ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
+  if (xae.note) items.unshift({ level: 'warning', text: xae.note, file: '', line: 0, column: 0, project: '', place: null });
+  const result = { ...r, items, xae: { progId: xae.progId, build: xae.xaeBuild, targetBuild: xae.targetBuild }, plcProject: plc.name, applied, project: path.basename(ws.tsproj, '.tsproj'), compileInfoCopied, compileInfoFiles, ...(plcRun ? { plcRun } : {}), ...(openUntil ? { xaeOpenUntil: openUntil, xaeOpenProjects: xaeOpenCount(), xaeOpen: xaeOpenList() } : {}) };
   delete result.broken;
   if (dry()) fs.rm(ws.dir, { recursive: true, force: true }, () => {});
   return result;
 }
 
-module.exports = { xaeProgId, XAE_PROGIDS, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Where a function block lives in the running PLC: its instance paths ("MAIN.fbLine.smTable"), found from the

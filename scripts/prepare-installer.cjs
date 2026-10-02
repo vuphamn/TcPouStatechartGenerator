@@ -1,6 +1,6 @@
 // Stages the desktop installer's optional components in release/installer-extras (build/installer.nsh packs them):
-//   KvalStateScope.Xae.vsix, vs-extension.ps1, install-tcxaeshell.ps1   the TwinCAT XAE extension (VS 2022 / 2026, TcXaeShell)
-//   KvalStateScope.Xae.Vs2017.vsix                                     the same for TwinCAT 4024's TcXaeShell (VS 2017 shell)
+//   KvalMachineScope.Xae.vsix, vs-extension.ps1, install-tcxaeshell.ps1   the TwinCAT XAE extension (VS 2022 / 2026, TcXaeShell)
+//   KvalMachineScope.Xae.Vs2017.vsix                                     the same for TwinCAT 4024's TcXaeShell (VS 2017 shell)
 //   link/Kval MachineScope Link.exe                                        the web edition's local helper
 //   gateway/                                                             the gateway, with its runtime dependencies
 // Run after "npm run build" (npm run build:exe does both). The VSIX is built with xae-extension/build.ps1 when missing.
@@ -10,7 +10,7 @@ const { execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const out = path.join(root, 'release', 'installer-extras');
-const vsix = path.join(root, 'xae-extension', 'KvalStateScope.Xae', 'bin', 'Release', 'KvalStateScope.Xae.vsix');
+const vsix = path.join(root, 'xae-extension', 'KvalMachineScope.Xae', 'bin', 'Release', 'KvalMachineScope.Xae.vsix');
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', cwd: root, ...opts });
 
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('dist/ is missing: run "npm run build" first');
@@ -26,26 +26,28 @@ if (!fs.existsSync(vsix)) {
   const newest = (dir, rx) => {
     let t = 0;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (['bin', 'obj', 'StateScopeApp'].includes(e.name)) continue;
+      if (['bin', 'obj', 'MachineScopeApp'].includes(e.name)) continue;
       const f = path.join(dir, e.name);
       if (e.isDirectory()) t = Math.max(t, newest(f, rx));
       else if (rx.test(e.name)) t = Math.max(t, fs.statSync(f).mtimeMs);
     }
     return t;
   };
-  const sources = Math.max(newest(path.join(root, 'xae-extension', 'KvalStateScope.Xae'), /\.(cs|vsct|vsixmanifest|csproj)$/i), newest(path.join(root, 'src'), /\.(tsx?|css)$/i));
+  const sources = Math.max(newest(path.join(root, 'xae-extension', 'KvalMachineScope.Xae'), /\.(cs|vsct|vsixmanifest|csproj)$/i), newest(path.join(root, 'src'), /\.(tsx?|css)$/i));
   if (fs.statSync(vsix).mtimeMs < sources) {
     console.warn('WARNING: the VSIX is older than the extension or app sources. Rebuild it with xae-extension\\build.ps1 to include the latest changes.');
   }
 }
-fs.copyFileSync(vsix, path.join(out, 'KvalStateScope.Xae.vsix'));
+fs.copyFileSync(vsix, path.join(out, 'KvalMachineScope.Xae.vsix'));
 // (the same extension built for TwinCAT 4024's TcXaeShell, the Visual Studio 2017 shell: by build.ps1 with the other)
-const vsix2017 = path.join(root, 'xae-extension', 'KvalStateScope.Xae.Vs2017', 'bin', 'Release', 'KvalStateScope.Xae.Vs2017.vsix');
+const vsix2017 = path.join(root, 'xae-extension', 'KvalMachineScope.Xae.Vs2017', 'bin', 'Release', 'KvalMachineScope.Xae.Vs2017.vsix');
 if (!fs.existsSync(vsix2017)) throw new Error(`${vsix2017} is missing: run xae-extension\\build.ps1`);
 if (fs.statSync(vsix2017).mtimeMs < fs.statSync(vsix).mtimeMs - 10 * 60 * 1000) throw new Error(`${vsix2017} is older than the main VSIX: run xae-extension\\build.ps1`);
-fs.copyFileSync(vsix2017, path.join(out, 'KvalStateScope.Xae.Vs2017.vsix'));
+fs.copyFileSync(vsix2017, path.join(out, 'KvalMachineScope.Xae.Vs2017.vsix'));
 fs.copyFileSync(path.join(root, 'build', 'installer', 'vs-extension.ps1'), path.join(out, 'vs-extension.ps1'));
 fs.copyFileSync(path.join(root, 'xae-extension', 'install-tcxaeshell.ps1'), path.join(out, 'install-tcxaeshell.ps1'));
+// (what the installer set up, checked: read-only; its Start menu shortcut)
+fs.copyFileSync(path.join(root, 'build', 'installer', 'check-install.ps1'), path.join(out, 'check-install.ps1'));
 
 // 2. Kval MachineScope Link (a single exe)
 run(process.execPath, [path.join(root, 'scripts', 'build-link.cjs')]);

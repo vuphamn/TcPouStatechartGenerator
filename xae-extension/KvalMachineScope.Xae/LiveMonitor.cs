@@ -6,7 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Watches one PLC variable over ADS (TwinCAT's own TcAdsDll.dll through the local AMS router) with a change
@@ -95,6 +95,19 @@ namespace KvalStateScope.Xae
             TargetText = $"{FormatNetId(_target.NetId)}:{amsPort}";
             Check(AdsNative.AdsSyncReadStateReqEx(_port, ref _target, out var adsState, out _), $"Connecting to {TargetText}");
             return AdsStateName(adsState);
+        }
+
+        /// <summary>
+        /// The PLC's TwinCAT build (its system service's device info, port 10000: TwinCAT 3.1.4024 gives 4024), or null
+        /// when it does not say (an older router, another system)
+        /// </summary>
+        public int? ReadTwinCatBuild()
+        {
+            if (_port == 0) return null;
+            var system = new AdsNative.AmsAddr { NetId = _target.NetId, Port = 10000 };
+            var name = new byte[17];
+            if (AdsNative.AdsSyncReadDeviceInfoReqEx(_port, ref system, name, out var version) != 0) return null;
+            return version.Version == 3 && version.Revision == 1 && version.Build > 4000 ? version.Build : (int?)null;
         }
 
         /// <summary>The PLC's ADS state now ("Run", "Stop", ...)</summary>
@@ -631,6 +644,15 @@ namespace KvalStateScope.Xae
         public const int ErrInvalidIndexOffset = 0x703;
         public const int ErrSymbolNotFound = 0x710;
 
+        /// <summary>ADS's version: TwinCAT 3.1.4024 is 3, 1, 4024</summary>
+        [StructLayout(LayoutKind.Sequential, Pack = 1)]
+        public struct AdsVersion
+        {
+            public byte Version;
+            public byte Revision;
+            public ushort Build;
+        }
+
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct AmsAddr
         {
@@ -698,6 +720,7 @@ namespace KvalStateScope.Xae
         [DllImport(Dll)] public static extern int AdsGetLocalAddressEx(int port, ref AmsAddr addr);
         [DllImport(Dll)] public static extern int AdsSyncSetTimeoutEx(int port, int ms);
         [DllImport(Dll)] public static extern int AdsSyncReadStateReqEx(int port, ref AmsAddr addr, out ushort adsState, out ushort deviceState);
+        [DllImport(Dll)] public static extern int AdsSyncReadDeviceInfoReqEx(int port, ref AmsAddr addr, byte[] devName, out AdsVersion version);
         [DllImport(Dll)] public static extern int AdsSyncReadReqEx2(int port, ref AmsAddr addr, uint indexGroup, uint indexOffset, uint length, byte[] data, out uint bytesRead);
         [DllImport(Dll)] public static extern int AdsSyncWriteReqEx(int port, ref AmsAddr addr, uint indexGroup, uint indexOffset, uint length, byte[] data);
         [DllImport(Dll)] public static extern int AdsSyncReadWriteReqEx2(int port, ref AmsAddr addr, uint indexGroup, uint indexOffset, uint readLength, byte[] readData, uint writeLength, byte[] writeData, out uint bytesRead);

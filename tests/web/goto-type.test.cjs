@@ -70,7 +70,7 @@ const MENU = '[aria-label="Editor Context Menu"]';
   await h.sleep(400);
   expect(await rightClickAt(p, 'pou-declaration-editor', 'smAxis'), 'POU Editor: the menu on smAxis');
   let list = await items(p);
-  expect(list.some((x) => /^editor-menu-open-type-statescope:Open SM_KAxis in MachineScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis in the TwinCAT editor/.test(x)), `smAxis : SM_KAxis offers its type: ${list.filter((x) => /open-type/.test(x)).join(' | ')}`);
+  expect(list.some((x) => /^editor-menu-open-type-machinescope:Open SM_KAxis in MachineScope/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:Open SM_KAxis in the TwinCAT editor/.test(x)), `smAxis : SM_KAxis offers its type: ${list.filter((x) => /open-type/.test(x)).join(' | ')}`);
   expect(list.some((x) => /Go to Definition.*Highlight in Top Panel/.test(x)), 'Go to Definition on the variable still goes to its declaration');
   await p.click('#editor-menu-open-type-xae');
   expect(await waitSent((m) => m.type === 'openInXae' && m.typeName === 'SM_KAxis'), 'Open in the TwinCAT editor: openInXae SM_KAxis sent');
@@ -117,7 +117,7 @@ const MENU = '[aria-label="Editor Context Menu"]';
   await p.waitForFunction(() => /smAxis : SM_KAxis/.test(document.getElementById('method-declaration-editor')?.value || ''), { timeout: 5000 }).catch(() => {});
   expect(await rightClickAt(p, 'method-declaration-editor', 'smAxis'), 'Method Editor: the menu on smAxis');
   list = await items(p);
-  expect(list.some((x) => /^editor-menu-open-type-statescope:Open SM_KAxis/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:/.test(x)), 'Method Editor: both ways offered');
+  expect(list.some((x) => /^editor-menu-open-type-machinescope:Open SM_KAxis/.test(x)) && list.some((x) => /^editor-menu-open-type-xae:/.test(x)), 'Method Editor: both ways offered');
   await closeMenu(p);
   const before = sent.filter((m) => m.type === 'openPou' && m.typeName === 'SM_KCylinder').length;
   await p.evaluate(() => {

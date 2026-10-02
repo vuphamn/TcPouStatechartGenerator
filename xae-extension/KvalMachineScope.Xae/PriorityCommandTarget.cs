@@ -4,7 +4,7 @@ using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Answers for our commands before any window does. TwinCAT's PLC tree shows its context menu through its own
@@ -13,18 +13,18 @@ namespace KvalStateScope.Xae
     /// </summary>
     internal sealed class PriorityCommandTarget : IOleCommandTarget
     {
-        private readonly KvalStateScopePackage _package;
+        private readonly KvalMachineScopePackage _package;
         private readonly Action<string> _open;
         private DateTime _lastLog = DateTime.MinValue;
         private bool? _lastVisible;
 
-        private PriorityCommandTarget(KvalStateScopePackage package, Action<string> open)
+        private PriorityCommandTarget(KvalMachineScopePackage package, Action<string> open)
         {
             _package = package;
             _open = open;
         }
 
-        public static uint Register(KvalStateScopePackage package, Action<string> open)
+        public static uint Register(KvalMachineScopePackage package, Action<string> open)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!(Package.GetGlobalService(typeof(SVsRegisterPriorityCommandTarget)) is IVsRegisterPriorityCommandTarget registrar)) return 0;

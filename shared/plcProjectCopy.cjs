@@ -8,6 +8,7 @@
 //   the PLC's differs      the app asks: Override (the PLC's written over it), Save to a different location (another
 //                          folder, remembered for the project), or Keep local (used as it is)
 const fs = require('fs');
+const LAYOUT_SUFFIX = require('./pouLayout.cjs').SUFFIX;
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
@@ -18,21 +19,17 @@ const SAFE = (s) => String(s || 'PLC project').replace(/[<>:"/\\|?*\x00-\x1f]/g,
 const sha1 = (b) => crypto.createHash('sha1').update(b).digest('hex');
 
 /** Documents\Kval MachineScope\PLC projects (documents: the host's Documents folder) */
-// (Documents\Kval StateScope\PLC projects, from before the product was renamed: used while only it is there)
-const baseDirOf = (documents) => {
-  const docs = documents || path.join(os.homedir(), 'Documents');
-  const now = path.join(docs, 'Kval MachineScope', 'PLC projects');
-  const was = path.join(docs, 'Kval StateScope', 'PLC projects');
-  return !fs.existsSync(now) && fs.existsSync(was) ? was : now;
-};
+const baseDirOf = (documents) => path.join(documents || path.join(os.homedir(), 'Documents'), 'Kval MachineScope', 'PLC projects');
 
 /** Every file under a folder (relative, / separated), the manifest left out */
 function filesIn(dir, rel = '') {
   const out = [];
   for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
     const r = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) out.push(...filesIn(dir, r));
-    else if (r !== MANIFEST) out.push(r);
+    // (git's folder, the layout files beside the POUs: the developers', not the PLC's)
+    if (e.isDirectory()) {
+      if (e.name !== '.git') out.push(...filesIn(dir, r));
+    } else if (r !== MANIFEST && !e.name.toLowerCase().endsWith(LAYOUT_SUFFIX) && e.name !== '.gitignore' && e.name !== '.gitattributes') out.push(r);
   }
   return out;
 }

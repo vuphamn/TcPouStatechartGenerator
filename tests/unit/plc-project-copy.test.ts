@@ -42,6 +42,13 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   // Again, the PLC unchanged: current, nothing asked
   r = await syncPlcProject(read, { documents });
   expect(r.status === 'current' && r.changes?.length === 0 && r.plcProjects.length === 1, `the same again: current (${r.status})`);
+  // The developers' files in it (the copy committed to git; a POU's layout file beside it): not the PLC's, no changes
+  fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+  fs.writeFileSync(path.join(dir, '.gitignore'), '*.tmp\n');
+  fs.writeFileSync(pou.replace(/\.TcPOU$/, '.machinescope.json'), '{}');
+  r = await syncPlcProject(read, { documents });
+  expect(r.status === 'current' && r.changes?.length === 0, `git's folder, .gitignore and a layout file: not changes (${r.changes?.join()})`);
 
   // Edited here, the PLC unchanged: still current (its edits listed)
   fs.writeFileSync(pou, '<POU Name="SM_TableManager">mine</POU>');
@@ -108,6 +115,16 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const session2 = createLiveSession({ documents: () => documents, folderAllowed: (d: string) => d.toLowerCase().startsWith(documents.toLowerCase()) });
   session2.projectPou((m: (typeof sent)[0]) => sent.push(m), { requestId: 9, plcproj: elsewhere, typeName: 'SM_TableManager' });
   expect(sent[2]?.requestId === 9 && /v2/.test(sent[2].content ?? ''), `Link: a copy saved to a different location in the user's folders (${sent[2]?.error ?? 'read'})`);
+  // A POU's layout file through Link: beside a POU of a kept PLC project only
+  const got2: { type: string; requestId: number; text?: string | null; written?: boolean; error?: string }[] = [];
+  const pouOfCopy = path.join(dir, 'EdgePlc', 'POUs', 'SM_TableManager.TcPOU');
+  session.layoutFile((m: (typeof got2)[0]) => got2.push(m), { requestId: 20, pou: pouOfCopy, text: '{"format":"kval-machinescope-layout"}\n' });
+  session.layoutFile((m: (typeof got2)[0]) => got2.push(m), { requestId: 21, pou: pouOfCopy });
+  session.layoutFile((m: (typeof got2)[0]) => got2.push(m), { requestId: 22, pou: path.join(other, 'EdgePlc', 'POUs', 'SM_TableManager.TcPOU'), text: '{}' });
+  session.layoutFile((m: (typeof got2)[0]) => got2.push(m), { requestId: 23, pou: path.join(dir, 'EdgeSS.tsproj'), text: '{}' });
+  expect(got2[0]?.written === true && fs.existsSync(pouOfCopy.replace(/\.TcPOU$/, '.machinescope.json')), `Link: the layout file written beside the POU (${got2[0]?.error ?? 'written'})`);
+  expect(got2[1]?.requestId === 21 && /kval-machinescope-layout/.test(got2[1].text ?? ''), `Link: and read back (${got2[1]?.error ?? 'read'})`);
+  expect(!!got2[2]?.error && !!got2[3]?.error, `Link: not beside a POU elsewhere, nor beside another file (${got2[2]?.error}; ${got2[3]?.error})`);
 
   fs.rmSync(documents, { recursive: true, force: true });
   console.log(`${fails} failures`);

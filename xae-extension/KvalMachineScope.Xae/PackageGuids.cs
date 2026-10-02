@@ -1,8 +1,8 @@
 using System;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
-    /// <summary>Ids shared with KvalStateScopePackage.vsct</summary>
+    /// <summary>Ids shared with KvalMachineScopePackage.vsct</summary>
     internal static class PackageGuids
     {
         public const string PackageString = "e0718790-a072-4c96-ba71-67161c7fdaa6";

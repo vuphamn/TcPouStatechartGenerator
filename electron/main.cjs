@@ -26,13 +26,6 @@ async function readPouForApp(file) {
 // ---- Windows: one per POU ----
 // One process: a second start (a file opened from Explorer) hands its file over. A POU already open in a window
 // brings that window forward; another one opens in a new window, with its own diagram and live session.
-// The settings where they were before the product was renamed Kval MachineScope (its window places and the page's
-// storage: layouts, recent files, bookmarks): that folder while it is there; not when one is given (--user-data-dir).
-// Before the lock below, which keeps its file there too
-if (!app.commandLine.hasSwitch('user-data-dir')) {
-  const was = path.join(app.getPath('appData'), 'Kval StateScope');
-  if (fs.existsSync(was)) app.setPath('userData', was);
-}
 const isFirstInstance = app.requestSingleInstanceLock();
 if (!isFirstInstance) app.quit();
 /**
@@ -251,14 +244,25 @@ ipcMain.handle('tc:save-source-as', async (event, name, content, defaultDir) => 
   }
 });
 
-ipcMain.handle('tc:save-file', async (event, name, content) => {
+/** Documents\Kval MachineScope\<sub> (made when missing): the user's own files (KSS_DOCUMENTS: the tests' folder) */
+function personalFolder(sub) {
+  const dir = path.join(process.env.KSS_DOCUMENTS || app.getPath('documents'), 'Kval MachineScope', sub);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    // (the dialog starts elsewhere)
+  }
+  return dir;
+}
+ipcMain.handle('tc:save-file', async (event, name, content, opts) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   // A document (HTML, opened after saving), a live recording (JSON) or a table (CSV)
   const recording = /\.json$/i.test(String(name));
   const csv = /\.csv$/i.test(String(name));
   const result = await dialog.showSaveDialog(win, {
     title: recording ? 'Save the live recording' : csv ? 'Save the table' : 'Save the documentation',
-    defaultPath: String(name || 'documentation.html'),
+    // (personal: a live recording, offered in the user's own folder, not the project's: not for git)
+    defaultPath: opts?.personal ? path.join(personalFolder('Recordings'), path.basename(String(name || 'recording.json'))) : String(name || 'documentation.html'),
     filters: [recording ? { name: 'Live recording', extensions: ['json'] } : csv ? { name: 'CSV (Excel)', extensions: ['csv'] } : { name: 'HTML document', extensions: ['html'] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
@@ -272,6 +276,23 @@ ipcMain.handle('tc:save-file', async (event, name, content) => {
 });
 
 // Compare: the committed (git HEAD) version of a file, from its folder's repository
+// A POU's layout file (<POU>.machinescope.json beside it, for git): { text } (null: none yet) or { error }; written:
+// { written } or { error }
+ipcMain.handle('tc:layout-read', (_event, pouPath) => {
+  try {
+    return { text: require('../shared/pouLayout.cjs').readLayoutFile(pouPath) };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+ipcMain.handle('tc:layout-write', (_event, pouPath, text) => {
+  try {
+    return require('../shared/pouLayout.cjs').writeLayoutFile(pouPath, typeof text === 'string' ? text : null);
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('tc:git-show', async (_event, filePath) => {
   const { execFile } = require('child_process');
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { error: 'Not a file of this computer' };
@@ -484,7 +505,7 @@ app.on('before-quit', () => {
 });
 
 // Windows groups taskbar buttons and pins by this id; it must match build.appId in package.json
-if (process.platform === 'win32') app.setAppUserModelId('com.kval.statescope');
+if (process.platform === 'win32') app.setAppUserModelId('com.kval.machinescope');
 
 app.whenReady().then(() => {
   if (!isFirstInstance) return;

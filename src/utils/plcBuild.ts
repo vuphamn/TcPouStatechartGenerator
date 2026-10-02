@@ -36,6 +36,8 @@ export interface PlcBuildResult {
   /** Its paths in the project (Link: the files themselves, compileInfo, to write into the page's project folder) */
   compileInfoFiles?: string[];
   compileInfo?: { path: string; data: string }[];
+  /** The XAE that built it (its ProgID and TwinCAT build) and the PLC's TwinCAT build (null: not known) */
+  xae?: { progId: string; build: number | null; targetBuild: number | null };
   /** XAE kept open for the next build until then (ms since 1970); the projects open in XAE */
   xaeOpenUntil?: number;
   xaeOpenProjects?: number;

@@ -1,5 +1,5 @@
 {
-  "name": "kval-statescope-gateway",
+  "name": "kval-machinescope-gateway",
   "version": "1.0.0",
   "description": "Kval MachineScope gateway: the web edition over HTTPS with read-only live access to configured TwinCAT PLCs (ADS)",
   "private": true,

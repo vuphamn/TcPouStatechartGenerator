@@ -526,7 +526,26 @@ function createLiveSession(hooks = {}) {
     send({ type: 'plcBuildClosed', requestId: Number.isInteger(req?.requestId) ? req.requestId : 0, closed: closeXae(typeof req?.key === 'string' ? req.key : undefined) });
   }
 
-  return { start, stop, watch, browse, sources, ioTree, ecatStates, projectCopy, projectPou, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  /**
+   * A POU's layout file beside it (<POU>.machinescope.json): req { requestId, pou, text? } (text: written; null: removed;
+   * none: read); answered with layoutFileResult { requestId, text } / { written } or { error }. Only for POUs of the
+   * PLC projects kept on this computer, as projectPou
+   */
+  function layoutFile(send, req) {
+    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+    const pou = typeof req?.pou === 'string' ? path.resolve(req.pou) : '';
+    const base = path.resolve(baseDirOf(hooks.documents?.())).toLowerCase() + path.sep;
+    const allowed = pou && /\.TcPOU$/i.test(pou) && (pou.toLowerCase().startsWith(base) || (hooks.folderAllowed && hooks.folderAllowed(path.dirname(pou))));
+    if (!allowed) return send({ type: 'layoutFileResult', requestId, error: 'Not a POU of a PLC project kept on this computer' });
+    try {
+      const { readLayoutFile, writeLayoutFile } = require('./pouLayout.cjs');
+      send({ type: 'layoutFileResult', requestId, ...('text' in (req ?? {}) ? writeLayoutFile(pou, typeof req.text === 'string' ? req.text : null) : { text: readLayoutFile(pou) }) });
+    } catch (err) {
+      send({ type: 'layoutFileResult', requestId, error: err.message });
+    }
+  }
+
+  return { start, stop, watch, browse, sources, ioTree, ecatStates, projectCopy, projectPou, layoutFile, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

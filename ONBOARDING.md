@@ -69,7 +69,7 @@ The app detects its host and uses one bridge per host. Features that need files,
 | Host | Bridge | Notes |
 |---|---|---|
 | Desktop | `window.tcDesktop` from `electron/preload.cjs`, handled by `ipcMain.handle('tc:...')` in `electron/main.cjs` | Full file system and git access |
-| XAE | `postMessage` over WebView2; message types in `src/utils/xaeHost.ts` (`HostMessage` / `AppMessage`), handled in `xae-extension/KvalStateScope.Xae/StateScopeControl.cs` | The extension only serves files MachineScope loaded or files of the loaded POU's PLC project |
+| XAE | `postMessage` over WebView2; message types in `src/utils/xaeHost.ts` (`HostMessage` / `AppMessage`), handled in `xae-extension/KvalMachineScope.Xae/MachineScopeControl.cs` | The extension only serves files MachineScope loaded or files of the loaded POU's PLC project |
 | Web | Browser APIs only (folder picker, downloads); live data via Link or the gateway (`utils/liveGateway.ts`) | No git; "open referenced POU" shows a message |
 
 Examples of wrappers that hide the difference: `utils/projectFiles.ts` (all POUs of a project, save a document), `utils/hostGit.ts` (committed version of a file), `utils/liveHost.ts` (live sessions).
@@ -130,7 +130,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
 - **Line endings.** Many files are CRLF on Windows checkouts. Keep them that way, and make scripted edits CRLF-aware.
 - **Persisted UI state** lives in localStorage, for example `tc_statechart_dock_layout_v1` (and `..._xae` inside XAE), `tc_statechart_diagram_notes_metadata:<POU path>` (notes per POU, so several instances can run at once) and `kss.followSelection`. Saved dock layouts carry a `revision`; bump `LAYOUT_REVISION` in `dockLayout.ts` when the default layout changes, so old layouts are migrated. Clear site data when a layout looks wrong after pulling changes.
 - **Vite watcher.** `vite.config.ts` ignores `release/` and `dist/`. Without that, `build:exe` fails with EPERM while the dev server is running.
-- **Adding a host message** means touching three places: the type in `src/utils/xaeHost.ts`, the `switch` in `StateScopeControl.cs`, and, for desktop, `preload.cjs` plus an `ipcMain.handle` in `main.cjs`.
+- **Adding a host message** means touching three places: the type in `src/utils/xaeHost.ts`, the `switch` in `MachineScopeControl.cs`, and, for desktop, `preload.cjs` plus an `ipcMain.handle` in `main.cjs`.
 
 ## Testing
 
@@ -145,7 +145,7 @@ The **Live** tab follows the POU's state variable in a running PLC over ADS and 
    - right-click a state for Paths, Add transition and Rename, and check the Problems, Paths and Changes tabs;
    - export.
 4. For desktop changes: run `npm run build:exe` (or `build.cmd`) and try `release/Kval MachineScope <version>.exe`. Try installer changes in a virtual machine or on a spare PC: installing replaces an installed Kval MachineScope, and its options change Visual Studio, TcXaeShell and Explorer.
-5. For XAE changes: build with `xae-extension\build.ps1`, then run `tests/xae` (see its README), and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalStateScope\log.txt`.
+5. For XAE changes: build with `xae-extension\build.ps1`, then run `tests/xae` (see its README), and try it in Visual Studio's experimental instance (`/rootsuffix Exp`) on a **copy** of a TwinCAT project, never on a working project. The WebView2 tab can be debugged with F12, and the extension logs to `%LocalAppData%\KvalMachineScope\log.txt`.
 6. Without a PLC, the live view is tested against `tests/fakes/fake-ams2.cjs`, a simulated PLC. It covers symbols, values, notifications, symbol upload and data types, including enums. Test against a real PLC before relying on it.
 
 ## Contributing

@@ -8,7 +8,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Xml.Linq;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// The Live tab's Browse: the PLCs this computer's TwinCAT router has a route to (StaticRoutes.xml), and the TwinCAT

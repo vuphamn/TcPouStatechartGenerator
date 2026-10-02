@@ -7,7 +7,7 @@
 import type { SymbolScope } from './projectSymbols.ts';
 import type { NewVariable } from './pouVariables.ts';
 
-export type OpenTypeWhere = 'statescope' | 'xae';
+export type OpenTypeWhere = 'machinescope' | 'xae';
 
 /** Rename in place (Shift+F6): the field at the name in the editor; done: it closed (its highlights cleared) */
 export interface InlineRename {

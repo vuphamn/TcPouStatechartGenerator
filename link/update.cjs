@@ -14,10 +14,7 @@ const ps = (s) => `'${String(s).replace(/'/g, "''")}'`;
 function installedLink() {
   const candidates = process.env.KSS_INSTALLED_LINK
     ? [process.env.KSS_INSTALLED_LINK]
-    : [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs'), process.env.ProgramFiles]
-        .filter(Boolean)
-        // (the product renamed Kval MachineScope: an earlier install keeps its folder, its Link the new name or the old)
-        .flatMap((root) => ['Kval MachineScope', 'Kval StateScope'].flatMap((dir) => ['Kval MachineScope Link.exe', 'Kval StateScope Link.exe'].map((exe) => path.join(root, dir, 'Link', exe))));
+    : [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Kval MachineScope', 'Link', 'Kval MachineScope Link.exe'), process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Kval MachineScope', 'Link', 'Kval MachineScope Link.exe')].filter(Boolean);
   for (const f of candidates) {
     try {
       if (path.resolve(f).toLowerCase() === path.resolve(process.execPath).toLowerCase()) return null;

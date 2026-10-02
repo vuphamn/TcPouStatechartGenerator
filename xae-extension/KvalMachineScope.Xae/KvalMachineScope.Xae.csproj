@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The extension for TwinCAT 4024's TcXaeShell (the 32-bit Visual Studio 2017 shell) and Visual Studio 2017 / 2019:
-     the same sources as ..\KvalStateScope.Xae, built against the Visual Studio 2017 SDK. Those IDEs ship no WebView2:
-     it goes into the VSIX (its x86 loader too). NOT YET TESTED in a 4024 TcXaeShell. -->
 <Project ToolsVersion="Current" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
-    <MinimumVisualStudioVersion>15.0</MinimumVisualStudioVersion>
+    <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
     <VSToolsPath Condition="'$(VSToolsPath)' == ''">$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)</VSToolsPath>
   </PropertyGroup>
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
@@ -13,10 +10,11 @@
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectTypeGuids>{82b43b9b-a64c-4715-b499-d71e9ca2bd60};{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}</ProjectTypeGuids>
-    <ProjectGuid>{5B0E2D1C-6E43-4C61-9A0E-2F7A1C3D4B58}</ProjectGuid>
+    <ProjectGuid>{D0165791-A4B1-4EEC-B352-052747316C8A}</ProjectGuid>
     <OutputType>Library</OutputType>
-    <RootNamespace>KvalStateScope.Xae</RootNamespace>
-    <AssemblyName>KvalStateScope.Xae</AssemblyName>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>KvalMachineScope.Xae</RootNamespace>
+    <AssemblyName>KvalMachineScope.Xae</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <LangVersion>latest</LangVersion>
     <GeneratePkgDefFile>true</GeneratePkgDefFile>
@@ -24,70 +22,66 @@
     <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
     <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
     <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
-    <!-- WebView2 (the IDE has none) copied into the VSIX; the Visual Studio SDK is the IDE's own -->
-    <IncludeCopyLocalReferencesInVSIXContainer>true</IncludeCopyLocalReferencesInVSIXContainer>
+    <!-- Everything referenced (Visual Studio SDK, WebView2) is provided by the IDE -->
+    <IncludeCopyLocalReferencesInVSIXContainer>false</IncludeCopyLocalReferencesInVSIXContainer>
     <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
     <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <!-- F5 in Visual Studio: run the experimental instance -->
+    <StartAction>Program</StartAction>
+    <StartProgram Condition="'$(DevEnvDir)' != ''">$(DevEnvDir)devenv.exe</StartProgram>
+    <StartArguments>/rootsuffix Exp</StartArguments>
     <DeployExtension>false</DeployExtension>
-    <TargetVsixContainerName>KvalStateScope.Xae.Vs2017.vsix</TargetVsixContainerName>
-    <Src>..\KvalStateScope.Xae\</Src>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE;VS2017</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>false</Optimize>
     <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE;VS2017</DefineConstants>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="$(Src)Properties\AssemblyInfo.cs" Link="Properties\AssemblyInfo.cs" />
-    <Compile Include="$(Src)PackageGuids.cs" Link="PackageGuids.cs" />
-    <Compile Include="$(Src)KvalStateScopePackage.cs" Link="KvalStateScopePackage.cs" />
-    <Compile Include="$(Src)OpenInStateScopeCommand.cs" Link="OpenInStateScopeCommand.cs" />
-    <Compile Include="$(Src)PriorityCommandTarget.cs" Link="PriorityCommandTarget.cs" />
-    <Compile Include="$(Src)SelectionHelper.cs" Link="SelectionHelper.cs" />
-    <Compile Include="$(Src)StateScopeToolWindow.cs" Link="StateScopeToolWindow.cs" />
-    <Compile Include="$(Src)StateScopeControl.cs" Link="StateScopeControl.cs" />
-    <Compile Include="$(Src)HostFiles.cs" Link="HostFiles.cs" />
-    <Compile Include="$(Src)ProjectScan.cs" Link="ProjectScan.cs" />
-    <Compile Include="$(Src)SaveAllRelay.cs" Link="SaveAllRelay.cs" />
-    <Compile Include="$(Src)TwinCATProject.cs" Link="TwinCATProject.cs" />
-    <Compile Include="$(Src)CodeNavigation.cs" Link="CodeNavigation.cs" />
-    <Compile Include="$(Src)LiveMonitor.cs" Link="LiveMonitor.cs" />
-    <Compile Include="$(Src)LiveTargets.cs" Link="LiveTargets.cs" />
-    <Compile Include="$(Src)PlcSearch.cs" Link="PlcSearch.cs" />
-    <Compile Include="$(Src)XaeBuild.cs" Link="XaeBuild.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="PackageGuids.cs" />
+    <Compile Include="KvalMachineScopePackage.cs" />
+    <Compile Include="OpenInMachineScopeCommand.cs" />
+    <Compile Include="PriorityCommandTarget.cs" />
+    <Compile Include="SelectionHelper.cs" />
+    <Compile Include="MachineScopeToolWindow.cs" />
+    <Compile Include="MachineScopeControl.cs" />
+    <Compile Include="HostFiles.cs" />
+    <Compile Include="ProjectScan.cs" />
+    <Compile Include="SaveAllRelay.cs" />
+    <Compile Include="TwinCATProject.cs" />
+    <Compile Include="CodeNavigation.cs" />
+    <Compile Include="LiveMonitor.cs" />
+    <Compile Include="LiveTargets.cs" />
+    <Compile Include="PlcSearch.cs" />
+    <Compile Include="XaeBuild.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </None>
-    <EmbeddedResource Include="$(Src)VSPackage.resx" Link="VSPackage.resx">
+    <EmbeddedResource Include="VSPackage.resx">
       <MergeWithCTO>true</MergeWithCTO>
       <ManifestResourceName>VSPackage</ManifestResourceName>
     </EmbeddedResource>
-    <VSCTCompile Include="$(Src)KvalStateScopePackage.vsct" Link="KvalStateScopePackage.vsct">
+    <VSCTCompile Include="KvalMachineScopePackage.vsct">
       <ResourceName>Menus.ctmenu</ResourceName>
     </VSCTCompile>
-    <Content Include="$(Src)Resources\icon.png" Link="Resources\icon.png">
+    <Content Include="Resources\icon.png">
       <IncludeInVSIX>true</IncludeInVSIX>
     </Content>
-    <!-- The web app (copied from the repo's dist/ by build.ps1 into ..\KvalStateScope.Xae\StateScopeApp) -->
-    <Content Include="$(Src)StateScopeApp\**\*">
-      <Link>StateScopeApp\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    <!-- The Kval MachineScope web app (copied from the repo's dist/ by build.ps1) -->
+    <Content Include="MachineScopeApp\**\*">
       <IncludeInVSIX>true</IncludeInVSIX>
-      <VSIXSubPath>StateScopeApp\%(RecursiveDir)</VSIXSubPath>
-    </Content>
-    <!-- WebView2's native loader for a 32-bit IDE, next to its assemblies -->
-    <Content Include="$(NuGetPackageRoot)microsoft.web.webview2\1.0.2151.40\runtimes\win-x86\native\WebView2Loader.dll">
-      <Link>WebView2Loader.dll</Link>
-      <IncludeInVSIX>true</IncludeInVSIX>
+      <VSIXSubPath>MachineScopeApp\%(RecursiveDir)</VSIXSubPath>
     </Content>
   </ItemGroup>
   <ItemGroup>
@@ -109,14 +103,16 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="15.9.3" ExcludeAssets="runtime">
+    <PackageReference Include="Microsoft.VisualStudio.SDK" Version="17.0.32112.339" ExcludeAssets="runtime">
       <IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.VSSDK.BuildTools" Version="17.14.2142">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2151.40" ExcludeAssets="native;build;buildTransitive" />
+    <!-- Compile against the oldest WebView2 the hosts ship (TcXaeShell: 1.0.2151.40). Each IDE redirects it to its own
+         copy (VS 2022: 1.0.2903.40, VS 2026: 1.0.3967.48), so WebView2 is not shipped: a second copy in the IDE process breaks -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2151.40" ExcludeAssets="runtime;native;build;buildTransitive" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Import Project="$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets" Condition="Exists('$(VSToolsPath)\VSSDK\Microsoft.VsSDK.targets')" />

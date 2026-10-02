@@ -18,8 +18,8 @@ $XaePou = if ($env:KSS_XAE_POU) { $env:KSS_XAE_POU } else {
 $XaePouName = [IO.Path]::GetFileNameWithoutExtension($XaePou)
 $XaeOtherPou = if ($env:KSS_XAE_OTHER_POU) { $env:KSS_XAE_OTHER_POU } else { 'SM_KAxis' }
 $XaeIde = if ($env:KSS_VS_IDE) { $env:KSS_VS_IDE } else { 'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE' }
-$XaeVsix = Join-Path $XaeRepo 'xae-extension\KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix'
-$XaeLog = Join-Path $env:LOCALAPPDATA 'KvalStateScope\log.txt'
+$XaeVsix = Join-Path $XaeRepo 'xae-extension\KvalMachineScope.Xae\bin\Release\KvalMachineScope.Xae.vsix'
+$XaeLog = Join-Path $env:LOCALAPPDATA 'KvalMachineScope\log.txt'
 # The experimental instance this folder started (the user's own IDEs are never touched)
 $XaePidFile = Join-Path $PSScriptRoot '..\.output\xae-exp-pid.txt'
 New-Item -ItemType Directory -Force (Split-Path $XaePidFile) | Out-Null

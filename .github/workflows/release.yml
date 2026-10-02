@@ -2,7 +2,7 @@ name: Release
 
 # After the tests pass on master: each edition whose code changed since its last release gets the next version
 # (patch + 1) and a GitHub Release with its installers. An edition without code changes gets no new version.
-#   XAE      tag xae-v*      KvalStateScope.Xae.vsix
+#   XAE      tag xae-v*      KvalMachineScope.Xae.vsix
 #   Desktop  tag desktop-v*  the installer and the portable exe
 #   Web      tag web-v*      the web app (any static host), the gateway, Kval MachineScope Link
 # Which files belong to which edition: scripts/release-plan.cjs. "[skip release]" in the commit message: no release.
@@ -107,9 +107,9 @@ jobs:
       - name: XAE edition files
         if: env.XAE == 'true'
         run: |
-          Copy-Item xae-extension/KvalStateScope.Xae/bin/Release/KvalStateScope.Xae.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION.vsix"
+          Copy-Item xae-extension/KvalMachineScope.Xae/bin/Release/KvalMachineScope.Xae.vsix "out/KvalMachineScope.Xae-$env:XAE_VERSION.vsix"
           # (TwinCAT 4024's TcXaeShell, Visual Studio 2017 / 2019: not yet tested)
-          Copy-Item xae-extension/KvalStateScope.Xae.Vs2017/bin/Release/KvalStateScope.Xae.Vs2017.vsix "out/KvalStateScope.Xae-$env:XAE_VERSION-vs2017.vsix"
+          Copy-Item xae-extension/KvalMachineScope.Xae.Vs2017/bin/Release/KvalMachineScope.Xae.Vs2017.vsix "out/KvalMachineScope.Xae-$env:XAE_VERSION-vs2017.vsix"
 
       - name: Web edition files
         if: env.WEB == 'true'
@@ -119,9 +119,9 @@ jobs:
           npm install --omit=dev --no-audit --no-fund --loglevel=error
           Pop-Location
           node scripts/build-link.cjs
-          Compress-Archive -Path dist/* -DestinationPath "out/KvalStateScope-WebApp-$env:WEB_VERSION.zip"
-          Compress-Archive -Path release/gateway/* -DestinationPath "out/KvalStateScope-Gateway-$env:WEB_VERSION.zip"
-          Copy-Item "release/link/Kval MachineScope Link.exe" "out/KvalStateScope-Link-$env:WEB_VERSION.exe"
+          Compress-Archive -Path dist/* -DestinationPath "out/KvalMachineScope-WebApp-$env:WEB_VERSION.zip"
+          Compress-Archive -Path release/gateway/* -DestinationPath "out/KvalMachineScope-Gateway-$env:WEB_VERSION.zip"
+          Copy-Item "release/link/Kval MachineScope Link.exe" "out/KvalMachineScope-Link-$env:WEB_VERSION.exe"
 
       - name: Desktop installer
         if: env.DESKTOP == 'true'
@@ -129,7 +129,7 @@ jobs:
           node scripts/prepare-installer.cjs
           npx electron-builder --win --publish never
           Get-ChildItem release -Filter *.exe | ForEach-Object {
-            $name = if ($_.Name -match 'Setup') { "KvalStateScope-Setup-$env:DESKTOP_VERSION.exe" } else { "KvalStateScope-Portable-$env:DESKTOP_VERSION.exe" }
+            $name = if ($_.Name -match 'Setup') { "KvalMachineScope-Setup-$env:DESKTOP_VERSION.exe" } else { "KvalMachineScope-Portable-$env:DESKTOP_VERSION.exe" }
             Copy-Item $_.FullName "out/$name"
           }
 
@@ -137,9 +137,9 @@ jobs:
         run: |
           $sha = '${{ needs.plan.outputs.sha }}'
           $editions = @(
-            @{ id = 'xae'; on = $env:XAE; v = $env:XAE_VERSION; title = 'XAE edition'; files = 'out/KvalStateScope.Xae-*.vsix' },
-            @{ id = 'desktop'; on = $env:DESKTOP; v = $env:DESKTOP_VERSION; title = 'Desktop edition'; files = 'out/KvalStateScope-Setup-*.exe', 'out/KvalStateScope-Portable-*.exe' },
-            @{ id = 'web'; on = $env:WEB; v = $env:WEB_VERSION; title = 'Web edition'; files = 'out/KvalStateScope-WebApp-*.zip', 'out/KvalStateScope-Gateway-*.zip', 'out/KvalStateScope-Link-*.exe' }
+            @{ id = 'xae'; on = $env:XAE; v = $env:XAE_VERSION; title = 'XAE edition'; files = 'out/KvalMachineScope.Xae-*.vsix' },
+            @{ id = 'desktop'; on = $env:DESKTOP; v = $env:DESKTOP_VERSION; title = 'Desktop edition'; files = 'out/KvalMachineScope-Setup-*.exe', 'out/KvalMachineScope-Portable-*.exe' },
+            @{ id = 'web'; on = $env:WEB; v = $env:WEB_VERSION; title = 'Web edition'; files = 'out/KvalMachineScope-WebApp-*.zip', 'out/KvalMachineScope-Gateway-*.zip', 'out/KvalMachineScope-Link-*.exe' }
           )
           # Every edition is tried (one failing does not stop the others); a release that exists already (a rerun)
           # gets its files uploaded again

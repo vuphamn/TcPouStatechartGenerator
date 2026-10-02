@@ -21,7 +21,7 @@ Get-ChildItem (Join-Path $XaeSource $rel) -File | ForEach-Object { Copy-Item $_.
 'test POU folder reset from the original'
 
 # 2. The extension in the experimental instance
-$id = 'KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6'
+$id = 'KvalMachineScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6'
 Start-Process "$XaeIde\VSIXInstaller.exe" -ArgumentList @('/quiet', '/rootSuffix:Exp', "/uninstall:$id") -Wait
 Start-Process "$XaeIde\VSIXInstaller.exe" -ArgumentList @('/quiet', '/rootSuffix:Exp', "`"$XaeVsix`"") -Wait
 Start-Process "$XaeIde\devenv.exe" -ArgumentList @('/rootsuffix', 'Exp', '/updateconfiguration') -Wait
@@ -45,6 +45,6 @@ for ($k = 0; $k -lt 90 -and -not $loaded; $k++) {
 
 # 4. MachineScope on the test POU
 Add-Content $XaeLog '---- xae test launch ----'
-for ($k = 0; $k -lt 10; $k++) { try { $dte.ExecuteCommand('Tools.KvalStateScope.Open', (Join-Path $XaeCopy $XaePou)); 'MachineScope command sent'; break } catch { Start-Sleep 2 } }
+for ($k = 0; $k -lt 10; $k++) { try { $dte.ExecuteCommand('Tools.KvalMachineScope.Open', (Join-Path $XaeCopy $XaePou)); 'MachineScope command sent'; break } catch { Start-Sleep 2 } }
 for ($k = 0; $k -lt 30; $k++) { Start-Sleep 2; if ((Get-Content $XaeLog -Tail 3) -match 'loaded ') { break } }
 Get-Content $XaeLog -Tail 3

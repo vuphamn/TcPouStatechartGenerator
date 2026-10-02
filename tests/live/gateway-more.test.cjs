@@ -153,7 +153,7 @@ function client() {
   // The startup task: the command (dry run), nothing installed
   const svc = await api('GET', 'service');
   const inst = await api('POST', 'service/install', {});
-  expect(svc.json?.supported && /Register-ScheduledTask -TaskName 'Kval StateScope gateway'/.test(inst.json?.dry ?? '') && /-AtStartup/.test(inst.json.dry) && /RestartCount 999/.test(inst.json.dry), 'startup task: the command (dry run)');
+  expect(svc.json?.supported && /Register-ScheduledTask -TaskName 'Kval MachineScope gateway'/.test(inst.json?.dry ?? '') && /-AtStartup/.test(inst.json.dry) && /RestartCount 999/.test(inst.json.dry), 'startup task: the command (dry run)');
 
   // The audit log
   await h.sleep(1500);

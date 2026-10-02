@@ -14,8 +14,8 @@ param(
   [string]$RootSuffix
 )
 $ErrorActionPreference = 'Stop'
-$extensionId = 'KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6'
-$log = Join-Path $env:TEMP 'KvalStateScope-vsix.log'
+$extensionId = 'KvalMachineScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6'
+$log = Join-Path $env:TEMP 'KvalMachineScope-vsix.log'
 
 function Get-Instances {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'

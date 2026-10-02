@@ -8,12 +8,10 @@
 !include LogicLib.nsh
 
 !define KSS_EXTRAS "${PROJECT_DIR}\release\installer-extras"
-!define KSS_REG "Software\Kval\StateScope"
+!define KSS_REG "Software\Kval\MachineScope"
 ; A verb of all files (*), shown only for .TcPOU (AppliesTo): Explorer skips SystemFileAssociations\.TcPOU when the
 ; extension itself is not registered (TwinCAT does not register it), whatever program opens it
-!define KSS_MENU_KEY "Software\Classes\*\shell\KvalStateScope"
-; Where earlier versions put it (removed on install and uninstall)
-!define KSS_MENU_KEY_OLD "Software\Classes\SystemFileAssociations\.TcPOU\shell\KvalStateScope.Open"
+!define KSS_MENU_KEY "Software\Classes\*\shell\KvalMachineScope"
 !define KSS_PS 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
 ; TcXaeShell: TwinCAT 4026's (64-bit), TwinCAT 4024's (32-bit, the Visual Studio 2017 shell)
 !define KSS_XAE64 "$PROGRAMFILES64\Beckhoff\TcXaeShell"
@@ -34,6 +32,7 @@
   Var kssGateway
   Var kssVsNames
   Var kssXaeFound
+  Var kssXaeTc
   Var kssXae24Found
   Var kssDetected
   Var kssMenuBox
@@ -100,7 +99,8 @@
     Page custom kssPageCreate kssPageLeave
     Page custom kssPage2Create kssPage2Leave
 
-    ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit (4026) and 32-bit (4024)
+    ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit (TwinCAT 4024 or 4026: both Visual
+    ; Studio 2022 shells, in the same folder) and 32-bit (4024's Visual Studio 2017 shell); TwinCAT's build here
     Function kssDetect
       ${If} $kssDetected == 1
         Return
@@ -131,6 +131,19 @@
       ${If} ${FileExists} "${KSS_XAE64}\Common7\IDE\TcXaeShell.exe"
         StrCpy $kssXaeFound 1
       ${EndIf}
+      ; (TwinCAT's build: the 64-bit shell is 4024's or 4026's; "" when not known)
+      StrCpy $kssXaeTc ""
+      SetRegView 32
+      ClearErrors
+      ReadRegDWORD $0 HKLM "SOFTWARE\Beckhoff\TwinCAT3\System" "Build"
+      ${IfNot} ${Errors}
+        ${If} $0 >= 4026
+          StrCpy $kssXaeTc "4026"
+        ${ElseIf} $0 >= 4024
+          StrCpy $kssXaeTc "4024"
+        ${EndIf}
+      ${EndIf}
+      SetRegView lastused
       StrCpy $kssXae24Found 0
       ${If} ${FileExists} "${KSS_XAE32}\Common7\IDE\TcXaeShell.exe"
         StrCpy $kssXae24Found 1
@@ -166,15 +179,19 @@
       ${EndIf}
       !insertmacro kssNote 20u 83u 10u "TwinCAT 3.1 build 4026 and later, integrated in Visual Studio."
       ${If} $kssXaeFound == 1
-        ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4026 (asks for administrator rights)"
+        ${If} $kssXaeTc != ""
+          ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT $kssXaeTc (asks for administrator rights)"
+        ${Else}
+          ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4024 / 4026 (asks for administrator rights)"
+        ${EndIf}
         Pop $kssXaeBox
         ${NSD_SetState} $kssXaeBox $kssXae
       ${Else}
-        ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4026 (not found on this computer)"
+        ${NSD_CreateCheckbox} 8u 95u -8u 10u "&TcXaeShell 64-bit, TwinCAT 4024 / 4026 (not found on this computer)"
         Pop $kssXaeBox
         EnableWindow $kssXaeBox 0
       ${EndIf}
-      !insertmacro kssNote 20u 105u 10u "Beckhoff's TcXaeShell of TwinCAT 3.1 build 4026, in Program Files."
+      !insertmacro kssNote 20u 105u 10u "The 64-bit TcXaeShell of TwinCAT 3.1 build 4024 or 4026, in Program Files."
       ${If} $kssXae24Found == 1
         ${NSD_CreateCheckbox} 8u 117u -8u 10u "TcXaeShell &32-bit, TwinCAT 4024 (asks for administrator rights)"
         Pop $kssXae24Box
@@ -278,7 +295,6 @@
     ${EndIf}
 
     ; Explorer's context menu of .TcPOU files (HKCU for this user, HKLM for all users)
-    DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
     ${If} $kssMenu == 1
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "" "Open in Kval MachineScope"
       WriteRegStr SHCTX "${KSS_MENU_KEY}" "Icon" '"$appExe",0'
@@ -293,30 +309,23 @@
     SetOutPath "$INSTDIR\installer"
     File "${KSS_EXTRAS}\vs-extension.ps1"
     File "${KSS_EXTRAS}\install-tcxaeshell.ps1"
+    ; What the installer set up, checked (read-only): its Start menu shortcut
+    File "${KSS_EXTRAS}\check-install.ps1"
+    CreateShortCut "$SMPROGRAMS\Kval MachineScope - check installation.lnk" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -NoExit -File "$INSTDIR\installer\check-install.ps1"' "$appExe" 0
 
     ${If} $kssVs == 1
     ${OrIf} $kssXae == 1
-      File "${KSS_EXTRAS}\KvalStateScope.Xae.vsix"
+      File "${KSS_EXTRAS}\KvalMachineScope.Xae.vsix"
     ${EndIf}
     ${If} $kssVs == 1
-      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\vs-extension.ps1" -Action Install -Vsix "$INSTDIR\installer\KvalStateScope.Xae.vsix"' "Visual Studio extension" "Visual Studio"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\vs-extension.ps1" -Action Install -Vsix "$INSTDIR\installer\KvalMachineScope.Xae.vsix"' "Visual Studio extension" "Visual Studio"
     ${EndIf}
     ${If} $kssXae == 1
-      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE64}" -Vsix "$INSTDIR\installer\KvalStateScope.Xae.vsix"' "TcXaeShell extension" "TcXaeShell"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE64}" -Vsix "$INSTDIR\installer\KvalMachineScope.Xae.vsix"' "TcXaeShell extension" "TcXaeShell"
     ${EndIf}
     ${If} $kssXae24 == 1
-      File "${KSS_EXTRAS}\KvalStateScope.Xae.Vs2017.vsix"
-      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE32}" -Vsix "$INSTDIR\installer\KvalStateScope.Xae.Vs2017.vsix"' "TcXaeShell (TwinCAT 4024) extension" "TcXaeShell"
-    ${EndIf}
-
-    ; (installed before the product was renamed: Kval StateScope Link and its shortcuts)
-    Delete "$INSTDIR\Link\Kval StateScope Link.exe"
-    Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
-    Delete "$SMPROGRAMS\Kval StateScope Gateway.lnk"
-    SetShellVarContext current
-    Delete "$SMSTARTUP\Kval StateScope Link.lnk"
-    ${If} $installMode == "all"
-      SetShellVarContext all
+      File "${KSS_EXTRAS}\KvalMachineScope.Xae.Vs2017.vsix"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE32}" -Vsix "$INSTDIR\installer\KvalMachineScope.Xae.Vs2017.vsix"' "TcXaeShell (TwinCAT 4024) extension" "TcXaeShell"
     ${EndIf}
 
     ; Kval MachineScope Link: the exe and a Start menu shortcut
@@ -343,9 +352,9 @@
     ${If} $kssGateway == 1
       ${If} $installMode == "all"
         ; The shell context is "all" here: $APPDATA is C:\ProgramData
-        StrCpy $kssGatewayDir "$APPDATA\KvalStateScope\Gateway"
+        StrCpy $kssGatewayDir "$APPDATA\KvalMachineScope\Gateway"
       ${Else}
-        StrCpy $kssGatewayDir "$LOCALAPPDATA\KvalStateScope\Gateway"
+        StrCpy $kssGatewayDir "$LOCALAPPDATA\KvalMachineScope\Gateway"
       ${EndIf}
       SetOutPath "$kssGatewayDir"
       File /r "${KSS_EXTRAS}\gateway\*.*"
@@ -372,10 +381,9 @@
 
 !macro customUnInstall
   DeleteRegKey SHCTX "${KSS_MENU_KEY}"
-  DeleteRegKey SHCTX "${KSS_MENU_KEY_OLD}"
   !insertmacro kssRefreshShell
   Delete "$SMPROGRAMS\Kval MachineScope Link.lnk"
-  Delete "$SMPROGRAMS\Kval StateScope Link.lnk"
+  Delete "$SMPROGRAMS\Kval MachineScope - check installation.lnk"
   ; An update runs the old version's uninstaller first: the extensions and the gateway stay
   ${IfNot} ${isUpdated}
     ReadRegDWORD $0 SHCTX "${KSS_REG}" "VisualStudio"
@@ -399,7 +407,6 @@
     ; Link's start at sign-in (this user's)
     SetShellVarContext current
     Delete "$SMSTARTUP\Kval MachineScope Link.lnk"
-    Delete "$SMSTARTUP\Kval StateScope Link.lnk"
     ${If} $installMode == "all"
       SetShellVarContext all
     ${EndIf}
@@ -417,7 +424,6 @@
       Delete "$1\README.md"
       RMDir "$1"
       Delete "$SMPROGRAMS\Kval MachineScope Gateway.lnk"
-      Delete "$SMPROGRAMS\Kval StateScope Gateway.lnk"
     ${EndIf}
     DeleteRegKey SHCTX "${KSS_REG}"
   ${EndIf}

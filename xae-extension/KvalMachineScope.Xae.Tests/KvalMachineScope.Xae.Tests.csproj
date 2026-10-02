@@ -6,11 +6,11 @@
     <LangVersion>latest</LangVersion>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <RootNamespace>KvalStateScope.Xae.Tests</RootNamespace>
+    <RootNamespace>KvalMachineScope.Xae.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="..\KvalStateScope.Xae\ProjectScan.cs" Link="ProjectScan.cs" />
-    <Compile Include="..\KvalStateScope.Xae\SaveAllRelay.cs" Link="SaveAllRelay.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\ProjectScan.cs" Link="ProjectScan.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\SaveAllRelay.cs" Link="SaveAllRelay.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

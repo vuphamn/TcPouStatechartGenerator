@@ -1,8 +1,8 @@
 using System.Collections.Generic;
-using KvalStateScope.Xae;
+using KvalMachineScope.Xae;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace KvalStateScope.Xae.Tests
+namespace KvalMachineScope.Xae.Tests
 {
     /// <summary>Save All relayed between the MachineScope tabs of one XAE (a tab with a WebView2 profile of its own)</summary>
     [TestClass]

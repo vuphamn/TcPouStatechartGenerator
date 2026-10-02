@@ -1,5 +1,5 @@
 {
-  "name": "kval-statescope",
+  "name": "kval-machinescope",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -21,7 +21,7 @@
     "test:all": "node tests/run.cjs all"
   },
   "build": {
-    "appId": "com.kval.statescope",
+    "appId": "com.kval.machinescope",
     "productName": "Kval MachineScope",
     "directories": {
       "output": "release"

@@ -3,4 +3,4 @@ bin/
 obj/
 *.vsix
 # Copied from the repo's dist/ by build.ps1
-KvalStateScope.Xae/StateScopeApp/
+KvalMachineScope.Xae/MachineScopeApp/

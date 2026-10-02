@@ -12,7 +12,7 @@ Add-Content $XaeLog $mark
 function LogSince { $t = Get-Content $XaeLog -Raw; $t.Substring($t.LastIndexOf($mark)) }
 
 "tabs at start: $((Tabs) -join ' | ')"
-$dte.ExecuteCommand('Tools.KvalStateScope.Open', $other)
+$dte.ExecuteCommand('Tools.KvalMachineScope.Open', $other)
 for ($i = 0; $i -lt 30 -and -not ((LogSince) -match "loaded .*$XaeOtherPou"); $i++) { Start-Sleep 1 }
 Start-Sleep 2
 $t = Tabs
@@ -20,7 +20,7 @@ Expect ($t.Count -eq 2 -and ($t -match $XaeOtherPou) -and ($t -match $XaePouName
 Expect ((Selected "MachineScope: $XaeOtherPou") -eq $true) 'the new tab is active'
 
 Add-Content $XaeLog ($mark = "---- same POU again $(Get-Date -Format o) ----")
-$dte.ExecuteCommand('Tools.KvalStateScope.Open', $pou)
+$dte.ExecuteCommand('Tools.KvalMachineScope.Open', $pou)
 Start-Sleep 4
 $t = Tabs
 Expect ($t.Count -eq 2 -and -not ((LogSince) -match 'loaded ')) "the same POU again: no third tab, not reloaded ($($t -join ' | '))"

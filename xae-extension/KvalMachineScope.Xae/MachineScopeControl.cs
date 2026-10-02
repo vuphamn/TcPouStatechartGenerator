@@ -16,16 +16,16 @@ using Microsoft.Web.WebView2.Wpf;
 // (the Visual Studio 2017 SDK also has a Shell.Task)
 using Task = System.Threading.Tasks.Task;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Hosts the Kval MachineScope web app in WebView2 and answers its requests (messages as JSON objects):
     ///   app -> host: ready, browsePou, findDut, chooseDutFiles, save, navigate, liveStart, liveStop, liveWatch, discoverPlcs
     ///   host -> app: loadPou, dutCandidates, saveResult, sourceChanged, liveStatus, liveValues, liveWatchResult, liveVars, plcList
     /// </summary>
-    internal sealed partial class StateScopeControl : UserControl, ISaveAllTab
+    internal sealed partial class MachineScopeControl : UserControl, ISaveAllTab
     {
-        private const string AppHost = "statescope.example";
+        private const string AppHost = "machinescope.example";
 
         private readonly ToolWindowPane _pane;
         private readonly Grid _grid = new Grid();
@@ -47,7 +47,7 @@ namespace KvalStateScope.Xae
         private readonly Dictionary<string, FileSystemWatcher> _watchers = new Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _pendingChecks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        public StateScopeControl(ToolWindowPane pane)
+        public MachineScopeControl(ToolWindowPane pane)
         {
             _pane = pane;
             Background = new SolidColorBrush(Color.FromRgb(0x02, 0x06, 0x17));
@@ -150,7 +150,7 @@ namespace KvalStateScope.Xae
             }
         }
 
-        private static string ExtensionDir => Path.GetDirectoryName(typeof(StateScopeControl).Assembly.Location);
+        private static string ExtensionDir => Path.GetDirectoryName(typeof(MachineScopeControl).Assembly.Location);
 
         private async Task InitializeAsync()
         {
@@ -158,11 +158,11 @@ namespace KvalStateScope.Xae
             try
             {
                 if (_web.CoreWebView2 != null) return;
-                var appDir = Path.Combine(ExtensionDir, "StateScopeApp");
+                var appDir = Path.Combine(ExtensionDir, "MachineScopeApp");
                 if (!File.Exists(Path.Combine(appDir, "index.html")))
                     throw new FileNotFoundException("The MachineScope app files are missing from the extension", Path.Combine(appDir, "index.html"));
                 // The IDE's install folder is read-only: keep the browser profile per user
-                var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalStateScope", "WebView2");
+                var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalMachineScope", "WebView2");
                 Log.Write($"creating WebView2 environment (runtime {CoreWebView2Environment.GetAvailableBrowserVersionString()}, profile {userData})");
                 await StartWebViewAsync(userData);
                 Log.Write("WebView2 ready");
@@ -348,10 +348,14 @@ namespace KvalStateScope.Xae
                         HandleProbePlcs(msg);
                         break;
                     case "hostInfo":
-                        Post(new { type = "hostInfo", edition = "xae", version = typeof(StateScopeControl).Assembly.GetName().Version.ToString(3) });
+                        Post(new { type = "hostInfo", edition = "xae", version = typeof(MachineScopeControl).Assembly.GetName().Version.ToString(3) });
                         break;
                     case "gitShow":
                         HandleGitShow(msg);
+                        break;
+                    case "layoutRead":
+                    case "layoutWrite":
+                        HandleLayoutFile(msg, type == "layoutWrite");
                         break;
                     case "openPou":
                         HandleOpenPou(msg);
@@ -467,7 +471,7 @@ namespace KvalStateScope.Xae
                 var where = viaXae.Count == files.Count
                     ? "into the TwinCAT project (XAE updated it and wrote the file)"
                     : viaXae.Count == 0 ? "to disk (not part of an open TwinCAT project)" : "into the TwinCAT project / to disk";
-                Post(new { type = "saveResult", ok = true, files = confirmed, message = $"Saved {names} {where}. A backup is in %LocalAppData%\\KvalStateScope\\Backups." });
+                Post(new { type = "saveResult", ok = true, files = confirmed, message = $"Saved {names} {where}. A backup is in %LocalAppData%\\KvalMachineScope\\Backups." });
             }
             else
             {
@@ -623,14 +627,14 @@ namespace KvalStateScope.Xae
             }
             // Else only this tab's POU, and an instance path (MAIN.fbLine.smX, GVL.aX[2])
             else if (path == null || !string.Equals(path, _pouPath, StringComparison.OrdinalIgnoreCase)) return;
-            var package = KvalStateScopePackage.Instance;
+            var package = KvalMachineScopePackage.Instance;
             if (package == null) return;
             Log.Write($"open instance: {instance} of {Path.GetFileName(path)}");
             _ = package.JoinableTaskFactory.RunAsync(async () =>
             {
                 try
                 {
-                    await package.ShowStateScopeAsync(path, instance, connection);
+                    await package.ShowMachineScopeAsync(path, instance, connection);
                 }
                 catch (Exception ex)
                 {
@@ -776,12 +780,24 @@ namespace KvalStateScope.Xae
             var recording = (name ?? "").EndsWith(".json", StringComparison.OrdinalIgnoreCase);
             var csv = (name ?? "").EndsWith(".csv", StringComparison.OrdinalIgnoreCase);
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            // (personal: a live recording, offered in the user's own folder, not the project's: not for git)
+            var personal = msg.TryGetValue("personal", out var pe) && pe is bool pb && pb;
+            string personalDir = null;
+            if (personal)
+            {
+                try
+                {
+                    personalDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Kval MachineScope", "Recordings");
+                    Directory.CreateDirectory(personalDir);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { personalDir = null; }
+            }
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
                 Title = recording ? "Save the live recording" : csv ? "Save the table" : "Save the documentation",
                 FileName = string.IsNullOrEmpty(name) ? "documentation.html" : Path.GetFileName(name),
                 Filter = recording ? "Live recording (*.json)|*.json" : csv ? "CSV (Excel) (*.csv)|*.csv" : "HTML document (*.html)|*.html",
-                InitialDirectory = plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null,
+                InitialDirectory = personalDir ?? (plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null),
             };
             if (dialog.ShowDialog() != true)
             {
@@ -841,6 +857,54 @@ namespace KvalStateScope.Xae
         }
 
         /// <summary>Compare: the committed (git HEAD) version of a loaded file, from its folder's repository</summary>
+        /// <summary>
+        /// A POU's layout file beside it (&lt;POU&gt;.machinescope.json: the states' places, the transitions' routes, the
+        /// notes; for git): read (layoutResult { requestId, text }, null: none yet) or written (text; { written }), only
+        /// for a POU this tab loaded; written only when it changed, through a temp file
+        /// </summary>
+        private void HandleLayoutFile(Dictionary<string, object> msg, bool write)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var pou = msg.TryGetValue("path", out var p) ? p as string : null;
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var text = msg.TryGetValue("text", out var t) ? t as string : null;
+            if (pou == null || !pou.EndsWith(".TcPOU", StringComparison.OrdinalIgnoreCase) || !(string.Equals(pou, _pouPath, StringComparison.OrdinalIgnoreCase) || _lastSeen.ContainsKey(pou)))
+            {
+                Post(new { type = "layoutResult", requestId, error = "Not a POU loaded in MachineScope" });
+                return;
+            }
+            var file = pou.Substring(0, pou.Length - ".TcPOU".Length) + ".machinescope.json";
+            try
+            {
+                if (!write)
+                {
+                    Post(new { type = "layoutResult", requestId, text = File.Exists(file) ? File.ReadAllText(file) : null });
+                    return;
+                }
+                if (text == null)
+                {
+                    var had = File.Exists(file);
+                    if (had) File.Delete(file);
+                    Post(new { type = "layoutResult", requestId, written = had });
+                    return;
+                }
+                if (File.Exists(file) && File.ReadAllText(file) == text)
+                {
+                    Post(new { type = "layoutResult", requestId, written = false });
+                    return;
+                }
+                var tmp = file + ".tmp";
+                File.WriteAllText(tmp, text, new System.Text.UTF8Encoding(false));
+                if (File.Exists(file)) File.Delete(file);
+                File.Move(tmp, file);
+                Post(new { type = "layoutResult", requestId, written = true });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Post(new { type = "layoutResult", requestId, error = ex.Message });
+            }
+        }
+
         private void HandleGitShow(Dictionary<string, object> msg)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -1102,10 +1166,13 @@ namespace KvalStateScope.Xae
                 await TaskScheduler.Default;
                 var monitor = new LiveMonitor();
                 string chosen = null, plcState = null, type = null, error = null;
+                int? twinCatBuild = null;
                 var found = new List<string>();
                 try
                 {
                     plcState = monitor.Connect(targetNetId, amsPort);
+                    // (the PLC's TwinCAT build: the app says when this XAE is of another one)
+                    twinCatBuild = monitor.ReadTwinCatBuild();
                     var candidates = LiveTargets.InstancePaths(path, pouName);
                     if (!string.IsNullOrEmpty(instance)) candidates.Insert(0, instance);
                     LiveMonitor.SymbolInfo info = null;
@@ -1160,9 +1227,37 @@ namespace KvalStateScope.Xae
                     instance = chosen,
                     instances = found,
                     symbolType = type,
+                    twinCatBuild,
+                    xaeBuild = XaeBuild,
                 });
             });
         }
+
+        /// <summary>
+        /// This XAE's TwinCAT build: the Visual Studio 2017 build of the extension is in 4024's TcXaeShell; the other in a
+        /// Visual Studio 2022 shell, 4024's 64-bit one or 4026's: this computer's TwinCAT's build (TwinCAT3\System's Build)
+        /// </summary>
+#if VS2017
+        private static int XaeBuild => 4024;
+#else
+        private static int XaeBuild
+        {
+            get
+            {
+                try
+                {
+                    using (var key = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry32).OpenSubKey(@"SOFTWARE\Beckhoff\TwinCAT3\System"))
+                    {
+                        var build = key?.GetValue("Build") as int?;
+                        if (build.HasValue && build.Value > 4000) return build.Value >= 4026 ? 4026 : 4024;
+                    }
+                }
+                catch (System.Security.SecurityException) { }
+                catch (System.IO.IOException) { }
+                return 4026;
+            }
+        }
+#endif
 
         private void OnLiveTick(object sender, EventArgs e)
         {
@@ -1276,11 +1371,11 @@ namespace KvalStateScope.Xae
         }
     }
 
-    /// <summary>Diagnostics for the prototype: %LocalAppData%KvalStateScopelog.txt (kept small)</summary>
+    /// <summary>Diagnostics for the prototype: %LocalAppData%KvalMachineScopelog.txt (kept small)</summary>
     internal static class Log
     {
         private static readonly string File = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalStateScope", "log.txt");
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KvalMachineScope", "log.txt");
 
         public static void Write(string message)
         {

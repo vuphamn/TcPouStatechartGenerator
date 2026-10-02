@@ -244,6 +244,43 @@ export interface MermaidViewerHandle {
   tidyEdges: () => number;
 }
 
+/** Each drawn transition's key across drawings: FROM->TO, #2, #3 … for more between the same states (in their order) */
+// (globalThis.Map: this file imports an icon called Map)
+function transitionKeysOf(svg: SVGSVGElement): globalThis.Map<SVGPathElement, string> {
+  const seen = new globalThis.Map<string, number>();
+  const out = new globalThis.Map<SVGPathElement, string>();
+  for (const p of edgePathsOf(svg)) {
+    const from = p.getAttribute('data-source-id');
+    const to = p.getAttribute('data-target-id');
+    if (!from || !to) continue;
+    const pair = `${from}->${to}`;
+    const n = (seen.get(pair) ?? 0) + 1;
+    seen.set(pair, n);
+    out.set(p, n > 1 ? `${pair}#${n}` : pair);
+  }
+  return out;
+}
+/** The routes by transition (from the drawing's path / edge ids); ones of paths no longer drawn left out */
+function edgeOffsetsByTransition(svg: SVGSVGElement, offsets: EdgeOffsetsMap): EdgeOffsetsMap {
+  const keys = transitionKeysOf(svg);
+  const out: EdgeOffsetsMap = {};
+  for (const [id, o] of Object.entries(offsets)) {
+    const p = [...keys.keys()].find((x) => x.getAttribute('data-path-id') === id || x.getAttribute('data-edge-id') === id);
+    const k = p ? keys.get(p) : null;
+    if (k) out[k] = o;
+  }
+  return out;
+}
+/** The routes by transition put on this drawing's paths (their path ids) */
+function edgeOffsetsOnPaths(svg: SVGSVGElement, byTransition: EdgeOffsetsMap): EdgeOffsetsMap {
+  const out: EdgeOffsetsMap = {};
+  for (const [p, k] of transitionKeysOf(svg)) {
+    const o = byTransition[k];
+    const id = p.getAttribute('data-path-id');
+    if (o && id) out[id] = o;
+  }
+  return out;
+}
 /** A transition's end dropped on another state: which end, the transition, the state, its route then */
 interface MovedEnd {
   atStart: boolean;
@@ -484,6 +521,14 @@ export interface MermaidViewerProps {
   keepPositionsSignal?: number;
   /** (auto: the canvas' own placing, the locked layout's or a drop's: no undo step of its own) */
   onNodeOffsetsChange?: (offsets: NodeOffsetsMap, opts?: { auto?: boolean }) => void;
+  /**
+   * The transitions' dragged routes and labels to start from (a POU's layout file), by transition (FROM->TO, #2 for a
+   * second one between them): taken when edgeOffsetsKey changes, on the drawing after it
+   */
+  initialEdgeOffsets?: EdgeOffsetsMap;
+  edgeOffsetsKey?: string;
+  /** The transitions' dragged routes and labels changed: by transition (FROM->TO, #2 …), as initialEdgeOffsets */
+  onEdgeOffsetsChange?: (offsets: EdgeOffsetsMap) => void;
   notes?: DiagramNotes;
   onSaveNote?: (target: ContextMenuTarget, noteText: string) => void;
   onDeleteNote?: (target: ContextMenuTarget) => void;
@@ -1908,6 +1953,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     onClearAllCustomStyles: onClearAllCustomStylesProp,
     nodeOffsets: externalNodeOffsets,
     onNodeOffsetsChange,
+    initialEdgeOffsets,
+    edgeOffsetsKey,
+    onEdgeOffsetsChange,
     notes,
     onSaveNote,
     onDeleteNote,
@@ -2367,6 +2415,28 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const currentEdgeOffsetsRef = useRef<EdgeOffsetsMap>({});
   useEffect(() => {
     currentEdgeOffsetsRef.current = { ...edgeOffsets };
+  }, [edgeOffsets]);
+  // A layout file's routes (by transition) for the next drawing: put on its paths there (their ids are the drawing's)
+  const pendingEdgeSeedRef = useRef<EdgeOffsetsMap | null>(null);
+  useEffect(() => {
+    if (edgeOffsetsKey === undefined) return;
+    pendingEdgeSeedRef.current = { ...(initialEdgeOffsets ?? {}) };
+    setLayoutTrigger((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgeOffsetsKey]);
+  // The routes changed: told by transition (the drawing's path ids are not kept across drawings)
+  const onEdgeOffsetsChangeRef = useRef(onEdgeOffsetsChange);
+  onEdgeOffsetsChangeRef.current = onEdgeOffsetsChange;
+  const reportedEdgesRef = useRef('');
+  useEffect(() => {
+    const svg = getDiagramSvg();
+    if (!svg || !onEdgeOffsetsChangeRef.current || pendingEdgeSeedRef.current) return;
+    const out = edgeOffsetsByTransition(svg, edgeOffsets);
+    const text = JSON.stringify(out);
+    if (text === reportedEdgesRef.current) return;
+    reportedEdgesRef.current = text;
+    onEdgeOffsetsChangeRef.current(out);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edgeOffsets]);
 
   const isDraggingEdgeHandleRef = useRef<boolean>(false);
@@ -3528,10 +3598,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       }
     }
 
+    // (a layout file's routes, by transition: on this drawing's paths)
+    let targetEdgeOffsets = edgeOffsets;
+    if (!stale && pendingEdgeSeedRef.current) {
+      targetEdgeOffsets = edgeOffsetsOnPaths(svg, pendingEdgeSeedRef.current);
+      pendingEdgeSeedRef.current = null;
+      currentEdgeOffsetsRef.current = { ...targetEdgeOffsets };
+      reportedEdgesRef.current = JSON.stringify(edgeOffsetsByTransition(svg, targetEdgeOffsets));
+      setEdgeOffsets(targetEdgeOffsets);
+    }
     applyDiagramOffsetsToSvg(
       svg,
       targetNodeOffsets,
-      edgeOffsets,
+      targetEdgeOffsets,
       null,
       selectedEdge?.id || null,
       layoutEngine,

@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, CircleDot, Cpu, FileCode, GitCompare, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, CircleDot, Cpu, FileCode, GitCompare, X, FileJson } from 'lucide-react';
 
 export interface StatusMessage {
   text: string;
@@ -22,6 +22,11 @@ interface StatusBarProps {
   onOpenProblems: () => void;
   live?: { state: string | null; message?: string } | null;
   onOpenLive: () => void;
+  /**
+   * Where the canvas' layout, notes and documentation are kept: the POU's layout file beside it (for git; its name, and
+   * its state), or this browser (no host has the POU's folder)
+   */
+  layout?: { file: string | null; state: 'loaded' | 'saved' | 'new' | 'other-engine' | 'error' | 'browser'; detail?: string } | null;
   /** The I/O's health while live (the I/O tab's boxes: how many known, how many not in OP) */
   io?: { known: number; down: string[] } | null;
   onOpenIo?: () => void;
@@ -55,6 +60,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   onOpenLive,
   io,
   onOpenIo,
+  layout,
   changes,
   onOpenChanges,
   host,
@@ -93,6 +99,21 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <span className="live-dot" />
         <span className="font-mono truncate max-w-[220px]">{live.state ?? 'LIVE'}</span>
       </button>
+    )}
+    {layout && (
+      <span
+        id="status-layout"
+        data-state={layout.state}
+        className={`flex items-center gap-1 shrink-0 ${layout.state === 'error' || layout.state === 'other-engine' ? 'text-amber-300' : 'text-slate-400'}`}
+        title={
+          layout.state === 'browser'
+            ? 'The states\' places, the notes and the documentation are kept in this browser only: opened from its project folder (the desktop app, XAE, or Link), they are kept in a file beside the POU, for git'
+            : `${layout.file}: the states' places, the transitions' routes, the notes and the documentation, kept beside the POU. Commit it to share them; your theme, presets and recordings stay yours${layout.detail ? `\n${layout.detail}` : ''}`
+        }
+      >
+        <FileJson className="w-3 h-3" />
+        <span className="font-mono truncate max-w-[220px]">{layout.state === 'browser' ? 'Layout: this browser' : `${layout.file}${layout.state === 'error' ? ' (not written)' : layout.state === 'other-engine' ? ' (another engine)' : ''}`}</span>
+      </span>
     )}
     {io && io.known > 0 && (
       <button

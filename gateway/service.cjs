@@ -6,8 +6,7 @@
 const { execFile, spawn } = require('child_process');
 const path = require('path');
 
-// (the scheduled task's name: as it was before the product was renamed Kval MachineScope, so an installed one is found)
-const TASK = 'Kval StateScope gateway';
+const TASK = 'Kval MachineScope gateway';
 const dry = () => process.env.KSS_SERVICE_DRYRUN === '1';
 
 const run = (cmd, args) =>

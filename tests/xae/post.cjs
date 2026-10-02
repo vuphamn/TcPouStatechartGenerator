@@ -5,7 +5,7 @@ const puppeteer = require('puppeteer-core');
   const [, , titlePart, file] = process.argv;
   const json = require("fs").readFileSync(file, "utf8").replace(/^﻿/, "");
   const browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9444', defaultViewport: null });
-  const pages = (await browser.pages()).filter((p) => p.url().includes('statescope.example'));
+  const pages = (await browser.pages()).filter((p) => p.url().includes('machinescope.example'));
   let target = null;
   for (const p of pages) if ((await p.title()).includes(titlePart)) target = p;
   if (!target) {

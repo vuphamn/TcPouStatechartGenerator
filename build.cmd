@@ -37,5 +37,5 @@ call npx electron-builder --win || exit /b 1
 echo.
 echo Done. In release\:
 dir /b release\*.exe
-echo Also: release\link\ ^(Link^), release\gateway\ ^(gateway^), the VSIX in xae-extension\KvalStateScope.Xae\bin\Release\
+echo Also: release\link\ ^(Link^), release\gateway\ ^(gateway^), the VSIX in xae-extension\KvalMachineScope.Xae\bin\Release\
 endlocal

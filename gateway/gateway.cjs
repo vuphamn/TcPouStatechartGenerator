@@ -297,8 +297,7 @@ function serveStatic(config, req, res) {
   const headers = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN' };
   if (url.pathname === '/gateway.json') {
     res.writeHead(200, { ...headers, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    // (gateway: the protocol's name, as older pages look for it; name: the product's)
-    return res.end(JSON.stringify({ gateway: 'Kval StateScope', name: 'Kval MachineScope', version: VERSION, live: '/live' }));
+    return res.end(JSON.stringify({ gateway: 'Kval MachineScope', version: VERSION, live: '/live' }));
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.writeHead(405, headers);

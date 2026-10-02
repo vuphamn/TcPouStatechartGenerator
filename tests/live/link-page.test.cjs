@@ -46,7 +46,7 @@ const pair = (code) =>
   const releases = http.createServer((req, res) => {
     if (req.url === '/releases') {
       res.setHeader('Content-Type', 'application/json');
-      return res.end(JSON.stringify([{ tag_name: 'web-v9.9.9', html_url: 'https://example.invalid/web-v9.9.9', assets: [{ name: 'KvalStateScope-Link-9.9.9.exe', browser_download_url: `http://127.0.0.1:${releases.address().port}/link.exe`, size: newLink.length, digest: `sha256:${require('crypto').createHash('sha256').update(newLink).digest('hex')}` }] }]));
+      return res.end(JSON.stringify([{ tag_name: 'web-v9.9.9', html_url: 'https://example.invalid/web-v9.9.9', assets: [{ name: 'KvalMachineScope-Link-9.9.9.exe', browser_download_url: `http://127.0.0.1:${releases.address().port}/link.exe`, size: newLink.length, digest: `sha256:${require('crypto').createHash('sha256').update(newLink).digest('hex')}` }] }]));
     }
     res.end(newLink);
   });
@@ -80,7 +80,7 @@ const pair = (code) =>
   expect(!!next && next !== code, `a new code from its page: ${next}`);
   expect((await pair(code)).reply?.type === 'denied', 'the old code no longer pairs');
   expect((await pair(next)).reply?.type === 'welcome', 'the new one does');
-  expect(JSON.parse(fs.readFileSync(path.join(appdata, 'KvalStateScope', 'link.json'), 'utf8')).code === next, 'kept in the profile');
+  expect(JSON.parse(fs.readFileSync(path.join(appdata, 'KvalMachineScope', 'link.json'), 'utf8')).code === next, 'kept in the profile');
 
   // In a browser: the code shown (the page's script runs), the paired page listed
   const browser = await h.launchBrowser({ defaultViewport: { width: 900, height: 700 } });
@@ -127,7 +127,7 @@ const pair = (code) =>
   expect(/Updated \(dry run: nothing replaced\)/.test(updated), `Update now: "${updated}"`);
   await bp.click('#update-auto');
   await h.sleep(600);
-  expect(JSON.parse((await request('GET', '/status')).body).updates.auto === false && JSON.parse(fs.readFileSync(path.join(appdata, 'KvalStateScope', 'link.json'), 'utf8')).autoUpdate === false, 'by itself: turned off, kept in the profile');
+  expect(JSON.parse((await request('GET', '/status')).body).updates.auto === false && JSON.parse(fs.readFileSync(path.join(appdata, 'KvalMachineScope', 'link.json'), 'utf8')).autoUpdate === false, 'by itself: turned off, kept in the profile');
   expect((await request('POST', '/update/install', { origin: 'https://evil.example' })).status === 403 && (await request('POST', '/update/check')).status === 403, 'updates: refused from another origin (or none)');
   await bp.click('#startup-off');
   await h.sleep(800);

@@ -8,10 +8,8 @@
 import { candidatesOf, type SeenMap, type SeenTransition } from './seenTransitions.ts';
 
 export const LEARNED_MARK = '(* Learned live by Kval MachineScope: no source. Its transitions: the ones seen on the PLC *)';
-// (written before the product was renamed: still known)
-const LEARNED_MARK_OLD = '(* Learned live by Kval StateScope: no source. Its transitions: the ones seen on the PLC *)';
 
-export const isLearnedPou = (pou: string) => pou.includes(LEARNED_MARK) || pou.includes(LEARNED_MARK_OLD);
+export const isLearnedPou = (pou: string) => pou.includes(LEARNED_MARK);
 
 const cdata = (s: string) => `<![CDATA[${s}]]>`;
 const ident = (s: string) => /^[A-Za-z_]\w*$/.test(s);
@@ -44,8 +42,6 @@ export function learnedAsSource(pou: string): string {
   return pou
     .split(LEARNED_MARK + '\n').join('')
     .split(LEARNED_MARK).join('')
-    .split(LEARNED_MARK_OLD + '\n').join('')
-    .split(LEARNED_MARK_OLD).join('')
     .replace(/\tseenLive : BOOL;[^\n]*\n/, '')
     .replace(/IF seenLive THEN/g, 'IF FALSE (* its condition: write it *) THEN');
 }

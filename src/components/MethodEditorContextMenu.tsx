@@ -223,11 +223,11 @@ export const MethodEditorContextMenu: React.FC<MethodEditorContextMenuProps> = (
           <>
             <div className="my-1 border-t border-slate-800" />
             <button
-              id="editor-menu-open-type-statescope"
+              id="editor-menu-open-type-machinescope"
               type="button"
               role="menuitem"
               onClick={() => {
-                opener.open(openType, 'statescope', member);
+                opener.open(openType, 'machinescope', member);
                 onClose();
               }}
               className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"

@@ -5,12 +5,12 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>"Open in Kval MachineScope" (context menus) and "Tools > Kval MachineScope..."</summary>
-    internal static class OpenInStateScopeCommand
+    internal static class OpenInMachineScopeCommand
     {
-        public static async Task InitializeAsync(KvalStateScopePackage package)
+        public static async Task InitializeAsync(KvalMachineScopePackage package)
         {
             await package.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
             if (!(await package.GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commands)) return;
@@ -28,7 +28,7 @@ namespace KvalStateScope.Xae
             };
             commands.AddCommand(openSelected);
 
-            // Also takes a path: "KvalStateScope.Open C:\Path\SM_X.TcPOU" in the Command Window or devenv /Command
+            // Also takes a path: "KvalMachineScope.Open C:\Path\SM_X.TcPOU" in the Command Window or devenv /Command
             var openFromTools = new OleMenuCommand(
                 (s, e) =>
                 {
@@ -73,7 +73,7 @@ namespace KvalStateScope.Xae
                 dynamic controls = menu.Controls;
                 for (var i = 1; i <= (int)controls.Count; i++)
                 {
-                    if (((string)controls[i].Caption ?? "").Contains("Kval MachineScope") || ((string)controls[i].Caption ?? "").Contains("Kval StateScope")) return;
+                    if (((string)controls[i].Caption ?? "").Contains("Kval MachineScope")) return;
                 }
                 var command = dte.Commands.Item(PackageGuids.CommandSet.ToString("B"), CommandIds.OpenSelected);
                 command.AddControl(menu, 1);
@@ -85,7 +85,7 @@ namespace KvalStateScope.Xae
             }
         }
 
-        private static void Run(KvalStateScopePackage package, string pouPath, bool askIfNone)
+        private static void Run(KvalMachineScopePackage package, string pouPath, bool askIfNone)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (pouPath == null && askIfNone)
@@ -96,7 +96,7 @@ namespace KvalStateScope.Xae
             {
                 try
                 {
-                    await package.ShowStateScopeAsync(pouPath);
+                    await package.ShowMachineScopeAsync(pouPath);
                 }
                 catch (Exception ex)
                 {
@@ -104,7 +104,7 @@ namespace KvalStateScope.Xae
                     VsShellUtilities.ShowMessageBox(package, ex.Message, "Kval MachineScope",
                         OLEMSGICON.OLEMSGICON_CRITICAL, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
                 }
-            }).FileAndForget("KvalStateScope/Open");
+            }).FileAndForget("KvalMachineScope/Open");
         }
     }
 }

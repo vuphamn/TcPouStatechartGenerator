@@ -8,7 +8,7 @@ using EnvDTE80;
 using Microsoft.CSharp.RuntimeBinder;
 using Microsoft.VisualStudio.Shell;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Access to POUs / DUTs of an open TwinCAT project through Beckhoff's Automation Interface (ITcSysManager,

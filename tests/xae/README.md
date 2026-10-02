@@ -15,7 +15,7 @@ tests\xae\close.ps1                                      # close that Exp instan
 
 The settings are in `config.ps1`: the solution, the POU to open (default `SM_TableManager.TcPOU`), a second POU for the
 tab test (default `SM_KAxis`), the copy's folder, and Visual Studio's folder. The extension's log is
-`%LocalAppData%\KvalStateScope\log.txt`. The tests read it, and it is the first place to look when one fails.
+`%LocalAppData%\KvalMachineScope\log.txt`. The tests read it, and it is the first place to look when one fails.
 
 Without a TwinCAT system running on this computer, going live fails. `instance-tab` checks that the tab asks to go
 live on its instance, not that it connects. Checks against a real PLC (live view, guard values, Symbols) are still

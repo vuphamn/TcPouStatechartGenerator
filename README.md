@@ -2,7 +2,7 @@
 
 **Design, simulate and debug TwinCAT state machines and their I/O, live on the PLC.**
 
-Kval MachineScope (formerly Kval StateScope; an installed one is updated in place, its settings, PLC project copies and device pictures kept where they were) is a tool to design, edit, simulate and debug the Kval Inc. TwinCAT state machines (`SM_*.TcPOU` function blocks and their `E_*_States` enums). It reads the Beckhoff TwinCAT PLC Structured Text and draws the state machine as an interactive [Mermaid](https://mermaid.js.org/) statechart (`flowchart TD` with subgraphs or `stateDiagram-v2`): states, composites, choices and transitions are edited on the canvas or in the Method, POU and Enum Editors, compared in a Diff and saved back to the project. Live over ADS it follows the running PLC (its state, the guards' values, its symbols, its EtherCAT I/O tree with the linked variables' values, read-only), records and replays runs, and rebuilds and writes the project through TwinCAT XAE. It runs in the browser (with Link or a gateway for live access), as a desktop app, and inside TwinCAT XAE.
+Kval MachineScope is a tool to design, edit, simulate and debug the Kval Inc. TwinCAT state machines (`SM_*.TcPOU` function blocks and their `E_*_States` enums). It reads the Beckhoff TwinCAT PLC Structured Text and draws the state machine as an interactive [Mermaid](https://mermaid.js.org/) statechart (`flowchart TD` with subgraphs or `stateDiagram-v2`): states, composites, choices and transitions are edited on the canvas or in the Method, POU and Enum Editors, compared in a Diff and saved back to the project. Live over ADS it follows the running PLC (its state, the guards' values, its symbols, its EtherCAT I/O tree with the linked variables' values, read-only), records and replays runs, and rebuilds and writes the project through TwinCAT XAE. It runs in the browser (with Link or a gateway for live access), as a desktop app, and inside TwinCAT XAE.
 
 The generator extracts state logic and transitions directly from the `doState()` and `preProcess()` methods of a `SM_*.TcPOU` file together with the enum definitions in matching `E_*_States.TcDUT` files. If the POU includes a `doState_UmlSC()` method, embedded UML composite states are preserved and mapped into nested subgraphs.
 
@@ -300,7 +300,7 @@ npm install
 npm run dev
 
 # The tests: node tests/run.cjs [unit|web|live|desktop|all]; the XAE extension's own (C#, no Visual Studio needed):
-dotnet test xae-extension/KvalStateScope.Xae.Tests
+dotnet test xae-extension/KvalMachineScope.Xae.Tests
 ```
 
 ### Production Build
@@ -323,9 +323,9 @@ After the **Tests** workflow passes on `master`, the **Release** workflow (`.git
 
 | Edition | Tag | Files in the GitHub Release | Changes that count |
 |---|---|---|---|
-| XAE | `xae-v0.8.1` | `KvalStateScope.Xae-<version>.vsix` | the web app (`src/`, `public/`, build config, `package.json`), `xae-extension/` |
-| Desktop | `desktop-v1.0.1` | `KvalStateScope-Setup-<version>.exe`, `KvalStateScope-Portable-<version>.exe` | the web app, `electron/`, `shared/`, `build/`, the installer script |
-| Web | `web-v1.0.1` | `KvalStateScope-WebApp-<version>.zip` (for any web server), `KvalStateScope-Gateway-<version>.zip` (with its dependencies), `KvalStateScope-Link-<version>.exe` | the web app, `gateway/`, `link/`, `shared/`, their build scripts |
+| XAE | `xae-v0.8.1` | `KvalMachineScope.Xae-<version>.vsix` | the web app (`src/`, `public/`, build config, `package.json`), `xae-extension/` |
+| Desktop | `desktop-v1.0.1` | `KvalMachineScope-Setup-<version>.exe`, `KvalMachineScope-Portable-<version>.exe` | the web app, `electron/`, `shared/`, `build/`, the installer script |
+| Web | `web-v1.0.1` | `KvalMachineScope-WebApp-<version>.zip` (for any web server), `KvalMachineScope-Gateway-<version>.zip` (with its dependencies), `KvalMachineScope-Link-<version>.exe` | the web app, `gateway/`, `link/`, `shared/`, their build scripts |
 
 - **Version numbers:** the patch number goes up by one from the edition's last release. To raise major or minor, set it in the edition's files: `source.extension.vsixmanifest` for XAE, `package.json` for Desktop, `gateway/package.json` for Web. The next release then uses it. The workflow writes the version into the files it builds, but doesn't commit them back.
 - **Not counted:** Markdown files and tests.
@@ -347,7 +347,7 @@ build.cmd          :: the XAE extension (VSIX), the web app, Link, the gateway, 
 build.cmd noxae    :: the same, keeping the existing VSIX (no Visual Studio build tools on this PC)
 ```
 
-`npm run build:exe` does the same except the VSIX: it uses the one in `xae-extension\KvalStateScope.Xae\bin\Release`, building it only when it is missing. Building the extension needs Visual Studio 2022 / 2026 with the extension development workload.
+`npm run build:exe` does the same except the VSIX: it uses the one in `xae-extension\KvalMachineScope.Xae\bin\Release`, building it only when it is missing. Building the extension needs Visual Studio 2022 / 2026 with the extension development workload.
 
 Compiled executables are output to the `release/` directory:
 - **`Kval MachineScope Setup <version>.exe`** — the Windows installer, with Start menu shortcuts and auto-updater support.
@@ -363,7 +363,7 @@ After the install folder, the installer offers its components on two pages, each
 |---|---|
 | **Explorer: Open in Kval MachineScope** (on by default) | Adds **Open in Kval MachineScope** to the right-click menu of `.TcPOU` files in Windows Explorer. It works whatever program `.TcPOU` files open with. On Windows 11 it is under **Show more options** (or Shift+right-click). |
 | **Visual Studio** (on by default, when found) | Installs the TwinCAT XAE extension in every Visual Studio 2022 / 2026 found (listed on the page): a POU opens in a document tab, Save writes into the project, Build shows XAE's errors, Live uses XAE's PLC. Close Visual Studio first; the installer asks you to. |
-| **TcXaeShell 64-bit, TwinCAT 4026** (on by default, when found) | Installs the extension in TwinCAT 4026's TcXaeShell (`C:\Program Files\Beckhoff\TcXaeShell`; asks for administrator rights). Close TcXaeShell first. |
+| **TcXaeShell 64-bit, TwinCAT 4024 or 4026** (on by default, when found) | Installs the extension in the 64-bit TcXaeShell (`C:\Program Files\Beckhoff\TcXaeShell`, a Visual Studio 2022 shell: TwinCAT 4024's or 4026's; the option names the build TwinCAT has here; asks for administrator rights). Close TcXaeShell first. |
 | **TcXaeShell 32-bit, TwinCAT 4024** (on by default, when found) | Installs the extension built for TwinCAT 4024's TcXaeShell, a Visual Studio 2017 shell (`C:\Program Files (x86)\Beckhoff\TcXaeShell`; asks for administrator rights). Close TcXaeShell first. |
 
 **Web edition helpers (optional)**: the web edition itself needs no install (its page, or a gateway's). A browser cannot reach a PLC by itself: for Live view it needs one of these.
@@ -372,12 +372,28 @@ After the install folder, the installer offers its components on two pages, each
 |---|---|
 | **Kval MachineScope Link** | The web edition's helper for a browser on this computer, with a Start menu shortcut. |
 | **Start Link when I sign in** (under Link) | A shortcut in your Startup folder starts Link minimized, without its page, each time you sign in. It's the same as *Start when I sign in* on Link's page, and either can turn it off. Uninstalling removes it. |
-| **Kval MachineScope gateway** | The web edition's shared server, in `%LocalAppData%\KvalStateScope\Gateway` (or `C:\ProgramData\KvalStateScope\Gateway` for all users), with its dependencies. It runs on Node.js 20+; set it up with [gateway/README.md](gateway/README.md) (`node gateway.cjs init`). |
+| **Kval MachineScope gateway** | The web edition's shared server, in `%LocalAppData%\KvalMachineScope\Gateway` (or `C:\ProgramData\KvalMachineScope\Gateway` for all users), with its dependencies. It runs on Node.js 20+; set it up with [gateway/README.md](gateway/README.md) (`node gateway.cjs init`). |
 
 Options for software that is not on the computer are greyed out; a computer with both TwinCAT builds can have the extension in both shells. Running the installer again shows your earlier choices; an update keeps them. A silent first install (`/S`) leaves the XAE extensions out (TcXaeShell's asks for administrator rights).
 
 - **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in a new window, or brings forward the window that already shows it.
+- **Kval MachineScope - check installation** (Start menu, or `installer\check-install.ps1` in the program folder; `-Json` for a report): what is set up on this computer, read-only. One line each: the app, the Explorer menu, the extension in each Visual Studio and each TcXaeShell (4024's and 4026's), the WebView2 Runtime, Link, its start at sign-in, the gateway; OK, `--` (not here, or not chosen) or `!!` (chosen but missing or broken). Its exit code is 1 when a part is `!!`.
 - **Uninstalling** removes the menu entry, the extensions and Link. It removes the gateway's program files but keeps its `config.json`, certificate and key.
+
+### The layout file: shared with your team through git
+
+What you arrange on the canvas is kept **beside the POU**, in `<POU>.machinescope.json` (`SM_TableManager.TcPOU` → `SM_TableManager.machinescope.json`), so you can commit and push it with the project and the other developers see the same chart:
+
+- **the states' places** (moved by hand), **the transitions' routes and labels** (dragged), by transition (`FROM->TO`, `#2` for a second one between them), not by the drawing's ids;
+- **the notes** on states and transitions, their places and looks, and **the states' documentation**.
+
+It is read when the POU is loaded and written a moment after each change, only when something differs; nothing is written while there is nothing to keep. The text is stable (keys sorted, whole units, two-space indents) so a move is a small diff. The places are relative to the layout engine (ELK or Dagre) they were made with, which the file records: under another engine they are not applied (the status bar says so) and stay in the file as they are; the notes are used either way.
+
+Where it is kept: by the desktop app and the XAE edition beside the POU they opened; through **Link**, beside a POU of a PLC project it keeps (Documents\Kval MachineScope\PLC projects, or the folder chosen for it). The web edition on its own has no access to the POU's folder: there they stay in the browser, as before. The status bar says which (`SM_TableManager.machinescope.json`, *Layout: this browser*).
+
+**A PLC's project downloaded live** (Go live, then an instance of another POU type opened from the Live tab): the whole project is kept in `Documents\Kval MachineScope\PLC projects\<project>`, with its manifest; when the PLC's version differs from a copy you have edited, you choose (*Override*, *Save elsewhere*, *Keep local*). Its layout files, `.git`, `.gitignore` and `.gitattributes` are not the PLC's files: they are not listed as your changes, and an override keeps them. So that folder can be a git repository too.
+
+**What stays yours** (this computer's storage, not the file): the theme and the diagram presets (layout engine, curve), the dock and the windows, bookmarks, Follow, the editors' zoom, live settings and watch lists, and **live recordings**: *Save recording* offers `Documents\Kval MachineScope\Recordings`, not the project's folder.
 
 ### Live view in the desktop app
 The desktop app's **Live** tab follows a state machine in a PLC on another computer. The Electron main process talks ADS straight to the PLC's router over TCP 48898 (`electron/tcLive.cjs`, with [ads-client](https://github.com/jisotalo/ads-client)), so TwinCAT is not needed on the laptop. The display is the same as in XAE: the active state glows on the diagram, and the tab lists every transition with its dwell and flags those that aren't in the diagram.
@@ -526,7 +542,7 @@ The POU is a copy of the PLC's source: **Save As** keeps it on this computer. A 
   - **The Live tab** also says so while you're live on that PLC. Its **Renew…** shows the steps in XAE (the license page's *7 Days Trial License*, whose characters a person has to type), **Open XAE** starts TwinCAT XAE on this computer (desktop app, Link), and **Check again** reads the license again once it's renewed.
 - **From your engineering project** (desktop app, a POU opened from a TwinCAT project folder, while live): **Build…** builds that project, from a copy of its folder with this POU and its enum as edited here. The folder itself is left as it is until a write works. Then the POU is saved, and the new compile information goes into the project's `_CompileInfo`, so XAE still matches the PLC.
 - **From your engineering project, in the web edition** (through Link, or a gateway with `allowBuild`; a POU not opened from the PLC, while live): **Build…** asks once for the TwinCAT project's folder, the one with the `.tsproj`, with read and write access (Chrome, Edge). Its files go to Link or the gateway, compressed when that saves: only the new or changed ones on later builds, and not even the file list when nothing changed (not `.git`, `.vs` or `_Boot`). It builds a copy there as the desktop app does. After a write, the new compile information goes back into the folder and the POU is saved.
-- **TwinCAT 3.1 versions:** live (ADS) works with 4022, 4024 and 4026. The PLC's sources, its project and its I/O are read from its boot folder; without `CurrentProjectInfo.json` (not every 4024 keeps one), its project and PLC projects (their ADS ports) come from `CurrentConfig.tszip` instead. Building, writing and **Open XAE** use XAE's Automation Interface: 4026's TcXaeShell (`TcXaeShell.DTE.17.0`), else 4024's (`TcXaeShell.DTE.15.0`, its Error List read through `envdte80.dll`); `KSS_XAE_PROGID` chooses another. Only 4026 has been tried; the 4024 paths are **not yet tested**. The XAE extension (VSIX) is built twice: for Visual Studio 2022 / 2026 and 4026's TcXaeShell, and (`KvalStateScope.Xae.Vs2017.vsix`, not yet tested) for 4024's TcXaeShell, the 32-bit Visual Studio 2017 shell, and Visual Studio 2017 / 2019 (see [xae-extension/README.md](xae-extension/README.md)).
+- **TwinCAT 3.1 versions:** live (ADS) works with 4022, 4024 and 4026. The PLC's sources, its project and its I/O are read from its boot folder; without `CurrentProjectInfo.json` (not every 4024 keeps one), its project and PLC projects (their ADS ports) come from `CurrentConfig.tszip` instead. Building, writing and **Open XAE** use XAE's Automation Interface: the 64-bit TcXaeShell (`TcXaeShell.DTE.17.0`: 4026's, or 4024's when TwinCAT here is 4024) or 4024's 32-bit one (`TcXaeShell.DTE.15.0`, its Error List read through `envdte80.dll`). **The XAE of the PLC's own TwinCAT build:** the PLC's build is read from its system service (ADS port 10000, its device info: TwinCAT 3.1.4024 → 4024), and the XAE of that family builds and writes for it when it is installed (a 4024.59 PLC: a 4024 XAE). With only another one here, it does, and the build says why that may matter: a 4026 XAE may save the project in a format 4024's XAE does not open; a 4024 XAE may not download to a 4026 runtime. The build window says which XAE built it, for which build. `KSS_XAE_PROGID` chooses one always. In the **XAE edition**, the Live tab shows the PLC's TwinCAT build beside this XAE's (`TwinCAT 3.1.4024 · XAE 4026`), amber with why when they are not of one family. Only 4026 has been tried; the 4024 paths are **not yet tested**. The XAE extension (VSIX) is built twice: for Visual Studio 2022 / 2026 and 4026's TcXaeShell, and (`KvalMachineScope.Xae.Vs2017.vsix`, not yet tested) for 4024's TcXaeShell, the 32-bit Visual Studio 2017 shell, and Visual Studio 2017 / 2019 (see [xae-extension/README.md](xae-extension/README.md)).
 - **Online change through the Automation Interface:** tried against a real TwinCAT 3.1.4026, TwinCAT refused it from the PLC's copy of the project, and from a copy of the engineering project whose compile information matched. It writes nothing when it refuses. Use **Download** (the application restarts), or XAE's own Login for an online change.
 - **Online change in XAE…** (after a build, or when the online change is refused) walks through XAE's own Login:
   - **Save to the project**, then reload the file in XAE. For a POU from the PLC: **Save into your engineering project** in the desktop app (its folder chosen once, the one with the `.tsproj` that runs on this PLC, then remembered; only a file already in it), or **Download the POU** to put in yourself. When that project no longer has the POU (renamed or moved), it asks for the folder again at once.

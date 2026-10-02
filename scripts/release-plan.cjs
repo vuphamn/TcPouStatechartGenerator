@@ -18,10 +18,10 @@ const write = (f, s) => fs.writeFileSync(path.join(root, f), s);
 
 // The web app is inside every edition (the VSIX and the desktop app carry it; the gateway serves it)
 const APP = ['src', 'public', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json'];
-const MANIFEST = 'xae-extension/KvalStateScope.Xae/source.extension.vsixmanifest';
-const ASSEMBLY = 'xae-extension/KvalStateScope.Xae/Properties/AssemblyInfo.cs';
+const MANIFEST = 'xae-extension/KvalMachineScope.Xae/source.extension.vsixmanifest';
+const ASSEMBLY = 'xae-extension/KvalMachineScope.Xae/Properties/AssemblyInfo.cs';
 // (its build for TwinCAT 4024's TcXaeShell / Visual Studio 2017: the same version)
-const MANIFEST_2017 = 'xae-extension/KvalStateScope.Xae.Vs2017/source.extension.vsixmanifest';
+const MANIFEST_2017 = 'xae-extension/KvalMachineScope.Xae.Vs2017/source.extension.vsixmanifest';
 
 const EDITIONS = {
   xae: {

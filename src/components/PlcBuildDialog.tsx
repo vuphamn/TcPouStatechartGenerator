@@ -244,6 +244,12 @@ export const PlcBuildDialog: React.FC<{
           )}
         </div>
       )}
+      {/* Which XAE built it, for which PLC (its TwinCAT build): another build's XAE is said in its warnings */}
+      {!running && r?.xae?.build && (
+        <div id="plc-build-xae-version" data-xae={String(r.xae.build)} data-plc={r.xae.targetBuild ? String(r.xae.targetBuild) : undefined} className={`px-3 pb-1 -mt-1 ${r.xae.targetBuild && (r.xae.targetBuild >= 4026) !== (r.xae.build >= 4026) ? 'text-amber-300' : 'text-slate-500'}`}>
+          Built by TwinCAT {r.xae.build}'s XAE{r.xae.targetBuild ? ` for the PLC's TwinCAT 3.1.${r.xae.targetBuild}` : ''}.
+        </div>
+      )}
       {!running && r?.xaeOpenUntil && !xaeClosed && (
         <div id="plc-build-xae" className="px-3 pb-2 -mt-1 flex items-center gap-2 text-slate-400">
           <span>

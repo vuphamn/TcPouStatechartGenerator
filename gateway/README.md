@@ -27,7 +27,7 @@ Requires Node.js 20 or later on the gateway machine.
    ```powershell
    cd gateway
    npm install --omit=dev
-   node gateway.cjs init --host statescope-gw.example.local
+   node gateway.cjs init --host machinescope-gw.example.local
    ```
    `init` creates `config.json` and a self-signed certificate for that host name. For browsers to trust the gateway, replace `cert.pem` / `key.pem` with a certificate from your company CA. Alternatively, set `tls.pfx` and `tls.passphrase`.
 3. **Set up the PLCs:** start the gateway (step 6) and open its **setup page** on the gateway machine, `https://localhost:8443/admin` (see [Setup page](#setup-page)): search the network for the PLCs, tick them, test them, save. Or edit `config.json` by hand:
@@ -54,7 +54,7 @@ Requires Node.js 20 or later on the gateway machine.
    - `localNetId`: the AMS NetId the gateway uses (its IP + `.1.1` by default). A PLC entry can override it.
    - `ip`: defaults to the first four numbers of `netId`. Use `host:port` for a forwarded ADS port.
    - `port`: the PLC runtime's ADS port (851 for the first PLC).
-   - `allowedOrigins`: only needed when the web app is served from somewhere else, e.g. `["https://statescope.example.com"]`.
+   - `allowedOrigins`: only needed when the web app is served from somewhere else, e.g. `["https://machinescope.example.com"]`.
 4. **Add an ADS route on each PLC** to the gateway: AMS NetId = `localNetId`, address = the gateway's IP. Use the PLC's TwinCAT router (*Router > Edit Routes*) or an XAE connected to the PLC.
 5. **Create access tokens** on the setup page, or from the command line. Each token is shown once; give it to its user:
    ```powershell
@@ -66,7 +66,7 @@ Requires Node.js 20 or later on the gateway machine.
    ```powershell
    node gateway.cjs start
    ```
-   To run it as a Windows service, use e.g. NSSM (`nssm install StateScopeGateway "C:\Program Files\nodejs\node.exe" "C:\gateway\gateway.cjs start"`) or your usual service wrapper.
+   To run it as a Windows service, use e.g. NSSM (`nssm install MachineScopeGateway "C:\Program Files\nodejs\node.exe" "C:\gateway\gateway.cjs start"`) or your usual service wrapper.
 
 ## Setup page
 
@@ -88,7 +88,7 @@ The page writes only `localNetId`, `plcs`, `tokens`, `alerts`, `boards`, `record
 Settings:
 - `"admin": { "enabled": false }` turns the page off.
 - `"admin": { "allowFrom": ["192.168.1.7"] }` also allows those addresses (an admin's workstation). Anyone who can open the page can create tokens: keep this list short.
-- A host name the gateway doesn't know as its own (for a DNS alias) goes in `"admin": { "hosts": ["statescope.example.local"] }`.
+- A host name the gateway doesn't know as its own (for a DNS alias) goes in `"admin": { "hosts": ["machinescope.example.local"] }`.
 
 The search needs UDP 48899 open between the gateway and the PLCs (outgoing, and the replies back to the gateway).
 

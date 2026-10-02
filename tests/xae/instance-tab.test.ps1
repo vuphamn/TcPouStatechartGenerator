@@ -27,7 +27,7 @@ Expect ($t -contains $tab -and ($t -contains "MachineScope: $XaePouName")) "a se
 Expect ((Selected $tab) -eq $true) 'the new tab is active'
 Expect ((LogSince) -match "live: start $XaePouName\.\w+ .*instance $([regex]::Escape($instance))") 'the new tab went live on its instance'
 
-$dte.ExecuteCommand('Tools.KvalStateScope.Open', $pou)
+$dte.ExecuteCommand('Tools.KvalMachineScope.Open', $pou)
 Start-Sleep 3
 Expect ((Tabs).Count -eq $t.Count) "plain Open of the POU: no new tab ($((Tabs).Count))"
 Add-Content $XaeLog ($mark = "---- same instance $(Get-Date -Format o) ----")

@@ -6,7 +6,7 @@ const { execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '..');
 const out = path.join(root, 'release', 'link');
-const bundle = path.join(out, 'statescope-link.cjs');
+const bundle = path.join(out, 'machinescope-link.cjs');
 const exe = path.join(out, 'Kval MachineScope Link.exe');
 fs.mkdirSync(out, { recursive: true });
 

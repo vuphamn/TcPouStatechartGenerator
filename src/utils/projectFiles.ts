@@ -10,7 +10,7 @@ import { triggerDownload } from './diagramExport.ts';
 
 interface DesktopProjectApi {
   projectPous: (fromPath: string) => Promise<ProjectFiles & { error?: string }>;
-  saveFile: (name: string, content: string) => Promise<{ path?: string; error?: string; canceled?: boolean }>;
+  saveFile: (name: string, content: string, opts?: { personal?: boolean }) => Promise<{ path?: string; error?: string; canceled?: boolean }>;
 }
 const desktop = (): Partial<DesktopProjectApi> | null =>
   (window as unknown as { tcDesktop?: Partial<DesktopProjectApi> }).tcDesktop ?? null;
@@ -69,11 +69,15 @@ export async function loadProjectFiles(pouPath?: string): Promise<ProjectFiles |
   return readFolder();
 }
 
-/** Saves the document: a save dialog (XAE, desktop) or a download (web). Resolves with where it went */
-export async function saveDocument(name: string, content: string): Promise<{ path?: string; error?: string; canceled?: boolean }> {
-  if (isXaeHost()) return hostRequest<{ path?: string; error?: string; canceled?: boolean }>({ type: 'saveDocument', name, content }, 'saveDocumentResult', 600000);
+/**
+ * Saves the document: a save dialog (XAE, desktop) or a download (web). Resolves with where it went. personal (a live
+ * recording): the dialog offers the user's own folder (Documents\Kval MachineScope\Recordings), not the project's:
+ * it is not for git
+ */
+export async function saveDocument(name: string, content: string, opts: { personal?: boolean } = {}): Promise<{ path?: string; error?: string; canceled?: boolean }> {
+  if (isXaeHost()) return hostRequest<{ path?: string; error?: string; canceled?: boolean }>({ type: 'saveDocument', name, content, ...(opts.personal ? { personal: true } : {}) }, 'saveDocumentResult', 600000);
   const d = desktop();
-  if (d?.saveFile) return d.saveFile(name, content);
+  if (d?.saveFile) return d.saveFile(name, content, opts);
   triggerDownload(new Blob([content], { type: /\.json$/i.test(name) ? 'application/json' : /\.csv$/i.test(name) ? 'text/csv;charset=utf-8' : 'text/html;charset=utf-8' }), name);
   return { path: name };
 }

@@ -131,6 +131,8 @@ import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, 
 import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendingEditors } from './utils/pendingSaves.ts';
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
+import { isEmptyLayout, layoutFileNameOf, parseLayout, serializeLayout, type PouLayout } from './utils/pouLayout.ts';
+import { layoutHost, readLayoutFile, writeLayoutFile, type LinkRequest } from './utils/hostLayout.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
 import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
 import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
@@ -321,7 +323,7 @@ import {
 } from './utils/diagramPresets.ts';
 import { applyCustomStylesToMermaid } from './utils/nodeStyles.ts';
 import { applyNotesToMermaid } from './utils/diagramNotes.ts';
-import { NodeOffsetsMap } from './utils/nodeDragger.ts';
+import { NodeOffsetsMap, type EdgeOffsetsMap } from './utils/nodeDragger.ts';
 import {
   CanvasNodePositionsMap,
   extractCanvasNodePositions,
@@ -672,7 +674,7 @@ export const App: React.FC = () => {
     [handleOpenEnumEditorModal]
   );
 
-  // Diagram notes and state documentation, kept per POU in localStorage. Several StateScopes (browser tabs, desktop
+  // Diagram notes and state documentation, kept per POU in localStorage. Several MachineScopes (browser tabs, desktop
   // windows, XAE tabs) share that storage: each keeps its own POU's notes, and picks up changes another one saves.
   const notesKey = `${NOTES_STORAGE_KEY}:${pouPath || pouFileName || 'POU'}`;
   const [diagramNotes, setDiagramNotes] = useState<DiagramNotes>({ nodes: {}, edges: {} });
@@ -1616,6 +1618,7 @@ export const App: React.FC = () => {
       instances: m.instances && m.instances.length ? m.instances : prev.instances,
       route: m.route ?? prev.route,
       ports: state === 'error' ? m.ports : undefined,
+      versions: state === 'connected' ? (m.twinCatBuild || m.xaeBuild ? { plc: m.twinCatBuild ?? null, xae: m.xaeBuild ?? null } : undefined) : prev.versions,
     }));
   }, []);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
@@ -4861,7 +4864,7 @@ export const App: React.FC = () => {
         group: kind,
         label: tp.name,
         hint: pou ? 'open in MachineScope' : isXaeHost() ? 'open in the TwinCAT editor' : undefined,
-        run: () => (pou ? void handleOpenType(tp.name, 'statescope') : isXaeHost() ? void handleOpenType(tp.name, 'xae') : showCopyToast(`${tp.name} is a ${kind}: MachineScope opens POUs`, 'error')),
+        run: () => (pou ? void handleOpenType(tp.name, 'machinescope') : isXaeHost() ? void handleOpenType(tp.name, 'xae') : showCopyToast(`${tp.name} is a ${kind}: MachineScope opens POUs`, 'error')),
       });
       if (tp.kind === 'GVL')
         for (const m of tp.members)
@@ -6145,7 +6148,7 @@ export const App: React.FC = () => {
     if (!symbolsOpen) setSymbolPaths([]);
   }, [symbolsOpen]);
 
-  // The POU and the followed instance in the window / tab title, to tell several StateScopes apart
+  // The POU and the followed instance in the window / tab title, to tell several MachineScopes apart
   const shownInstance = (liveStatus.state === 'connected' || liveStatus.state === 'lost' ? liveStatus.instance : undefined) ?? windowInstance ?? undefined;
   useEffect(() => {
     const pou = pouFileName ? pouFileName.replace(/\.TcPOU$/i, '') : '';
@@ -6179,7 +6182,8 @@ export const App: React.FC = () => {
       pou: pouTypeName, pouFile: pouFileName, instance: liveStatus.instance ?? (liveSettings.instance || undefined), target: liveStatus.target,
       stateVar: identifiedStatesResult.stateVarName || 'machineState',
     });
-    const r = await saveDocument(recordingFileName(pouTypeName, rec.instance), JSON.stringify(rec));
+    // (a recording is the user's own: offered in their folder, not the project's)
+    const r = await saveDocument(recordingFileName(pouTypeName, rec.instance), JSON.stringify(rec), { personal: true });
     if (r.error) showCopyToast(`Could not save the recording: ${r.error}`, 'error', 8000);
     else if (!r.canceled) showCopyToast(`Recording saved${r.path ? `: ${r.path}` : ''} (${rec.values.length} samples${rec.truncated ? ', the oldest dropped' : ''})`, 'success', 6000);
   }, [pouTypeName, pouFileName, liveStatus.instance, liveStatus.target, liveSettings.instance, identifiedStatesResult.stateVarName, showCopyToast]);
@@ -6370,6 +6374,96 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStatus.state, liveStatus.target, canCopyProject]);
   const viaLink = liveMode === 'web' && liveVia === 'link';
+
+  // ---- The POU's layout file (<POU>.machinescope.json beside it: for git, shared with the other developers) ----
+  // The states' places, the transitions' routes and labels, the notes and the states' documentation: read when the POU
+  // is loaded, written a moment after each change (only when it differs). Kept by the host that has the POU's folder:
+  // the desktop app, XAE, Link (a PLC project it keeps); in the web edition on its own, in this browser as before.
+  // The theme, the presets, the dock, bookmarks and live recordings stay each user's own.
+  const layoutLink = useCallback<() => LinkRequest | null>(
+    () => (viaLink && gatewayRef.current && linkBuildRef.current?.features?.includes('layoutFile') ? (m, a, t) => gatewayRef.current!.request(m as never, a, t) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [viaLink, gatewayFeatures]
+  );
+  const layoutPou = layoutHost(pouPath, layoutLink()) ? pouPath! : null;
+  const [layoutEdges, setLayoutEdges] = useState<EdgeOffsetsMap>({});
+  const [layoutSeed, setLayoutSeed] = useState<{ key: string; edges: EdgeOffsetsMap } | null>(null);
+  const [layoutStatus, setLayoutStatus] = useState<{ file: string | null; state: 'loaded' | 'saved' | 'new' | 'other-engine' | 'error' | 'browser'; detail?: string } | null>(null);
+  // (the file as read: its POU, its text, its places when made by another layout engine: kept as they are)
+  const layoutRef = useRef<{ pou: string | null; ready: boolean; text: string | null; other: PouLayout | null }>({ pou: null, ready: false, text: null, other: null });
+  useEffect(() => {
+    const pou = layoutPou;
+    layoutRef.current = { pou, ready: false, text: null, other: null };
+    setLayoutEdges({});
+    if (!pou) {
+      setLayoutStatus(pouContent ? { file: null, state: 'browser' } : null);
+      return;
+    }
+    const file = layoutFileNameOf(pou.split(/[\\/]/).pop() ?? pou);
+    let gone = false;
+    void readLayoutFile(pou, layoutLink()).then((r) => {
+      if (gone || layoutRef.current.pou !== pou) return;
+      if (r.error) {
+        setLayoutStatus({ file, state: 'error', detail: r.error });
+        return;
+      }
+      const parsed = r.text ? parseLayout(r.text) : null;
+      if (parsed && 'error' in parsed) {
+        // (a file that is not one, or a newer one: left as it is, not written over)
+        setLayoutStatus({ file, state: 'error', detail: parsed.error });
+        return;
+      }
+      if (parsed) {
+        setDiagramNotes(parsed.notes);
+        if (parsed.layoutEngine === layoutEngine) {
+          setNodeOffsets(parsed.states);
+          setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: parsed.transitions });
+          setLayoutEdges(parsed.transitions);
+          setLayoutStatus({ file, state: 'loaded' });
+        } else {
+          // (made with another layout engine: its places drawn by that one only; the file's kept, its notes used)
+          layoutRef.current.other = parsed;
+          setNodeOffsets({});
+          setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: {} });
+          setLayoutStatus({ file, state: 'other-engine', detail: `Its states' places were made with ${parsed.layoutEngine.toUpperCase()}: choose that engine to see them (they are kept as they are)` });
+        }
+      } else {
+        setNodeOffsets({});
+        setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: {} });
+        setLayoutStatus({ file, state: 'new' });
+      }
+      layoutRef.current = { ...layoutRef.current, ready: true, text: r.text ?? null };
+    });
+    return () => {
+      gone = true;
+    };
+    // (when the POU or where it is kept changes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutPou]);
+  // Written a moment after a change, when it differs (none while there is nothing to keep)
+  useEffect(() => {
+    const pou = layoutRef.current.pou;
+    if (!pou || !layoutRef.current.ready) return;
+    const t = window.setTimeout(() => {
+      if (layoutRef.current.pou !== pou || !layoutRef.current.ready) return;
+      const other = layoutRef.current.other;
+      const layout: PouLayout = other
+        ? { ...other, notes: diagramNotes }
+        : { pou: pou.split(/[\\/]/).pop() ?? pou, layoutEngine, states: nodeOffsets, transitions: layoutEdges, notes: diagramNotes };
+      if (!layoutRef.current.text && isEmptyLayout(layout)) return;
+      const text = serializeLayout(layout);
+      if (text === layoutRef.current.text) return;
+      const file = layoutFileNameOf(pou.split(/[\\/]/).pop() ?? pou);
+      void writeLayoutFile(pou, text, layoutLink()).then((r) => {
+        if (layoutRef.current.pou !== pou) return;
+        if (r.error) return setLayoutStatus({ file, state: 'error', detail: r.error });
+        layoutRef.current.text = text;
+        setLayoutStatus((s) => ({ file, state: other ? 'other-engine' : 'saved', detail: s?.state === 'other-engine' ? s.detail : undefined }));
+      });
+    }, 800);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeOffsets, layoutEdges, diagramNotes, layoutEngine]);
   // A box's device details for the I/O tab: TwinCAT's device descriptions and the user's pictures (the desktop app;
   // Link, also offline with its pairing code)
   const ioViaLink = !desktopLive() && !isXaeHost() && liveVia === 'link' && !!linkCode;
@@ -8497,6 +8591,9 @@ export const App: React.FC = () => {
                   nodeOffsets={nodeOffsets}
                   keepPositionsSignal={keepCanvasPositions}
                   onNodeOffsetsChange={handleCanvasNodeOffsets}
+                  initialEdgeOffsets={layoutSeed?.edges}
+                  edgeOffsetsKey={layoutSeed?.key}
+                  onEdgeOffsetsChange={setLayoutEdges}
                   onCanvasPositionsChange={setCanvasPositions}
                   notes={diagramNotes}
                   onSaveNote={handleSaveNote}
@@ -9181,6 +9278,7 @@ export const App: React.FC = () => {
           live={liveActive ? { state: liveSession.current?.state ?? null, message: liveStatus.message } : null}
           onOpenLive={() => showDockTab('live')}
           io={ioHealth}
+          layout={layoutStatus}
           onOpenIo={() => showDockTab('io')}
           changes={chartDiff && compareOnDiagram ? chartDiff.total : null}
           onOpenChanges={() => showDockTab('changes')}

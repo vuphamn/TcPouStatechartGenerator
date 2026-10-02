@@ -6,7 +6,7 @@
 
 import type { LiveValue } from './liveGuards.ts';
 
-export const RECORDING_KIND = 'kval-statescope-recording';
+export const RECORDING_KIND = 'kval-machinescope-recording';
 const MAX_VALUES = 500000;
 const MAX_VARS = 500000;
 

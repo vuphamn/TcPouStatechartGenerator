@@ -229,7 +229,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
         const tt = findTypeTarget([decl], sym, memberOf);
         const opener = tt?.member ? openTypeHandlerFor(tt.type) : null;
         if (tt?.member && opener) {
-          opener.open(tt.type, 'statescope', tt.member);
+          opener.open(tt.type, 'machinescope', tt.member);
           return;
         }
       }
@@ -255,7 +255,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       const typeTarget = findTypeTarget([decl], sym, memberOf);
       const opener = typeTarget?.isTypeItself ? openTypeHandlerFor(typeTarget.type) : null;
       if (typeTarget && opener) {
-        opener.open(typeTarget.type, 'statescope');
+        opener.open(typeTarget.type, 'machinescope');
         return;
       }
       showNotice('warning', `'${sym}' is not declared in ${body.name || 'the POU'} (a base class, a GVL or a library?)`);

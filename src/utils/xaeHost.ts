@@ -26,6 +26,9 @@ export type HostMessage =
       instance?: string;
       instances?: string[];
       symbolType?: string;
+      /** XAE: the PLC's TwinCAT build (3.1.4024: 4024; null: not known) and the XAE's */
+      twinCatBuild?: number | null;
+      xaeBuild?: number | null;
       /** Desktop: the address this computer uses towards the PLC (the PLC needs a route for it) */
       route?: { localNetId: string; localIp: string };
       /** An error: nothing on the chosen ADS port, the PLC runtimes it has (port, state) */
@@ -39,6 +42,8 @@ export type HostMessage =
   | { type: 'liveVars'; values: { id: string; t: number; v: boolean | number | string | null }[] }
   /** The committed (git HEAD) version of a loaded file */
   | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
+  /** A POU's layout file (<POU>.machinescope.json): read (text; null: none yet) or written */
+  | { type: 'layoutResult'; requestId: number; text?: string | null; written?: boolean; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
   | { type: 'projectPous'; project?: string; pous?: { name: string; path?: string; content: string }[]; duts?: DutCandidate[]; error?: string }
   /** A rename's other files: the project's POUs whose code has the name */
@@ -121,6 +126,9 @@ export type AppMessage =
   | { type: 'liveWatch'; vars: LiveWatchVar[] }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
   | { type: 'gitShow'; path: string; requestId: number }
+  /** A loaded POU's layout file beside it: read, or written (text; null: removed) */
+  | { type: 'layoutRead'; path: string; requestId: number }
+  | { type: 'layoutWrite'; path: string; requestId: number; text: string | null }
   /** Open another POU of the same PLC project: a referenced state machine (typeName) or a previous one (path) */
   | { type: 'openPou'; typeName?: string; path?: string }
   /** Open a POU (or DUT, interface) of the loaded POU's PLC project in TwinCAT's editor */
@@ -142,7 +150,7 @@ export type AppMessage =
   /** Other POUs of the project written (a rename; answered with saveOtherResult) */
   | { type: 'saveOther'; requestId: number; files: { path: string; content: string; baseline: string }[] }
   /** Save a document (a save dialog; answered with saveDocumentResult) */
-  | { type: 'saveDocument'; name: string; content: string }
+  | { type: 'saveDocument'; name: string; content: string; personal?: boolean }
   /** Build: XAE's own build of the open solution (answered with xaeBuildResult) */
   | { type: 'buildProject'; requestId: number }
   /** Save All: to the other MachineScope tabs of this XAE, and this tab's answer to theirs */

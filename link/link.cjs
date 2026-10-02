@@ -2,7 +2,7 @@
 // Kval MachineScope Link: a small helper on this computer that gives the web edition's Live tab ADS access to PLCs
 // (a browser cannot talk ADS itself). Listens on 127.0.0.1 only; a page must present the pairing code shown here.
 //
-//   statescope-link [--port 48960] [--new-code] [--no-open]
+//   machinescope-link [--port 48960] [--new-code] [--no-open]
 // Its page, http://127.0.0.1:<port>/, shows the pairing code and the paired pages (opened at start from a console,
 // and when Link is started again while it runs).
 const fs = require('fs');
@@ -62,7 +62,7 @@ const log = (...a) => console.log(new Date().toLocaleTimeString(), ...a);
 const startup = createStartup({ port, log });
 
 // ---- Pairing code (kept in the user's profile) ----
-const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'KvalStateScope');
+const dir = path.join(process.env.APPDATA || path.join(os.homedir(), '.config'), 'KvalMachineScope');
 const file = path.join(dir, 'link.json');
 function newCode() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I
@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'ioTree', 'ecatStates', 'deviceInfo'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'layoutFile', 'ioTree', 'ecatStates', 'deviceInfo'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -296,6 +296,7 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'plcProjectCopy') return void session.projectCopy(send, m);
     // A POU of that copy (an instance of it opened live)
     if (m.type === 'projectPou') return void session.projectPou(send, m);
+    if (m.type === 'layoutFile') return void session.layoutFile(send, m);
     // Rebuild the PLC's project with the page's edits (XAE on this computer), and write it back when asked
     if (m.type === 'plcBuildClose') return void session.closeBuild(send, m);
     if (m.type === 'plcLicense') return void session.license(send, m);
@@ -437,7 +438,7 @@ server.listen(port, '127.0.0.1', () => {
   console.log(`  Pairing code:  ${settings.code}`);
   console.log('');
   console.log('Enter it once in the web app (Live tab, "This computer"). Keep this window open while you go live.');
-  console.log('Only this computer can connect. New code: statescope-link --new-code');
+  console.log('Only this computer can connect. New code: machinescope-link --new-code');
   console.log(`Link's page (the code, the paired pages): http://127.0.0.1:${port}/`);
   console.log('');
   if (shouldOpen) openPage();

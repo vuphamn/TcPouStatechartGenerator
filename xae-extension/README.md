@@ -4,7 +4,7 @@ A Visual Studio extension (VSIX) that opens a Kval `SM_*.TcPOU` state machine in
 
 Targets: TcXaeShell 64-bit (TwinCAT 3.1.4026+), and Visual Studio 2022 and 2026 with TwinCAT integration. It uses the same installation target as Beckhoff's own XAE extensions.
 
-**TwinCAT 4024** (not yet tested): its TcXaeShell is the 32-bit Visual Studio 2017 shell, which cannot load that build. `KvalStateScope.Xae.Vs2017` builds the same sources against the Visual Studio 2017 SDK, as `KvalStateScope.Xae.Vs2017.vsix` (`build.ps1` builds both). Those IDEs have no WebView2 of their own, so it carries WebView2 (its x86 loader too; the WebView2 Runtime must be on the PC, as on any current Windows 10 / 11). `install-tcxaeshell.ps1` installs it into `C:\Program Files (x86)\Beckhoff\TcXaeShell` when that is the only TcXaeShell (or pass `-ShellRoot` and `-Vsix`). Visual Studio 2017 / 2019 take it with their VSIXInstaller. The desktop installer installs it there too (its option **TcXaeShell 32-bit, TwinCAT 4024**, on by default when that shell is found), beside the 64-bit one when both are on the PC.
+**TwinCAT 4024** (not yet tested): its 64-bit TcXaeShell is a Visual Studio 2022 shell, like 4026's (the same folder, `C:\Program Files\Beckhoff\TcXaeShell`): it takes the main build. Its 32-bit TcXaeShell is a Visual Studio 2017 shell, which cannot load that build. `KvalMachineScope.Xae.Vs2017` builds the same sources against the Visual Studio 2017 SDK, as `KvalMachineScope.Xae.Vs2017.vsix` (`build.ps1` builds both). Those IDEs have no WebView2 of their own, so it carries WebView2 (its x86 loader too; the WebView2 Runtime must be on the PC, as on any current Windows 10 / 11). `install-tcxaeshell.ps1` installs it into `C:\Program Files (x86)\Beckhoff\TcXaeShell` when that is the only TcXaeShell (or pass `-ShellRoot` and `-Vsix`). Visual Studio 2017 / 2019 take it with their VSIXInstaller. The desktop installer installs it there too (its option **TcXaeShell 32-bit, TwinCAT 4024**, on by default when that shell is found), beside the 64-bit one when both are on the PC.
 
 ## Build
 
@@ -15,7 +15,7 @@ cd xae-extension
 .\build.ps1          # npm run build, copy dist/ into the extension, build the VSIX
 ```
 
-Output: `xae-extension\KvalStateScope.Xae\bin\Release\KvalStateScope.Xae.vsix`
+Output: `xae-extension\KvalMachineScope.Xae\bin\Release\KvalMachineScope.Xae.vsix`
 
 ## Install
 
@@ -36,7 +36,7 @@ The simplest way is the Kval MachineScope **Desktop installer** (`build.cmd` at 
 
 In Visual Studio, if the commands don't appear after a restart, make it merge extension registrations once with `devenv.exe /updateconfiguration`. In TcXaeShell, run `install-tcxaeshell.ps1` again: it updates the change marker.
 
-Uninstall from **Extensions > Manage Extensions** (Visual Studio), with `VSIXInstaller.exe /uninstall:KvalStateScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6` (Visual Studio's installer), or with `install-tcxaeshell.ps1 -Uninstall` (TcXaeShell).
+Uninstall from **Extensions > Manage Extensions** (Visual Studio), with `VSIXInstaller.exe /uninstall:KvalMachineScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6` (Visual Studio's installer), or with `install-tcxaeshell.ps1 -Uninstall` (TcXaeShell).
 
 It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally already have. The WebView2 .NET assemblies are not shipped: each IDE provides its own copy (the extension compiles against the oldest, TcXaeShell's 1.0.2151.40).
 
@@ -46,7 +46,7 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
   - the project-item context menu;
   - the context menu of an open document's tab.
 - **Tools > Kval MachineScope...** opens the selected or active `.TcPOU`. Without one, it asks for a file.
-- **Command Window:** `Tools.KvalStateScope.Open C:\Path\SM_X.TcPOU`
+- **Command Window:** `Tools.KvalMachineScope.Open C:\Path\SM_X.TcPOU`
 - **One tab per POU:** each POU opens in its own **MachineScope: <POU>** tab, so several state machines can be watched at once. Opening a POU that already has a tab brings that tab forward, without reloading it. The tabs share one WebView2 browser process.
 - **Machine Overview:** while live, every state machine under `MAIN.mainStateMachine` with its current state (names from the PLC's enum types), time in state and error states. Watch opens one in its own tab. Like Symbols, it has not yet run against a real PLC here.
 - **PLC Symbols:** while live, the Live tab's **Symbols** browses the PLC's symbols from `MAIN.mainStateMachine` with their values; **Watch** opens another state machine of the project in its own tab, live. (Built on the same TcAdsDll calls as the live view; like guard values, not yet run against a real PLC here, because this PC's TwinCAT system is not started.)
@@ -58,7 +58,7 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 - **Through XAE:** when the file belongs to a TwinCAT project open in the IDE, the change goes through Beckhoff's Automation Interface. XAE updates its project and TwinCAT writes the file, so there is no separate save in XAE.
 - **Only the changed parts are written:** the declarations and ST implementations that changed, on the POU, its methods, actions and property accessors, or the DUT. That keeps the object ids, so git diffs stay clean, and an open TwinCAT editor stays open. If the structure changed (a method added or removed, non-ST code edited), the whole object is replaced. TwinCAT then assigns new ids and closes its editor, which MachineScope opens again.
 - **Files outside an open TwinCAT project** are written to disk directly.
-- **Backups:** a copy of each original is kept in `%LocalAppData%\KvalStateScope\Backups`. Writes through the Automation Interface are not in XAE's undo history.
+- **Backups:** a copy of each original is kept in `%LocalAppData%\KvalMachineScope\Backups`. Writes through the Automation Interface are not in XAE's undo history.
 - **Refused** when XAE has unsaved changes for that file. Save or close it in XAE first.
 
 **Staying in sync with XAE.** MachineScope watches the loaded files. When one changes in XAE or on disk (edited and saved in TwinCAT, a git pull, ...):
@@ -112,7 +112,7 @@ The `.TcDUT` enum is found as in the other editions: every `.TcDUT` in the `.TcP
 
 TwinCAT's PLC tree shows POUs with its own context menu, named **PlcFile**. Its numeric id is internal to Beckhoff's package, so the extension adds **Open in Kval MachineScope** to that menu by name when it loads. It only does this once, and the IDE keeps the placement in its settings. The TwinCAT tree also shows that menu through its own command handling, which does not ask other extensions about their commands. A priority command target (`PriorityCommandTarget.cs`) makes sure the command is asked, so it can show itself for a `.TcPOU`.
 
-To add the command to another TwinCAT context menu, find the menu's name. With TcXaeShell running, list the IDE's menus through its automation object (`DTE.CommandBars`, each with `Name` and `Controls`) and look for the menu with the entries you see. Then add it in `OpenInStateScopeCommand.AddToTwinCATPouMenu`.
+To add the command to another TwinCAT context menu, find the menu's name. With TcXaeShell running, list the IDE's menus through its automation object (`DTE.CommandBars`, each with `Name` and `Controls`) and look for the menu with the entries you see. Then add it in `OpenInMachineScopeCommand.AddToTwinCATPouMenu`.
 
 Command logging (Ctrl+Shift+right-click shows a menu's Guid and CmdID) was not reliable for the PLC tree. For a POU it reported a group of the PLC *project* node's menu. If you need it anyway:
 
@@ -125,7 +125,7 @@ reg delete "HKCU\Software\Beckhoff\TcXaeShell\17.0_IsoShell\General" /v EnableVS
 
 Visual Studio 2022 / 2026 store their settings in a private registry file instead. There, use `VsRegEdit.exe` from the IDE folder: `VsRegEdit.exe set local HKCU General EnableVSIPLogging dword 1`.
 
-After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuResource("Menus.ctmenu", N)]`. TcXaeShell only re-merges an extension's menus when that number changes.
+After changing `KvalMachineScopePackage.vsct`, raise the version in `[ProvideMenuResource("Menus.ctmenu", N)]`. TcXaeShell only re-merges an extension's menus when that number changes.
 
 ## Tested
 
@@ -160,17 +160,17 @@ After changing `KvalStateScopePackage.vsct`, raise the version in `[ProvideMenuR
 
 - **Unsaved edits in TwinCAT's editor** are not visible to MachineScope until they are saved in XAE; saving from MachineScope is refused while they exist.
 - **Live view** follows integer / enum state variables of 1, 2, 4 or 8 bytes. Instances inside arrays (`ARRAY OF SM_X`) are not found automatically: type the path, e.g. `MAIN.aTables[1]`.
-- **DevTools** are enabled in the tab for diagnostics (F12). Start-up, load and save steps are logged to `%LocalAppData%\KvalStateScope\log.txt`.
+- **DevTools** are enabled in the tab for diagnostics (F12). Start-up, load and save steps are logged to `%LocalAppData%\KvalMachineScope\log.txt`.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `KvalStateScopePackage.cs` | Package: loads when a solution opens; shows the tool window |
-| `KvalStateScopePackage.vsct` | Commands and menu placements |
-| `OpenInStateScopeCommand.cs` | Command handlers |
+| `KvalMachineScopePackage.cs` | Package: loads when a solution opens; shows the tool window |
+| `KvalMachineScopePackage.vsct` | Commands and menu placements |
+| `OpenInMachineScopeCommand.cs` | Command handlers |
 | `SelectionHelper.cs` | Finds the `.TcPOU` behind the selection / active document |
-| `StateScopeToolWindow.cs`, `StateScopeControl.cs` | Document tab with WebView2; message bridge to the app (`src/utils/xaeHost.ts`) |
+| `MachineScopeToolWindow.cs`, `MachineScopeControl.cs` | Document tab with WebView2; message bridge to the app (`src/utils/xaeHost.ts`) |
 | `HostFiles.cs` | Dialogs, `.TcDUT` search, saving with backup and safety checks |
 | `TwinCATProject.cs` | Automation Interface: finds a file's PLC tree item, reads / writes it (changed parts only) |
 | `LiveMonitor.cs` | Live view: ADS through `TcAdsDll.dll` (P/Invoke), symbol lookup, change notification |

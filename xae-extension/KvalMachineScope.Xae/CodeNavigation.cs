@@ -11,7 +11,7 @@ using Microsoft.VisualStudio.TextManager.Interop;
 // (the Visual Studio 2017 SDK also has a Shell.Task)
 using Task = System.Threading.Tasks.Task;
 
-namespace KvalStateScope.Xae
+namespace KvalMachineScope.Xae
 {
     /// <summary>
     /// Opens a method of a POU in TwinCAT's editor at a line, the way a user would: the method's node in the project

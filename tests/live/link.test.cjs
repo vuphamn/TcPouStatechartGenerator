@@ -34,24 +34,24 @@ function session(url, messages, headers = {}, waitMs = 2500) {
   const banner = fs.readFileSync(path.join(h.OUT, 'link-run.txt'), 'utf8');
   const code = banner.match(/Pairing code:\s+(\S+)/)?.[1];
   expect(!!code && /^[A-Z2-9]{5}-[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(code), `exe started, pairing code shown (${code})`);
-  expect(fs.existsSync(path.join(profile, 'KvalStateScope', 'link.json')), 'code kept in the profile');
+  expect(fs.existsSync(path.join(profile, 'KvalMachineScope', 'link.json')), 'code kept in the profile');
   const URL_ = 'ws://127.0.0.1:48961/live';
 
   const page = await new Promise((r) => http.get('http://127.0.0.1:48961/', (res) => { let b = ''; res.on('data', (d) => (b += d)); res.on('end', () => r(b)); }));
   expect(/Kval MachineScope Link/.test(page) && /Pairing code/.test(page), 'its page');
   const rebinding = await session(URL_, [], { Host: 'evil.example:48961' });
   expect(rebinding.status === 403, `foreign Host refused (${rebinding.status})`);
-  const wrong = await session(URL_, [{ type: 'hello', token: 'AAAAA-BBBBB-CCCCC' }], { Origin: 'https://statescope.example' });
+  const wrong = await session(URL_, [{ type: 'hello', token: 'AAAAA-BBBBB-CCCCC' }], { Origin: 'https://machinescope.example' });
   expect(wrong.code === 4401 && wrong.got[0]?.type === 'denied', `wrong code refused (${wrong.code})`);
   const lower = code.toLowerCase().replace(/-/g, ' ');
-  const bad = await session(URL_, [{ type: 'hello', token: lower }, { type: 'liveStart', netId: '127.0.0.1.1.1; rm', stateVar: 'machineState' }], { Origin: 'https://statescope.example' });
+  const bad = await session(URL_, [{ type: 'hello', token: lower }, { type: 'liveStart', netId: '127.0.0.1.1.1; rm', stateVar: 'machineState' }], { Origin: 'https://machinescope.example' });
   expect(bad.got[0]?.type === 'welcome', 'code accepted in any case / spacing');
   expect(bad.got[1]?.state === 'error' && /Check the PLC address/.test(bad.got[1].message), 'a bad address is refused');
 
   const live = await session(URL_, [
     { type: 'hello', token: code },
     { type: 'liveStart', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48954', localNetId: '10.9.9.9.1.1', stateVar: 'machineState', typeName: 'SM_TableManager' },
-  ], { Origin: 'https://statescope.example' }, seq.states.length * 700 + 4000);
+  ], { Origin: 'https://machinescope.example' }, seq.states.length * 700 + 4000);
   const connected = live.got.find((m) => m.state === 'connected');
   expect(connected && connected.instance === 'MAIN.mainStateMachine.smTableManager', `connected, instance from the PLC's tables: "${connected?.message}"`);
   const values = live.got.filter((m) => m.type === 'liveValues').flatMap((m) => m.events.map((e) => e.value)).filter((v, i, a) => i === 0 || v !== a[i - 1]);

@@ -1,5 +1,5 @@
 /**
- * Several StateScopes on one POU, each following another PLC instance of it (MAIN.fbLine1.smTable,
+ * Several MachineScopes on one POU, each following another PLC instance of it (MAIN.fbLine1.smTable,
  * MAIN.fbLine2.smTable, ...). A new window / tab starts with the POU, the instance to follow, and whether to go live.
  * Where the host cannot load the POU itself (the web edition, a sample or dropped file in the desktop app), the page
  * that opens it hands the POU over through localStorage: the new page gets "?handoff=<id>" and takes the entry.
