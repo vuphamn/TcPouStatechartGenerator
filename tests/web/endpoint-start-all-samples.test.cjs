@@ -1,7 +1,8 @@
 // Every sample: transitions' start endpoints (a spread of each chart's edges) dragged onto another state: the code
 // moved (the status says so; the chart has the edge from the new state), every state where it was on the canvas
-// (locked or not), every other transition drawn as it was (its route, its label), Ctrl+Z puts the code back (the
-// others still as they were)
+// (locked or not), every other transition drawn as it was (its route, its label), the moved one still into its state
+// at the same spot, Ctrl+Z puts the code back (the others still as they were)
+// runner-timeout: 600 (5 drops in each of the samples, each undone)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -40,8 +41,8 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       out[k] = `${round(path.getAttribute('d'))} @ ${label?.textContent?.trim() ? round(label.getAttribute('transform')) : ''}`;
     }
     // (the composites' boxes too)
-    for (const c of svg.querySelectorAll('g.cluster')) {
-      const r = c.querySelector(':scope > rect');
+    for (const c of svg.querySelectorAll('g.cluster, g.statediagram-cluster')) {
+      const r = c.querySelector(':scope > rect:not(.inner), :scope > g > rect.outer');
       const b = r?.getBoundingClientRect();
       const name = c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
       if (b) out[`cluster:${name}`] =round(`${b.x},${b.y},${b.width},${b.height}`);
@@ -50,6 +51,10 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
   });
   // The ones redrawn: in both, not between the edge's states (old or new), differing
   const redrawn = (a, b, pairs) => Object.keys(a).filter((k) => b[k] !== undefined && !pairs.some((pr) => k.startsWith(`${pr}|`)) && a[k] !== b[k]);
+  // Where the transitions between two states end (their routes' last points, in the drawing's coordinates)
+  const endsOf = (from, to) => p.evaluate((from, to) => [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgePaths path.tc-edge-path')]
+    .filter((x) => !x.classList.contains('tc-edge-hitbox') && x.getAttribute('data-source-id') === from && x.getAttribute('data-target-id') === to)
+    .map((x) => { const n = (x.getAttribute('d') || '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []; return [n[n.length - 2], n[n.length - 1]]; }), from, to);
   const keys = () => p.evaluate(() => [...new Set([...document.querySelectorAll('#mermaid-diagram-svg-container svg path.tc-edge-path[data-edge-key]')].map((x) => x.getAttribute('data-edge-key')))]);
   // The edges whose start can be dragged: both ends states drawn (not the initial one, not a composite's border)
   const candidates = () => p.evaluate(() => {
@@ -170,6 +175,7 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       }
       const before = await places();
       const routesBefore = await routes();
+      const endsBefore = await endsOf(from, to);
       const statusBefore = await status();
       await p.mouse.move(hd.x, hd.y);
       await p.mouse.down();
@@ -191,6 +197,11 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       expect(shifted.length === 0, `${sample} ${key}: no state moved on the canvas (${shifted.slice(0, 4).map((id) => `${id} ${before[id]}→${after[id]}`).join(', ') || 'none'})`);
       // (KSS_ENDPOINT_SHOTS=1: the canvas after each drop, in tests/.output)
       if (process.env.KSS_ENDPOINT_SHOTS) await p.screenshot({ path: h.out(`endpoint-${sample}-${key.replace(/[^\w]+/g, '_')}.png`) });
+      // (the moved one: into its state at the same spot as before)
+      const endsAfter = await endsOf(pl.target, to);
+      const sameEnd = endsAfter.some((a) => endsBefore.some((b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 3));
+      // (drawn from its composite's border instead, merged with others: nothing of its own to compare)
+      if (endsAfter.length) expect(sameEnd, `${sample} ${key}: from ${pl.target}, still into ${to} where it was (${JSON.stringify(endsBefore)} → ${JSON.stringify(endsAfter)})`);
       // (every other transition as it was drawn: its route and its label)
       const routesAfter = await routes();
       const pairs = [key, `${pl.target}->${to}`];

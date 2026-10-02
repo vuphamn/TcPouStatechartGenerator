@@ -124,9 +124,11 @@ import {
   findEdgePathElement,
   getEdgeAnchorPoint,
   parseTranslation,
+  routeToNewEnd,
   getNodeGeometry,
   nodeShapeOf,
 } from '../utils/nodeDragger.ts';
+import { COMPOSITE_SELECTOR, compositeMembersOf, compositeNameOf, compositeRectsOf, growCompositesToMembers } from '../utils/compositeBounds.ts';
 import {
   CanvasNodePositionsMap,
   extractCanvasNodePositions,
@@ -241,6 +243,14 @@ export interface MermaidViewerHandle {
   tidyEdges: () => number;
 }
 
+/** A transition's end dropped on another state: which end, the transition, the state, its route then */
+interface MovedEnd {
+  atStart: boolean;
+  from: string;
+  to: string;
+  newId: string;
+  d: string;
+}
 /** A transition's route as drawn (its path's d, its label's place), kept across an edit from the canvas */
 interface KeptRoute {
   d: string;
@@ -269,46 +279,49 @@ function keptRoutesOf(svg: SVGSVGElement): Record<string, KeptRoute[]> {
   return out;
 }
 /** A composite's box as drawn (its rect, its title's place; in its group's own coordinates, the group's place) */
+type KeptBox = { x: number; y: number; width: number; height: number } | null;
 interface KeptCluster {
   at: { x: number; y: number };
-  rect: { x: number; y: number; width: number; height: number } | null;
+  outer: KeptBox;
+  inner: KeptBox;
   label: { x: number; y: number } | null;
 }
-const clusterNameOf = (c: Element) => c.getAttribute('data-id') || c.id.replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '');
 const clusterPartsOf = (c: Element) => ({
-  rect: c.querySelector<SVGRectElement>(':scope > rect'),
+  ...compositeRectsOf(c),
   label: c.querySelector<SVGGElement>(':scope > g.cluster-label'),
   at: parseTranslation(c.getAttribute('data-orig-transform') ?? c.getAttribute('transform') ?? ''),
 });
-/** Each composite's box now, by its name */
+const boxOfRect = (r: SVGRectElement | null): KeptBox => {
+  const n = (a: string) => parseFloat(r?.getAttribute(a) ?? 'NaN');
+  return r && [n('x'), n('y'), n('width'), n('height')].every(Number.isFinite) ? { x: n('x'), y: n('y'), width: n('width'), height: n('height') } : null;
+};
+/** Each composite's box now (a flowchart's subgraph, a state diagram's composite), by its name */
 function keptClustersOf(svg: SVGSVGElement): Record<string, KeptCluster> {
   const out: Record<string, KeptCluster> = {};
-  for (const c of svg.querySelectorAll('g.cluster')) {
-    const { rect, label, at } = clusterPartsOf(c);
-    const n = (a: string) => parseFloat(rect?.getAttribute(a) ?? 'NaN');
-    out[clusterNameOf(c)] = {
-      at,
-      rect: rect && [n('x'), n('y'), n('width'), n('height')].every(Number.isFinite) ? { x: n('x'), y: n('y'), width: n('width'), height: n('height') } : null,
-      label: label ? parseTranslation(label.getAttribute('transform') ?? '') : null,
-    };
+  for (const c of svg.querySelectorAll(COMPOSITE_SELECTOR)) {
+    const { outer, inner, label, at } = clusterPartsOf(c);
+    out[compositeNameOf(c)] = { at, outer: boxOfRect(outer), inner: boxOfRect(inner), label: label ? parseTranslation(label.getAttribute('transform') ?? '') : null };
   }
   return out;
 }
 /** The new drawing's composites as they were drawn: the layout sized them for its own places, not the states' kept ones */
 function restoreKeptClusters(svg: SVGSVGElement, kept: Record<string, KeptCluster>) {
-  for (const c of svg.querySelectorAll('g.cluster')) {
-    const k = kept[clusterNameOf(c)];
+  for (const c of svg.querySelectorAll(COMPOSITE_SELECTOR)) {
+    const k = kept[compositeNameOf(c)];
     if (!k) continue;
-    const { rect, label, at } = clusterPartsOf(c);
+    const { outer, inner, label, at } = clusterPartsOf(c);
     // (its group placed elsewhere this time: the box where it was all the same)
     const dx = k.at.x - at.x;
     const dy = k.at.y - at.y;
-    if (rect && k.rect) {
-      rect.setAttribute('x', String(k.rect.x + dx));
-      rect.setAttribute('y', String(k.rect.y + dy));
-      rect.setAttribute('width', String(k.rect.width));
-      rect.setAttribute('height', String(k.rect.height));
-    }
+    const put = (r: SVGRectElement | null, b: KeptBox) => {
+      if (!r || !b) return;
+      r.setAttribute('x', String(b.x + dx));
+      r.setAttribute('y', String(b.y + dy));
+      r.setAttribute('width', String(b.width));
+      r.setAttribute('height', String(b.height));
+    };
+    put(outer, k.outer);
+    put(inner, k.inner);
     if (label && k.label) label.setAttribute('transform', `translate(${k.label.x + dx}, ${k.label.y + dy})`);
   }
 }
@@ -316,8 +329,9 @@ function restoreKeptClusters(svg: SVGSVGElement, kept: Record<string, KeptCluste
  * The new drawing's transitions given their kept routes: the same states and label (else the only one between the
  * same states, its label changed: the other arm of an IF / ELSE moved); a new one (the one moved) routed afresh
  */
-function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>) {
+function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>, moved: MovedEnd | null = null, places: Record<string, { centerX: number; centerY: number }> = {}) {
   const used = new Set<KeptRoute>();
+  const kept1 = new Set<SVGPathElement>();
   const paths = edgePathsOf(svg);
   const keys = paths.map((p) => routeKeyOf(svg, p));
   const pairs: Record<string, number> = {};
@@ -329,6 +343,7 @@ function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>
     if (!r && pairs[k.pair] === 1 && kept[`pair:${k.pair}`]?.length === 1 && !used.has(kept[`pair:${k.pair}`][0])) r = kept[`pair:${k.pair}`][0];
     if (!r || !r.d) return;
     used.add(r);
+    kept1.add(path);
     path.setAttribute('data-frozen-d', r.d);
     path.removeAttribute('data-frozen-sig');
     if (k.label && r.label) {
@@ -337,6 +352,27 @@ function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>
       k.label.removeAttribute('data-frozen-ldy');
     }
   });
+  // The transition moved: from (to) its new state, square to its side, then its other end's stretch as it was
+  if (!moved || !moved.d) return;
+  const from = moved.atStart ? moved.newId : moved.from;
+  const to = moved.atStart ? moved.to : moved.newId;
+  const path = paths.find((p) => !kept1.has(p) && p.getAttribute('data-source-id') === from && p.getAttribute('data-target-id') === to);
+  const node = findNodeElement(svg, moved.newId);
+  if (!path || !node) return;
+  const g = getNodeGeometry(node, svg);
+  const at = places[moved.newId];
+  // (the other states, where they are kept: its new part clear of them)
+  const obstacles: { cx: number; cy: number; hw: number; hh: number }[] = [];
+  for (const n of svg.querySelectorAll<SVGGElement>('g.node[data-state-id]')) {
+    const id = n.getAttribute('data-state-id') || '';
+    if (id === moved.newId) continue;
+    const q = getNodeGeometry(n, svg);
+    obstacles.push({ cx: places[id]?.centerX ?? q.origCenterX, cy: places[id]?.centerY ?? q.origCenterY, hw: q.width / 2, hh: q.height / 2 });
+  }
+  const d = routeToNewEnd(moved.d, { cx: at?.centerX ?? g.origCenterX, cy: at?.centerY ?? g.origCenterY, hw: g.width / 2, hh: g.height / 2 }, moved.atStart, obstacles);
+  if (!d) return;
+  path.setAttribute('data-frozen-d', d);
+  path.removeAttribute('data-frozen-sig');
 }
 
 export interface MermaidViewerProps {
@@ -2291,6 +2327,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   };
 
   const [isNodeDragging, setIsNodeDragging] = useState<boolean>(false);
+  // The transitions drawn as they were kept (an edit from the canvas): shown, with a re-layout at hand
+  const [keptRoutes, setKeptRoutes] = useState(0);
+  const countKeptRoutes = () => setKeptRoutes(getDiagramSvg()?.querySelectorAll('path.tc-edge-path[data-frozen-d]').length ?? 0);
+  useEffect(() => {
+    if (!isNodeDragging) countKeptRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNodeDragging]);
   const isDraggingNodeRef = useRef<boolean>(false);
   const draggedNodeIdRef = useRef<string | null>(null);
   const draggedNodeElRef = useRef<SVGGElement | null>(null);
@@ -2322,6 +2365,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const draggedHandleTypeRef = useRef<'start' | 'end' | 'mid' | 'label' | null>(null);
   const edgeHandleDragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const edgeInitialOffsetRef = useRef<EdgeOffset>({ x: 0, y: 0 });
+  // (a handle drag: the route as drawn when it began, the layout's, clear of the states; not the dragged one)
+  const edgeInitialDRef = useRef<string | null>(null);
   // Label drag: only the label element moves (once per frame); the full re-apply runs on release
   const draggedLabelRef = useRef<{ el: SVGGElement; x: number; y: number } | null>(null);
   const labelDragFrameRef = useRef<number | null>(null);
@@ -2390,10 +2435,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const renderedChartRef = useRef<string | undefined>(undefined);
   // An edit from the canvas itself (an edge's end dropped on another state): the states kept where they were in the
   // drawing that follows it, locked or not (taken at the drop; dropped when no drawing follows within a few seconds)
-  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
+  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; moved: MovedEnd | null; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
   // Each state's place at the last edits from the canvas and undos (this chart's; a state gone since too): one that
   // comes back (an undo of its deletion) where it was. (Not at each drawing: a deleted state is drawn once more
   // without its offset before it goes.)
+  // (each composite's states, from the chart's source)
+  const compositeMembers = useMemo(() => compositeMembersOf(code), [code]);
+  const compositeMembersRef = useRef(compositeMembers);
+  compositeMembersRef.current = compositeMembers;
   const lastDrawnPositionsRef = useRef<Record<string, { centerX: number; centerY: number }>>({});
   /** The states' places on the canvas now (moved by hand since it was drawn too), this chart's, remembered with those
    * gone since */
@@ -2413,12 +2462,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     lastDrawnPositionsRef.current = drawn;
   };
   /** The states' places now (as drawn: the drawing already has the offsets in it) and its frame, for the next drawing */
-  const keepPositionsForNextDrawing = () => {
+  const keepPositionsForNextDrawing = (moved: MovedEnd | null = null) => {
     const svg = getDiagramSvg();
     if (!svg) return;
     rememberDrawnPositions();
     const positions: Record<string, { centerX: number; centerY: number }> = { ...lastDrawnPositionsRef.current };
-    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, edges: keptRoutesOf(svg), clusters: keptClustersOf(svg), frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
+    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, edges: keptRoutesOf(svg), clusters: keptClustersOf(svg), moved, frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
   };
   // (an undo / redo of a code change: the states where they are; the chart drawn again for the code as it was)
   const keepSignalRef = useRef(keepPositionsSignal);
@@ -3432,7 +3481,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const pinned = stale ? null : keep ?? (isLayoutLocked && Object.keys(lockedNodePositionsRef.current).length > 0 ? lockedNodePositionsRef.current : null);
     // (the transitions as they were drawn, but the ones the edit changed: their routes and labels kept)
     if (!stale && kept) {
-      restoreKeptRoutes(svg, kept.edges);
+      restoreKeptRoutes(svg, kept.edges, kept.moved, kept.positions);
       restoreKeptClusters(svg, kept.clusters);
     }
     if (pinned) {
@@ -3479,6 +3528,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       layoutEngine,
       flowchartCurve
     );
+    // (the states kept where they were: a composite the layout sized for its own places grown to hold its states)
+    if (!stale && pinned) growCompositesToMembers(svg, compositeMembersRef.current);
+    if (!stale) countKeptRoutes();
     const positions = extractCanvasNodePositions(svg, targetNodeOffsets);
     setCanvasNodePositions(positions);
 
@@ -4674,6 +4726,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         edgeMovedRef.current = false;
         const currentEdgeOffset = currentEdgeOffsetsRef.current[eId] || { x: 0, y: 0 };
         edgeInitialOffsetRef.current = { ...currentEdgeOffset };
+        const startSvg = getDiagramSvg();
+        edgeInitialDRef.current = (startSvg && edgePathsOf(startSvg).find((x) => x.getAttribute('data-path-id') === eId || x.getAttribute('data-edge-id') === eId)?.getAttribute('d')) || null;
         setIsNodeDragging(true);
         return;
       }
@@ -4905,8 +4959,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [eId]: edgeInitialOffsetRef.current };
     const svg = getDiagramSvg();
     if (svg) applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, eId, layoutEngine, flowchartCurve);
-    // (the states stay where they are in the drawing the edit brings)
-    keepPositionsForNextDrawing();
+    // (the states stay where they are in the drawing the edit brings; this transition: its other end's stretch kept)
+    const was = svg ? edgePathsOf(svg).find((x) => x.getAttribute('data-path-id') === eId || x.getAttribute('data-edge-id') === eId) ?? edgePathsOf(svg).find((x) => x.getAttribute('data-source-id') === target.edge.from && x.getAttribute('data-target-id') === target.edge.to) : undefined;
+    const wasD = edgeInitialDRef.current || was?.getAttribute('d') || '';
+    edgeInitialDRef.current = null;
+    keepPositionsForNextDrawing(wasD ? { atStart: target.type === 'start', from: target.edge.from, to: target.edge.to, newId: target.id, d: wasD } : null);
     onEdgeEndpointDrop?.(target.edge, target.type, target.id);
     return true;
   };
@@ -7316,6 +7373,31 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       )}
       {/* The statechart palette: over the canvas, not in it (the canvas' first <svg> is the diagram) */}
       {onPaletteElement && !error && svgContent && <StatechartPalette onClick={handlePaletteClick} history={history} top={canvasTop + 8} />}
+      {/* The layout kept (an edit from the canvas: the states where they were, the other transitions drawn as they were): a re-layout at hand */}
+      {!error && svgContent && keptRoutes > 0 && (
+        <div
+          id="layout-kept-chip"
+          className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-2.5 pr-1 py-1 rounded-full border border-slate-700/70 bg-slate-900/90 text-[11px] text-slate-300 shadow-lg backdrop-blur"
+          style={{ top: canvasTop + 8 }}
+          title="After an edit from the canvas the states stay where they were and the other transitions are drawn as they were, so you see what changed. Re-layout lets the layout engine place everything again."
+        >
+          <Lock className="w-3 h-3 text-slate-400" />
+          <span>Layout kept: {keptRoutes} transition{keptRoutes === 1 ? '' : 's'} as drawn</span>
+          <button
+            id="layout-kept-relayout-btn"
+            type="button"
+            onClick={() => {
+              onSwitchToDiagramTab?.();
+              handleAutoAlign();
+            }}
+            disabled={isAutoAligning}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/20 border border-sky-500/40 text-sky-300 hover:bg-sky-500/30 disabled:opacity-50"
+          >
+            <Workflow className="w-3 h-3" />
+            Re-layout
+          </button>
+        </div>
+      )}
       {/* Main Diagram Canvas */}
       <div
         ref={containerRef}

@@ -12,8 +12,9 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const p = await browser.newPage();
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
+  // (a render loop seen once in a while beside other tests, never alone: its stack printed when it comes again)
   await p.evaluateOnNewDocument(() => { const orig = console.error; console.error = (...a) => { if (/Maximum update depth/.test(String(a[0]))) orig('LOOPSTACK ' + new Error().stack); return orig(...a); }; });
-  p.on('console', (m) => { if (m.type() === 'error' && /LOOPSTACK/.test(m.text())) console.log(m.text().slice(0, 4000)); if (false) Promise.all(m.args().map((x) => x.evaluate((v) => (v && v.stack) || String(v)).catch(() => '?'))).then((t) => console.log('CONSOLE-ERR', t.join(' || ').slice(0, 6000))); });
+  p.on('console', (m) => { if (m.type() === 'error' && /LOOPSTACK/.test(m.text())) console.log(m.text().slice(0, 4000)); });
   p.on('framenavigated', (f) => { if (f === p.mainFrame()) console.log('NAVIGATED', f.url()); });
   const sent = [];
   const toApp = (m) => p.evaluate((m) => window.__fromHost(m), m).catch(() => {});
@@ -39,6 +40,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
       await toApp({ type: 'saveDocumentResult', path: `C:\\\\rec\\\\${m.name}` });
     } else if (m.type === 'projectPous') await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
   });
+  // (a render loop seen once in a while beside other tests, never alone: its stack printed when it comes again)
   await p.evaluateOnNewDocument(() => {
     const listeners = [];
     window.chrome = window.chrome || {};

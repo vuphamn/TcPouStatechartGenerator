@@ -194,7 +194,9 @@ function failuresOf(log) {
           // (the built app has no /src/: a test importing from it gets the dev server)
           const needsDev = preview && app && !GIVEN_URL && fs.readFileSync(path.join(__dirname, suite, f), 'utf8').includes("'/src/");
           if (needsDev && !devApp) devApp = await (devStarting ??= startApp({ dev: true }));
-          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: TIMEOUT[suite] ?? 300000, log });
+          // (a long test: its own limit, '// runner-timeout: <seconds>' in its first lines)
+          const own = Number(fs.readFileSync(path.join(__dirname, suite, f), 'utf8').slice(0, 2000).match(/runner-timeout:\s*(\d+)/)?.[1]) * 1000;
+          r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: own || TIMEOUT[suite] || 300000, log });
         }
         const text = fs.readFileSync(log, 'utf8');
         // A test fails on a non-zero exit, and on any "FAIL" line (some tests only print them)

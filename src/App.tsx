@@ -3421,13 +3421,15 @@ export const App: React.FC = () => {
     [dutContent, composites, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
   );
   // States moved into a composite, or out of theirs (target null): their enum lines moved, kept whole (comments,
-  // values, @initial / @final)
-  const moveStatesTo = (states: string[], target: string | null) => {
+  // values, @initial / @final). Dragged there (dropped: true): they stay where they were dropped, the composite's box
+  // grown to hold them; else (a menu) the layout places them in it
+  const moveStatesTo = (states: string[], target: string | null, dropped = false) => {
     const r = moveToComposite(dutContent, states, target);
     if ('error' in r) return showCopyToast(`Could not move ${states.join(', ')} in the enum: ${r.error}`, 'error', 6000);
     if (r.dut === dutContent) return;
+    if (dropped) setKeepCanvasPositions((v) => v + 1);
     handleReplaceSources(null, r.dut);
-    states.forEach(dropNodeOffset);
+    if (!dropped) states.forEach(dropNodeOffset);
     const who = states.length > 1 ? `${states.length} states are` : `${states[0]} is`;
     showCopyToast(`${target ? `${who} in ${target}` : `${who} in no composite`} (the enum's {region} markers; Ctrl+Z undoes)${r.reordered ? '. Members without a value of their own get new numbers' : ''}`, 'success', 6000);
   };
@@ -3531,7 +3533,7 @@ export const App: React.FC = () => {
       // (dropped with the states selected with it: those of them in the same composite as it move too)
       const with_ = multiSelected.includes(state) ? multiSelected.filter((s) => knownStates.has(s) && !regionOf.has(s) && compositeOf(dutContent, s) === current) : [state];
       // (out of an inner composite into the one around it: into that one)
-      moveStatesTo(with_.length ? with_ : [state], target);
+      moveStatesTo(with_.length ? with_ : [state], target, true);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [dutContent, knownStates, regionOf, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast, multiSelected]

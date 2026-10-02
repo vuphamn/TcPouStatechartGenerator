@@ -262,6 +262,77 @@ function reattachEnd(route: Point[], box: NodeBox, gap: number, atStart: boolean
   return atStart ? out.reverse() : out;
 }
 
+/**
+ * A transition's route after one of its ends was dropped on another state (atStart: its start): the stretch at the
+ * end that stayed kept as it was (into its state at the same spot), joined square to a side of the new state's box.
+ * Joined at its last bend if that way is clear, else at an earlier one, from the side that keeps it clear of the
+ * other states (obstacles: their boxes); the shortest of those. null when the new state is in the way
+ */
+export function routeToNewEnd(oldD: string, box: NodeBox, atStart: boolean, obstacles: NodeBox[] = []): string | null {
+  let pts = simplifyOrthogonal(extractCoordinatePoints(parseSvgPathCommands(oldD)));
+  if (pts.length < 2) return null;
+  // (from the end that moved to the one that stayed)
+  if (!atStart) pts = [...pts].reverse();
+  const end = pts[pts.length - 1];
+  if (isAtBox(box, end, 8)) return null;
+  // (a straight one: a short stretch of it kept)
+  if (pts.length === 2) {
+    const len = Math.hypot(end.x - pts[0].x, end.y - pts[0].y) || 1;
+    const t = Math.min(1, 24 / len);
+    pts = [pts[0], { x: end.x + (pts[0].x - end.x) * t, y: end.y + (pts[0].y - end.y) * t }, end];
+  }
+  const dedupe = (q: Point[]) => q.filter((p, i) => i === 0 || Math.hypot(p.x - q[i - 1].x, p.y - q[i - 1].y) >= 0.5);
+  // (a run that turns back on itself: not taken)
+  const turnsBack = (q: Point[]) =>
+    q.some((p, i) => {
+      if (i < 2) return false;
+      const [u, v] = [q[i - 2], q[i - 1]];
+      const vertical = Math.abs(u.x - v.x) < 0.5 && Math.abs(v.x - p.x) < 0.5;
+      const horizontal = Math.abs(u.y - v.y) < 0.5 && Math.abs(v.y - p.y) < 0.5;
+      return (vertical && (v.y - u.y) * (p.y - v.y) < 0) || (horizontal && (v.x - u.x) * (p.x - v.x) < 0);
+    });
+  // (a straight run through a box: e > 0 grows it, e < 0 shrinks it)
+  const crosses = (a: Point, b: Point, o: NodeBox, e: number) =>
+    Math.max(a.x, b.x) > o.cx - o.hw - e && Math.min(a.x, b.x) < o.cx + o.hw + e && Math.max(a.y, b.y) > o.cy - o.hh - e && Math.min(a.y, b.y) < o.cy + o.hh + e;
+  const SIDES = [
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+  ];
+  let best: { route: Point[]; score: number } | null = null;
+  // (joined at a bend of the kept stretch: its last first, back to the first one after the old end)
+  for (let k = pts.length - 2; k >= 1 && k >= pts.length - 7; k--) {
+    const join = pts[k];
+    if (isAtBox(box, join, 8)) continue;
+    const tail = pts.slice(k + 1);
+    for (const n of SIDES) {
+      // (that side, as far along it as the bend: away from its corners)
+      const a = attachToBoxSide(box, { x: n.x ? box.cx + n.x * 1e4 : join.x, y: n.y ? box.cy + n.y * 1e4 : join.y }, 0);
+      const from = { x: a.x, y: a.y };
+      const stub = { x: a.x + a.normalX * 16, y: a.y + a.normalY * 16 };
+      for (const corner of [{ x: join.x, y: stub.y }, { x: stub.x, y: join.y }]) {
+        const joined = dedupe([from, stub, corner, join]);
+        const route = dedupe([...joined, ...tail]);
+        if (turnsBack(route)) continue;
+        // (its new part: clear of the other states and of its own one)
+        let hits = 0;
+        for (let i = 1; i < joined.length; i++) {
+          const [u, v] = [joined[i - 1], joined[i]];
+          hits += obstacles.filter((o) => crosses(u, v, o, 4)).length;
+          if (i > 1 && crosses(u, v, box, -1)) hits++;
+        }
+        const simple = simplifyOrthogonal(route);
+        const length = simple.reduce((s, p, i) => (i ? s + Math.hypot(p.x - simple[i - 1].x, p.y - simple[i - 1].y) : 0), 0);
+        const score = hits * 1e6 + length + simple.length * 24;
+        if (!best || score < best.score) best = { route: simple, score };
+      }
+    }
+  }
+  if (!best) return null;
+  return orthogonalPolylineToPath(atStart ? best.route : [...best.route].reverse());
+}
+
 /** A diamond (a Choice): its shape is a polygon of 4 corners */
 /**
  * An edge's end on its (moved) state, Dagre: where it was on the state (rel: from the state's center, as laid out),
@@ -1392,6 +1463,12 @@ const ORTHO_EPS = 0.5;
 const isVerticalSeg = (a: Point, b: Point) => Math.abs(a.x - b.x) < ORTHO_EPS;
 const isHorizontalSeg = (a: Point, b: Point) => Math.abs(a.y - b.y) < ORTHO_EPS;
 
+/** A kept route's middle (its label's anchor): halfway along it, the same for it and for it re-routed */
+function frozenMidOf(d: string): Point {
+  const pts = simplifyOrthogonal(extractCoordinatePoints(parseSvgPathCommands(d)));
+  return pts.length ? pointAlongPolyline(pts, 0.5) : { x: 0, y: 0 };
+}
+
 /** Point at a fraction of the total length along a polyline */
 function pointAlongPolyline(pts: Point[], fraction: number): Point {
   const lengths = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
@@ -1441,7 +1518,7 @@ function rerouteElkOrthogonal(
   tgtOffset: Point,
   edgeOffset: EdgeOffset = { x: 0, y: 0 },
   /** The states' boxes (moved, and where they were): a dragged end re-attaches to the side it is dropped by */
-  boxes: { src?: NodeBox | null; tgt?: NodeBox | null; origSrc?: NodeBox | null; origTgt?: NodeBox | null; srcDiamond?: boolean; tgtDiamond?: boolean } = {}
+  boxes: { src?: NodeBox | null; tgt?: NodeBox | null; origSrc?: NodeBox | null; origTgt?: NodeBox | null; srcDiamond?: boolean; tgtDiamond?: boolean; route?: Point[] } = {}
 ): { d: string; midPoint: Point; startPoint: Point; endPoint: Point } | null {
   // Start / end handle drags move that endpoint on top of any node movement
   srcOffset = { x: srcOffset.x + (edgeOffset.startDx || 0), y: srcOffset.y + (edgeOffset.startDy || 0) };
@@ -1450,7 +1527,8 @@ function rerouteElkOrthogonal(
   // without ELK's route on it: the drawn points, squared below)
   const drawn = extractCoordinatePoints(parseSvgPathCommands(origD));
   if (drawn.length < 2) return null;
-  const route = readMermaidRoutePoints(path) ?? drawn;
+  // (a kept route: its own bends, not the layout's)
+  const route = boxes.route ?? readMermaidRoutePoints(path) ?? drawn;
   const orig: Point[] = [drawn[0], ...route.slice(1, -1), drawn[drawn.length - 1]].map((p) => ({ x: p.x, y: p.y }));
 
   // A diamond's end (a Choice) sits on a slanted side: its first / last bit is squared to the next segment's axis
@@ -1680,25 +1758,46 @@ export function calculateReroutedEdgePath(
     (edgeOffset.endDx !== undefined && edgeOffset.endDx !== 0) ||
     (edgeOffset.endDy !== undefined && edgeOffset.endDy !== 0);
 
-  // A route kept from the drawing before (an edit from the canvas: the other transitions drawn as they were): as long
-  // as its states stay where they were and its own handles are not dragged (its label's move aside)
+  // A route kept from the drawing before (an edit from the canvas: the other transitions drawn as they were): as it
+  // was while its states stay where they were then; one of them moved since, re-routed from it (not from the
+  // layout's); its own handles dragged, the layout's again (its label's move aside)
   const frozenD = path.getAttribute('data-frozen-d');
   if (frozenD) {
     const shape = { ...edgeOffset } as EdgeOffset;
     delete shape.labelDx;
     delete shape.labelDy;
-    const at = (n: SVGGElement | null) => {
-      if (!n) return '-';
-      const g = getNodeGeometry(n, svg);
-      return `${Math.round(g.origCenterX)},${Math.round(g.origCenterY)}`;
-    };
-    const sig = `${JSON.stringify(shape)}|${at(srcNodeEl)}|${at(tgtNodeEl)}`;
-    const was = path.getAttribute('data-frozen-sig');
-    if (was === null) path.setAttribute('data-frozen-sig', sig);
-    if (was === null || was === sig) {
+    const shapeSig = JSON.stringify(shape);
+    // (its states' offsets when it was kept: taken the first time it is drawn)
+    if (!path.hasAttribute('data-frozen-sig')) path.setAttribute('data-frozen-sig', JSON.stringify({ shape: shapeSig, src: srcOffset, tgt: tgtOffset }));
+    let at: { shape: string; src: Point; tgt: Point } | null = null;
+    try {
+      at = JSON.parse(path.getAttribute('data-frozen-sig') || '');
+    } catch {
+      at = null;
+    }
+    if (at && at.shape === shapeSig) {
       const pts = extractCoordinatePoints(parseSvgPathCommands(frozenD));
       const s0 = pts[0] || { x: 0, y: 0 };
-      return { d: frozenD, midPoint: pts[Math.floor(pts.length / 2)] || s0, startPoint: s0, endPoint: pts[pts.length - 1] || s0 };
+      const ds = { x: srcOffset.x - at.src.x, y: srcOffset.y - at.src.y };
+      const dt = { x: tgtOffset.x - at.tgt.x, y: tgtOffset.y - at.tgt.y };
+      if (Math.hypot(ds.x, ds.y) < 0.5 && Math.hypot(dt.x, dt.y) < 0.5) {
+        return { d: frozenD, midPoint: frozenMidOf(frozenD), startPoint: s0, endPoint: pts[pts.length - 1] || s0 };
+      }
+      if (srcId && tgtId && srcId === tgtId) {
+        const moved = translateSvgPath(frozenD, ds.x, ds.y);
+        const mp = extractCoordinatePoints(parseSvgPathCommands(moved));
+        return { d: moved, midPoint: frozenMidOf(moved), startPoint: mp[0] || s0, endPoint: mp[mp.length - 1] || s0 };
+      }
+      const rerouted = rerouteElkOrthogonal(path, frozenD, ds, dt, { x: 0, y: 0 }, {
+        route: simplifyOrthogonal(pts),
+        src: nodeBoxOf(srcNodeEl, svg, srcOffset),
+        tgt: nodeBoxOf(tgtNodeEl, svg, tgtOffset),
+        origSrc: nodeBoxOf(srcNodeEl, svg, at.src),
+        origTgt: nodeBoxOf(tgtNodeEl, svg, at.tgt),
+        srcDiamond: isDiamondNode(srcNodeEl),
+        tgtDiamond: isDiamondNode(tgtNodeEl),
+      });
+      if (rerouted) return { ...rerouted, midPoint: frozenMidOf(rerouted.d) };
     }
     path.removeAttribute('data-frozen-d');
     path.removeAttribute('data-frozen-sig');
@@ -2109,15 +2208,18 @@ export function applyDiagramOffsetsToSvg(
         const lDx = labelOffset?.labelDx || 0;
         const lDy = labelOffset?.labelDy || 0;
         // (its kept route: its label where it was, moved by hand since by the change of its offset)
-        const frozenAt = newD === path.getAttribute('data-frozen-d') ? label.getAttribute('data-frozen-transform') : null;
-        if (frozenAt) {
+        // (re-routed from it since: moved with its middle)
+        const keptD = path.getAttribute('data-frozen-d');
+        const frozenAt = keptD ? label.getAttribute('data-frozen-transform') : null;
+        if (frozenAt && keptD) {
           if (!label.hasAttribute('data-frozen-ldx')) {
             label.setAttribute('data-frozen-ldx', String(lDx));
             label.setAttribute('data-frozen-ldy', String(lDy));
           }
           const f = parseTranslation(frozenAt);
-          const fx = f.x + lDx - parseFloat(label.getAttribute('data-frozen-ldx') || '0');
-          const fy = f.y + lDy - parseFloat(label.getAttribute('data-frozen-ldy') || '0');
+          const m0 = frozenMidOf(keptD);
+          const fx = f.x + (midPoint.x - m0.x) + lDx - parseFloat(label.getAttribute('data-frozen-ldx') || '0');
+          const fy = f.y + (midPoint.y - m0.y) + lDy - parseFloat(label.getAttribute('data-frozen-ldy') || '0');
           label.setAttribute('transform', `translate(${fx}, ${fy})`);
           continue;
         }
