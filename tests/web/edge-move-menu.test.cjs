@@ -27,8 +27,20 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   };
   const branch = (code, state) => { const m = new RegExp(`\\n\\s*(?:\\w+\\.)?${state}\\s*:[\\s\\S]*?(?=\\n\\s*(?:\\w+\\.)?[A-Z][A-Z0-9_]+\\s*:(?!=)|\\n\\s*END_CASE)`).exec(code); return m ? m[0] : ''; };
   const has = (b, to) => new RegExp(`IF \\(?status_bError\\)? THEN\\s*\\n\\s*machineState := ${to}`).test(b);
+  // The chart drawn and settled (an edit just made: drawn again a moment later, on a busy machine later still): the
+  // same drawing for a while
+  const settled = async () => {
+    let last = '';
+    for (let i = 0; i < 30; i++) {
+      const now = await p.evaluate(() => { const svg = document.querySelector('#mermaid-diagram-svg-container svg'); return svg ? `${svg.id}|${svg.querySelectorAll('path.tc-edge-path').length}|${svg.getAttribute('viewBox')}` : ''; });
+      if (now && now === last) return;
+      last = now;
+      await h.sleep(500);
+    }
+  };
   // A point of the edge's line, right-clicked; the menu's item picked; the state typed in the list
   const move = async (src, to, item, pick) => {
+    await settled();
     const pt = await p.evaluate((src, to) => {
       const el = [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].find((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to);
       if (!el) return null;

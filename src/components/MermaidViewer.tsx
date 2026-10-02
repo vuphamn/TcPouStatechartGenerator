@@ -125,6 +125,7 @@ import {
   getEdgeAnchorPoint,
   parseTranslation,
   routeToNewEnd,
+  frozenMidOf,
   getNodeGeometry,
   nodeShapeOf,
 } from '../utils/nodeDragger.ts';
@@ -373,6 +374,14 @@ function restoreKeptRoutes(svg: SVGSVGElement, kept: Record<string, KeptRoute[]>
   if (!d) return;
   path.setAttribute('data-frozen-d', d);
   path.removeAttribute('data-frozen-sig');
+  // (its label halfway along its new route, as the others are on theirs; moved with it afterwards)
+  const label = routeKeyOf(svg, path)?.label;
+  if (label) {
+    const m = frozenMidOf(d);
+    label.setAttribute('data-frozen-transform', `translate(${m.x}, ${m.y})`);
+    label.removeAttribute('data-frozen-ldx');
+    label.removeAttribute('data-frozen-ldy');
+  }
 }
 
 export interface MermaidViewerProps {
@@ -4971,8 +4980,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const compositeAt = (x: number, y: number): string | null => {
     let best: string | null = null;
     let bestArea = Infinity;
-    getDiagramSvg()?.querySelectorAll('g.cluster').forEach((c) => {
-      const r = (c.querySelector(':scope > rect') ?? c).getBoundingClientRect();
+    // (a flowchart's subgraph, a state diagram's composite: its frame)
+    getDiagramSvg()?.querySelectorAll(COMPOSITE_SELECTOR).forEach((c) => {
+      const r = (compositeRectsOf(c).outer ?? c).getBoundingClientRect();
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
       const label = (c.querySelector('.cluster-label, .nodeLabel, text')?.textContent ?? '').trim();
       if (label && r.width * r.height < bestArea) {
@@ -4985,8 +4995,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // The composites (cluster labels) at a point of the screen, smallest first
   const compositesAt = (x: number, y: number): string[] => {
     const hits: { label: string; area: number }[] = [];
-    getDiagramSvg()?.querySelectorAll('g.cluster').forEach((c) => {
-      const r = (c.querySelector(':scope > rect') ?? c).getBoundingClientRect();
+    // (a flowchart's subgraph, a state diagram's composite: its frame)
+    getDiagramSvg()?.querySelectorAll(COMPOSITE_SELECTOR).forEach((c) => {
+      const r = (compositeRectsOf(c).outer ?? c).getBoundingClientRect();
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) return;
       const label = (c.querySelector('.cluster-label, .nodeLabel, text')?.textContent ?? '').trim();
       if (label) hits.push({ label, area: r.width * r.height });
@@ -7683,7 +7694,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         )}
 
         {/* Complexity Heat-map / Refactor Badge Hover Tooltip */}
-        {hoveredActions && !((isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric) && (
+        {hoveredActions && !contextMenuState && !((isHeatmapActive || showComplexityBadges) && hoveredComplexityMetric) && (
           <NodeHoverBox
             anchor={() => stateScreenRect(hoveredActions.id) ?? hoveredActions.rect}
             id="state-actions-hover"
@@ -7761,8 +7772,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
           </NodeHoverBox>
         )}
 
-        {/* Visual Badge for Edge Label Guard Condition Expression */}
-        {hoveredEdgeCondition && !activeConditionOverlay && (
+        {/* Visual Badge for Edge Label Guard Condition Expression (not while a right-click menu is open: above it, it
+            would take its clicks) */}
+        {hoveredEdgeCondition && !activeConditionOverlay && !contextMenuState && (
           <div
             id="edge-guard-condition-hover-badge"
             ref={guardPopupRef}

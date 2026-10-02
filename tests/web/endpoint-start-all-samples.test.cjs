@@ -1,7 +1,7 @@
 // Every sample: transitions' start endpoints (a spread of each chart's edges) dragged onto another state: the code
 // moved (the status says so; the chart has the edge from the new state), every state where it was on the canvas
 // (locked or not), every other transition drawn as it was (its route, its label), the moved one still into its state
-// at the same spot, Ctrl+Z puts the code back (the others still as they were)
+// at the same spot and its label on it, Ctrl+Z puts the code back (the others still as they were)
 // runner-timeout: 600 (5 drops in each of the samples, each undone)
 const h = require('../lib/harness.cjs');
 let fails = 0;
@@ -55,6 +55,24 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
   const endsOf = (from, to) => p.evaluate((from, to) => [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgePaths path.tc-edge-path')]
     .filter((x) => !x.classList.contains('tc-edge-hitbox') && x.getAttribute('data-source-id') === from && x.getAttribute('data-target-id') === to)
     .map((x) => { const n = (x.getAttribute('d') || '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? []; return [n[n.length - 2], n[n.length - 1]]; }), from, to);
+  // How far the transitions' labels between two states are from their own routes (screen px; those with a text)
+  const labelGaps = (from, to) => p.evaluate((from, to) => {
+    const svg = document.querySelector('#mermaid-diagram-svg-container svg');
+    const out = [];
+    for (const path of svg.querySelectorAll('g.edgePaths path.tc-edge-path')) {
+      if (path.classList.contains('tc-edge-hitbox') || path.getAttribute('data-source-id') !== from || path.getAttribute('data-target-id') !== to) continue;
+      const label = svg.querySelector(`g.edgeLabel[data-linked-path-id="${CSS.escape(path.getAttribute('data-path-id') || '')}"]`);
+      if (!label?.textContent?.trim()) continue;
+      const r = label.getBoundingClientRect();
+      const c = { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      const m = path.getScreenCTM();
+      const L = path.getTotalLength();
+      let best = Infinity;
+      for (let i = 0; i <= 200; i++) { const q = path.getPointAtLength((L * i) / 200).matrixTransform(m); best = Math.min(best, Math.hypot(q.x - c.x, q.y - c.y)); }
+      out.push(Math.round(best));
+    }
+    return out;
+  }, from, to);
   const keys = () => p.evaluate(() => [...new Set([...document.querySelectorAll('#mermaid-diagram-svg-container svg path.tc-edge-path[data-edge-key]')].map((x) => x.getAttribute('data-edge-key')))]);
   // The edges whose start can be dragged: both ends states drawn (not the initial one, not a composite's border)
   const candidates = () => p.evaluate(() => {
@@ -200,6 +218,9 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       // (the moved one: into its state at the same spot as before)
       const endsAfter = await endsOf(pl.target, to);
       const sameEnd = endsAfter.some((a) => endsBefore.some((b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 3));
+      // (its label on its new route)
+      const gaps = await labelGaps(pl.target, to);
+      if (gaps.length) expect(gaps.some((g) => g <= 8), `${sample} ${key}: its label on its new route (${gaps.join(', ')} px off)`);
       // (drawn from its composite's border instead, merged with others: nothing of its own to compare)
       if (endsAfter.length) expect(sameEnd, `${sample} ${key}: from ${pl.target}, still into ${to} where it was (${JSON.stringify(endsBefore)} → ${JSON.stringify(endsAfter)})`);
       // (every other transition as it was drawn: its route and its label)

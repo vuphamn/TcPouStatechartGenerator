@@ -1464,7 +1464,7 @@ const isVerticalSeg = (a: Point, b: Point) => Math.abs(a.x - b.x) < ORTHO_EPS;
 const isHorizontalSeg = (a: Point, b: Point) => Math.abs(a.y - b.y) < ORTHO_EPS;
 
 /** A kept route's middle (its label's anchor): halfway along it, the same for it and for it re-routed */
-function frozenMidOf(d: string): Point {
+export function frozenMidOf(d: string): Point {
   const pts = simplifyOrthogonal(extractCoordinatePoints(parseSvgPathCommands(d)));
   return pts.length ? pointAlongPolyline(pts, 0.5) : { x: 0, y: 0 };
 }
@@ -1759,8 +1759,8 @@ export function calculateReroutedEdgePath(
     (edgeOffset.endDy !== undefined && edgeOffset.endDy !== 0);
 
   // A route kept from the drawing before (an edit from the canvas: the other transitions drawn as they were): as it
-  // was while its states stay where they were then; one of them moved since, re-routed from it (not from the
-  // layout's); its own handles dragged, the layout's again (its label's move aside)
+  // was while its states and its own handles stay as they were then; a state moved or a handle dragged since,
+  // re-routed from it (not from the layout's) by how far they moved (its label's move aside)
   const frozenD = path.getAttribute('data-frozen-d');
   if (frozenD) {
     const shape = { ...edgeOffset } as EdgeOffset;
@@ -1775,20 +1775,30 @@ export function calculateReroutedEdgePath(
     } catch {
       at = null;
     }
-    if (at && at.shape === shapeSig) {
+    let was: EdgeOffset | null = null;
+    try {
+      was = at ? (JSON.parse(at.shape) as EdgeOffset) : null;
+    } catch {
+      was = null;
+    }
+    if (at && was) {
       const pts = extractCoordinatePoints(parseSvgPathCommands(frozenD));
       const s0 = pts[0] || { x: 0, y: 0 };
       const ds = { x: srcOffset.x - at.src.x, y: srcOffset.y - at.src.y };
       const dt = { x: tgtOffset.x - at.tgt.x, y: tgtOffset.y - at.tgt.y };
-      if (Math.hypot(ds.x, ds.y) < 0.5 && Math.hypot(dt.x, dt.y) < 0.5) {
+      // (its handles: how far they were dragged since it was kept)
+      const diff = (k: 'x' | 'y' | 'startDx' | 'startDy' | 'endDx' | 'endDy') => (shape[k] ?? 0) - (was![k] ?? 0);
+      const handles: EdgeOffset = { x: diff('x'), y: diff('y'), startDx: diff('startDx'), startDy: diff('startDy'), endDx: diff('endDx'), endDy: diff('endDy') };
+      const dragged = Object.values(handles).some((v) => Math.abs(v ?? 0) >= 0.5);
+      if (!dragged && Math.hypot(ds.x, ds.y) < 0.5 && Math.hypot(dt.x, dt.y) < 0.5) {
         return { d: frozenD, midPoint: frozenMidOf(frozenD), startPoint: s0, endPoint: pts[pts.length - 1] || s0 };
       }
-      if (srcId && tgtId && srcId === tgtId) {
+      if (!dragged && srcId && tgtId && srcId === tgtId) {
         const moved = translateSvgPath(frozenD, ds.x, ds.y);
         const mp = extractCoordinatePoints(parseSvgPathCommands(moved));
         return { d: moved, midPoint: frozenMidOf(moved), startPoint: mp[0] || s0, endPoint: mp[mp.length - 1] || s0 };
       }
-      const rerouted = rerouteElkOrthogonal(path, frozenD, ds, dt, { x: 0, y: 0 }, {
+      const rerouted = rerouteElkOrthogonal(path, frozenD, ds, dt, handles, {
         route: simplifyOrthogonal(pts),
         src: nodeBoxOf(srcNodeEl, svg, srcOffset),
         tgt: nodeBoxOf(tgtNodeEl, svg, tgtOffset),

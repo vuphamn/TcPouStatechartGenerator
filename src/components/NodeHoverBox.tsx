@@ -16,6 +16,9 @@ export interface ScreenRect {
 export const NodeHoverBox: React.FC<{ anchor: () => ScreenRect | null; id?: string; className?: string; children: React.ReactNode }> = ({ anchor, id, className, children }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; maxHeight?: number; below: boolean } | null>(null);
+  // (the place set last: not set again when it is the same, not even to the same value; a state update there on each
+  // render, its parent drawn again meanwhile, would loop)
+  const placedRef = useRef<typeof pos>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     const rect = anchor();
@@ -37,7 +40,10 @@ export const NodeHoverBox: React.FC<{ anchor: () => ScreenRect | null; id?: stri
       maxHeight = above;
     }
     const left = Math.max(8, Math.min(window.innerWidth - w - 8, rect.l));
-    setPos((p) => (p && p.left === left && p.top === top && p.maxHeight === maxHeight ? p : { left, top, maxHeight, below: top >= rect.b }));
+    const was = placedRef.current;
+    if (was && was.left === left && was.top === top && was.maxHeight === maxHeight) return;
+    placedRef.current = { left, top, maxHeight, below: top >= rect.b };
+    setPos(placedRef.current);
   });
   return (
     <div
