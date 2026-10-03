@@ -8,9 +8,9 @@ const MIME = 'application/x-kss-statechart-element';
 /** The web edition with the first sample, this browser's storage cleared, the chart drawn */
 async function openSample(page, url, { sidebar = false, rightPanel = true, before } = {}) {
   if (before) await before();
-  await page.goto(url, { waitUntil: 'load' });
+  await page.goto(url, { waitUntil: 'load', timeout: 180000 });
   await page.evaluate(() => localStorage.clear());
-  await page.reload({ waitUntil: 'load' });
+  await page.reload({ waitUntil: 'load', timeout: 180000 });
   await page.waitForSelector('#mermaid-canvas-area g.node', { timeout: 90000 });
   await sleep(2500);
   // (the minimap: closed, it covers the chart's corner at this size)
@@ -330,7 +330,7 @@ module.exports = {
         window.chrome.webview = { postMessage: (m) => window.__hostPost(m), addEventListener: (t, fn) => listeners.push(fn), removeEventListener: (t, fn) => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1); } };
         window.__fromHost = (m) => listeners.forEach((fn) => fn({ data: m }));
       });
-      await page.goto(url, { waitUntil: 'load' });
+      await page.goto(url, { waitUntil: 'load', timeout: 180000 });
       sample = await page.evaluate(async () => {
         const mod = await import('/src/samples/samplesData.ts');
         const lv = await import('/src/utils/liveView.ts');
@@ -339,7 +339,7 @@ module.exports = {
       });
       page.__values = sample.values;
       await page.evaluate(() => localStorage.clear());
-      await page.reload({ waitUntil: 'load' });
+      await page.reload({ waitUntil: 'load', timeout: 180000 });
       await page.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${S('CLAMPED')}"]`, { timeout: 90000 });
       await sleep(2500);
       await page.evaluate(() => document.querySelector('#diagram-minimap-container button[title^="Close Minimap"]')?.click());
@@ -402,4 +402,130 @@ module.exports = {
     },
   },
 };
+
+// The I/O scene's project: a small EtherCAT line (a coupler, digital and analog terminals, a drive), its PLC links
+const box = (id, name, vendor, product, type, port, inner = '', extra = '') => `<Box Id="${id}"><Name>${name}</Name><EtherCAT VendorId="${vendor}" ProductCode="${product}" RevisionNo="#x00110000" Type="${type}" Desc="${name.replace(/.*\((.*)\)/, '$1')}" PortABoxInfo="${port}">${extra}</EtherCAT>${inner}</Box>`;
+const pdo = (n) => Array.from({ length: n }, (_, i) => `<Pdo Name="Channel ${i + 1}" Index="#x1a0${i}"><Entry Name="Input" Index="#x6000" Sub="#x0${i + 1}"><Type>BIT</Type></Entry></Pdo>`).join('');
+const IO_XTI = `<?xml version="1.0"?>
+<TcSmItem><Device Id="1" AmsNetId="5.6.7.8.2.1" RemoteName="TransferTable (EtherCAT)"><Name>__FILENAME__</Name>
+${box(1, 'Coupler (EK1100)', '#x00000002', '#x044c2c52', 'EK1100 EtherCAT Coupler (2A E-Bus)', '#x00ffffff',
+  box(2, 'Sensors (EL1008)', '#x00000002', '#x03f03052', 'EL1008 8Ch. Dig. Input 24V, 3ms', '#x01000001', '', pdo(4)) +
+  box(3, 'Valves (EL2008)', '#x00000002', '#x07d83052', 'EL2008 8Ch. Dig. Output 24V, 0.5A', '#x02000002') +
+  box(4, 'Pressure (EL3064)', '#x00000002', '#x0bf83052', 'EL3064 4Ch. Ana. Input 0-10V', '#x03000003'))}
+${box(5, 'Clamp drive (Inverter i550 Cabinet)', '#x0000003b', '#x69055000', 'i550 Inverter FW V05.02.xx', '#x04000004', '', '<SuName>Lenze i550</SuName>')}
+${box(6, 'Feed drive (Inverter i550 Cabinet)', '#x0000003b', '#x69055000', 'i550 Inverter FW V05.02.xx', '#x05000005', '', '<SuName>Lenze i550</SuName>')}
+</Device></TcSmItem>`;
+const PLC_XTI = `<?xml version="1.0"?>
+<TcSmItem><Mappings><OwnerA Name="InputDst"><OwnerB Name="TIID^TransferTable (EtherCAT)^Coupler (EK1100)^Sensors (EL1008)"><Link VarA="MAIN.di_DoorSense" TypeA="BOOL" VarB="Channel 1^Input"/><Link VarA="MAIN.di_BeforeInfeed" TypeA="BOOL" VarB="Channel 2^Input"/><Link VarA="MAIN.di_AfterInfeed" TypeA="BOOL" VarB="Channel 3^Input"/></OwnerB></OwnerA></Mappings></TcSmItem>`;
+
+module.exports.io = {
+  async prepare(page, d, url) {
+    await openSample(page, url, { rightPanel: true });
+    await setPanels(page, { sidebar: false, rightPanel: true });
+    await page.evaluate((io, plc) => {
+      const file = (name, text) => ({ kind: 'file', name, getFile: async () => new File([text], name) });
+      const dir = (name, entries) => ({ kind: 'directory', name, values: async function* () { for (const e of entries) yield e; } });
+      const root = dir('TransferTable', [dir('TransferTable', [file('TransferTable.tsproj', '<TcSmProject/>'), dir('_Config', [dir('IO', [file('TransferTable (EtherCAT).xti', io)]), dir('PLC', [dir('Plant', [file('Plant Instance.xti', plc)])])])])]);
+      window.showDirectoryPicker = async () => root;
+    }, IO_XTI, PLC_XTI);
+    if (await page.$eval('#status-follow-selection', (e) => e.checked).catch(() => false)) await page.click('#status-follow-selection');
+    await sleep(500);
+  },
+  async play(page, d) {
+    await d.caption('The machine\'s EtherCAT I/O: the <b>I/O</b> tab', 300);
+    await tab(page, d, 'io');
+    await sleep(600);
+    await d.caption('Offline, from the TwinCAT project folder (live: from the running master, with each box\'s state)', 300);
+    await d.clickOn('#io-tree-load-folder', { after: 2200 });
+    await d.caption('Each box, its channels and the PLC variables linked to them', 300);
+    await d.clickOn('#io-tree-filter', { after: 300 });
+    await d.type('di_');
+    await sleep(2200);
+    await page.click('#io-tree-filter', { clickCount: 3 });
+    await page.keyboard.press('Backspace');
+    await d.caption('The network: the boxes as they are cabled', 300);
+    await d.clickOn('#io-view-network', { after: 2000 });
+    const drive = await d.at('#io-network [data-io-node$="Clamp drive (Inverter i550 Cabinet)"]');
+    if (drive) {
+      await d.caption('A box\'s properties: its vendor, its ports, its documentation', 300);
+      await d.click(drive.x, drive.y, { button: 'right', after: 3200 });
+    }
+    await d.caption('Live: the boxes not in OP shown at once, in the status bar too', 2400);
+  },
+};
+
+// The layout file shared through git (the web edition: a folder chosen; a teammate's change: the file changed there)
+module.exports['layout-git'] = {
+  async prepare(page, d, url) {
+    await openSample(page, url, {
+      rightPanel: false,
+      before: () =>
+        page.evaluateOnNewDocument(() => {
+          const files = { 'SM_TableManager.TcPOU': '<POU/>' };
+          window.__layoutFiles = files;
+          const folder = {
+            kind: 'directory',
+            name: 'TransferTable',
+            async *values() {
+              for (const n of Object.keys(files)) yield { kind: 'file', name: n };
+            },
+            async resolve() {
+              return null;
+            },
+            async queryPermission() {
+              return 'granted';
+            },
+            async requestPermission() {
+              return 'granted';
+            },
+            async getDirectoryHandle() {
+              throw new DOMException('none', 'NotFoundError');
+            },
+            async removeEntry(n) {
+              delete files[n];
+            },
+            async getFileHandle(n, opts) {
+              if (!(n in files) && !opts?.create) throw new DOMException('none', 'NotFoundError');
+              if (!(n in files)) files[n] = '';
+              return {
+                kind: 'file',
+                name: n,
+                async getFile() {
+                  return new File([files[n]], n);
+                },
+                async createWritable() {
+                  let text = '';
+                  return { async write(t) { text += t; }, async close() { files[n] = text; } };
+                },
+              };
+            },
+          };
+          window.showDirectoryPicker = async () => folder;
+        }),
+    });
+    await focus(page, S('HOMMING'), { notches: 9 });
+  },
+  async play(page, d) {
+    await d.caption('Places, routes, notes and colours: kept in a file beside the POU, for git', 300);
+    await d.clickOn('#status-layout', { after: 900 });
+    await d.clickOn('#status-layout-pick', { after: 1800 });
+    const st = await stateAt(page, S('HOMMING'));
+    await d.caption('Move a state: <b>SM_TableManager.machinescope.json</b> written a moment later', 300);
+    await d.drag(st.x, st.y, st.x + 140, st.y + 30, 1100);
+    await sleep(1800);
+    await d.caption('Commit it with the project: the team sees the same chart', 2200);
+    // A teammate's change pulled in: another state moved in the file
+    await page.evaluate((s) => {
+      const f = JSON.parse(window.__layoutFiles['SM_TableManager.machinescope.json']);
+      f.states[s] = { x: (f.states[s]?.x ?? 0) - 160, y: (f.states[s]?.y ?? 0) + 60 };
+      window.__layoutFiles['SM_TableManager.machinescope.json'] = JSON.stringify(f, null, 2) + '\n';
+    }, S('IDLE_FEED_OFF'));
+    await d.caption('A <b>git pull</b> changes it: the chart follows within seconds', 4200);
+    await d.caption('ELK and Dagre users share it; a merge conflict in it is resolved here; your own look if you want', 300);
+    await d.clickOn('#status-layout', { after: 1500 });
+    await page.keyboard.press('Escape');
+    await sleep(1500);
+  },
+};
+
 module.exports.helpers = { focus, openSample, stateAt, goTo, edgeAt, zoomAt, zoomIn, zoomLabel, emptyNear, sleep, S };

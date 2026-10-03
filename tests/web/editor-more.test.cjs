@@ -176,7 +176,16 @@ const OTHER = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1
   await p.click('#dock-tab-pou');
   await h.sleep(500);
   expect(await rightClickAt('pou-declaration-editor', 'cmd_bStart'), 'the menu on cmd_bStart');
-  await p.click('#editor-menu-rename');
+  // (clicked as it is found: a slow machine's late re-render can close the menu between; then opened again)
+  let renameClicked = false;
+  for (let k = 0; k < 3 && !renameClicked; k++) {
+    if (k) await rightClickAt('pou-declaration-editor', 'cmd_bStart');
+    renameClicked = await p.evaluate(() => {
+      const b = document.getElementById('editor-menu-rename');
+      b?.click();
+      return !!b;
+    });
+  }
   await p.waitForSelector('#text-prompt-input', { timeout: 3000 });
   await p.evaluate(() => { const el = document.getElementById('text-prompt-input'); el.focus(); el.select(); });
   await p.keyboard.type('cmd_bGo', { delay: 10 });

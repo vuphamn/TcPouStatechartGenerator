@@ -59,7 +59,23 @@ const LINE = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.
     open = !!(await p.$(MENU));
   }
   expect(open && !!(await p.$('#editor-menu-rename')), 'the menu on cmd_bUnclamp: Rename…');
-  await p.click('#editor-menu-rename');
+  // (clicked as it is found: a slow machine's late re-render can close the menu between; then opened again)
+  for (let k = 0; k < 3; k++) {
+    const clicked = await p.evaluate(() => {
+      const b = document.getElementById('editor-menu-rename');
+      b?.click();
+      return !!b;
+    });
+    if (clicked) break;
+    await p.evaluate(() => {
+      const ta = document.getElementById('pou-declaration-editor');
+      const at = ta.value.indexOf('cmd_bUnclamp') + 2;
+      ta.focus();
+      ta.setSelectionRange(at, at);
+      ta.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 600, clientY: 400, button: 2 }));
+    });
+    await h.sleep(400);
+  }
   await p.waitForSelector('#text-prompt-input', { timeout: 4000 });
   await p.evaluate(() => { const el = document.getElementById('text-prompt-input'); el.focus(); el.select(); });
   await p.keyboard.type('cmd_bRelease', { delay: 5 });

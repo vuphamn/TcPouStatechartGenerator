@@ -134,6 +134,7 @@ import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { isEmptyLayout, layoutFileNameOf, parseLayout, serializeLayout, type PouLayout } from './utils/pouLayout.ts';
 import { layoutHost, readLayoutFile, WEB_LAYOUT_PREFIX, writeLayoutFile, type LinkRequest } from './utils/hostLayout.ts';
 import { pickWebLayoutFolder, webLayoutReady } from './utils/sourceFileAccess.ts';
+import { mergeLayouts, readConflict } from './utils/layoutConflict.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
 import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
 import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
@@ -3655,8 +3656,11 @@ export const App: React.FC = () => {
     layoutPast: NodeOffsetsMap[];
     layoutFuture: NodeOffsetsMap[];
     layoutAt: number;
-    orderPast: ('code' | 'layout')[];
-    orderFuture: ('code' | 'layout')[];
+    /** The transitions' routes before a change of the user's (by transition: a handle dragged, Re-layout edge) */
+    edgesPast: EdgeOffsetsMap[];
+    edgesFuture: EdgeOffsetsMap[];
+    orderPast: ('code' | 'layout' | 'edges')[];
+    orderFuture: ('code' | 'layout' | 'edges')[];
   }>({
     past: [],
     future: [],
@@ -3667,9 +3671,13 @@ export const App: React.FC = () => {
     layoutPast: [],
     layoutFuture: [],
     layoutAt: 0,
+    edgesPast: [],
+    edgesFuture: [],
     orderPast: [],
     orderFuture: [],
   });
+  // (the transitions' routes now, and how they are put back: the layout block's, below)
+  const edgeUndoRef = useRef<{ get: () => EdgeOffsetsMap; restore: (edges: EdgeOffsetsMap) => void } | null>(null);
   const nodeOffsetsRef = useRef(nodeOffsets);
   nodeOffsetsRef.current = nodeOffsets;
   // The canvas moved states: where they were is kept for Undo (a held arrow key is one step)
@@ -3692,11 +3700,23 @@ export const App: React.FC = () => {
     h.layoutAt = now;
     h.future = [];
     h.layoutFuture = [];
+    h.edgesFuture = [];
     h.orderFuture = [];
     setNodeOffsets(next);
     setHistoryVersion((v) => v + 1);
   }, []);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const pushEdgeStep = useCallback((before: EdgeOffsetsMap) => {
+    const h = historyRef.current;
+    h.edgesPast.push(before);
+    if (h.edgesPast.length > 100) h.edgesPast.shift();
+    h.orderPast.push('edges');
+    h.future = [];
+    h.layoutFuture = [];
+    h.edgesFuture = [];
+    h.orderFuture = [];
+    setHistoryVersion((v) => v + 1);
+  }, []);
   // An undo / redo of a code change: the canvas keeps its states where they are (counted)
   const [keepCanvasPositions, setKeepCanvasPositions] = useState(0);
   useEffect(() => {
@@ -3709,6 +3729,8 @@ export const App: React.FC = () => {
       h.future = [];
       h.layoutPast = [];
       h.layoutFuture = [];
+      h.edgesPast = [];
+      h.edgesFuture = [];
       h.orderPast = [];
       h.orderFuture = [];
       h.last = snap;
@@ -3727,6 +3749,7 @@ export const App: React.FC = () => {
       if (h.past.length > 100) h.past.shift();
       h.future = [];
       h.layoutFuture = [];
+      h.edgesFuture = [];
       h.orderFuture = [];
       h.lastAt = now;
     }
@@ -3738,6 +3761,21 @@ export const App: React.FC = () => {
       const h = historyRef.current;
       const orderFrom = back ? h.orderPast : h.orderFuture;
       const orderTo = back ? h.orderFuture : h.orderPast;
+      // A transition's route changed last (dragged, laid out again): the routes back as they were, on the drawing as it is
+      if (orderFrom[orderFrom.length - 1] === 'edges' && edgeUndoRef.current) {
+        const eFrom = back ? h.edgesPast : h.edgesFuture;
+        const eTo = back ? h.edgesFuture : h.edgesPast;
+        const edges = eFrom.pop();
+        orderFrom.pop();
+        if (edges) {
+          eTo.push(edgeUndoRef.current.get());
+          orderTo.push('edges');
+          edgeUndoRef.current.restore(edges);
+          setHistoryVersion((v) => v + 1);
+          showCopyToast(`${back ? 'Transition layout undone' : 'Transition layout redone'} (${h.orderPast.length} to undo, ${h.orderFuture.length} to redo)`, 'success');
+          return;
+        }
+      }
       // A move on the canvas last: the states back where they were
       if (orderFrom[orderFrom.length - 1] === 'layout') {
         const lFrom = back ? h.layoutPast : h.layoutFuture;
@@ -3772,7 +3810,10 @@ export const App: React.FC = () => {
     [pouContent, dutContent, handleReplaceSources, showCopyToast]
   );
   const historyState = useMemo(
-    () => ({ canUndo: historyRef.current.past.length + historyRef.current.layoutPast.length > 0, canRedo: historyRef.current.future.length + historyRef.current.layoutFuture.length > 0 }),
+    () => ({
+      canUndo: historyRef.current.past.length + historyRef.current.layoutPast.length + historyRef.current.edgesPast.length > 0,
+      canRedo: historyRef.current.future.length + historyRef.current.layoutFuture.length + historyRef.current.edgesFuture.length > 0,
+    }),
     [historyVersion] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
@@ -6420,6 +6461,24 @@ export const App: React.FC = () => {
     }
   }, [ownLookKey]);
   const [layoutEdges, setLayoutEdges] = useState<EdgeOffsetsMap>({});
+  const layoutEdgesRef = useRef(layoutEdges);
+  layoutEdgesRef.current = layoutEdges;
+  // (put back by an undo / redo: on the canvas' drawing as it is)
+  const [edgeRestore, setEdgeRestore] = useState<{ key: string; edges: EdgeOffsetsMap } | null>(null);
+  edgeUndoRef.current = {
+    get: () => layoutEdgesRef.current,
+    restore: (edges) => {
+      setLayoutEdges(edges);
+      setEdgeRestore({ key: `${Date.now()}`, edges });
+    },
+  };
+  const handleCanvasEdgeOffsets = useCallback(
+    (next: EdgeOffsetsMap, opts?: { user?: boolean }) => {
+      if (opts?.user) pushEdgeStep(layoutEdgesRef.current);
+      setLayoutEdges(next);
+    },
+    [pushEdgeStep]
+  );
   const [layoutSeed, setLayoutSeed] = useState<{ key: string; edges: EdgeOffsetsMap } | null>(null);
   const [layoutPins, setLayoutPins] = useState<{ key: string; positions: Record<string, { centerX: number; centerY: number }> } | null>(null);
   const [layoutStatus, setLayoutStatus] = useState<LayoutStatus | null>(null);
@@ -6445,13 +6504,55 @@ export const App: React.FC = () => {
   canvasPositionsRef.current = canvasPositions;
   const lookNow = (): PouLayout['look'] => ({ states: customNodeStyles, transitions: customEdgeStyles, collapsed: collapsedComposites });
   // The file's layout put on the canvas (read at load, or again: changed on disk)
+  // A layout file git could not merge (conflict markers): Merge both (each state's place, route, note and colour from
+  // either side; one changed on both: yours), or one side; written back without the markers (then git add it to
+  // finish the merge). Not now: left as it is (Read the file again asks again)
+  const conflictAskedRef = useRef<string | null>(null);
+  const askLayoutConflict = (pou: string, text: string, sides: { ours: PouLayout; theirs: PouLayout }, force = false) => {
+    if (!force && conflictAskedRef.current === text) return;
+    conflictAskedRef.current = text;
+    const file = layoutFileNameOf(pouNameOf(pou));
+    const resolve = (layout: PouLayout, how: string) => {
+      const next = serializeLayout(layout);
+      void writeLayoutFile(pou, next, layoutLink()).then((r) => {
+        if (layoutRef.current.pou !== pou) return;
+        if (r.error) return setLayoutStatus({ file, state: 'error', detail: r.error });
+        applyLayoutText(pou, next);
+        showCopyToast(`${file}: ${how}, the conflict markers gone. git add it to finish the merge`, 'success');
+      });
+    };
+    const count = (l: PouLayout) => `${Object.keys(l.states).length} states moved, ${Object.values(l.transitions).reduce((n, m) => n + Object.keys(m).length, 0)} routes, ${Object.keys(l.notes.nodes).length + Object.keys(l.notes.edges).length} notes`;
+    const sideOnly = () =>
+      setPromptRequest({
+        title: 'The layout file: one side',
+        label: `${file}: keep one side of the conflict, the other dropped (git still has it).`,
+        details: [`Yours: ${count(sides.ours)}`, `Theirs: ${count(sides.theirs)}`],
+        confirmOnly: true,
+        submitLabel: 'Keep mine',
+        onSubmit: () => resolve(sides.ours, 'yours kept'),
+        altAction: { id: 'layout-conflict-theirs', label: 'Take theirs', title: 'Their side of the conflict, yours dropped', run: () => resolve(sides.theirs, 'theirs taken') },
+        cancelLabel: 'Not now',
+      });
+    setPromptRequest({
+      title: 'The layout file has a merge conflict',
+      label: `${file}: git could not merge the two layouts.`,
+      details: [`Yours: ${count(sides.ours)}`, `Theirs: ${count(sides.theirs)}`, 'Merge both: each state\'s place, route, note and colour from either side; one changed on both sides: yours'],
+      confirmOnly: true,
+      submitLabel: 'Merge both',
+      onSubmit: () => resolve(mergeLayouts(sides.ours, sides.theirs), 'both merged'),
+      altAction: { id: 'layout-conflict-one-side', label: 'One side…', title: 'Keep yours or take theirs', run: sideOnly },
+      cancelLabel: 'Not now',
+    });
+  };
   const applyLayoutText = (pou: string, text: string | null) => {
     const file = layoutFileNameOf(pouNameOf(pou));
     const parsed = text ? parseLayout(text) : null;
     if (parsed && 'error' in parsed) {
-      // (a file that is not one, or a newer one: left as it is, not written over)
+      // (a file that is not one, or a newer one: left as it is, not written over; one git could not merge: asked how)
       layoutRef.current = { ...layoutRef.current, ready: false, text };
-      setLayoutStatus({ file, state: 'error', detail: parsed.error });
+      const conflict = text ? readConflict(text) : null;
+      setLayoutStatus({ file, state: 'error', detail: conflict ? ('error' in conflict ? `A merge conflict in it, not readable: ${conflict.error}` : 'A merge conflict in it (git): choose how to resolve it (Read the file again asks again)') : parsed.error });
+      if (conflict && !('error' in conflict)) askLayoutConflict(pou, text!, conflict);
       return;
     }
     const key = `${pou}|${Date.now()}`;
@@ -6574,6 +6675,9 @@ export const App: React.FC = () => {
       if (layoutRef.current.pou !== pou || r.error) return;
       const text = r.text ?? null;
       if (text === layoutRef.current.text) {
+        // (still the conflict: asked again)
+        const conflict = !quiet && text ? readConflict(text) : null;
+        if (conflict && !('error' in conflict)) return askLayoutConflict(pou, text!, conflict, true);
         if (!quiet) showCopyToast('The layout file has not changed', 'success');
         return;
       }
@@ -8789,7 +8893,8 @@ export const App: React.FC = () => {
                   initialEdgeOffsets={layoutSeed?.edges}
                   edgeOffsetsKey={layoutSeed?.key}
                   pinPositions={layoutPins ?? undefined}
-                  onEdgeOffsetsChange={setLayoutEdges}
+                  onEdgeOffsetsChange={handleCanvasEdgeOffsets}
+                  restoreEdges={edgeRestore ?? undefined}
                   onCanvasPositionsChange={setCanvasPositions}
                   notes={diagramNotes}
                   onSaveNote={handleSaveNote}

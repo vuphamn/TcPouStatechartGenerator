@@ -1,6 +1,6 @@
 // A State from the palette dropped in a composite with the canvas zoomed in (the side panels hidden): drawn where it
 // was dropped, in the composite's box (it was put where the layout chose, often off screen); a second one dropped on
-// it: put clear of it, below
+// it: put clear of it, close by; with Snap to Grid on (its default), a third one: its center on the grid
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -82,13 +82,34 @@ const S = (n) => `TABLEMANAGER_${n}`;
       return r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null;
     });
     expect(!!nb && !!cluster && nb.left >= cluster.left - 2 && nb.right <= cluster.right + 2 && nb.top >= cluster.top - 2 && nb.bottom <= cluster.bottom + 2, 'in the composite\'s box');
-    // A second one dropped on it: clear of it, below
+    // A second one dropped on it: clear of it, close by
     if (nb) {
       await drop(nb.x, nb.y, S('WAIT_DOOR2'));
       const b1 = await box(S('WAIT_DOOR'));
       const b2 = await box(S('WAIT_DOOR2'));
       const overlap = b1 && b2 && b2.left < b1.right && b2.right > b1.left && b2.top < b1.bottom && b2.bottom > b1.top;
-      expect(!!b2 && !overlap && b2.top >= b1.bottom && Math.abs(b2.x - b1.x) < 30, `dropped on it: put below it, not over it (${b2 ? `${Math.round(b2.x)},${Math.round(b2.y)}` : 'none'})`);
+      const h1 = b1 ? b1.bottom - b1.top : 0;
+      expect(!!b2 && !overlap && Math.hypot(b2.x - b1.x, b2.y - b1.y) < 4 * h1 + (b1.right - b1.left), `dropped on it: put close by, not over it (${b2 ? `${Math.round(b2.x)},${Math.round(b2.y)}` : 'none'}; it at ${Math.round(b1.x)},${Math.round(b1.y)})`);
+      // Snap to Grid on: a third one, its center on the grid (in the drawing's units)
+      // (on by default; switched on when it is not: the button is sky blue while on)
+      if (!(await p.$eval('#toolbar-snap-btn', (e) => e.className.includes('text-sky-300')))) await p.click('#toolbar-snap-btn');
+      await h.sleep(400);
+      const grid = await p.$eval('#toolbar-snap-size-select', (e) => Number(e.value)).catch(() => 20);
+      const area = await p.evaluate(() => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
+      const spot3 = { x: Math.max(area.l + 150, Math.min(area.r - 100, b1.x - 2.5 * (b1.right - b1.left))), y: Math.max(area.t + 80, Math.min(area.b - 80, b1.y - 2 * h1)) };
+      await drop(spot3.x, spot3.y, S('WAIT_DOOR3'));
+      const c3 = await p.evaluate((id) => {
+        const svg = document.querySelector('#mermaid-diagram-svg-container svg');
+        const n = svg?.querySelector(`g.node[data-state-id="${id}"]`);
+        const shape = n?.querySelector(':scope > rect, :scope > .label-container, :scope > polygon') ?? n;
+        const frame = svg?.querySelector('g.edgePaths');
+        if (!shape || !frame) return null;
+        const r = shape.getBoundingClientRect();
+        const q = new DOMPoint(r.x + r.width / 2, r.y + r.height / 2).matrixTransform(frame.getScreenCTM().inverse());
+        return { x: q.x, y: q.y };
+      }, S('WAIT_DOOR3'));
+      const off = (v) => Math.min(((v % grid) + grid) % grid, grid - (((v % grid) + grid) % grid));
+      expect(!!c3 && off(c3.x) < 1.5 && off(c3.y) < 1.5, `Snap to Grid (${grid}): its center on the grid (${c3 ? `${c3.x.toFixed(1)}, ${c3.y.toFixed(1)}` : 'none'})`);
     }
   }
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

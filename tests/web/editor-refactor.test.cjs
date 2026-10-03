@@ -92,7 +92,18 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   expect(await rightClickAt('pou-declaration-editor', 'cmd_bUnclamp'), 'the POU Editor\'s menu on cmd_bUnclamp');
   list = await items();
   expect(list.some((x) => /^editor-menu-rename:Rename cmd_bUnclamp…/.test(x)), 'Rename cmd_bUnclamp…');
-  await p.click('#editor-menu-rename');
+  // (clicked as it is found: a slow machine's late re-render, the editor's after Back, can close the menu between;
+  // then opened again)
+  let renamed = false;
+  for (let k = 0; k < 3 && !renamed; k++) {
+    if (k) await rightClickAt('pou-declaration-editor', 'cmd_bUnclamp');
+    renamed = await p.evaluate(() => {
+      const b = document.getElementById('editor-menu-rename');
+      b?.click();
+      return !!b;
+    });
+  }
+  expect(renamed, 'Rename… clicked');
   await p.waitForSelector('#text-prompt-input', { timeout: 4000 });
   await p.evaluate(() => { const el = document.getElementById('text-prompt-input'); el.focus(); el.select(); });
   await p.keyboard.type('cmd_bRelease', { delay: 10 });

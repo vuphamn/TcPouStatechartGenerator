@@ -107,7 +107,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     const expand = await p.waitForSelector('#context-menu-composite-expand-btn', { timeout: 3000 }).catch(() => null);
     expect(!!expand, `the box's menu: Expand (${JSON.stringify(r)}; ${await p.evaluate(() => [...document.querySelectorAll('[id^=context-menu-]')].map((e) => e.id).slice(0, 10).join(', '))})`);
     if (expand) await expand.click();
-    await h.sleep(2500);
+    // (drawn again: a busy machine takes longer)
+    for (let i = 0; i < 40 && !(await box(inner)); i++) await h.sleep(200);
     expect(!!(await box(inner)), 'expanded: the composite drawn again');
   }
 

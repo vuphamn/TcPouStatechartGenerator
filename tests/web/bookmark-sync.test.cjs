@@ -83,8 +83,23 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   }
   expect(!!add, `its card's menu: Add bookmark (card ${JSON.stringify(card)}; menus: ${await p.evaluate(() => [...document.querySelectorAll('[id*="context-menu"] [id], [role="menu"] [id]')].map((e) => e.id).slice(0, 8).join(', '))})`);
   if (add) await p.evaluate(() => document.getElementById('state-list-bookmark-btn')?.click());
-  // (a slow machine: until it shows, at most a few seconds)
-  for (let i = 0; i < 25 && !(await cards()).includes(S2); i++) await h.sleep(200);
+  // (a slow machine: until it shows, at most a few seconds; not set (seen once in a while in a full run, the click
+  // landing while the list re-renders): the menu opened again and its item clicked, twice more at most)
+  for (let k = 0; k < 3 && !(await cards()).includes(S2); k++) {
+    for (let i = 0; i < 15 && !(await cards()).includes(S2); i++) await h.sleep(200);
+    if ((await cards()).includes(S2) || k === 2) break;
+    await p.keyboard.press('Escape');
+    await h.sleep(300);
+    await p.evaluate((s) => {
+      const el = document.getElementById(`state-list-item-${s}`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: Math.round(r.x + 60), clientY: Math.round(r.y + 12), button: 2 }));
+    }, S2);
+    const again = await p.waitForSelector('#state-list-bookmark-btn', { timeout: 2500 }).catch(() => null);
+    if (again) await p.evaluate(() => document.getElementById('state-list-bookmark-btn')?.click());
+  }
   // (not set: what the page holds, for the next time it happens; seen once in a while in a full run, never alone)
   const why = (await cards()).includes(S2) ? '' : await p.evaluate(() => JSON.stringify({ menu: !!document.getElementById('state-list-bookmark-btn'), menus: document.querySelectorAll('#state-list-bookmark-btn').length, status: document.getElementById('status-message')?.textContent ?? '', stored: Object.fromEntries(Object.keys(localStorage).filter((k) => /bookmark/i.test(k)).map((k) => [k, localStorage.getItem(k)?.slice(0, 200)])) }));
   expect((await cards()).includes(S2), `set from Identified States (${await cards()}${why ? `; ${why}` : ''})`);

@@ -3,7 +3,9 @@
 // opened again with that file: the state where it was dragged to, the note there; the status bar says where it is kept.
 // Followed on disk (git): changed there, read again; edited here too, asked (Keep mine: written over it). The chart's
 // look from the file (a state's colour), but not while the user keeps their own. Another layout engine: its states put
-// at the file's places (the same places relative to each other), nothing written for it
+// at the file's places (the same places relative to each other), nothing written for it. A transition laid out again:
+// written, the same line when opened again. A merge conflict in the file (git's markers): asked; Merge both: each
+// side's notes kept, the markers gone
 const h = require('../lib/harness.cjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -181,9 +183,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let i = 0; i < 20 && fill !== 'rgb(0, 255, 0)'; i++) { await sleep(250); fill = await fillOf(); }
   expect(fill === 'rgb(0, 255, 0)', `the team's look again: the file's (${fill})`);
 
-  // 6. Changed on disk while moved here: asked; Keep mine: written over it
-  edit((f) => { f.states[S] = { x: f.states[S].x - 300, y: f.states[S].y }; });
-  const disk = stored;
+  // 6. Changed on disk while moved here: asked; Keep mine: written over it (the file changed just after the move,
+  // before its write: not read by the check every few seconds first)
   await page.evaluate((s) => document.getElementById(`btn-goto-state-${s}`)?.click(), other);
   await sleep(1500);
   const ob = await page.evaluate((s) => { const n = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`); const r = (n?.querySelector('rect, path') ?? n)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, other);
@@ -191,6 +192,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.mouse.down();
   for (let i = 1; i <= 8; i++) await page.mouse.move(ob.x + 6 * i, ob.y + 6 * i);
   await page.mouse.up();
+  edit((f) => { f.states[S] = { x: f.states[S].x - 300, y: f.states[S].y }; });
+  const disk = stored;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   const asked = await page.waitForFunction(() => /layout file changed/i.test(document.getElementById('text-prompt-dialog')?.textContent ?? ''), { timeout: 5000 }).then(() => true).catch(() => false);
   expect(asked, 'changed on disk while moved here: asked which to keep');
@@ -220,7 +223,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const pick = await page.evaluate(() => {
     for (const p of document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgePaths path.tc-edge-path:not(.tc-edge-hitbox)')) {
       const [from, to] = [p.getAttribute('data-source-id'), p.getAttribute('data-target-id')];
-      if (!from || !to || from === to || (p.getAttribute('d') || '').split(/[QC]/).length < 3) continue;
+      if (!from || !to || from === to || from === '[*]' || /^(startNode|root_start)/.test(from) || (p.getAttribute('d') || '').split(/[QC]/).length < 3) continue;
       const q = p.getPointAtLength(p.getTotalLength() / 2);
       const at = new DOMPoint(q.x, q.y).matrixTransform(p.getScreenCTM());
       (document.querySelector(`path.tc-edge-hitbox[data-path-id="${p.getAttribute('data-path-id')}"]`) ?? p).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2 }));
@@ -241,6 +244,32 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const nums = (d) => (d ?? '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
   const [l1, l2] = [nums(laid), nums(reopened)];
   expect(l1.length > 0 && l1.length === l2.length && l1.every((v, i) => Math.abs(v - l2[i]) <= 1), `opened again: the same line (${laid?.slice(0, 60)} vs ${reopened?.slice(0, 60)})`);
+
+  // 9. A merge conflict in the file (a git pull): asked how; Merge both: both sides' notes, no markers left
+  {
+    const f = JSON.parse(stored);
+    const mine = { ...f, notes: { ...f.notes, nodes: { ...f.notes.nodes, [S]: 'mine: homing note' } } };
+    const theirs = { ...f, notes: { ...f.notes, nodes: { ...f.notes.nodes, TABLEMANAGER_ERROR: 'theirs: error note' } } };
+    stored = `<<<<<<< HEAD\n${JSON.stringify(mine, null, 2)}\n=======\n${JSON.stringify(theirs, null, 2)}\n>>>>>>> origin/main\n`;
+    const asked = await page.waitForFunction(() => /merge conflict/i.test(document.getElementById('text-prompt-dialog')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
+    expect(asked, 'a merge conflict in it: asked how to resolve it');
+    st = await status();
+    expect(st?.state === 'error', `the status bar: not read (${JSON.stringify(st)})`);
+    if (asked) {
+      await page.click('#text-prompt-submit');
+      for (let i = 0; i < 20 && /<<<<<<</.test(stored); i++) await sleep(250);
+      let m = null;
+      try {
+        m = JSON.parse(stored);
+      } catch {
+        m = null;
+      }
+      expect(!!m && m.notes.nodes[S] === 'mine: homing note' && m.notes.nodes.TABLEMANAGER_ERROR === 'theirs: error note', `Merge both: written without the markers, both notes in it (${stored.slice(0, 80).replace(/\s+/g, ' ')})`);
+      await sleep(800);
+      st = await status();
+      expect(st?.state === 'loaded', `then read (${JSON.stringify(st)})`);
+    }
+  }
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

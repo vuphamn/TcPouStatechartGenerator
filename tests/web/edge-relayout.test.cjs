@@ -1,7 +1,9 @@
 // Re-layout edge (a transition's right-click menu): the transition with the most turns laid out again on its own:
 // fewer turns (or as few), clear of the other states, square into its state, its label on it; nothing else moved (the
-// states, the other transitions and their labels as they were); a state of it moved afterwards: still attached; not
-// offered for a transition back to its own state
+// states, the other transitions and their labels as they were); Undo (the palette's) puts its route back, Redo lays it
+// out again; a state of it moved afterwards: still attached; not offered for a transition back to its own state.
+// Re-layout transitions (a state's menu): all its transitions laid out again, none with more turns, the others as they
+// were; one Undo puts them all back
 const h = require('../lib/harness.cjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -120,6 +122,19 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   }, e.key);
   if (labelOn !== null) expect(labelOn < 6, `its label on it (${labelOn.toFixed(1)} px off)`);
 
+  // Undo: its route as it was; Redo: laid out again (the drawing as it is: nothing else moves)
+  const lineOf = (key) => page.evaluate((key) => document.querySelector(`#mermaid-diagram-svg-container svg path.tc-edge-path[data-path-id="${key}"]:not(.tc-edge-hitbox)`)?.getAttribute('d'), key);
+  const laidOut = await lineOf(e.key);
+  await page.evaluate(() => document.getElementById('palette-undo')?.click());
+  await sleep(800);
+  const undone = await lineOf(e.key);
+  const others = async () => (await lines()).filter((l) => l.key !== e.key).map((l) => l.d).join('|');
+  const othersNow = await others();
+  expect(undone === e.d, `Undo: its route as it was (${undone === e.d ? 'the same' : 'changed'})`);
+  await page.evaluate(() => document.getElementById('palette-redo')?.click());
+  await sleep(800);
+  expect((await lineOf(e.key)) === laidOut && (await others()) === othersNow, 'Redo: laid out again, the others as they were');
+
   // A state of it moved afterwards: still attached (its route follows)
   const tgtBox = await page.evaluate((id) => { const n = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`); n?.scrollIntoView?.(); const r = (n?.querySelector('rect, path') ?? n)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width } : null; }, e.to);
   const area = await page.evaluate(() => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
@@ -140,6 +155,42 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     }, e.key, e.to);
     expect(end === true, 'its state moved afterwards: still into it');
   } else console.log('(its state off screen: the move not tried)');
+
+  // Re-layout transitions (a state's menu): all its transitions, one Undo step
+  const hub = [...new Set(after.flatMap((l) => (l.from && l.to && l.from !== l.to ? [l.from, l.to] : [])))]
+    .map((id) => ({ id, n: after.filter((l) => l.from !== l.to && (l.from === id || l.to === id)).length }))
+    .filter((x) => x.id !== e.from && x.id !== e.to)
+    .sort((a, b) => b.n - a.n)[0];
+  if (hub) {
+    await page.keyboard.press('Escape');
+    const before2 = await lines();
+    const mine = (ls) => ls.filter((l) => l.from !== l.to && (l.from === hub.id || l.to === hub.id));
+    const notMine = (ls) => ls.filter((l) => !(l.from !== l.to && (l.from === hub.id || l.to === hub.id))).map((l) => `${l.key}=${l.d}`).sort().join('|');
+    await page.evaluate((id) => {
+      const n = document.querySelector(`#mermaid-diagram-svg-container svg g.node[data-state-id="${id}"]`);
+      const r = n.getBoundingClientRect();
+      n.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 2 }));
+    }, hub.id);
+    const item = await page.waitForSelector('#context-menu-relayout-state-edges', { timeout: 4000 }).catch(() => null);
+    expect(!!item, `${hub.id}'s menu: Re-layout transitions (${hub.n} transitions)`);
+    if (item) {
+      await page.evaluate(() => document.getElementById('context-menu-relayout-state-edges')?.click());
+      await sleep(1000);
+      const after2 = await lines();
+      const was = Object.fromEntries(mine(before2).map((l) => [l.key, l.turns]));
+      const changed = mine(after2).filter((l) => before2.find((b) => b.key === l.key)?.d !== l.d).length;
+      const worse = mine(after2).filter((l) => l.turns > (was[l.key] ?? 99));
+      expect(changed >= 1 && worse.length === 0, `its transitions laid out again (${changed} of ${mine(after2).length} changed, none with more turns: ${mine(before2).map((l) => l.turns).join(',')} -> ${mine(after2).map((l) => l.turns).join(',')})`);
+      expect(notMine(after2) === notMine(before2), 'the other transitions as they were');
+      const said = await page.evaluate(() => document.getElementById('status-message')?.textContent ?? '');
+      expect(/laid out again/.test(said), `said (${said.trim()})`);
+      await page.evaluate(() => document.getElementById('palette-undo')?.click());
+      await sleep(900);
+      const back = await lines();
+      const same = mine(before2).every((l) => back.find((b) => b.key === l.key)?.d === l.d);
+      expect(same, 'one Undo: all of them as they were');
+    }
+  }
 
   // A transition back to its own state: not offered
   const loop = after.find((l) => l.from && l.from === l.to);

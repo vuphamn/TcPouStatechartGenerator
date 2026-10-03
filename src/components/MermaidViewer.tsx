@@ -542,7 +542,10 @@ export interface MermaidViewerProps {
    */
   pinPositions?: { key: string; positions: Record<string, { centerX: number; centerY: number }> };
   /** The transitions' dragged routes and labels changed: by transition (FROM->TO, #2 …), as initialEdgeOffsets */
-  onEdgeOffsetsChange?: (offsets: EdgeOffsetsMap) => void;
+  /** The routes changed, by transition; user: by the user (a handle dragged, Re-layout edge: an undo step), not the drawing's own */
+  onEdgeOffsetsChange?: (offsets: EdgeOffsetsMap, opts?: { user?: boolean }) => void;
+  /** The routes put back as they were (by transition: an undo / redo), on the drawing as it is, when key changes */
+  restoreEdges?: { key: string; edges: EdgeOffsetsMap };
   notes?: DiagramNotes;
   onSaveNote?: (target: ContextMenuTarget, noteText: string) => void;
   onDeleteNote?: (target: ContextMenuTarget) => void;
@@ -1971,6 +1974,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     edgeOffsetsKey,
     onEdgeOffsetsChange,
     pinPositions,
+    restoreEdges,
     notes,
     onSaveNote,
     onDeleteNote,
@@ -2446,18 +2450,42 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setLayoutTrigger((v) => v + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinPositions?.key]);
+  // The routes put back (an undo / redo): on this drawing's paths, the drawing as it is (not drawn again); not told
+  // back as a change
+  useEffect(() => {
+    if (!restoreEdges?.key) return;
+    const svg = getDiagramSvg();
+    if (!svg) return;
+    const target = edgeOffsetsOnPaths(svg, restoreEdges.edges);
+    // (the transitions it changes: no kept route in their way; the others as drawn)
+    for (const path of edgePathsOf(svg)) {
+      const id = path.getAttribute('data-path-id') || '';
+      if (JSON.stringify(currentEdgeOffsetsRef.current[id] ?? null) === JSON.stringify(target[id] ?? null)) continue;
+      path.removeAttribute('data-frozen-d');
+      path.removeAttribute('data-frozen-sig');
+    }
+    currentEdgeOffsetsRef.current = { ...target };
+    applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, target, null, selectedEdge?.id || null, layoutEngine, flowchartCurve);
+    reportedEdgesRef.current = JSON.stringify(edgeOffsetsByTransition(svg, target));
+    setEdgeOffsets(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreEdges?.key]);
   // The routes changed: told by transition (the drawing's path ids are not kept across drawings)
   const onEdgeOffsetsChangeRef = useRef(onEdgeOffsetsChange);
   onEdgeOffsetsChangeRef.current = onEdgeOffsetsChange;
   const reportedEdgesRef = useRef('');
+  // (the next change is the user's: a handle drag released, Re-layout edge)
+  const userEdgeChangeRef = useRef(false);
   useEffect(() => {
     const svg = getDiagramSvg();
     if (!svg || !onEdgeOffsetsChangeRef.current || pendingEdgeSeedRef.current) return;
     const out = edgeOffsetsByTransition(svg, edgeOffsets);
     const text = JSON.stringify(out);
+    const user = userEdgeChangeRef.current;
+    userEdgeChangeRef.current = false;
     if (text === reportedEdgesRef.current) return;
     reportedEdgesRef.current = text;
-    onEdgeOffsetsChangeRef.current(out);
+    onEdgeOffsetsChangeRef.current(out, { user });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edgeOffsets]);
 
@@ -4600,7 +4628,25 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // Re-layout edge (a transition's menu): that transition laid out again on its own, straight or with as few turns as
   // it can, clear of the other states; the states, the other transitions and their labels stay as they are. Its
   // label goes to its middle. Kept as its own route (its offsets: the layout file's too)
-  const relayoutEdge = (edge: { id: string; pathId?: string; from: string; to: string }): string | null => {
+  /** A drawn line's turns: its direction (right / down / left / up) along it, each change one */
+  const turnsOf = (path: SVGPathElement): number => {
+    if (typeof path.getTotalLength !== 'function') return 0;
+    const len = path.getTotalLength();
+    let dir = -1;
+    let turns = 0;
+    let last = path.getPointAtLength(0);
+    for (let at = 3; at <= len; at += 3) {
+      const q = path.getPointAtLength(at);
+      const [dx, dy] = [q.x - last.x, q.y - last.y];
+      if (Math.hypot(dx, dy) < 2) continue;
+      const d = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 0 : 2) : dy > 0 ? 1 : 3;
+      if (dir >= 0 && d !== dir) turns++;
+      dir = d;
+      last = q;
+    }
+    return turns;
+  };
+  const relayoutEdge = (edge: { id: string; pathId?: string; from: string; to: string }, opts: { notWorse?: boolean } = {}): string | null => {
     const svg = getDiagramSvg();
     if (!svg) return 'No drawing';
     const paths = edgePathsOf(svg);
@@ -4663,17 +4709,47 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       tgtDiamond: isDiamondNode(tgtEl),
     });
     if (!route) return 'No way between its states clear of the others';
+    // (with others laid out around it: kept as it is when the new one would turn more)
+    if (opts.notWorse && route.length - 2 > turnsOf(path)) return 'kept';
     const next: EdgeOffset = { x: 0, y: 0, route: route.flatMap((q) => [Math.round(q.x * 10) / 10, Math.round(q.y * 10) / 10]), routeAt: [src.cx, src.cy, tgt.cx, tgt.cy].map((v) => Math.round(v * 10) / 10) };
     // (its kept route, from an edit before: this one now)
     path.removeAttribute('data-frozen-d');
     path.removeAttribute('data-frozen-sig');
     currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [key]: next };
     applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, selectedEdge?.id || null, layoutEngine, flowchartCurve);
+    userEdgeChangeRef.current = true;
     setEdgeOffsets({ ...currentEdgeOffsetsRef.current });
     return null;
   };
   const relayoutEdgeRef = useRef(relayoutEdge);
   relayoutEdgeRef.current = relayoutEdge;
+  // Re-layout transitions (a state's menu): each of its transitions in and out laid out again, one after the other
+  // (each clear of the ones laid out before it; one that would turn more than it does: kept as it is); its loops kept.
+  // One undo step. → how many, and the ones with no way
+  const relayoutStateEdges = (stateId: string): { done: number; failed: string[] } => {
+    const svg = getDiagramSvg();
+    if (!svg) return { done: 0, failed: [] };
+    const mine = edgePathsOf(svg).filter((x) => {
+      const [from, to] = [x.getAttribute('data-source-id'), x.getAttribute('data-target-id')];
+      return from && to && from !== to && (from === stateId || to === stateId);
+    });
+    // (the longest first: they have the fewest ways round)
+    const len = (x: SVGPathElement) => (typeof x.getTotalLength === 'function' ? x.getTotalLength() : 0);
+    mine.sort((a, b) => len(b) - len(a));
+    let done = 0;
+    const failed: string[] = [];
+    for (const path of mine) {
+      const from = path.getAttribute('data-source-id')!;
+      const to = path.getAttribute('data-target-id')!;
+      const err = relayoutEdge({ id: path.getAttribute('data-edge-id') || '', pathId: path.getAttribute('data-path-id') || undefined, from, to }, { notWorse: true });
+      if (err === 'kept') continue;
+      if (err) failed.push(`${from} → ${to}`);
+      else done++;
+    }
+    return { done, failed };
+  };
+  const relayoutStateEdgesRef = useRef(relayoutStateEdges);
+  relayoutStateEdgesRef.current = relayoutStateEdges;
   // Several states lined up / spread evenly: their offsets changed, the diagram re-drawn, the positions kept
   const arrangeRef = useRef<(ids: string[], mode: string) => void>(() => {});
   const tidyRef = useRef<() => number>(() => 0);
@@ -5236,7 +5312,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (el.parentElement) ro.observe(el.parentElement);
     return () => ro.disconnect();
   }, [svgContent]);
-  // A new state's node put where it was dropped, clear of the states there. The drop point taken in the drawing's own
+  // A new state's node put where it was dropped, clear of the states there (and of labels and lines when it can be),
+  // on the grid when snapping is on. The drop point taken in the drawing's own
   // units (its transitions' frame, as the states' places are) while the drawing it was dropped on is still shown,
   // and handed to the next drawing with the states it keeps: that one puts it there and grows its composite's box to
   // hold it (a state dropped in a composite), as for a state dragged in. Not put there by it (no drawing kept):
@@ -5258,17 +5335,53 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const node = svg?.querySelector(`g.node[data-state-id="${CSS.escape(placeRequest.stateId)}"]`) as SVGGElement | null;
     if (placeAtRef.current?.nonce !== placeRequest.nonce && toFrame && svg) {
       const p0 = new DOMPoint(placeRequest.x, placeRequest.y).matrixTransform(toFrame);
-      // (clear of the states there: moved down past one it would cover; its size: a state's, as most are)
+      // Its place: the nearest spot to the drop that covers no state (and, if it can, no transition's label, and few
+      // lines), on the grid when snapping is on. Its size: a state's, as most are
       const others = Array.from(svg.querySelectorAll<SVGGElement>('g.node')).filter((n) => n !== node).map((n) => boxIn(nodeShapeOf(n).getBoundingClientRect()));
+      const labels = Array.from(svg.querySelectorAll<SVGGElement>('g.edgeLabel'))
+        .filter((l) => l.textContent?.trim())
+        .map((l) => boxIn(l.getBoundingClientRect()))
+        .filter((q) => q.r - q.l > 1);
+      // (the lines: points along them, in the same units)
+      const linePoints: { x: number; y: number }[] = [];
+      for (const path of edgePathsOf(svg)) {
+        const m = path.getScreenCTM();
+        if (!m || typeof path.getTotalLength !== 'function') continue;
+        const len = path.getTotalLength();
+        const step = Math.max(4, len / 150);
+        for (let t = 0; t <= len; t += step) {
+          const q = path.getPointAtLength(t);
+          const sp = new DOMPoint(q.x, q.y).matrixTransform(m).matrixTransform(toFrame);
+          linePoints.push({ x: sp.x, y: sp.y });
+        }
+      }
       const median = (v: number[]) => (v.length ? [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)] : 40);
       const own = node ? boxIn(nodeShapeOf(node).getBoundingClientRect()) : null;
       const hw = own ? (own.r - own.l) / 2 : median(others.map((o) => (o.r - o.l) / 2));
       const hh = own ? (own.b - own.t) / 2 : median(others.map((o) => (o.b - o.t) / 2));
-      const want = { x: p0.x, y: p0.y };
-      for (let k = 0; k < 12; k++) {
-        const hit = others.find((o) => want.x + hw > o.l - 4 && want.x - hw < o.r + 4 && want.y + hh > o.t - 4 && want.y - hh < o.b + 4);
-        if (!hit) break;
-        want.y = hit.b + 16 + hh;
+      const g = snapConfig.enabled && snapConfig.gridSize > 0 ? snapConfig.gridSize : 0;
+      const snap = (v: number) => (g ? Math.round(v / g) * g : v);
+      const covers = (q: { l: number; t: number; r: number; b: number }, x: number, y: number, m: number) => x + hw > q.l - m && x - hw < q.r + m && y + hh > q.t - m && y - hh < q.b + m;
+      const cost = (x: number, y: number) => {
+        let c = Math.hypot(x - p0.x, y - p0.y) + (y < p0.y - 1 ? 1 : 0);
+        c += 1e6 * others.filter((o) => covers(o, x, y, 6)).length;
+        c += 1e4 * labels.filter((o) => covers(o, x, y, 2)).length;
+        c += 6 * linePoints.filter((q) => Math.abs(q.x - x) < hw + 2 && Math.abs(q.y - y) < hh + 2).length;
+        return c;
+      };
+      let want = { x: snap(p0.x), y: snap(p0.y) };
+      let best = cost(want.x, want.y);
+      const [sx, sy] = [hw + 14, hh + 10];
+      for (let j = -4; j <= 4; j++) {
+        for (let i = -2; i <= 2; i++) {
+          const x = snap(p0.x + i * sx);
+          const y = snap(p0.y + j * sy);
+          const c = cost(x, y);
+          if (c < best) {
+            best = c;
+            want = { x, y };
+          }
+        }
       }
       placeAtRef.current = { nonce: placeRequest.nonce, x: want.x, y: want.y };
       // (the next drawing: the states kept where they are, this one put there)
@@ -5758,6 +5871,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       setIsNodeDragging(false);
 
       if (wasMoved && edgeId) {
+        userEdgeChangeRef.current = true;
         setEdgeOffsets({ ...currentEdgeOffsetsRef.current });
         return;
       }
@@ -6179,6 +6293,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         setIsNodeDragging(false);
 
         if (wasMoved && edgeId) {
+          userEdgeChangeRef.current = true;
           setEdgeOffsets({ ...currentEdgeOffsetsRef.current });
         }
       }
@@ -8414,6 +8529,22 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             extraItems={(() => {
               const target = contextMenuState.target;
               const items = contextMenuItems?.(target) ?? [];
+              if (target.type === 'node' && target.id && target.id !== '[*]') {
+                return [
+                  ...items,
+                  {
+                    id: 'relayout-state-edges',
+                    label: 'Re-layout transitions',
+                    icon: <Spline className="w-3.5 h-3.5" />,
+                    title: "Its transitions (in and out) laid out again, each straight or with as few turns as it can, clear of the other states and of each other. The states and the other transitions stay where they are",
+                    onSelect: () => {
+                      const r = relayoutStateEdgesRef.current(target.id);
+                      const msg = r.done ? `${target.id}: ${r.done} transition${r.done === 1 ? '' : 's'} laid out again${r.failed.length ? ` (no way for ${r.failed.join(', ')})` : ''}` : r.failed.length ? `Re-layout transitions: no way for ${r.failed.join(', ')}` : `${target.id} has no transitions to lay out`;
+                      onToastProp?.(msg, r.done ? 'success' : 'error');
+                    },
+                  },
+                ];
+              }
               if (target.type !== 'edge' || !target.from || !target.to || target.from === target.to) return items;
               return [
                 ...items,

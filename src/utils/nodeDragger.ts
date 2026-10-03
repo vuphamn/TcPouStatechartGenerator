@@ -1781,8 +1781,12 @@ export function calculateReroutedEdgePath(
       const handles: EdgeOffset = { x: own.x || 0, y: own.y || 0, startDx: own.startDx || 0, startDy: own.startDy || 0, endDx: own.endDx || 0, endDy: own.endDy || 0 };
       const dragged = Object.values(handles).some((v) => Math.abs(v ?? 0) >= 0.5);
       const d0 = orthogonalPolylineToPath(pts);
-      if (!dragged && Math.hypot(ds.x - dt.x, ds.y - dt.y) < 0.5) {
-        const d = Math.hypot(ds.x, ds.y) < 0.5 ? d0 : translateSvgPath(d0, ds.x, ds.y);
+      // (its states moved together, or not at all: moved with them; the file keeps whole units, so a unit apart is the
+      // same place)
+      if (!dragged && Math.hypot(ds.x - dt.x, ds.y - dt.y) < 2) {
+        const mx = (ds.x + dt.x) / 2;
+        const my = (ds.y + dt.y) / 2;
+        const d = Math.hypot(mx, my) < 0.5 ? d0 : translateSvgPath(d0, mx, my);
         const mp = extractCoordinatePoints(parseSvgPathCommands(d));
         return { d, midPoint: frozenMidOf(d), startPoint: mp[0] || pts[0], endPoint: mp[mp.length - 1] || pts[pts.length - 1] };
       }
