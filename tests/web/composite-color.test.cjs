@@ -87,7 +87,9 @@ const MIME = 'application/x-kss-statechart-element';
     await p.mouse.click(l.titleAt.x, l.titleAt.y, { button: 'right' });
     const btn = await p.waitForSelector(`#context-menu-${item}`, { timeout: 4000 }).catch(() => null);
     if (!btn) return false;
-    await btn.click();
+    // (the item itself clicked, not the screen spot it was at: on CI's slow runner the menu was placed again between
+    // and the click took the item below it)
+    await p.evaluate((id) => document.getElementById(id)?.click(), `context-menu-${item}`);
     await h.sleep(1800);
     return true;
   };

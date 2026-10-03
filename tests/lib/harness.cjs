@@ -82,9 +82,13 @@ async function launchBrowser(options = {}) {
   // takes 20 s and more): every page gets 1 minute, 2 on CI
   const navTimeout = process.env.CI ? 120000 : 60000;
   const newPage = browser.newPage.bind(browser);
+  // KSS_CPU_THROTTLE=4: each page's CPU slowed down that many times (Chrome's own throttling): a slow CI runner's
+  // timing reproduced locally, for a test that fails only there
+  const throttle = Number(process.env.KSS_CPU_THROTTLE) || 0;
   browser.newPage = async (...a) => {
     const page = await newPage(...a);
     page.setDefaultNavigationTimeout(navTimeout);
+    if (throttle > 1) await (await page.createCDPSession()).send('Emulation.setCPUThrottlingRate', { rate: throttle }).catch(() => {});
     return page;
   };
   browser.on('targetcreated', (t) => {
