@@ -134,7 +134,7 @@ import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { isEmptyLayout, layoutFileNameOf, parseLayout, serializeLayout, type PouLayout } from './utils/pouLayout.ts';
 import { layoutHost, readLayoutFile, WEB_LAYOUT_PREFIX, writeLayoutFile, type LinkRequest } from './utils/hostLayout.ts';
 import { pickWebLayoutFolder, webLayoutReady } from './utils/sourceFileAccess.ts';
-import { mergeLayouts, readConflict } from './utils/layoutConflict.ts';
+import { diffLayouts, mergeLayouts, readConflict } from './utils/layoutConflict.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
 import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
 import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
@@ -3706,6 +3706,15 @@ export const App: React.FC = () => {
     setHistoryVersion((v) => v + 1);
   }, []);
   const [historyVersion, setHistoryVersion] = useState(0);
+  // The transitions of several states laid out again (a selection's, a composite's): said how many
+  const relayoutTransitionsOf = (states: string[], what: string) => {
+    const r = mermaidViewerRef.current?.relayoutTransitions(states) ?? { done: 0, failed: [] };
+    if (!r.done && !r.failed.length) return showCopyToast(`${what}: no transition to lay out again (each as straight as it can be)`, 'success');
+    showCopyToast(
+      r.done ? `${what}: ${r.done} transition${r.done === 1 ? '' : 's'} laid out again${r.failed.length ? ` (no way for ${r.failed.length})` : ''}` : `${what}: no way for ${r.failed.length} transition${r.failed.length === 1 ? '' : 's'}`,
+      r.done ? 'success' : 'error'
+    );
+  };
   const pushEdgeStep = useCallback((before: EdgeOffsetsMap) => {
     const h = historyRef.current;
     h.edgesPast.push(before);
@@ -4586,6 +4595,13 @@ export const App: React.FC = () => {
           items.push({ id: 'multi-distribute-h-btn', label: 'Distribute horizontally', icon: <AlignHorizontalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-h') });
           items.push({ id: 'multi-distribute-v-btn', label: 'Distribute vertically', icon: <AlignVerticalSpaceAround className="w-3.5 h-3.5" />, title: 'The ones between the outer two: evenly apart', onSelect: arrange('distribute-v') });
         }
+        items.push({
+          id: 'multi-relayout-btn',
+          label: 'Re-layout their transitions',
+          icon: <Spline className="w-3.5 h-3.5" />,
+          title: 'Every transition in or out of the selected states laid out again, each straight or with as few turns as it can, clear of the other states; the states stay where they are (one Ctrl+Z puts them back)',
+          onSelect: () => relayoutTransitionsOf(many, `the ${n} states`),
+        });
         items.push({ id: 'multi-snap-each-btn', label: `${groupSnapEach ? '✓ ' : ''}Snap each to the grid when moved`, icon: <Grid3x3 className="w-3.5 h-3.5" />, title: 'With snapping on: each of the selected states on the grid when they are moved together (else they keep their places to the one dragged)', onSelect: () => setGroupSnapEach(!groupSnapEach) });
         if (pouContent) items.push({ id: 'multi-copy-btn', label: `Copy the ${n} states`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+C; then Ctrl+V pastes copies of them, the transitions between them going to the copies', onSelect: () => handleCopyState(many) });
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
@@ -4614,6 +4630,22 @@ export const App: React.FC = () => {
             }),
         });
         if (own) items.push({ id: 'composite-color-default', label: `The Composites colour (${compositeColor})`, icon: <X className="w-3.5 h-3.5" />, title: 'Its own colour taken out of its {region} line', onSelect: () => handleCompositeColor(name, null) });
+        items.push({
+          id: 'composite-relayout-btn',
+          label: 'Re-layout its transitions',
+          icon: <Spline className="w-3.5 h-3.5" />,
+          title: 'Every transition in or out of its states (its nested composites\' too) laid out again; the states stay where they are (one Ctrl+Z puts them back)',
+          onSelect: () => {
+            // (its states and its nested composites' states)
+            const inside = new Set([name]);
+            for (let grew = true; grew; ) {
+              grew = false;
+              for (const c of composites) if (c.parent && inside.has(c.parent) && !inside.has(c.name)) (inside.add(c.name), (grew = true));
+            }
+            const states = composites.filter((c) => inside.has(c.name)).flatMap((c) => c.members);
+            relayoutTransitionsOf(states, name);
+          },
+        });
         items.push({
           id: 'composite-collapse-btn',
           label: 'Collapse to one box',
@@ -6536,7 +6568,15 @@ export const App: React.FC = () => {
     setPromptRequest({
       title: 'The layout file has a merge conflict',
       label: `${file}: git could not merge the two layouts.`,
-      details: [`Yours: ${count(sides.ours)}`, `Theirs: ${count(sides.theirs)}`, 'Merge both: each state\'s place, route, note and colour from either side; one changed on both sides: yours'],
+      // (what differs, and what Merge both does with each: before choosing)
+      details: (() => {
+        const diff = diffLayouts(sides.ours, sides.theirs);
+        return [
+          `Yours: ${count(sides.ours)} · theirs: ${count(sides.theirs)}`,
+          'Merge both: each state\'s place, route, note and colour from either side; one changed on both sides: yours',
+          ...(diff.length ? [`${diff.length} difference${diff.length === 1 ? '' : 's'}:`, ...diff.slice(0, 60), ...(diff.length > 60 ? [`… ${diff.length - 60} more`] : [])] : ['No difference in the states, routes, notes or colours (only the states\' places as drawn)']),
+        ];
+      })(),
       confirmOnly: true,
       submitLabel: 'Merge both',
       onSubmit: () => resolve(mergeLayouts(sides.ours, sides.theirs), 'both merged'),

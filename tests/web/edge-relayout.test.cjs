@@ -3,7 +3,8 @@
 // states, the other transitions and their labels as they were); Undo (the palette's) puts its route back, Redo lays it
 // out again; a state of it moved afterwards: still attached; not offered for a transition back to its own state.
 // Re-layout transitions (a state's menu): all its transitions laid out again, none with more turns, the others as they
-// were; one Undo puts them all back
+// were; one Undo puts them all back. The same for a selection of states (their menu: Re-layout their transitions) and
+// for a composite (its title's menu: Re-layout its transitions)
 const h = require('../lib/harness.cjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -191,6 +192,73 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       expect(same, 'one Undo: all of them as they were');
     }
   }
+
+  // A selection (Ctrl+click two states), and a composite: their transitions laid out again, the others as they were,
+  // none turning more; one Undo each
+  const check = async (label, ids, open, itemId) => {
+    await page.keyboard.press('Escape');
+    await sleep(300);
+    const before3 = await lines();
+    const touches = (l) => l.from && l.to && l.from !== l.to && l.from !== '[*]' && (ids.includes(l.from) || ids.includes(l.to));
+    const rest = (ls) => ls.filter((l) => !touches(l)).map((l) => `${l.key}=${l.d}`).sort().join('|');
+    await open();
+    const item = await page.waitForSelector(`#${itemId}`, { timeout: 4000 }).catch(() => null);
+    expect(!!item, `${label}: Re-layout in its menu`);
+    if (!item) return;
+    await page.evaluate((id) => document.getElementById(id)?.click(), itemId);
+    await sleep(1500);
+    const after3 = await lines();
+    const was = Object.fromEntries(before3.map((l) => [l.key, l]));
+    const mine = after3.filter(touches);
+    const changed = mine.filter((l) => was[l.key]?.d !== l.d).length;
+    const worse = mine.filter((l) => l.turns > (was[l.key]?.turns ?? 99));
+    expect(changed >= 1 && worse.length === 0, `${label}: ${changed} of ${mine.length} transitions laid out again, none turning more`);
+    expect(rest(after3) === rest(before3), `${label}: the other transitions as they were`);
+    await page.evaluate(() => document.getElementById('palette-undo')?.click());
+    await sleep(1200);
+    const back = await lines();
+    expect(before3.filter(touches).every((l) => back.find((b) => b.key === l.key)?.d === l.d), `${label}: one Undo: all of them as they were`);
+  };
+  // (two states with turning transitions, on screen and not covered: Ctrl+clicked)
+  const pickable = await page.evaluate(() => {
+    const out = [];
+    for (const n of document.querySelectorAll('#mermaid-diagram-svg-container svg g.node[data-state-id]')) {
+      const r = n.getBoundingClientRect();
+      const [x, y] = [r.x + r.width / 2, r.y + r.height / 2];
+      if (document.elementFromPoint(x, y)?.closest('g.node') === n) out.push({ id: n.getAttribute('data-state-id'), x, y });
+    }
+    return out;
+  });
+  const turning = (id) => after.filter((l) => l.from !== l.to && (l.from === id || l.to === id) && l.turns >= 2).length;
+  const two = pickable.filter((q) => q.id !== hub?.id && q.id !== e.from && q.id !== e.to && /^TABLEMANAGER_/.test(q.id)).sort((a, b) => turning(b.id) - turning(a.id)).slice(0, 2);
+  if (two.length === 2) {
+    await check(`${two[0].id} and ${two[1].id} selected`, two.map((q) => q.id), async () => {
+      await page.mouse.click(two[0].x, two[0].y);
+      await sleep(300);
+      await page.keyboard.down('Control');
+      await page.mouse.click(two[1].x, two[1].y);
+      await page.keyboard.up('Control');
+      await sleep(400);
+      await page.mouse.click(two[0].x, two[0].y, { button: 'right' });
+    }, 'context-menu-multi-relayout-btn');
+  } else expect(false, `two states to select (${pickable.length} on screen)`);
+  // (a composite: the one with the fewest states, its title right-clicked)
+  const comp = await page.evaluate(() => {
+    const cs = [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.cluster')].map((c) => ({ label: (c.querySelector('.cluster-label')?.textContent ?? '').trim(), r: (c.querySelector(':scope > rect') ?? c).getBoundingClientRect() }));
+    const nodes = [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.node[data-state-id]')].map((n) => ({ id: n.getAttribute('data-state-id'), r: n.getBoundingClientRect() }));
+    const inside = (c) => nodes.filter((n) => n.r.left >= c.r.left && n.r.right <= c.r.right && n.r.top >= c.r.top && n.r.bottom <= c.r.bottom).map((n) => n.id);
+    return cs.filter((c) => c.label).map((c) => ({ label: c.label, states: inside(c) })).filter((c) => c.states.length >= 2).sort((a, b) => a.states.length - b.states.length)[0] ?? null;
+  });
+  if (comp) {
+    await check(`the composite ${comp.label} (${comp.states.length} states)`, comp.states, async () => {
+      await page.evaluate((label) => {
+        const c = [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.cluster')].find((x) => (x.querySelector('.cluster-label')?.textContent ?? '').trim() === label);
+        const t = c.querySelector('.cluster-label');
+        const r = t.getBoundingClientRect();
+        t.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, button: 2 }));
+      }, comp.label);
+    }, 'context-menu-composite-relayout-btn');
+  } else expect(false, 'a composite with states');
 
   // A transition back to its own state: not offered
   const loop = after.find((l) => l.from && l.from === l.to);

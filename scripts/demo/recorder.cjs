@@ -233,4 +233,36 @@ function writeGif(file, frames, { minFrameMs = 70, holdLastMs = 2500, colors = 2
   return { frames: written, bytes: fs.statSync(file).size, width, height };
 }
 
-module.exports = { driver, recorder, writeGif };
+/** A GIF's frames and length (its frames' delays), read from its bytes; null when it is not one */
+function gifInfo(buf) {
+  if (!buf || buf.length < 13 || buf.toString('latin1', 0, 3) !== 'GIF') return null;
+  let i = 13;
+  const packed = buf[10];
+  if (packed & 0x80) i += 3 * (1 << ((packed & 7) + 1));
+  const skipBlocks = () => {
+    while (i < buf.length && buf[i] !== 0) i += buf[i] + 1;
+    i++;
+  };
+  let frames = 0;
+  let ms = 0;
+  while (i < buf.length) {
+    const b = buf[i];
+    if (b === 0x3b) break;
+    if (b === 0x21) {
+      // (an extension: a frame's delay in its graphic control block)
+      if (buf[i + 1] === 0xf9) ms += buf.readUInt16LE(i + 4) * 10;
+      i += 2;
+      skipBlocks();
+    } else if (b === 0x2c) {
+      frames++;
+      const p = buf[i + 9];
+      i += 10;
+      if (p & 0x80) i += 3 * (1 << ((p & 7) + 1));
+      i++;
+      skipBlocks();
+    } else return null;
+  }
+  return { frames, ms };
+}
+
+module.exports = { driver, recorder, writeGif, gifInfo };

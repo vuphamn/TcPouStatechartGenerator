@@ -1,0 +1,43 @@
+name: Demo clips
+
+# The README's demo GIFs played again in the app as it is now: a scene that no longer plays (something it clicks is
+# gone), with page errors, or whose clip runs much longer or shorter than the one in docs/demo is flagged (the run
+# fails, the summary says which). The clips recorded anew are kept as the run's demo-clips artifact: copy the ones you
+# want into docs/demo (look at them first). Nothing is committed by the run.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'scripts/demo/**'
+      - 'scripts/demo-gifs.cjs'
+  workflow_dispatch:
+  # (weekly too: a dependency's change shows)
+  schedule:
+    - cron: '0 5 * * 1'
+
+jobs:
+  clips:
+    # Windows and Edge: the fonts and the browser the clips were made with
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Play and record the scenes
+        run: node scripts/demo-gifs.cjs --check --out demo-out --summary "$env:GITHUB_STEP_SUMMARY"
+      - name: The clips recorded anew
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: demo-clips
+          path: demo-out
+          retention-days: 14

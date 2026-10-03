@@ -1,8 +1,8 @@
 // (tests/unit: bundled with esbuild and run by tests/run.cjs)
 // A layout file git could not merge: its two sides read back from the conflict markers (a diff3 base left out), and
-// merged key by key: each side's own changes kept, a key changed on both: yours; the states' offsets of another
-// layout engine not mixed in; no markers: null; markers left open: null
-import { mergeLayouts, readConflict, splitConflict } from '../../src/utils/layoutConflict.ts';
+// listed (each difference with what Merge both does), merged key by key: each side's own changes kept, a key changed
+// on both: yours; the states' offsets of another layout engine not mixed in; no markers: null; markers left open: null
+import { diffLayouts, mergeLayouts, readConflict, splitConflict } from '../../src/utils/layoutConflict.ts';
 import { serializeLayout, type PouLayout } from '../../src/utils/pouLayout.ts';
 
 let fails = 0;
@@ -42,6 +42,10 @@ if (r && !('error' in r)) {
   const m = mergeLayouts(r.ours, r.theirs);
   expect(m.states.A.x === 40 && m.states.B?.y === 20, `each state: yours where both moved it (A ${m.states.A.x}), theirs where only they did (B)`);
   expect(m.notes.nodes.B === 'mine on B' && m.look.states.B?.fill === '#f00' && m.look.collapsed.includes('Clamp') && !!m.transitions.elk['B->A'], 'your note, their colour, their collapsed composite, their route: all kept');
+  const diff = diffLayouts(r.ours, r.theirs);
+  const has = (re: RegExp) => diff.some((l) => re.test(l));
+  expect(has(/^State A: yours 40, 0 · theirs -30, 0 → yours kept \(both changed it\)/) && has(/^State B: yours not moved · theirs 0, 20 → theirs taken/) && has(/^Note B: yours "mine on B" · theirs none → yours kept/) && has(/^Colour B: yours default · theirs #f00 → theirs taken/) && has(/^Route \(elk\) B->A: .*theirs taken/) && has(/^Composite Clamp: collapsed in theirs/), `the differences listed, each with what Merge both does: ${diff.join(' | ')}`);
+  expect(diffLayouts(r.ours, r.ours).length === 0, 'the same layout: no differences');
   const dagre = mergeLayouts({ ...r.ours }, { ...r.theirs, layoutEngine: 'dagre', states: { Z: { x: 1, y: 1 } } });
   expect(!dagre.states.Z, "another engine's state offsets not mixed in");
 }

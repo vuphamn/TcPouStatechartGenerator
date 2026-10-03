@@ -251,6 +251,11 @@ export interface MermaidViewerHandle {
    * many edges had a route of their own
    */
   tidyEdges: () => number;
+  /**
+   * The transitions touching any of these states (a selection, a composite's states) laid out again, each clear of
+   * the ones before it, none made to turn more; one undo step. How many, and the ones with no way
+   */
+  relayoutTransitions: (stateIds: string[]) => { done: number; failed: string[] };
 }
 
 /** Each drawn transition's key across drawings: FROM->TO, #2, #3 … for more between the same states (in their order) */
@@ -4726,12 +4731,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // Re-layout transitions (a state's menu): each of its transitions in and out laid out again, one after the other
   // (each clear of the ones laid out before it; one that would turn more than it does: kept as it is); its loops kept.
   // One undo step. → how many, and the ones with no way
-  const relayoutStateEdges = (stateId: string): { done: number; failed: string[] } => {
+  // (several states: a selection, a composite's: the transitions touching any of them)
+  const relayoutStateEdges = (stateIds: string | string[]): { done: number; failed: string[] } => {
     const svg = getDiagramSvg();
     if (!svg) return { done: 0, failed: [] };
+    const ids = new Set(Array.isArray(stateIds) ? stateIds : [stateIds]);
     const mine = edgePathsOf(svg).filter((x) => {
       const [from, to] = [x.getAttribute('data-source-id'), x.getAttribute('data-target-id')];
-      return from && to && from !== to && (from === stateId || to === stateId);
+      return from && to && from !== to && from !== '[*]' && (ids.has(from) || ids.has(to));
     });
     // (the longest first: they have the fewest ways round)
     const len = (x: SVGPathElement) => (typeof x.getTotalLength === 'function' ? x.getTotalLength() : 0);
@@ -6639,6 +6646,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       getActiveSvgElement: () => getActiveSvgElement(),
       arrangeStates: (ids, mode) => arrangeRef.current(ids, mode),
       tidyEdges: () => tidyRef.current(),
+      relayoutTransitions: (ids) => relayoutStateEdgesRef.current(ids),
     }),
     [
       panToState,

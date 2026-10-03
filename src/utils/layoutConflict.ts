@@ -55,6 +55,32 @@ export function mergeLayouts(ours: PouLayout, theirs: PouLayout): PouLayout {
   };
 }
 
+/** Where the two sides differ, one line each (what Merge both does with it): states, places, routes, notes, looks */
+export function diffLayouts(ours: PouLayout, theirs: PouLayout): string[] {
+  const out: string[] = [];
+  const short = (id: string) => (id.length > 40 ? `${id.slice(0, 38)}…` : id);
+  const pt = (o?: { x: number; y: number }) => (o ? `${Math.round(o.x)}, ${Math.round(o.y)}` : 'not moved');
+  const json = (v: unknown) => JSON.stringify(v ?? null);
+  const each = <T>(label: string, a: Record<string, T> | undefined, b: Record<string, T> | undefined, show: (v: T | undefined) => string) => {
+    for (const k of [...new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])].sort()) {
+      const [x, y] = [a?.[k], b?.[k]];
+      if (json(x) === json(y)) continue;
+      const how = x === undefined ? 'theirs taken' : y === undefined ? 'yours kept' : 'yours kept (both changed it)';
+      out.push(`${label} ${short(k)}: yours ${show(x)} · theirs ${show(y)} → ${how}`);
+    }
+  };
+  if (ours.layoutEngine === theirs.layoutEngine) each('State', ours.states, theirs.states, pt);
+  else out.push(`Layout engine: yours ${ours.layoutEngine.toUpperCase()} · theirs ${theirs.layoutEngine.toUpperCase()} → yours (their states' offsets are the other engine's: not taken)`);
+  for (const engine of [...new Set([...Object.keys(ours.transitions), ...Object.keys(theirs.transitions)])].sort()) each(`Route (${engine})`, ours.transitions[engine], theirs.transitions[engine], (v) => (v ? (v.route ? 'laid out again' : 'dragged') : 'as drawn'));
+  each('Note', ours.notes.nodes, theirs.notes.nodes, (v) => (v ? `"${String(v).split('\n')[0].slice(0, 24)}"` : 'none'));
+  each('Note', ours.notes.edges, theirs.notes.edges, (v) => (v ? `"${String(v).split('\n')[0].slice(0, 24)}"` : 'none'));
+  each('Colour', ours.look.states, theirs.look.states, (v) => (v ? String((v as { fill?: string }).fill ?? 'own') : 'default'));
+  each('Colour', ours.look.transitions, theirs.look.transitions, (v) => (v ? 'own' : 'default'));
+  const [oc, tc] = [new Set(ours.look.collapsed), new Set(theirs.look.collapsed)];
+  for (const c of [...new Set([...oc, ...tc])].sort()) if (oc.has(c) !== tc.has(c)) out.push(`Composite ${c}: ${oc.has(c) ? 'collapsed in yours' : 'collapsed in theirs'} → collapsed`);
+  return out;
+}
+
 /** A conflicted layout file read: its two sides' layouts, or why not (no markers; a side that is not a layout) */
 export function readConflict(text: string): { ours: PouLayout; theirs: PouLayout } | { error: string } | null {
   const sides = splitConflict(text);

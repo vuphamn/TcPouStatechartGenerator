@@ -253,6 +253,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     stored = `<<<<<<< HEAD\n${JSON.stringify(mine, null, 2)}\n=======\n${JSON.stringify(theirs, null, 2)}\n>>>>>>> origin/main\n`;
     const asked = await page.waitForFunction(() => /merge conflict/i.test(document.getElementById('text-prompt-dialog')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
     expect(asked, 'a merge conflict in it: asked how to resolve it');
+    const listed = await page.$eval('#text-prompt-details', (e) => e.innerText).catch(() => '');
+    expect(/Note TABLEMANAGER_ERROR: yours none · theirs "theirs: error note" → theirs taken/.test(listed) && /Note TABLEMANAGER_HOMMING: yours "mine: homing note"/.test(listed), `the differences listed before choosing (${listed.split('\n').filter((l) => /^Note/.test(l)).join(' | ')})`);
     st = await status();
     expect(st?.state === 'error', `the status bar: not read (${JSON.stringify(st)})`);
     if (asked) {

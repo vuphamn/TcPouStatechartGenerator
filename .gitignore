@@ -24,3 +24,6 @@ Thumbs.db
 
 # Test output (browser profiles, logs, screenshots)
 tests/.output/
+
+# The demo clips recorded anew (scripts/demo-gifs.cjs --out demo-out: CI)
+demo-out/
