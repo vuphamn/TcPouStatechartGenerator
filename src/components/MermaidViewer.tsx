@@ -5236,22 +5236,73 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (el.parentElement) ro.observe(el.parentElement);
     return () => ro.disconnect();
   }, [svgContent]);
-  // A new state's node moved to where it was dropped
+  // A new state's node put where it was dropped, clear of the states there. The drop point taken in the drawing's own
+  // units (its transitions' frame, as the states' places are) while the drawing it was dropped on is still shown,
+  // and handed to the next drawing with the states it keeps: that one puts it there and grows its composite's box to
+  // hold it (a state dropped in a composite), as for a state dragged in. Not put there by it (no drawing kept):
+  // moved there once it is drawn
   const placedNonceRef = useRef<number | null>(null);
+  const placeAtRef = useRef<{ nonce: number; x: number; y: number } | null>(null);
+  const placeTriesRef = useRef({ nonce: -1, n: 0 });
+  const [, setPlaceRetry] = useState(0);
   useEffect(() => {
     if (!placeRequest || placedNonceRef.current === placeRequest.nonce) return;
-    const node = getDiagramSvg()?.querySelector(`g.node[data-state-id="${CSS.escape(placeRequest.stateId)}"]`) as SVGGElement | null;
-    if (!node) return;
+    const svg = getDiagramSvg();
+    const frame = svg?.querySelector('g.edgePaths') as SVGGraphicsElement | null;
+    const toFrame = frame?.getScreenCTM()?.inverse() ?? null;
+    const boxIn = (q: DOMRect) => {
+      const p0 = new DOMPoint(q.left, q.top).matrixTransform(toFrame!);
+      const p1 = new DOMPoint(q.right, q.bottom).matrixTransform(toFrame!);
+      return { l: Math.min(p0.x, p1.x), t: Math.min(p0.y, p1.y), r: Math.max(p0.x, p1.x), b: Math.max(p0.y, p1.y) };
+    };
+    const node = svg?.querySelector(`g.node[data-state-id="${CSS.escape(placeRequest.stateId)}"]`) as SVGGElement | null;
+    if (placeAtRef.current?.nonce !== placeRequest.nonce && toFrame && svg) {
+      const p0 = new DOMPoint(placeRequest.x, placeRequest.y).matrixTransform(toFrame);
+      // (clear of the states there: moved down past one it would cover; its size: a state's, as most are)
+      const others = Array.from(svg.querySelectorAll<SVGGElement>('g.node')).filter((n) => n !== node).map((n) => boxIn(nodeShapeOf(n).getBoundingClientRect()));
+      const median = (v: number[]) => (v.length ? [...v].sort((x, y) => x - y)[Math.floor(v.length / 2)] : 40);
+      const own = node ? boxIn(nodeShapeOf(node).getBoundingClientRect()) : null;
+      const hw = own ? (own.r - own.l) / 2 : median(others.map((o) => (o.r - o.l) / 2));
+      const hh = own ? (own.b - own.t) / 2 : median(others.map((o) => (o.b - o.t) / 2));
+      const want = { x: p0.x, y: p0.y };
+      for (let k = 0; k < 12; k++) {
+        const hit = others.find((o) => want.x + hw > o.l - 4 && want.x - hw < o.r + 4 && want.y + hh > o.t - 4 && want.y - hh < o.b + 4);
+        if (!hit) break;
+        want.y = hit.b + 16 + hh;
+      }
+      placeAtRef.current = { nonce: placeRequest.nonce, x: want.x, y: want.y };
+      // (the next drawing: the states kept where they are, this one put there)
+      if (!node) {
+        const kept = keepPositionsRef.current;
+        if (!(kept && kept.chart === fileName && Date.now() - kept.at < 8000)) keepPositionsForNextDrawing();
+        if (keepPositionsRef.current) keepPositionsRef.current.positions[placeRequest.stateId] = { centerX: want.x, centerY: want.y };
+      }
+    }
+    if (!node) {
+      // (the new drawing comes in without a render of this component: looked for again, a few seconds at most)
+      if (placeTriesRef.current.nonce !== placeRequest.nonce) placeTriesRef.current = { nonce: placeRequest.nonce, n: 0 };
+      if (placeTriesRef.current.n++ > 40) return;
+      const t = window.setTimeout(() => setPlaceRetry((n) => n + 1), 100);
+      return () => window.clearTimeout(t);
+    }
     placedNonceRef.current = placeRequest.nonce;
-    const r = node.getBoundingClientRect();
-    const scale = getSvgUnitScale(node.parentElement, zoom);
     const current = effectiveNodeOffsets[placeRequest.stateId] ?? { x: 0, y: 0 };
+    const r = nodeShapeOf(node).getBoundingClientRect();
+    const at = placeAtRef.current;
+    let move: { x: number; y: number };
+    if (at && toFrame) {
+      const c = new DOMPoint(r.left + r.width / 2, r.top + r.height / 2).matrixTransform(toFrame);
+      move = { x: at.x - c.x, y: at.y - c.y };
+    } else {
+      // (no frame: by the screen, as it is now)
+      const scale = getSvgUnitScale(node.parentElement, zoom);
+      move = { x: (placeRequest.x - (r.left + r.width / 2)) / scale.x, y: (placeRequest.y - (r.top + r.height / 2)) / scale.y };
+    }
+    // (put there by the drawing already)
+    if (Math.hypot(move.x, move.y) < 3) return;
     setNodeOffsets({
       ...effectiveNodeOffsets,
-      [placeRequest.stateId]: {
-        x: Math.round(current.x + (placeRequest.x - (r.left + r.width / 2)) / scale.x),
-        y: Math.round(current.y + (placeRequest.y - (r.top + r.height / 2)) / scale.y),
-      },
+      [placeRequest.stateId]: { x: Math.round(current.x + move.x), y: Math.round(current.y + move.y) },
     });
   });
 

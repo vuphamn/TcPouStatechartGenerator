@@ -6,6 +6,44 @@ Kval MachineScope is a tool to design, edit, simulate and debug the Kval Inc. Tw
 
 The generator extracts state logic and transitions directly from the `doState()` and `preProcess()` methods of a `SM_*.TcPOU` file together with the enum definitions in matching `E_*_States.TcDUT` files. If the POU includes a `doState_UmlSC()` method, embedded UML composite states are preserved and mapped into nested subgraphs.
 
+![A TwinCAT state machine drawn as a statechart: zoom in, a state's code on hover, a transition's guard](docs/demo/overview.gif)
+
+## See it in action
+
+All clips use the sample POU that ships with the app (`SM_TableManager`).
+
+### Edit the state machine from the chart
+
+Drag a transition's end onto another state and the `machineState := …` line in `doState()` is rewritten; **Go to code** shows the line. Drag a **State** from the palette and it is added to the enum and to `doState()`, where you dropped it. Every edit is one Ctrl+Z away.
+
+![Editing from the chart: a transition's end moved to another state, the code rewritten, a state added from the palette](docs/demo/edit.gif)
+
+### Straighten one transition
+
+Right-click a transition with too many turns and choose **Re-layout edge**: it is redrawn straight, or with as few turns as it can, clear of the other states. Nothing else on the chart moves.
+
+![Re-layout edge: a transition with four turns redrawn straight](docs/demo/relayout.gif)
+
+### Simulate without a PLC
+
+The **Simulation** tab steps through the state machine: a state's transitions in the order the PLC checks them, each condition's result, values you set, **Step**, **Back** and **Take**.
+
+![The Simulation tab: a value set, Step, Back, Take](docs/demo/simulate.gif)
+
+### Follow the PLC live
+
+Go live from the desktop app, the TwinCAT XAE extension, or the browser (through Link or a gateway). The PLC's state glows on the chart, the transitions it takes fill the trail with their times, and **State times** shows how long it stays in each state, on the chart too. Every session is recorded: save it, replay it, compare two of them. (In this clip the PLC's values come from a stand-in, not a real PLC.)
+
+![Live: the active state on the chart, the transitions taken, state times](docs/demo/live.gif)
+
+### Checked as you edit
+
+The chart is checked on every edit. Delete a transition and **Problems** says which state no transition reaches now; **Show in diagram** goes to it. Unreachable and dead-end states, missing CASE branches, duplicate or shadowed conditions and more are covered (see [Problems](#4-problems-state-machine-checks)).
+
+![Problems: a deleted transition leaves a state unreachable](docs/demo/problems.gif)
+
+The clips are recorded from the app itself: `npm run demo:gifs` plays each scene (`scripts/demo/scenes.cjs`) in a headless browser and writes `docs/demo/*.gif`.
+
 ---
 
 ## Workspace Layout
@@ -188,7 +226,7 @@ The toolbar on the left of the canvas holds the elements of TwinCAT's UML statec
 | Element | Dropped | Written to |
 | --- | --- | --- |
 | **Pointer** | (click) | Ends drawing a transition |
-| **State** | on the canvas, or in a composite | An enum member (at the end, or last in the composite), a `CASE` branch in `doState()`, a line in `getStateDescription()`. It is placed where you dropped it, except in a composite, where the layout keeps it in the composite's box |
+| **State** | on the canvas, or in a composite | An enum member (at the end, or last in the composite), a `CASE` branch in `doState()`, a line in `getStateDescription()`. It is placed where you dropped it, in a composite too (its box grows to hold it), whatever the zoom; dropped on a state, just below it |
 | **Initial** | on a state | In a composite: that composite's initial state (`// @initial` in the enum). Elsewhere: the machine's, the state variable's initial value in the declaration (`machineState : E_X := STATE;`); when the base FB declares it, it is set in `initialize()` after `SUPER^.initialize()` |
 | **Final** | on the canvas / on a state | A new final state / the state marked final or not: `// @final` on its line in the enum (`(* final *)` on its `CASE` label without a `.TcDUT`). In a composite its transitions out start at the composite's border |
 | **Choice** | on a state | Conditions and targets (and an optional `ELSE`) as `IF / ELSIF / ELSE` at the end of its branch |

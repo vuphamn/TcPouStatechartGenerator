@@ -1274,22 +1274,25 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 <thead>
                   <tr className="text-slate-500 text-left">
                     <th className="font-normal">State</th>
-                    <th className="font-normal text-right" title="Stays measured">n</th>
-                    <th className="font-normal text-right">average</th>
-                    <th className="font-normal text-right" title="90% of the stays are within this">90%</th>
-                    <th className="font-normal text-right">longest</th>
-                    <th className="font-normal text-right" title="All the time in this state">total</th>
+                    <th className="pl-1.5 font-normal text-right" title="Stays measured">n</th>
+                    <th className="pl-1.5 font-normal text-right">average</th>
+                    <th className="pl-1.5 font-normal text-right" title="90% of the stays are within this">90%</th>
+                    <th className="pl-1.5 font-normal text-right">longest</th>
+                    <th className="pl-1.5 font-normal text-right" title="All the time in this state">total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {stateTimes.map((t) => (
                     <tr key={t.state} className="live-state-time-row hover:bg-slate-800 cursor-pointer" data-state={t.state} onClick={() => onSelectState(t.state)} title="Show on the diagram">
-                      <td className="font-mono text-slate-200 truncate max-w-[12rem]">{t.state}</td>
-                      <td className="text-right font-mono text-slate-400">{t.n}</td>
-                      <td className="text-right font-mono text-slate-200">{formatDuration(t.avgMs)}</td>
-                      <td className="text-right font-mono text-slate-400">{formatDuration(t.p90Ms)}</td>
-                      <td className="text-right font-mono text-slate-400">{formatDuration(t.maxMs)}</td>
-                      <td className="text-right font-mono text-slate-400">{formatDuration(t.totalMs)}</td>
+                      {/* (the name: the room the numbers leave, cut short; the numbers on one line) */}
+                      <td className="w-full max-w-0 font-mono text-slate-200">
+                        <div className="truncate" title={t.state}>{t.state}</div>
+                      </td>
+                      <td className="pl-1.5 text-right font-mono text-slate-400 whitespace-nowrap">{t.n}</td>
+                      <td className="pl-1.5 text-right font-mono text-slate-200 whitespace-nowrap">{formatDuration(t.avgMs)}</td>
+                      <td className="pl-1.5 text-right font-mono text-slate-400 whitespace-nowrap">{formatDuration(t.p90Ms)}</td>
+                      <td className="pl-1.5 text-right font-mono text-slate-400 whitespace-nowrap">{formatDuration(t.maxMs)}</td>
+                      <td className="pl-1.5 text-right font-mono text-slate-400 whitespace-nowrap">{formatDuration(t.totalMs)}</td>
                     </tr>
                   ))}
                 </tbody>

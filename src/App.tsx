@@ -3272,8 +3272,9 @@ export const App: React.FC = () => {
       }
       handleReplaceSources(pou, dut);
       if (opts.from) setPendingShow(name);
-      // (a state in a composite stays where the layout puts it: in the composite's box)
-      if (opts.at && !opts.composite && !opts.newComposite) setPlaceRequest({ stateId: name, x: opts.at.x, y: opts.at.y, nonce: Date.now() });
+      // (in a composite too: dropped in its box, kept there, the box grown to hold it as for a state dragged in; a
+      // new composite around it: where the layout puts the two)
+      if (opts.at && !opts.newComposite) setPlaceRequest({ stateId: name, x: opts.at.x, y: opts.at.y, nonce: Date.now() });
       const where = opts.newComposite ? ` in the new composite ${opts.newComposite}` : opts.composite ? ` in ${opts.composite}` : '';
       showCopyToast(
         opts.from
