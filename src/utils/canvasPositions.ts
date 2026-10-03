@@ -167,6 +167,7 @@ export function formatPositionsCommentMetadata(
   const layout = options.layoutEngine || 'elk';
   const tiers = computeStructuralTiers(positions);
 
+  // (each comment line with something after its %%: Mermaid strips only those; a bare %% is drawn as a node "%%")
   const lines: string[] = [];
   lines.push('%% =========================================================================');
   lines.push('%% DIAGRAM CANVAS NODE POSITIONS & STRUCTURAL METADATA');
@@ -174,7 +175,7 @@ export function formatPositionsCommentMetadata(
   lines.push('%% =========================================================================');
   lines.push(`%% @layout-engine: ${layout}`);
   lines.push(`%% @node-count: ${nodeEntries.length}`);
-  lines.push('%%');
+  lines.push('%% -');
   lines.push('%% Structural Tiers (Top-to-Bottom, Left-to-Right layout ordering):');
 
   for (const tier of tiers) {
@@ -184,7 +185,7 @@ export function formatPositionsCommentMetadata(
     lines.push(`%%   Tier ${tier.tierIndex} (y ≈ ${tier.approxY}): ${nodeSummary}`);
   }
 
-  lines.push('%%');
+  lines.push('%% -');
   lines.push('%% Node Coordinates Catalog [id: x, y, width, height, centerX, centerY]:');
   for (const [, pos] of nodeEntries) {
     const clusterInfo = pos.cluster ? ` [cluster: ${pos.cluster}]` : '';
@@ -195,7 +196,7 @@ export function formatPositionsCommentMetadata(
 
   // Structural Subgraph hints for flowchart/hierarchical representation
   if (options.includeStructuralComments !== false && tiers.length > 1) {
-    lines.push('%%');
+    lines.push('%% -');
     lines.push('%% Structural Rank Hints (for Mermaid layout engines):');
     for (const tier of tiers) {
       const ids = tier.nodes.map((n) => n.id).join(' ');
@@ -217,7 +218,7 @@ export function formatPositionsCommentMetadata(
         ...(p.cluster ? { cluster: p.cluster } : {}),
       };
     }
-    lines.push('%%');
+    lines.push('%% -');
     lines.push('%% Machine-Readable JSON Metadata:');
     lines.push(`%% %%canvas_node_positions: ${JSON.stringify(jsonPayload)}`);
   }
