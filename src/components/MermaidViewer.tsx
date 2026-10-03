@@ -527,6 +527,11 @@ export interface MermaidViewerProps {
    */
   initialEdgeOffsets?: EdgeOffsetsMap;
   edgeOffsetsKey?: string;
+  /**
+   * The states put at these places (their centers in the drawing) in the drawing after pinPositions.key changes: a
+   * layout file made with another layout engine (its offsets are that engine's)
+   */
+  pinPositions?: { key: string; positions: Record<string, { centerX: number; centerY: number }> };
   /** The transitions' dragged routes and labels changed: by transition (FROM->TO, #2 …), as initialEdgeOffsets */
   onEdgeOffsetsChange?: (offsets: EdgeOffsetsMap) => void;
   notes?: DiagramNotes;
@@ -1956,6 +1961,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     initialEdgeOffsets,
     edgeOffsetsKey,
     onEdgeOffsetsChange,
+    pinPositions,
     notes,
     onSaveNote,
     onDeleteNote,
@@ -2424,6 +2430,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     setLayoutTrigger((v) => v + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edgeOffsetsKey]);
+  // A layout file's places (another engine's): the states pinned there in the next drawing, as after a drop
+  useEffect(() => {
+    if (!pinPositions?.key) return;
+    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions: { ...pinPositions.positions }, edges: {}, clusters: {}, moved: null, frame: { viewBox: null, style: null, width: null, height: null }, align: true };
+    setLayoutTrigger((v) => v + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinPositions?.key]);
   // The routes changed: told by transition (the drawing's path ids are not kept across drawings)
   const onEdgeOffsetsChangeRef = useRef(onEdgeOffsetsChange);
   onEdgeOffsetsChangeRef.current = onEdgeOffsetsChange;
@@ -2514,7 +2527,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const renderedChartRef = useRef<string | undefined>(undefined);
   // An edit from the canvas itself (an edge's end dropped on another state): the states kept where they were in the
   // drawing that follows it, locked or not (taken at the drop; dropped when no drawing follows within a few seconds)
-  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; moved: MovedEnd | null; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null } } | null>(null);
+  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; moved: MovedEnd | null; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null }; align?: boolean } | null>(null);
   // Each state's place at the last edits from the canvas and undos (this chart's; a state gone since too): one that
   // comes back (an undo of its deletion) where it was. (Not at each drawing: a deleted state is drawn once more
   // without its offset before it goes.)
@@ -3549,7 +3562,18 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     // (the states' places to keep: after a drop on the canvas, else the locked layout's)
     const kept = keepPositionsRef.current && keepPositionsRef.current.chart === fileName && svgVersionRef.current > keepPositionsRef.current.version && Date.now() - keepPositionsRef.current.at < 8000 ? keepPositionsRef.current : null;
-    const keep = kept ? kept.positions : null;
+    let keep = kept ? kept.positions : null;
+    // (another drawing's places, a layout file's of another engine: moved as a whole to this drawing's top left)
+    if (!stale && kept?.align && keep) {
+      const drawn = extractCanvasNodePositions(svg, {});
+      const ids = Object.keys(keep).filter((id) => drawn[id]);
+      if (ids.length) {
+        const min = (v: number[]) => Math.min(...v);
+        const dx = min(ids.map((id) => drawn[id].centerX)) - min(ids.map((id) => keep![id].centerX));
+        const dy = min(ids.map((id) => drawn[id].centerY)) - min(ids.map((id) => keep![id].centerY));
+        keep = Object.fromEntries(ids.map((id) => [id, { centerX: keep![id].centerX + dx, centerY: keep![id].centerY + dy }]));
+      }
+    }
     if (!stale && kept) {
       keepPositionsRef.current = null;
       // (the drawing's frame as before: a bigger one would scale every state on screen)

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowLeft, CheckCircle2, CircleDot, Cpu, FileCode, GitCompare, X, FileJson } from 'lucide-react';
 
 export interface StatusMessage {
@@ -26,7 +26,9 @@ interface StatusBarProps {
    * Where the canvas' layout, notes and documentation are kept: the POU's layout file beside it (for git; its name, and
    * its state), or this browser (no host has the POU's folder)
    */
-  layout?: { file: string | null; state: 'loaded' | 'saved' | 'new' | 'other-engine' | 'error' | 'browser'; detail?: string } | null;
+  layout?: LayoutStatus | null;
+  /** The layout badge's menu: a folder for it (web), the file read again, the chart's look kept as this user's own */
+  layoutMenu?: LayoutMenu | null;
   /** The I/O's health while live (the I/O tab's boxes: how many known, how many not in OP) */
   io?: { known: number; down: string[] } | null;
   onOpenIo?: () => void;
@@ -43,6 +45,83 @@ interface StatusBarProps {
   version?: string;
   onOpenReleaseNotes?: () => void;
 }
+
+export interface LayoutStatus {
+  file: string | null;
+  state: 'loaded' | 'saved' | 'new' | 'other-engine' | 'error' | 'browser';
+  detail?: string;
+}
+export interface LayoutMenu {
+  /** The web edition: a folder chosen for the layout file (the POU's own, or one above it) */
+  onPickFolder?: () => void;
+  /** The file read again (changed on disk: git) */
+  onReload?: () => void;
+  /** The chart's look (colours, collapsed composites): this user's own, not the file's */
+  ownLook: boolean;
+  onOwnLookChange?: (on: boolean) => void;
+}
+
+/** Where the layout is kept (the file beside the POU, or this browser), and its menu */
+const LayoutBadge: React.FC<{ layout: LayoutStatus; menu?: LayoutMenu | null }> = ({ layout, menu }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', esc);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+  const kept = layout.state !== 'browser';
+  const item = 'block w-full text-left px-3 py-1.5 hover:bg-slate-700 text-slate-200 disabled:text-slate-500 disabled:hover:bg-transparent';
+  return (
+    <span ref={ref} className="relative shrink-0">
+      <button
+        id="status-layout"
+        type="button"
+        data-state={layout.state}
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1 ${layout.state === 'error' || layout.state === 'other-engine' ? 'text-amber-300 hover:text-amber-200' : 'text-slate-400 hover:text-slate-200'}`}
+        title={
+          !kept
+            ? "The states' places, the notes and the documentation are kept in this browser only: opened from its project folder (the desktop app, XAE, Link, or a folder chosen here), they are kept in a file beside the POU, for git"
+            : `${layout.file}: the states' places, the transitions' routes, the notes, the documentation and the chart's look, kept beside the POU. Commit it to share them; your theme, presets and recordings stay yours${layout.detail ? `\n${layout.detail}` : ''}`
+        }
+      >
+        <FileJson className="w-3 h-3" />
+        <span className="font-mono truncate max-w-[220px]">{!kept ? 'Layout: this browser' : `${layout.file}${layout.state === 'error' ? ' (not written)' : layout.state === 'other-engine' ? ' (another engine)' : ''}`}</span>
+      </button>
+      {open && (
+        <div id="status-layout-menu" className="absolute bottom-6 right-0 z-50 w-72 rounded border border-slate-700 bg-slate-800 shadow-xl py-1 text-[11px]">
+          <div className="px-3 py-1.5 text-slate-400 whitespace-normal">
+            {kept ? `${layout.file}, beside the POU: commit it to share the layout with the team.` : 'Kept in this browser only.'}
+            {layout.detail && <div className="mt-1 text-amber-300">{layout.detail}</div>}
+          </div>
+          {menu?.onPickFolder && (
+            <button id="status-layout-pick" type="button" className={item} onClick={() => { setOpen(false); menu.onPickFolder!(); }}>
+              {kept ? 'Choose another folder for it…' : 'Keep it beside the POU (choose its folder)…'}
+            </button>
+          )}
+          {kept && menu?.onReload && (
+            <button id="status-layout-reload" type="button" className={item} onClick={() => { setOpen(false); menu.onReload!(); }}>
+              Read the file again
+            </button>
+          )}
+          {kept && menu?.onOwnLookChange && (
+            <label className="flex items-start gap-2 px-3 py-1.5 hover:bg-slate-700 text-slate-200 cursor-pointer" title="The states' and transitions' colours and the collapsed composites: yours, kept in this browser; the file's look is left as it is">
+              <input id="status-layout-own-look" type="checkbox" className="w-3 h-3 mt-0.5" checked={menu.ownLook} onChange={(e) => menu.onOwnLookChange!(e.target.checked)} />
+              <span>My own look (colours, collapsed composites), not the team's</span>
+            </label>
+          )}
+        </div>
+      )}
+    </span>
+  );
+};
 
 /** One quiet line at the bottom: messages, the file and its save state, counts, problems and the live view */
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -61,6 +140,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   io,
   onOpenIo,
   layout,
+  layoutMenu,
   changes,
   onOpenChanges,
   host,
@@ -100,21 +180,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <span className="font-mono truncate max-w-[220px]">{live.state ?? 'LIVE'}</span>
       </button>
     )}
-    {layout && (
-      <span
-        id="status-layout"
-        data-state={layout.state}
-        className={`flex items-center gap-1 shrink-0 ${layout.state === 'error' || layout.state === 'other-engine' ? 'text-amber-300' : 'text-slate-400'}`}
-        title={
-          layout.state === 'browser'
-            ? 'The states\' places, the notes and the documentation are kept in this browser only: opened from its project folder (the desktop app, XAE, or Link), they are kept in a file beside the POU, for git'
-            : `${layout.file}: the states' places, the transitions' routes, the notes and the documentation, kept beside the POU. Commit it to share them; your theme, presets and recordings stay yours${layout.detail ? `\n${layout.detail}` : ''}`
-        }
-      >
-        <FileJson className="w-3 h-3" />
-        <span className="font-mono truncate max-w-[220px]">{layout.state === 'browser' ? 'Layout: this browser' : `${layout.file}${layout.state === 'error' ? ' (not written)' : layout.state === 'other-engine' ? ' (another engine)' : ''}`}</span>
-      </span>
-    )}
+    {layout && <LayoutBadge layout={layout} menu={layoutMenu} />}
     {io && io.known > 0 && (
       <button
         id="status-io"

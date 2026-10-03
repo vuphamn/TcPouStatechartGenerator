@@ -132,7 +132,8 @@ import { editorParts, pendingEditors, pendingParts, savePendingEditors, usePendi
 import { SAVE_TO_FILE_EVENT } from './components/SaveToFileButton.tsx';
 import { CODE_FOCUS_EVENT, type CodeFocus } from './utils/codeFocus.ts';
 import { isEmptyLayout, layoutFileNameOf, parseLayout, serializeLayout, type PouLayout } from './utils/pouLayout.ts';
-import { layoutHost, readLayoutFile, writeLayoutFile, type LinkRequest } from './utils/hostLayout.ts';
+import { layoutHost, readLayoutFile, WEB_LAYOUT_PREFIX, writeLayoutFile, type LinkRequest } from './utils/hostLayout.ts';
+import { pickWebLayoutFolder, webLayoutReady } from './utils/sourceFileAccess.ts';
 import { IoTreePanel, type IoGuardUse, type IoTree } from './components/IoTreePanel.tsx';
 import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, type SlaveState } from './components/IoNetworkView.tsx';
 import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
@@ -184,7 +185,7 @@ import { getPouBody } from './utils/pouBody.ts';
 import { locateState, locateTransition } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
-import { StatusBar } from './components/StatusBar.tsx';
+import { StatusBar, type LayoutMenu, type LayoutStatus } from './components/StatusBar.tsx';
 import { PathsPanel } from './components/PathsPanel.tsx';
 import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
@@ -247,6 +248,11 @@ import {
 } from './utils/liveGuards.ts';
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { desktopLive } from './utils/liveHost.ts';
+
+// (the layout file: its POU's name, of a path or of the web edition's web:<name>; routes compared key by key; no look)
+const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB_LAYOUT_PREFIX, '');
+const stableEdges = (e: EdgeOffsetsMap) => Object.fromEntries(Object.entries(e).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+const emptyLook: PouLayout['look'] = { states: {}, transitions: {}, collapsed: [] };
 import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
 import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen, setSeenCondition, candidatesOf } from './utils/seenTransitions.ts';
 import { probePlcs, refreshRemembered, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
@@ -3666,9 +3672,12 @@ export const App: React.FC = () => {
   const nodeOffsetsRef = useRef(nodeOffsets);
   nodeOffsetsRef.current = nodeOffsets;
   // The canvas moved states: where they were is kept for Undo (a held arrow key is one step)
+  // (the canvas' own placing told to the layout file: not a change of the user's)
+  const autoNodeOffsetsRef = useRef<(o: NodeOffsetsMap) => void>(() => {});
   const handleCanvasNodeOffsets = useCallback((next: NodeOffsetsMap, opts?: { auto?: boolean }) => {
     // (the canvas' own placing: the locked layout's, a drop's states kept: part of the edit, no undo step)
     if (opts?.auto) {
+      autoNodeOffsetsRef.current(next);
       setNodeOffsets(next);
       return;
     }
@@ -6376,63 +6385,127 @@ export const App: React.FC = () => {
   const viaLink = liveMode === 'web' && liveVia === 'link';
 
   // ---- The POU's layout file (<POU>.machinescope.json beside it: for git, shared with the other developers) ----
-  // The states' places, the transitions' routes and labels, the notes and the states' documentation: read when the POU
-  // is loaded, written a moment after each change (only when it differs). Kept by the host that has the POU's folder:
-  // the desktop app, XAE, Link (a PLC project it keeps); in the web edition on its own, in this browser as before.
-  // The theme, the presets, the dock, bookmarks and live recordings stay each user's own.
+  // The states' places, the transitions' routes and labels, the notes and the states' documentation, the chart's look:
+  // read when the POU is loaded, written a moment after each change of the user's (only when it differs; the canvas'
+  // own placing is not one). Kept by the host that has the POU's folder: the desktop app, XAE, Link (a PLC project it
+  // keeps), the web edition with a folder granted (its project folder, or one chosen for it); else in this browser.
+  // Followed while open: changed on disk (a git pull, a checkout), read again (asked first when edited here too).
+  // The theme, the presets, the dock, bookmarks and live recordings stay each user's own; the look too, when chosen.
   const layoutLink = useCallback<() => LinkRequest | null>(
     () => (viaLink && gatewayRef.current && linkBuildRef.current?.features?.includes('layoutFile') ? (m, a, t) => gatewayRef.current!.request(m as never, a, t) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [viaLink, gatewayFeatures]
   );
-  const layoutPou = layoutHost(pouPath, layoutLink()) ? pouPath! : null;
+  // (the web edition: the POU's folder granted, its project folder or one chosen for it)
+  const [webLayoutPou, setWebLayoutPou] = useState<string | null>(null);
+  const [webLayoutTick, setWebLayoutTick] = useState(0);
+  const hostedPou = layoutHost(pouPath, layoutLink()) ? pouPath! : null;
+  useEffect(() => {
+    if (hostedPou || isXaeHost() || desktopLive() || !pouContent || !/\.TcPOU$/i.test(pouFileName)) return setWebLayoutPou(null);
+    let gone = false;
+    void webLayoutReady(pouFileName).then((ok) => !gone && setWebLayoutPou(ok ? pouFileName : null));
+    return () => {
+      gone = true;
+    };
+  }, [hostedPou, pouFileName, pouContent, webLayoutTick]);
+  const layoutPou = hostedPou ?? (webLayoutPou ? WEB_LAYOUT_PREFIX + webLayoutPou : null);
+  const ownLookKey = `kss.layout.ownLook.${(pouFileName || 'POU').replace(/\.TcPOU$/i, '')}`;
+  const [ownLook, setOwnLookState] = useState(false);
+  useEffect(() => {
+    try {
+      setOwnLookState(localStorage.getItem(ownLookKey) === '1');
+    } catch {
+      setOwnLookState(false);
+    }
+  }, [ownLookKey]);
   const [layoutEdges, setLayoutEdges] = useState<EdgeOffsetsMap>({});
   const [layoutSeed, setLayoutSeed] = useState<{ key: string; edges: EdgeOffsetsMap } | null>(null);
-  const [layoutStatus, setLayoutStatus] = useState<{ file: string | null; state: 'loaded' | 'saved' | 'new' | 'other-engine' | 'error' | 'browser'; detail?: string } | null>(null);
-  // (the file as read: its POU, its text, its places when made by another layout engine: kept as they are)
-  const layoutRef = useRef<{ pou: string | null; ready: boolean; text: string | null; other: PouLayout | null }>({ pou: null, ready: false, text: null, other: null });
+  const [layoutPins, setLayoutPins] = useState<{ key: string; positions: Record<string, { centerX: number; centerY: number }> } | null>(null);
+  const [layoutStatus, setLayoutStatus] = useState<LayoutStatus | null>(null);
+  // (the file as read or last written: its text, its layout; what was taken from it, to tell the user's changes from
+  // the canvas' own placing: the states' offsets put, the routes' text, the notes' and look's text)
+  const layoutRef = useRef<{
+    pou: string | null;
+    ready: boolean;
+    text: string | null;
+    file: PouLayout | null;
+    states: NodeOffsetsMap | null;
+    edges: string;
+    marks: string;
+    autoStates: NodeOffsetsMap | null;
+    unsaved: boolean;
+    asking: boolean;
+  }>({ pou: null, ready: false, text: null, file: null, states: null, edges: '{}', marks: '', autoStates: null, unsaved: false, asking: false });
+  autoNodeOffsetsRef.current = (o) => {
+    layoutRef.current.autoStates = o;
+  };
+  const marksOf = (notes: DiagramNotes, look: PouLayout['look'] | null) => JSON.stringify([notes, look]);
+  const canvasPositionsRef = useRef(canvasPositions);
+  canvasPositionsRef.current = canvasPositions;
+  const lookNow = (): PouLayout['look'] => ({ states: customNodeStyles, transitions: customEdgeStyles, collapsed: collapsedComposites });
+  // The file's layout put on the canvas (read at load, or again: changed on disk)
+  const applyLayoutText = (pou: string, text: string | null) => {
+    const file = layoutFileNameOf(pouNameOf(pou));
+    const parsed = text ? parseLayout(text) : null;
+    if (parsed && 'error' in parsed) {
+      // (a file that is not one, or a newer one: left as it is, not written over)
+      layoutRef.current = { ...layoutRef.current, ready: false, text };
+      setLayoutStatus({ file, state: 'error', detail: parsed.error });
+      return;
+    }
+    const key = `${pou}|${Date.now()}`;
+    const states = parsed && parsed.layoutEngine === layoutEngine ? parsed.states : {};
+    const edges = parsed?.transitions[layoutEngine] ?? {};
+    setNodeOffsets(states);
+    setLayoutSeed({ key, edges });
+    setLayoutEdges(edges);
+    let look: PouLayout['look'] | null = null;
+    if (parsed) {
+      setDiagramNotes(parsed.notes);
+      if (!ownLook) {
+        look = parsed.look;
+        setCustomNodeStyles(parsed.look.states);
+        setCustomEdgeStyles(parsed.look.transitions);
+        setCollapsedComposites(parsed.look.collapsed);
+      }
+      // (made with another layout engine: its states put at its places, as a whole where this one's drawing starts)
+      if (parsed.layoutEngine !== layoutEngine && Object.keys(parsed.places).length) {
+        setLayoutPins({ key, positions: Object.fromEntries(Object.entries(parsed.places).map(([id, q]) => [id, { centerX: q.x, centerY: q.y }])) });
+      }
+    }
+    layoutRef.current = {
+      ...layoutRef.current,
+      ready: true,
+      text,
+      file: parsed,
+      states,
+      edges: JSON.stringify(stableEdges(edges)),
+      marks: marksOf(parsed?.notes ?? diagramNotes, ownLook ? parsed?.look ?? null : parsed?.look ?? lookNow()),
+      autoStates: null,
+      unsaved: false,
+    };
+    setLayoutStatus(
+      !parsed
+        ? { file, state: 'new' }
+        : parsed.layoutEngine !== layoutEngine
+          ? { file, state: 'other-engine', detail: `Made with ${parsed.layoutEngine.toUpperCase()}: its states put at its places; its routes are ${parsed.layoutEngine.toUpperCase()}'s (kept as they are)` }
+          : { file, state: 'loaded' }
+    );
+  };
   useEffect(() => {
     const pou = layoutPou;
-    layoutRef.current = { pou, ready: false, text: null, other: null };
+    layoutRef.current = { pou, ready: false, text: null, file: null, states: null, edges: '{}', marks: '', autoStates: null, unsaved: false, asking: false };
     setLayoutEdges({});
     if (!pou) {
       setLayoutStatus(pouContent ? { file: null, state: 'browser' } : null);
       return;
     }
-    const file = layoutFileNameOf(pou.split(/[\\/]/).pop() ?? pou);
+    const file = layoutFileNameOf(pouNameOf(pou));
     let gone = false;
     void readLayoutFile(pou, layoutLink()).then((r) => {
       if (gone || layoutRef.current.pou !== pou) return;
-      if (r.error) {
-        setLayoutStatus({ file, state: 'error', detail: r.error });
-        return;
-      }
-      const parsed = r.text ? parseLayout(r.text) : null;
-      if (parsed && 'error' in parsed) {
-        // (a file that is not one, or a newer one: left as it is, not written over)
-        setLayoutStatus({ file, state: 'error', detail: parsed.error });
-        return;
-      }
-      if (parsed) {
-        setDiagramNotes(parsed.notes);
-        if (parsed.layoutEngine === layoutEngine) {
-          setNodeOffsets(parsed.states);
-          setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: parsed.transitions });
-          setLayoutEdges(parsed.transitions);
-          setLayoutStatus({ file, state: 'loaded' });
-        } else {
-          // (made with another layout engine: its places drawn by that one only; the file's kept, its notes used)
-          layoutRef.current.other = parsed;
-          setNodeOffsets({});
-          setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: {} });
-          setLayoutStatus({ file, state: 'other-engine', detail: `Its states' places were made with ${parsed.layoutEngine.toUpperCase()}: choose that engine to see them (they are kept as they are)` });
-        }
-      } else {
-        setNodeOffsets({});
-        setLayoutSeed({ key: `${pou}|${Date.now()}`, edges: {} });
-        setLayoutStatus({ file, state: 'new' });
-      }
-      layoutRef.current = { ...layoutRef.current, ready: true, text: r.text ?? null };
+      if (r.error) return setLayoutStatus({ file, state: 'error', detail: r.error });
+      applyLayoutText(pou, r.text ?? null);
     });
     return () => {
       gone = true;
@@ -6440,30 +6513,149 @@ export const App: React.FC = () => {
     // (when the POU or where it is kept changes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutPou]);
-  // Written a moment after a change, when it differs (none while there is nothing to keep)
+  // Another layout engine chosen: the file put on its drawing again (its offsets, or the other engine's places)
+  const layoutEngineRef = useRef(layoutEngine);
+  useEffect(() => {
+    if (layoutEngineRef.current === layoutEngine) return;
+    layoutEngineRef.current = layoutEngine;
+    const L = layoutRef.current;
+    if (L.pou && L.ready && !L.unsaved) applyLayoutText(L.pou, L.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutEngine]);
+  // Written a moment after a change of the user's, when it differs: the states moved (not by the canvas itself), a
+  // route dragged, a note, the look; with all the states' places as drawn (another engine puts its states there)
   useEffect(() => {
     const pou = layoutRef.current.pou;
     if (!pou || !layoutRef.current.ready) return;
+    const L = layoutRef.current;
+    const marks = marksOf(diagramNotes, ownLook ? L.file?.look ?? null : lookNow());
+    const moved = nodeOffsets !== L.states && nodeOffsets !== L.autoStates;
+    const routed = JSON.stringify(stableEdges(layoutEdges)) !== L.edges;
+    const marked = marks !== L.marks;
+    if (!moved && !routed && !marked) return;
+    L.unsaved = true;
     const t = window.setTimeout(() => {
-      if (layoutRef.current.pou !== pou || !layoutRef.current.ready) return;
-      const other = layoutRef.current.other;
-      const layout: PouLayout = other
-        ? { ...other, notes: diagramNotes }
-        : { pou: pou.split(/[\\/]/).pop() ?? pou, layoutEngine, states: nodeOffsets, transitions: layoutEdges, notes: diagramNotes };
-      if (!layoutRef.current.text && isEmptyLayout(layout)) return;
+      const L = layoutRef.current;
+      if (L.pou !== pou || !L.ready || L.asking) return;
+      const places: PouLayout['places'] = {};
+      for (const [id, q] of Object.entries(canvasPositionsRef.current)) if (!id.startsWith('note_')) places[id] = { x: q.centerX, y: q.centerY };
+      const layout: PouLayout = {
+        pou: pouNameOf(pou),
+        layoutEngine,
+        states: nodeOffsets,
+        places,
+        transitions: { ...(L.file?.transitions ?? {}), [layoutEngine]: layoutEdges },
+        notes: diagramNotes,
+        look: ownLook ? L.file?.look ?? emptyLook : lookNow(),
+      };
+      if (!L.text && isEmptyLayout(layout)) return void (L.unsaved = false);
       const text = serializeLayout(layout);
-      if (text === layoutRef.current.text) return;
-      const file = layoutFileNameOf(pou.split(/[\\/]/).pop() ?? pou);
+      if (text === L.text) return void (L.unsaved = false);
+      const file = layoutFileNameOf(layout.pou);
       void writeLayoutFile(pou, text, layoutLink()).then((r) => {
         if (layoutRef.current.pou !== pou) return;
         if (r.error) return setLayoutStatus({ file, state: 'error', detail: r.error });
-        layoutRef.current.text = text;
-        setLayoutStatus((s) => ({ file, state: other ? 'other-engine' : 'saved', detail: s?.state === 'other-engine' ? s.detail : undefined }));
+        // (what is in the file now: the next changes told from it)
+        Object.assign(layoutRef.current, { text, file: layout, states: nodeOffsets, edges: JSON.stringify(stableEdges(layoutEdges)), marks, autoStates: null, unsaved: false });
+        setLayoutStatus({ file, state: 'saved' });
       });
     }, 800);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeOffsets, layoutEdges, diagramNotes, layoutEngine]);
+  }, [nodeOffsets, layoutEdges, diagramNotes, customNodeStyles, customEdgeStyles, collapsedComposites, ownLook]);
+  // Followed on disk: read every few seconds while shown (and when the window is back); changed there (git), read
+  // again; edited here too, the user asked which to keep
+  const reloadLayout = async (quiet: boolean) => {
+      const L = layoutRef.current;
+      const pou = L.pou;
+      if (!pou || L.asking) return;
+      const r = await readLayoutFile(pou, layoutLink());
+      if (layoutRef.current.pou !== pou || r.error) return;
+      const text = r.text ?? null;
+      if (text === layoutRef.current.text) {
+        if (!quiet) showCopyToast('The layout file has not changed', 'success');
+        return;
+      }
+      const file = layoutFileNameOf(pouNameOf(pou));
+      if (!layoutRef.current.unsaved) {
+        applyLayoutText(pou, text);
+        showCopyToast(`${file} changed on disk: read again`, 'success');
+        return;
+      }
+      layoutRef.current.asking = true;
+      let took = false;
+      setPromptRequest({
+        title: 'The layout file changed',
+        label: `${file} was changed on disk (a git pull or checkout?) while you moved states or edited notes here.`,
+        details: ["Take the file's: your changes since it was last read are dropped", 'Keep mine: your layout is written over it (git still has the other one)'],
+        confirmOnly: true,
+        submitLabel: "Take the file's",
+        onSubmit: () => {
+          took = true;
+        },
+        onDismiss: () => {
+          layoutRef.current.asking = false;
+          if (layoutRef.current.pou !== pou) return;
+          if (took) return applyLayoutText(pou, text);
+          // (mine: written over it, as a change of the user's)
+          layoutRef.current.text = text;
+          layoutRef.current.edges = '';
+          setLayoutEdges((e) => ({ ...e }));
+        },
+      });
+  };
+  const reloadLayoutRef = useRef(reloadLayout);
+  reloadLayoutRef.current = reloadLayout;
+  useEffect(() => {
+    if (!layoutPou) return;
+    const poll = () => document.visibilityState === 'visible' && (layoutRef.current.ready || layoutRef.current.text !== null) && void reloadLayoutRef.current(true);
+    const timer = window.setInterval(poll, 3000);
+    window.addEventListener('focus', poll);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', poll);
+    };
+  }, [layoutPou]);
+  // (the chart's look this user's own: kept in this browser; the file's left as it is)
+  const setOwnLook = useCallback(
+    (on: boolean) => {
+      setOwnLookState(on);
+      try {
+        if (on) localStorage.setItem(ownLookKey, '1');
+        else localStorage.removeItem(ownLookKey);
+      } catch {
+        // (this session only)
+      }
+      // (the team's look again: the file's)
+      const look = layoutRef.current.file?.look;
+      if (!on && look) {
+        setCustomNodeStyles(look.states);
+        setCustomEdgeStyles(look.transitions);
+        setCollapsedComposites(look.collapsed);
+        layoutRef.current.marks = marksOf(diagramNotes, look);
+      }
+      showCopyToast(on ? 'The chart\'s look is yours now: the layout file\'s is left as it is' : "The team's look: the layout file's", 'success');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ownLookKey, diagramNotes, showCopyToast]
+  );
+  const layoutMenu = useMemo<LayoutMenu | null>(() => {
+    const web = !hostedPou && !isXaeHost() && !desktopLive() && !!pouContent && /\.TcPOU$/i.test(pouFileName);
+    if (!layoutPou && !web) return null;
+    return {
+      onPickFolder: web
+        ? () =>
+            void pickWebLayoutFolder(pouFileName).then((err) => {
+              if (err === 'canceled') return;
+              if (err) return showCopyToast(err, 'error');
+              setWebLayoutTick((v) => v + 1);
+            })
+        : undefined,
+      onReload: layoutPou ? () => void reloadLayoutRef.current(false) : undefined,
+      ownLook,
+      onOwnLookChange: layoutPou ? setOwnLook : undefined,
+    };
+  }, [hostedPou, layoutPou, pouContent, pouFileName, ownLook, setOwnLook, showCopyToast]);
   // A box's device details for the I/O tab: TwinCAT's device descriptions and the user's pictures (the desktop app;
   // Link, also offline with its pairing code)
   const ioViaLink = !desktopLive() && !isXaeHost() && liveVia === 'link' && !!linkCode;
@@ -6524,6 +6716,8 @@ export const App: React.FC = () => {
         return;
       }
       if (!folder.pouPath) return fail(`${pouFileName} is not in ${folder.name}: choose the folder of this POU's TwinCAT project`);
+      // (its project folder granted: the layout file kept beside the POU there too)
+      setWebLayoutTick((v) => v + 1);
       // (the folder as it is now: the same as at the last build, sent to the same place: nothing to send)
       const key = `${host}|${folder.name}|${folder.files.map((f) => `${f.path}:${f.size}:${f.mtime}`).join('|')}`;
       const send = async (): Promise<string | null> => {
@@ -8593,6 +8787,7 @@ export const App: React.FC = () => {
                   onNodeOffsetsChange={handleCanvasNodeOffsets}
                   initialEdgeOffsets={layoutSeed?.edges}
                   edgeOffsetsKey={layoutSeed?.key}
+                  pinPositions={layoutPins ?? undefined}
                   onEdgeOffsetsChange={setLayoutEdges}
                   onCanvasPositionsChange={setCanvasPositions}
                   notes={diagramNotes}
@@ -9279,6 +9474,7 @@ export const App: React.FC = () => {
           onOpenLive={() => showDockTab('live')}
           io={ioHealth}
           layout={layoutStatus}
+          layoutMenu={layoutMenu}
           onOpenIo={() => showDockTab('io')}
           changes={chartDiff && compareOnDiagram ? chartDiff.total : null}
           onOpenChanges={() => showDockTab('changes')}

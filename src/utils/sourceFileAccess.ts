@@ -377,3 +377,92 @@ export async function writeWebProjectFile(relPath: string, data: Uint8Array<Arra
 export function forgetWebProjectFolder() {
   projectRoot = null;
 }
+
+// ---- The POU's layout file (web): <POU>.machinescope.json in the POU's own folder, for git ----
+// The folder: a granted project folder that holds the POU, else one the user picks for it (the POU's folder, or one
+// above it). Only while this page is open: picked again after a reload.
+let layoutFolder: { dir: ProjectDir; sub: string[] } | null = null;
+type RemovableDir = ProjectDir & { removeEntry?(name: string): Promise<void> };
+
+/** Where the POU (its file handle) is under a folder: its folders down to it, or null when it is not there */
+async function pouFolderIn(dir: ProjectDir, pouName: string): Promise<string[] | null> {
+  if (lastPouHandle) {
+    const parts = await dir.resolve(lastPouHandle).catch(() => null);
+    if (parts?.length) return parts.slice(0, -1);
+  }
+  // (no handle of it: by its name, right in that folder)
+  for await (const e of dir.values()) if (e.kind === 'file' && e.name.toLowerCase() === pouName.toLowerCase()) return [];
+  return null;
+}
+
+/** The web edition can keep the POU's layout file (a folder that holds it is granted) */
+export async function webLayoutReady(pouName: string): Promise<boolean> {
+  if (layoutFolder && (await pouFolderIn(layoutFolder.dir, pouName)) !== null) return true;
+  if (projectRoot) {
+    const sub = await pouFolderIn(projectRoot, pouName);
+    if (sub) {
+      layoutFolder = { dir: projectRoot, sub };
+      return true;
+    }
+  }
+  return false;
+}
+
+/** A folder picked for the POU's layout file (the POU's own, or one above it): null, or what went wrong */
+export async function pickWebLayoutFolder(pouName: string): Promise<string | null> {
+  if (typeof w.showDirectoryPicker !== 'function') return 'This browser cannot open a folder (Chrome or Edge can)';
+  try {
+    const dir = (await w.showDirectoryPicker({ id: 'kms-layout', mode: 'readwrite', startIn: lastPouHandle ?? undefined })) as ProjectDir;
+    const sub = await pouFolderIn(dir, pouName);
+    if (!sub) return `${pouName} is not in ${dir.name}: choose the folder it is in (or one above it)`;
+    layoutFolder = { dir, sub };
+    return null;
+  } catch (e) {
+    return isAbort(e) ? 'canceled' : String(e);
+  }
+}
+
+async function layoutDir(write: boolean): Promise<RemovableDir | string> {
+  if (!layoutFolder) return 'No folder for it';
+  let permission = (await layoutFolder.dir.queryPermission?.({ mode: write ? 'readwrite' : 'read' })) ?? 'prompt';
+  if (permission !== 'granted') permission = (await layoutFolder.dir.requestPermission?.({ mode: write ? 'readwrite' : 'read' })) ?? 'denied';
+  if (permission !== 'granted') return 'Not allowed to use that folder';
+  let dir: ProjectDir = layoutFolder.dir;
+  for (const p of layoutFolder.sub) dir = (await dir.getDirectoryHandle(p)) as ProjectDir;
+  return dir as RemovableDir;
+}
+
+/** The layout file's text: { text } (null: none yet) or { error } */
+export async function readWebLayout(fileName: string): Promise<{ text?: string | null; error?: string }> {
+  try {
+    const dir = await layoutDir(false);
+    if (typeof dir === 'string') return { error: dir };
+    const handle = await dir.getFileHandle(fileName).catch(() => null);
+    return { text: handle ? await (await handle.getFile()).text() : null };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+/** Written (null: removed): { written } or { error } */
+export async function writeWebLayout(fileName: string, text: string | null): Promise<{ written?: boolean; error?: string }> {
+  try {
+    const dir = await layoutDir(true);
+    if (typeof dir === 'string') return { error: dir };
+    if (text === null) {
+      if (!dir.removeEntry) return { error: 'This browser cannot remove files' };
+      await dir.removeEntry(fileName).catch(() => {});
+      return { written: true };
+    }
+    const handle = await dir.getFileHandle(fileName, { create: true });
+    if (!handle.createWritable) return { error: 'This browser cannot write files' };
+    const old = await (await handle.getFile()).text().catch(() => null);
+    if (old === text) return { written: false };
+    const writable = await handle.createWritable();
+    await writable.write(text);
+    await writable.close();
+    return { written: true };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
