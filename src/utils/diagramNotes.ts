@@ -282,9 +282,12 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** A free note (the palette's Note: placed on the canvas, of no state): its id note_<time> */
+export const isFreeNoteId = (id: string) => id.startsWith('note_');
+
 /**
- * Injects user-defined notes for nodes and edges into Mermaid source code
- * so they render natively in the viewer and in mermaid.live.
+ * Injects user-defined notes for nodes and edges into Mermaid source code (the exported text: Mermaid Live, the
+ * code view, copies). Free notes are left out: they belong to no state, Mermaid would draw a box of their id.
  */
 export function applyNotesToMermaid(
   mermaidCode: string,
@@ -450,8 +453,8 @@ export function applyNotesToMermaid(
     }
   }
 
-  // 2. Apply Node Notes
-  const nodeEntries = Object.entries(notes.nodes).filter(([, note]) => Boolean(note && note.trim()));
+  // 2. Apply Node Notes (a free note, on the canvas on its own: not exported, it belongs to no state)
+  const nodeEntries = Object.entries(notes.nodes).filter(([id, note]) => Boolean(note && note.trim()) && !isFreeNoteId(id));
   if (nodeEntries.length > 0) {
     if (isFlowchart) {
       for (const [rawNodeId, rawNote] of nodeEntries) {
