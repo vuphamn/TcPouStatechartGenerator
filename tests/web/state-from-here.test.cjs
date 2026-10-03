@@ -42,7 +42,24 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.evaluate(() => document.getElementById('text-prompt-input').select());
   await p.keyboard.type('bNextStep');
   await p.keyboard.press('Enter');
-  expect(await waitFor(() => p.evaluate((k) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${k}"]`), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`), 20000), 'the new state and the transition on the canvas');
+  const drawn = await waitFor(() => p.evaluate((k) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${k}"]`), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`), 20000);
+  // (not there: what the page shows, said in the failure: seen on CI only)
+  const why = drawn
+    ? ''
+    : await p
+        .evaluate((id, k) => {
+          const prompt = document.getElementById('text-prompt-dialog');
+          return JSON.stringify({
+            status: document.getElementById('status-message')?.textContent?.slice(0, 160),
+            prompt: prompt ? `${prompt.getAttribute('aria-label')}: ${(document.getElementById('text-prompt-input')?.value ?? '').slice(0, 40)}; ${(prompt.textContent ?? '').slice(0, 120)}` : null,
+            node: !!document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`),
+            edgeKeys: [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].map((x) => x.getAttribute('data-edge-key')).filter((x) => x && x.startsWith(k.split('->')[0] + '->')),
+            nodes: document.querySelectorAll('#mermaid-canvas-area g.node').length,
+            error: document.querySelector('#mermaid-error, [data-mermaid-error]')?.textContent?.slice(0, 160) ?? null,
+          });
+        }, S('CLAMPED_NEXT'), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`)
+        .catch((e) => `the page did not answer: ${e.message}`);
+  expect(drawn, `the new state and the transition on the canvas${why ? ` (${why}; page errors: ${errors.slice(0, 2).join(' | ').slice(0, 300) || 'none'})` : ''}`);
   await waitFor(() => p.evaluate((id) => !!document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`), S('CLAMPED_NEXT')), 10000);
   await h.sleep(1500);
   const inView = await p.evaluate((id) => {
