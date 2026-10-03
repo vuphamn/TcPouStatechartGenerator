@@ -49,6 +49,12 @@ expect(serializeLayout(back as PouLayout) === ta, 'read back and written again: 
 const older = parseLayout('{"format":"kval-machinescope-layout","version":1,"pou":"X.TcPOU","states":{}}');
 expect(!('error' in older) && Object.keys(older.places).length === 0 && older.look.collapsed.length === 0 && Object.keys(older.transitions).length === 0, 'a file without places, routes or look: read, empty ones');
 expect('error' in parseLayout('{"format":"something-else","version":1}') && 'error' in parseLayout('not json') && 'error' in parseLayout('{"format":"kval-machinescope-layout","version":2}'), 'not one, not JSON, a newer one: not taken');
+// (a transition laid out again: its own route and where its states were then, whole units, read back as they are)
+const routed = serializeLayout({ ...a, transitions: { elk: { 'A->B': { x: 0, y: 0, route: [100.4, 122, 100.4, 274.6], routeAt: [100.2, 100, 160, 300.4] } } } });
+const rj = JSON.parse(routed);
+const rb = parseLayout(routed);
+expect(rj.transitions.elk['A->B'].route.join() === '100,122,100,275' && rj.transitions.elk['A->B'].routeAt.join() === '100,100,160,300' && !('error' in rb) && rb.transitions.elk['A->B'].route?.length === 4, `a route of its own kept (${JSON.stringify(rj.transitions)})`);
+expect(!isEmptyLayout({ states: {}, transitions: { elk: { 'A->B': { x: 0, y: 0, route: [0, 0, 0, 10], routeAt: [0, 0, 0, 0] } } }, notes: { nodes: {}, edges: {} }, look: { states: {}, transitions: {}, collapsed: [] } }), 'a route of its own: something to keep');
 const none = { states: { X: { x: 0.2, y: 0 } }, transitions: { elk: { 'A->B': { x: 0, y: 0 } } }, notes: { nodes: {}, edges: {} }, look: { states: {}, transitions: {}, collapsed: [] } };
 expect(isEmptyLayout(none) && !isEmptyLayout(a), 'nothing to keep: empty');
 expect(!isEmptyLayout({ ...none, look: { states: {}, transitions: {}, collapsed: ['Clamp'] } }) && !isEmptyLayout({ ...none, look: { states: { X: { fill: '#f00' } }, transitions: {}, collapsed: [] } }), 'a look of its own: something to keep');

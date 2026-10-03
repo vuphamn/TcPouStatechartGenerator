@@ -45,6 +45,7 @@ import {
   ShieldCheck,
   ArrowRight,
   Target,
+  Spline,
 } from 'lucide-react';
 import { DiagramMinimap } from './DiagramMinimap.tsx';
 import { DiagramLegendOverlay } from './DiagramLegendOverlay.tsx';
@@ -128,7 +129,15 @@ import {
   frozenMidOf,
   getNodeGeometry,
   nodeShapeOf,
+  nodeBoxOf,
+  gapOutside,
+  isDiamondNode,
+  resolveNodeOffset,
+  parseSvgPathCommands,
+  extractCoordinatePoints,
+  type NodeBox,
 } from '../utils/nodeDragger.ts';
+import { relayoutEdgeRoute } from '../utils/edgeRelayout.ts';
 import { COMPOSITE_SELECTOR, compositeMembersOf, compositeNameOf, compositeRectsOf, growCompositesToMembers } from '../utils/compositeBounds.ts';
 import {
   CanvasNodePositionsMap,
@@ -4588,6 +4597,83 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   // (Snap each to the grid, the selection's menu: each of them snapped when moved, not only the one dragged)
   const groupSnapEachRef = useRef(false);
   groupSnapEachRef.current = !!groupSnapEach;
+  // Re-layout edge (a transition's menu): that transition laid out again on its own, straight or with as few turns as
+  // it can, clear of the other states; the states, the other transitions and their labels stay as they are. Its
+  // label goes to its middle. Kept as its own route (its offsets: the layout file's too)
+  const relayoutEdge = (edge: { id: string; pathId?: string; from: string; to: string }): string | null => {
+    const svg = getDiagramSvg();
+    if (!svg) return 'No drawing';
+    const paths = edgePathsOf(svg);
+    const path =
+      (edge.pathId ? paths.find((x) => x.getAttribute('data-path-id') === edge.pathId) : undefined) ??
+      paths.find((x) => x.getAttribute('data-path-id') === edge.id || x.getAttribute('data-edge-id') === edge.id) ??
+      paths.find((x) => x.getAttribute('data-source-id') === edge.from && x.getAttribute('data-target-id') === edge.to);
+    const key = path?.getAttribute('data-path-id') || path?.getAttribute('id') || '';
+    const srcId = path?.getAttribute('data-source-id');
+    const tgtId = path?.getAttribute('data-target-id');
+    if (!path || !key || !srcId || !tgtId) return 'Its line is not in the drawing';
+    if (srcId === tgtId) return 'A transition back to its own state keeps its loop';
+    const offsets = currentNodeOffsetsRef.current;
+    const boxOf = (el: SVGGElement | null, id: string | null) => (el ? nodeBoxOf(el, svg, resolveNodeOffset(id, el, offsets)) : null);
+    const srcEl = findNodeElement(svg, srcId) as SVGGElement | null;
+    const tgtEl = findNodeElement(svg, tgtId) as SVGGElement | null;
+    const src = boxOf(srcEl, srcId);
+    const tgt = boxOf(tgtEl, tgtId);
+    if (!src || !tgt) return 'Its states are not in the drawing';
+    // (the other states, as they are now)
+    const obstacles: NodeBox[] = [];
+    for (const n of Array.from(svg.querySelectorAll<SVGGElement>('g.node'))) {
+      if (n === srcEl || n === tgtEl) continue;
+      const id = cleanNodeId(n.getAttribute('data-state-id') || n.getAttribute('id') || '');
+      if (id.startsWith('note_')) continue;
+      const b = boxOf(n, id || null);
+      if (b) obstacles.push(b);
+    }
+    // (the other lines and labels, in this line's coordinates)
+    const ownCtm = path.getScreenCTM();
+    const toOwn = ownCtm ? ownCtm.inverse() : null;
+    const mapped = (m: DOMMatrix | null, q: { x: number; y: number }) => (m ? new DOMPoint(q.x, q.y).matrixTransform(m) : q);
+    const edges = paths
+      .filter((x) => x !== path)
+      .map((x) => {
+        const m = toOwn && x.getScreenCTM() ? toOwn.multiply(x.getScreenCTM()!) : null;
+        return extractCoordinatePoints(parseSvgPathCommands(x.getAttribute('d') || '')).map((q) => mapped(m, q));
+      });
+    const labels: NodeBox[] = [];
+    for (const l of Array.from(svg.querySelectorAll<SVGGElement>('g.edgeLabel'))) {
+      const linked = l.getAttribute('data-linked-path-id');
+      if (linked === key || !l.textContent?.trim()) continue;
+      const r = l.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      const a = mapped(toOwn, { x: r.left, y: r.top });
+      const b = mapped(toOwn, { x: r.right, y: r.bottom });
+      labels.push({ cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, hw: Math.abs(b.x - a.x) / 2, hh: Math.abs(b.y - a.y) / 2 });
+    }
+    // (its ends off the borders as they are now: the arrow head's room)
+    const own = extractCoordinatePoints(parseSvgPathCommands(path.getAttribute('d') || ''));
+    const route = relayoutEdgeRoute({
+      src,
+      tgt,
+      obstacles,
+      labels,
+      edges,
+      srcGap: own.length ? gapOutside(src, own[0]) : 0,
+      tgtGap: own.length ? gapOutside(tgt, own[own.length - 1]) : 0,
+      srcDiamond: isDiamondNode(srcEl),
+      tgtDiamond: isDiamondNode(tgtEl),
+    });
+    if (!route) return 'No way between its states clear of the others';
+    const next: EdgeOffset = { x: 0, y: 0, route: route.flatMap((q) => [Math.round(q.x * 10) / 10, Math.round(q.y * 10) / 10]), routeAt: [src.cx, src.cy, tgt.cx, tgt.cy].map((v) => Math.round(v * 10) / 10) };
+    // (its kept route, from an edit before: this one now)
+    path.removeAttribute('data-frozen-d');
+    path.removeAttribute('data-frozen-sig');
+    currentEdgeOffsetsRef.current = { ...currentEdgeOffsetsRef.current, [key]: next };
+    applyDiagramOffsetsToSvg(svg, currentNodeOffsetsRef.current, currentEdgeOffsetsRef.current, null, selectedEdge?.id || null, layoutEngine, flowchartCurve);
+    setEdgeOffsets({ ...currentEdgeOffsetsRef.current });
+    return null;
+  };
+  const relayoutEdgeRef = useRef(relayoutEdge);
+  relayoutEdgeRef.current = relayoutEdge;
   // Several states lined up / spread evenly: their offsets changed, the diagram re-drawn, the positions kept
   const arrangeRef = useRef<(ids: string[], mode: string) => void>(() => {});
   const tidyRef = useRef<() => number>(() => 0);
@@ -8274,7 +8360,24 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             target={contextMenuState.target}
             onAddOrEditNote={handleOpenAddNote}
             onDeleteNote={handleDeleteActiveNote}
-            extraItems={contextMenuItems?.(contextMenuState.target)}
+            extraItems={(() => {
+              const target = contextMenuState.target;
+              const items = contextMenuItems?.(target) ?? [];
+              if (target.type !== 'edge' || !target.from || !target.to || target.from === target.to) return items;
+              return [
+                ...items,
+                {
+                  id: 'relayout-edge',
+                  label: 'Re-layout edge',
+                  icon: <Spline className="w-3.5 h-3.5" />,
+                  title: 'This transition laid out again on its own: straight, or with as few turns as it can, clear of the other states. The states, the other transitions and their labels stay where they are',
+                  onSelect: () => {
+                    const err = relayoutEdgeRef.current({ id: target.id, pathId: target.pathId, from: target.from, to: target.to });
+                    onToastProp?.(err ? `Re-layout edge: ${err}` : `${target.from} → ${target.to} laid out again`, err ? 'error' : 'success');
+                  },
+                },
+              ];
+            })()}
             onShowInXae={
               onShowInXae
                 ? (target: ContextMenuTarget) => {

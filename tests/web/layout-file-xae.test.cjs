@@ -202,7 +202,33 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   st = await status();
   expect(st?.state === 'other-engine' && writes.length === before7, `said: another engine; nothing written (${JSON.stringify(st)}, ${writes.length - before7} written)`);
   await page.click('#layout-engine-elk');
-  await sleep(2000);
+  await sleep(2500);
+
+  // 8. A transition laid out again (Re-layout edge): its own route written, the same line when opened again
+  const pick = await page.evaluate(() => {
+    for (const p of document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgePaths path.tc-edge-path:not(.tc-edge-hitbox)')) {
+      const [from, to] = [p.getAttribute('data-source-id'), p.getAttribute('data-target-id')];
+      if (!from || !to || from === to || (p.getAttribute('d') || '').split(/[QC]/).length < 3) continue;
+      const q = p.getPointAtLength(p.getTotalLength() / 2);
+      const at = new DOMPoint(q.x, q.y).matrixTransform(p.getScreenCTM());
+      (document.querySelector(`path.tc-edge-hitbox[data-path-id="${p.getAttribute('data-path-id')}"]`) ?? p).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.x, clientY: at.y, button: 2 }));
+      return { from, to };
+    }
+    return null;
+  });
+  await page.waitForSelector('#context-menu-relayout-edge', { timeout: 4000 }).catch(() => {});
+  await page.evaluate(() => document.getElementById('context-menu-relayout-edge')?.click());
+  const key = pick ? `${pick.from}->${pick.to}` : '';
+  for (let i = 0; i < 20 && !(stored && JSON.parse(stored).transitions?.elk?.[key]?.route); i++) await sleep(250);
+  const routedTo = stored ? JSON.parse(stored).transitions?.elk?.[key] : null;
+  expect(!!pick && Array.isArray(routedTo?.route) && routedTo.route.length >= 4 && routedTo.routeAt?.length === 4, `re-laid out: its route written by the transition (${key}: ${JSON.stringify(routedTo)?.slice(0, 120)})`);
+  const lineOf = () => page.evaluate((from, to) => document.querySelector(`#mermaid-diagram-svg-container svg path.tc-edge-path[data-source-id="${from}"][data-target-id="${to}"]:not(.tc-edge-hitbox)`)?.getAttribute('d'), pick?.from, pick?.to);
+  const laid = await lineOf();
+  await open();
+  const reopened = await lineOf();
+  const nums = (d) => (d ?? '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+  const [l1, l2] = [nums(laid), nums(reopened)];
+  expect(l1.length > 0 && l1.length === l2.length && l1.every((v, i) => Math.abs(v - l2[i]) <= 1), `opened again: the same line (${laid?.slice(0, 60)} vs ${reopened?.slice(0, 60)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

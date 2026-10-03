@@ -25,6 +25,13 @@ export interface EdgeOffset {
   /** Manual label move, added on top of the label's position along the (re-routed) edge */
   labelDx?: number;
   labelDy?: number;
+  /**
+   * A route of its own (Re-layout edge): its points in the drawing as laid out then, [x0, y0, x1, y1, …]; its label
+   * at its middle. Its handles dragged since (x, y, start, end) move it on from there
+   */
+  route?: number[];
+  /** Where its two states' centers were then, [sx, sy, tx, ty]: moved since, the route's ends follow them */
+  routeAt?: number[];
 }
 
 export type NodeOffsetsMap = Record<string, NodeOffset>;
@@ -221,7 +228,7 @@ export function isAtBox(box: NodeBox, p: Point, reach = 24): boolean {
 }
 
 /** How far outside its box's side a path end is (the room Mermaid leaves for the arrow head) */
-function gapOutside(box: NodeBox, p: Point): number {
+export function gapOutside(box: NodeBox, p: Point): number {
   const a = attachToBoxSide(box, p, 0);
   return Math.max(0, Math.min(8, (p.x - a.x) * a.normalX + (p.y - a.y) * a.normalY));
 }
@@ -371,7 +378,7 @@ function keepEndOnNode(box: NodeBox, rel: Point, toward: Point, diamond: boolean
   return { x, y, normalX: n.x, normalY: n.y };
 }
 
-function isDiamondNode(el: Element | null): boolean {
+export function isDiamondNode(el: Element | null): boolean {
   const poly = el?.querySelector(':scope > polygon, :scope > g > polygon');
   return !!poly && (poly.getAttribute('points') ?? '').trim().split(/[\s,]+/).filter(Boolean).length === 8;
 }
@@ -462,7 +469,7 @@ export function layoutCenterOf(node: SVGGElement, svg: SVGSVGElement | null | un
 }
 
 /** A state's box from its element (as the reroutes measure it), moved by its offset */
-function nodeBoxOf(el: Element | null, svg: SVGSVGElement, offset: Point): NodeBox | null {
+export function nodeBoxOf(el: Element | null, svg: SVGSVGElement, offset: Point): NodeBox | null {
   if (!el) return null;
   let cx = parseFloat(el.getAttribute('data-orig-cx') || 'NaN');
   let cy = parseFloat(el.getAttribute('data-orig-cy') || 'NaN');
@@ -1484,7 +1491,7 @@ function pointAlongPolyline(pts: Point[], fraction: number): Point {
 }
 
 /** SVG path through an orthogonal polyline with rounded corners (matches Mermaid's ELK edge style) */
-function orthogonalPolylineToPath(pts: Point[], radius = 7): string {
+export function orthogonalPolylineToPath(pts: Point[], radius = 7): string {
   const f = (p: Point) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
   let d = `M${f(pts[0])}`;
   for (let i = 1; i < pts.length - 1; i++) {
@@ -1756,7 +1763,41 @@ export function calculateReroutedEdgePath(
     (edgeOffset.startDx !== undefined && edgeOffset.startDx !== 0) ||
     (edgeOffset.startDy !== undefined && edgeOffset.startDy !== 0) ||
     (edgeOffset.endDx !== undefined && edgeOffset.endDx !== 0) ||
-    (edgeOffset.endDy !== undefined && edgeOffset.endDy !== 0);
+    (edgeOffset.endDy !== undefined && edgeOffset.endDy !== 0) ||
+    !!edgeOffset.route?.length;
+
+  // A route of its own (Re-layout edge): as laid out while its states stay where they were then (the whole drawing
+  // shifted: with it); a state moved or a handle dragged since, re-routed from it by how far
+  const own = edgeOffset.route && edgeOffset.route.length >= 4 && edgeOffset.routeAt?.length === 4 && srcId !== tgtId ? edgeOffset : null;
+  if (own) {
+    const pts: Point[] = [];
+    for (let i = 0; i + 1 < own.route!.length; i += 2) pts.push({ x: own.route![i], y: own.route![i + 1] });
+    const src = nodeBoxOf(srcNodeEl, svg, srcOffset);
+    const tgt = nodeBoxOf(tgtNodeEl, svg, tgtOffset);
+    if (src && tgt && pts.length >= 2) {
+      const [sx, sy, tx, ty] = own.routeAt!;
+      const ds = { x: src.cx - sx, y: src.cy - sy };
+      const dt = { x: tgt.cx - tx, y: tgt.cy - ty };
+      const handles: EdgeOffset = { x: own.x || 0, y: own.y || 0, startDx: own.startDx || 0, startDy: own.startDy || 0, endDx: own.endDx || 0, endDy: own.endDy || 0 };
+      const dragged = Object.values(handles).some((v) => Math.abs(v ?? 0) >= 0.5);
+      const d0 = orthogonalPolylineToPath(pts);
+      if (!dragged && Math.hypot(ds.x - dt.x, ds.y - dt.y) < 0.5) {
+        const d = Math.hypot(ds.x, ds.y) < 0.5 ? d0 : translateSvgPath(d0, ds.x, ds.y);
+        const mp = extractCoordinatePoints(parseSvgPathCommands(d));
+        return { d, midPoint: frozenMidOf(d), startPoint: mp[0] || pts[0], endPoint: mp[mp.length - 1] || pts[pts.length - 1] };
+      }
+      const rerouted = rerouteElkOrthogonal(path, d0, ds, dt, handles, {
+        route: pts,
+        src,
+        tgt,
+        origSrc: { ...src, cx: sx, cy: sy },
+        origTgt: { ...tgt, cx: tx, cy: ty },
+        srcDiamond: isDiamondNode(srcNodeEl),
+        tgtDiamond: isDiamondNode(tgtNodeEl),
+      });
+      if (rerouted) return { ...rerouted, midPoint: frozenMidOf(rerouted.d) };
+    }
+  }
 
   // A route kept from the drawing before (an edit from the canvas: the other transitions drawn as they were): as it
   // was while its states and its own handles stay as they were then; a state moved or a handle dragged since,
@@ -2217,6 +2258,14 @@ export function applyDiagramOffsetsToSvg(
         const labelOffset = edgeOffsets[rawPathId] || edgeOffsets[edgeId] || edgeOffsets[edgeKey];
         const lDx = labelOffset?.labelDx || 0;
         const lDy = labelOffset?.labelDy || 0;
+        // (a route of its own: its label on its middle, centred there (its own frame: the path's mapped onto it);
+        // moved by hand since, by that much)
+        if (labelOffset?.route?.length) {
+          const toLabel = (label.parentElement as unknown as SVGGraphicsElement | null)?.getScreenCTM?.()?.inverse().multiply(path.getScreenCTM?.() ?? new DOMMatrix());
+          const m = toLabel ? new DOMPoint(midPoint.x, midPoint.y).matrixTransform(toLabel) : midPoint;
+          label.setAttribute('transform', `translate(${m.x + lDx}, ${m.y + lDy})`);
+          continue;
+        }
         // (its kept route: its label where it was, moved by hand since by the change of its offset)
         // (re-routed from it since: moved with its middle)
         const keptD = path.getAttribute('data-frozen-d');
