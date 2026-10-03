@@ -75,11 +75,23 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(600);
   const moved = await placeOf();
   expect(!!before && !!moved && Math.hypot(moved[0] - before[0], moved[1] - before[1]) > 20, `${S} dragged (${before} → ${moved})`);
-  await page.mouse.click(box.x + 80, box.y + 50, { button: 'right' });
-  await page.waitForSelector('#context-menu-add-note-btn', { timeout: 4000 }).catch(() => {});
-  await page.click('#context-menu-add-note-btn').catch(() => {});
-  await page.waitForSelector('#note-textarea', { timeout: 4000 }).catch(() => {});
-  await page.type('#note-textarea', 'Homing: waits for the reference switch');
+  // (its menu: right-clicked where it is now, read again; a slow machine: the drawing may still be settling)
+  let noteOpen = false;
+  for (let k = 0; k < 3 && !noteOpen; k++) {
+    if (k) {
+      await page.keyboard.press('Escape');
+      await sleep(800);
+    }
+    const at = await page.evaluate((s) => { const n = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`); const r = (n?.querySelector('rect, path') ?? n)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, S);
+    if (!at) continue;
+    await page.mouse.click(at.x, at.y, { button: 'right' });
+    const add = await page.waitForSelector('#context-menu-add-note-btn', { timeout: 4000 }).catch(() => null);
+    if (!add) continue;
+    await add.click().catch(() => {});
+    noteOpen = !!(await page.waitForSelector('#note-textarea', { timeout: 4000 }).catch(() => null));
+  }
+  expect(noteOpen, `its menu: Add note, the note's dialog`);
+  if (noteOpen) await page.type('#note-textarea', 'Homing: waits for the reference switch');
   await page.click('#note-dialog-save-btn').catch(() => {});
   for (let i = 0; i < 20 && !(stored && /reference switch/.test(stored) && new RegExp(S).test(stored)); i++) await sleep(250);
   const j = stored ? JSON.parse(stored) : null;
