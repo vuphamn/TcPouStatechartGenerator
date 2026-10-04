@@ -144,6 +144,8 @@ interface LivePanelProps {
   onStartPlc?: () => Promise<{ state: string | null; ok: boolean; error?: string }>;
   /** Link on this computer is another version than this page: what to do */
   linkNotice?: string | null;
+  /** The notice's Update Link (a newer Link: Link updates itself): what it said */
+  onUpdateLink?: () => Promise<string>;
   /** Check any PLC (Browse: Check all, the remembered ones) */
   onCheckPlc?: (req: CheckRequest) => Promise<CheckResult>;
   /** Check: why the PLC does not answer, step by step (desktop, Link) */
@@ -286,6 +288,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onOpenSymbols,
   onOpenFromPlc,
   fromPlcOffline,
+  onUpdateLink,
   onBuildForPlc,
   buildOffline,
   onCompareWithPlc,
@@ -328,6 +331,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
   // The instance this window follows (or will), and the others the PLC has
+  const [linkUpdating, setLinkUpdating] = useState(false);
+  const [linkUpdateText, setLinkUpdateText] = useState('');
   const following = status.state === 'connected' || status.state === 'lost' ? status.instance ?? settings.instance : settings.instance || status.instances[0];
   const others = status.instances.filter((i) => !sameInstance(i, following));
   const via = settings.via || defaultVia;
@@ -760,6 +765,27 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               {linkNotice && (
                 <div id="live-link-outdated" className="col-span-2 text-[11px] leading-snug text-amber-300">
                   {linkNotice}
+                  {onUpdateLink && (
+                    <span className="ml-1 inline-flex items-center gap-1.5">
+                      <button
+                        id="live-link-update"
+                        type="button"
+                        disabled={linkUpdating}
+                        onClick={() => {
+                          setLinkUpdating(true);
+                          setLinkUpdateText('Asking Link…');
+                          void onUpdateLink()
+                            .then(setLinkUpdateText)
+                            .finally(() => setLinkUpdating(false));
+                        }}
+                        className="px-1.5 rounded border border-amber-700 text-amber-200 hover:bg-amber-900/40 disabled:opacity-50"
+                        title="Link checks for a newer released version and updates itself (it starts again with it)"
+                      >
+                        Update Link
+                      </button>
+                      {linkUpdateText && <span id="live-link-update-state" className="text-amber-200/80">{linkUpdateText}</span>}
+                    </span>
+                  )}
                 </div>
               )}
             </>

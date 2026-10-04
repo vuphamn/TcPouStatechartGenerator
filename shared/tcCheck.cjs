@@ -58,6 +58,44 @@ async function adsState(options) {
 }
 
 /**
+ * Why this computer's TwinCAT did not start, from what it wrote to Windows' Application log (the last day's errors of
+ * its system service), in words: a license that could not be read, an incomplete install; else its own first line
+ */
+function explainTwinCatError(message) {
+  const m = String(message ?? '').trim();
+  if (!m) return '';
+  const first = m.split(/\r?\n/)[0].slice(0, 200);
+  if (/DefaultConfig\.xml/i.test(m)) return `TwinCAT here cannot find DefaultConfig.xml: its install is incomplete (two TwinCAT runtimes on this computer, or a broken uninstall). Repair the runtime (TwinCAT Package Manager: repair TwinCAT.XAR.Base, or the TwinCAT setup's Repair). (${first})`;
+  if (/licen[cs]e/i.test(m)) return `TwinCAT here did not start: its license could not be read (a license terminal or dongle that is not plugged in, or a trial that ran out). Plug it in, or switch TwinCAT to Config mode (its tray icon), which needs no license. (${first})`;
+  return `Windows' log says: "${first}"`;
+}
+
+/** The last day's errors of this computer's TwinCAT system service (Windows' Application log), newest first */
+function twinCatStartErrors() {
+  if (process.platform !== 'win32') return Promise.resolve('');
+  return new Promise((resolve) => {
+    const script = "$e = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2; StartTime = (Get-Date).AddDays(-1) } -MaxEvents 200 -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'TcSysSrv|TwinCAT' } | Select-Object -First 1; if ($e) { $e.Message }";
+    require('child_process').execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 8000, windowsHide: true }, (err, stdout) => resolve(err ? '' : String(stdout ?? '').trim()));
+  });
+}
+
+/**
+ * This computer's TwinCAT, when it is installed: its router answers (going live may use a route it has), else a step
+ * saying it is not running and why (null: all well, or no TwinCAT here)
+ */
+async function localTwinCatStep({ check = tcpOpen, errors = twinCatStartErrors } = {}) {
+  if (!localTwinCatNetId()) return null;
+  if (await check('127.0.0.1', 48898, 1500)) return null;
+  const why = explainTwinCatError(await errors());
+  return {
+    id: 'localTwinCat',
+    ok: null,
+    title: "This computer's TwinCAT is not running (its router does not answer)",
+    detail: `${why ? `${why} ` : ''}Not needed to go live: MachineScope then connects straight to the PLC, which needs a route for this computer's own NetId (a route made with XAE's Add Route works only while TwinCAT here runs).`,
+  };
+}
+
+/**
  * The PLC's own state, once it answers: running (Run), stopped (Stop: its values as they are, frozen), or without a
  * program to run (Invalid and the like: the runtime is there, no application in it) — a step, or null when it runs
  */
@@ -108,6 +146,8 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
       detail: `The router between them must pass TCP 48898 and UDP 48899 both ways (your IT: from ${myIp}'s network to ${host}'s). TwinCAT's search broadcast does not cross it: Browse asks it by its address. Or connect this computer to the PLC's network.`,
     });
   }
+  const here = await localTwinCatStep();
+  if (here) add(here);
   if (local) {
     const s = await adsState({ targetAmsNetId: netId || '127.0.0.1.1.1', targetAdsPort: adsPort, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
     add({ id: 'ads', ok: s.ok, title: s.ok ? `The PLC on this computer answers (${s.state})` : 'The PLC on this computer does not answer', detail: s.ok ? '' : `${s.error}. Is TwinCAT running here (in Run mode), with a PLC on ADS port ${adsPort}?` });
@@ -210,4 +250,4 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   return { steps, verdict, ...(suggest || portSuggest ? { suggest: { ...(suggest ?? {}), ...(portSuggest ?? {}) } } : {}) };
 }
 
-module.exports = { checkConnection, tcpOpen, networkProfile, plcStateStep };
+module.exports = { checkConnection, tcpOpen, networkProfile, plcStateStep, explainTwinCatError, localTwinCatStep };

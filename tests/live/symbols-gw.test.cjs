@@ -35,8 +35,10 @@ async function run(allowBrowse, port) {
   await new Promise((r) => ws.on('open', r));
   ws.send(JSON.stringify({ type: 'hello', token }));
   await sleep(400);
-  // Before going live: refused
+  // Before going live: refused; the sources of one of its PLCs read without going live
   ws.send(JSON.stringify({ type: 'liveBrowse', requestId: 1, path: R, stateVar: 'machineState' }));
+  ws.send(JSON.stringify({ type: 'plcSources', requestId: 13, plc: 'line' }));
+  await sleep(1500);
   ws.send(JSON.stringify({ type: 'liveStart', plc: 'line', stateVar: 'machineState', instance: `${R}.smTable1` }));
   await sleep(2000);
   ws.send(JSON.stringify({ type: 'liveBrowse', requestId: 2, path: R, stateVar: 'machineState' }));
@@ -71,6 +73,8 @@ async function run(allowBrowse, port) {
   expect(root?.symbolType === 'FB_MainStateMachine' && names.includes('nCount:value') && names.includes('smTable2:struct*') && names.includes('pTarget:other'), `root: ${root?.symbolType}: ${names.join(' ')}`);
   expect((r(3)?.children ?? []).map((c) => c.path).join() === `${R}.aDoors[1],${R}.aDoors[2]`, `array: ${(r(3)?.children ?? []).map((c) => c.name).join(' ')}`);
   expect(r(4)?.error === 'Not a symbol path', `malformed path refused: "${r(4)?.error}"`);
+  const before = r(13);
+  expect(before?.project === 'Plant' && (before.files ?? []).length === 5, `plcSources before going live (one of its PLCs named): ${before?.error ?? `${before?.project}, ${before?.files?.length} files`}`);
   const src = r(5);
   expect(src?.project === 'Plant' && (src.files ?? []).map((x) => x.path).sort().join() === 'POUs/Conveyor/E_Conveyor_States.TcDUT,POUs/Conveyor/SM_Conveyor.TcPOU,POUs/MAIN.TcPOU,POUs/Table/E_TableManager_States.TcDUT,POUs/Table/SM_TableManager.TcPOU', `plcSources: ${src?.error ?? `${src?.project}: ${(src?.files ?? []).map((x) => x.path).join(', ')}`}`);
   expect(src?.projects?.map((x) => `${x.name}:${x.port}`).join() === 'Plant:851,Line2:852' && src?.libraryTypes?.sm_doordasher === 'Tc3_Doors', `its PLC projects: ${JSON.stringify(src?.projects)}, library types: ${JSON.stringify(src?.libraryTypes)}`);

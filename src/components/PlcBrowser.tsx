@@ -147,6 +147,39 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => run(), []);
 
+  // (its state, as going live would see it: green when its PLC runs, amber when it does not, grey when it did not
+  // answer; its project's name beside it)
+  const stateBadge = (d: FoundPlc) => {
+    const s = d.state;
+    if (!s) return null;
+    if (s.error) {
+      return (
+        <span className="live-plc-state shrink-0 px-1 rounded bg-slate-800 text-slate-400 text-[10px]" data-state="error" title={`Did not answer: ${s.error}. Add route gives it one for this computer`}>
+          {/route/i.test(s.error) ? 'no route' : 'no answer'}
+        </span>
+      );
+    }
+    const running = s.plc === 'Run';
+    const text = s.system === 'Config' ? 'Config' : !s.plc || s.plc === 'none' ? 'no PLC' : s.plc === 'Invalid' ? 'no program' : s.plc === 'Run' ? 'Run' : s.plc;
+    const why =
+      s.system === 'Config'
+        ? 'TwinCAT is in Config mode: no PLC runs'
+        : s.plc === 'Invalid'
+          ? 'Its PLC runs no program (not started, or its license ran out)'
+          : !s.plc || s.plc === 'none'
+            ? 'No PLC on ADS port 851'
+            : `Its PLC is in ${s.plc}`;
+    return (
+      <span
+        className={`live-plc-state shrink-0 px-1 rounded text-[10px] ${running ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'}`}
+        data-state={text}
+        title={`TwinCAT ${s.system ?? '?'}; ${why}${s.project ? `; project ${s.project}` : ''}`}
+      >
+        {text}
+        {s.project ? ` · ${s.project}` : ''}
+      </span>
+    );
+  };
   const routeBadge = (d: FoundPlc) =>
     mode !== 'xae' ? null : d.route ? (
       <span className="shrink-0 px-1 rounded bg-emerald-900/60 text-emerald-300 text-[10px]" title="The TwinCAT router of this computer has a route to it: XAE can go live on it">
@@ -268,6 +301,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       <span className="ml-auto shrink-0 font-mono text-slate-400">{d.netId}</span>
                       {d.ip && <span className="shrink-0 font-mono text-slate-500">{d.ip}</span>}
                       {d.twincat && <span className="shrink-0 text-slate-500">{d.twincat}</span>}
+                      {stateBadge(d)}
                       {routeBadge(d)}
                     </button>
                     {canRoute && (

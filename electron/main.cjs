@@ -442,7 +442,9 @@ ipcMain.handle('tc:discover-plcs', (_event, options) => {
     .slice(0, 64);
   // (the adapter towards the PLC asked for, else a real network one: not a virtual switch)
   const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : defaultLocalNetId(localIpTowards(addresses[0] ?? ''));
-  return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 }).then((r) => ({ ...r, localTwinCat: require('../shared/liveSession.cjs').localTwinCatNetId() }));
+  // (each found PLC described as going live would see it: TwinCAT's state, its PLC's, its project)
+  return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 })
+    .then(async (r) => ({ ...r, devices: await require('../shared/tcPlcState.cjs').describePlcs(r.devices), localTwinCat: require('../shared/liveSession.cjs').localTwinCatNetId() }));
 });
 // The Live tab's Check: why a PLC does not answer (all read-only)
 ipcMain.handle('tc:check-connection', (_event, req) => {

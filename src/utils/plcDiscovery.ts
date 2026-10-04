@@ -15,6 +15,11 @@ export interface FoundPlc {
   route?: boolean;
   /** XAE: "route" for a route not found on the network, "project" for the TwinCAT project's target */
   source?: 'network' | 'route' | 'project';
+  /**
+   * As going live would see it (desktop, Link): TwinCAT's state, its PLC's (port 851: Run, Stop, Invalid when it runs
+   * no program, "none" when there is none), its project's name; or why it did not answer (no route for this computer)
+   */
+  state?: { system?: string; plc?: string | null; project?: string | null; error?: string };
 }
 
 export interface PlcScanResult {

@@ -95,6 +95,52 @@ function defaultLocalNetId(localIp) {
  * hooks: { findInstances?(path, typeName): string[], plcPort?(path): number } - instance paths and ADS port from
  * the PLC project's files (desktop app); without them (or without a path) the PLC's own tables are used
  */
+/**
+ * A connection of its own to a PLC's system service (port 10000: its boot folder), not live: the same way there as
+ * going live (this computer's TwinCAT router first when it has a route, else straight to the PLC with this
+ * computer's NetId). options: { netId, ip?, localNetId? } → a connected client (the caller disconnects it)
+ */
+async function systemClient(options) {
+  const netId = String(options?.netId ?? '').trim();
+  if (!/^\d+\.\d+\.\d+\.\d+\.\d+\.\d+$/.test(netId)) throw new Error("Enter the PLC's AMS NetId (e.g. 192.168.1.20.1.1)");
+  const [host, tcp] = (String(options.ip ?? '').trim() || netId.split('.').slice(0, 4).join('.')).split(':');
+  const tcpPort = Number(tcp) || 48898;
+  const given = String(options.localNetId ?? '').trim();
+  const localNetId = given || defaultLocalNetId(localIpTowards(host));
+  const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !given;
+  const make = (router) =>
+    new Client({
+      targetAmsNetId: netId,
+      targetAdsPort: 10000,
+      routerAddress: router ? '127.0.0.1' : host,
+      routerTcpPort: router ? 48898 : tcpPort,
+      ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
+      rawClient: true,
+      autoReconnect: false,
+      timeoutDelay: 5000,
+      hideConsoleWarnings: true,
+    });
+  if (!viaLocalRouter && tcpPort === 48898 && !given && localTwinCatNetId()) {
+    const c = make(true);
+    try {
+      await c.connect();
+      await c.readState();
+      return c;
+    } catch {
+      await c.disconnect().catch(() => {});
+    }
+  }
+  const c = make(viaLocalRouter);
+  try {
+    await c.connect();
+    await c.readState();
+    return c;
+  } catch (err) {
+    await c.disconnect().catch(() => {});
+    throw new Error(`${host} did not answer (${ads.adsErrorText(err)}). Is there an ADS route on the PLC for this computer (AMS NetId ${localNetId})?`);
+  }
+}
+
 function createLiveSession(hooks = {}) {
   let session = null;
   let sessionId = 0;
@@ -363,52 +409,6 @@ function createLiveSession(hooks = {}) {
     }
   }
 
-  /**
-   * A connection of its own to a PLC's system service (port 10000: its boot folder), not live: the same way there as
-   * going live (this computer's TwinCAT router first when it has a route, else straight to the PLC with this
-   * computer's NetId). options: { netId, ip?, localNetId? } → a connected client (the caller disconnects it)
-   */
-  async function systemClient(options) {
-    const netId = String(options?.netId ?? '').trim();
-    if (!/^\d+\.\d+\.\d+\.\d+\.\d+\.\d+$/.test(netId)) throw new Error("Enter the PLC's AMS NetId (e.g. 192.168.1.20.1.1)");
-    const [host, tcp] = (String(options.ip ?? '').trim() || netId.split('.').slice(0, 4).join('.')).split(':');
-    const tcpPort = Number(tcp) || 48898;
-    const given = String(options.localNetId ?? '').trim();
-    const localNetId = given || defaultLocalNetId(localIpTowards(host));
-    const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !given;
-    const make = (router) =>
-      new Client({
-        targetAmsNetId: netId,
-        targetAdsPort: 10000,
-        routerAddress: router ? '127.0.0.1' : host,
-        routerTcpPort: router ? 48898 : tcpPort,
-        ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
-        rawClient: true,
-        autoReconnect: false,
-        timeoutDelay: 5000,
-        hideConsoleWarnings: true,
-      });
-    if (!viaLocalRouter && tcpPort === 48898 && !given && localTwinCatNetId()) {
-      const c = make(true);
-      try {
-        await c.connect();
-        await c.readState();
-        return c;
-      } catch {
-        await c.disconnect().catch(() => {});
-      }
-    }
-    const c = make(viaLocalRouter);
-    try {
-      await c.connect();
-      await c.readState();
-      return c;
-    } catch (err) {
-      await c.disconnect().catch(() => {});
-      throw new Error(`${host} did not answer (${ads.adsErrorText(err)}). Is there an ADS route on the PLC for this computer (AMS NetId ${localNetId})?`);
-    }
-  }
-
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
@@ -612,4 +612,4 @@ function createLiveSession(hooks = {}) {
   return { start, stop, watch, browse, sources, ioTree, ecatStates, projectCopy, projectPou, layoutFile, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
-module.exports = { createLiveSession, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };
+module.exports = { createLiveSession, systemClient, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'layoutFile', 'ioTree', 'ecatStates', 'deviceInfo', 'sourcesOffline'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'layoutFile', 'ioTree', 'ecatStates', 'deviceInfo', 'sourcesOffline', 'plcStates', 'selfUpdate'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -359,8 +359,16 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'discover') {
       const addresses = (Array.isArray(m.addresses) ? m.addresses : []).map((a) => String(a).trim()).filter((a) => hostRx.test(a)).slice(0, 64);
       const result = await discovery.discover({ localNetId: defaultLocalNetId(localIpTowards(addresses[0] ?? '')), addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
+      // (each described as going live would see it: TwinCAT's state, its PLC's, its project)
+      result.devices = await require('../shared/tcPlcState.cjs').describePlcs(result.devices);
       log(`browse: ${origin} searched the network, ${result.devices.length} device(s)`);
       return send({ type: 'discoverResult', requestId, ...result, localTwinCat: localTwinCatNetId() });
+    }
+    // A paired page asks Link to update itself (its notice that Link is another version): check, or install the
+    // newer released Link (Link starts again with it); as its own page's Updates
+    if (m.type === 'linkUpdate') {
+      const r = m.action === 'install' ? await updater.install() : await updater.check();
+      return send({ type: 'linkUpdateResult', requestId, ...(r && typeof r === 'object' ? r : {}), status: updater.status(), build: BUILD });
     }
     // The Live tab's Check: why a PLC does not answer (all read-only)
     if (m.type === 'checkConnection') {

@@ -242,6 +242,13 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   expect(kept && !(await a.$('#text-prompt-dialog')), 'SM_TableManager opened: SM_Conveyor\'s edits kept for the build (not asked to discard them)');
   let tableLive = '';
   for (let i = 0; i < 40 && !tableLive; i++) { await sleep(300); tableLive = await a.$eval('#live-current-state', (e) => e.textContent).catch(() => ''); }
+  // (two instances of it on the PLC: which one is asked; the first, followed already, kept)
+  const asked = await a.waitForSelector('#live-instance-picker', { timeout: 5000 }).catch(() => null);
+  expect(!!asked, 'two instances of it on the PLC: which one asked');
+  if (asked) {
+    await a.keyboard.press('Escape');
+    await sleep(300);
+  }
   await a.waitForSelector('#live-build-btn', { timeout: 10000 }).catch(() => {});
   await a.click('#live-build-btn').catch(() => {});
   await waitDone();

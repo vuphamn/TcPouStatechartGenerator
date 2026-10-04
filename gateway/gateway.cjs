@@ -578,7 +578,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBrowse === false || config.allowSources === false ? [] : ['sourcesOffline']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -604,7 +604,7 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}`);
         audit.add(user, 'sign-in', { ip, how: 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBrowse === false || config.allowSources === false ? [] : ['sourcesOffline']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
       }
 
       // Operator board: the machines of these PLCs (default: all), once a second
@@ -870,7 +870,27 @@ function start() {
       if (m.type === 'plcSources') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });
-        if (!session?.conn.client) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
+        if (!session?.conn.client) {
+          // (not live: one of the gateway's PLCs named, its sources read from its boot folder over a connection of
+          // their own to its system service, then closed; its PLC need not run)
+          const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+          if (!plc) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
+          const [host, tcp] = (plc.ip || plc.netId.split('.').slice(0, 4).join('.')).split(':');
+          const own = new Client({
+            targetAmsNetId: plc.netId, targetAdsPort: 10000, routerAddress: host, routerTcpPort: Number(tcp) || 48898,
+            localAmsNetId: plc.localNetId || config.localNetId, localAdsPort: 32907, rawClient: true, autoReconnect: false, timeoutDelay: 5000, hideConsoleWarnings: true,
+          });
+          try {
+            await own.connect();
+            const key = typeof m.plcProject === 'string' ? m.plcProject.slice(0, 100) : '';
+            send({ type: 'plcSourcesResult', requestId, ...(await readPlcSources(own, Number(plc.port) || 851, { plcProject: key })) });
+          } catch (err) {
+            send({ type: 'plcSourcesResult', requestId, error: `${plc.name} did not answer (${ads.adsErrorText(err)}). Does the PLC have an ADS route to the gateway (AMS NetId ${plc.localNetId || config.localNetId})?` });
+          } finally {
+            await own.disconnect().catch(() => {});
+          }
+          return;
+        }
         const conn = session.conn;
         try {
           // (per PLC project: plcProject, another one on the same target; read once each)

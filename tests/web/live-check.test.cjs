@@ -82,6 +82,10 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   await a.type('#live-plc-addresses', '127.0.0.1');
   await a.click('#live-plc-rescan');
   await a.waitForFunction(() => document.querySelectorAll('.live-plc-found').length >= 2, { timeout: 8000 }).catch(() => {});
+  // Each found PLC with its state, as going live would see it (what it is depends on what answers at its address:
+  // here no PLC on 48898, or this computer's own TwinCAT: a badge each, whatever it says)
+  const badges = await a.$$eval('.live-plc-found .live-plc-state', (b) => b.map((x) => x.getAttribute('data-state')));
+  expect(badges.length >= 2 && badges.every(Boolean), `each found PLC with its state (${badges.join(', ')})`);
   await a.click('.live-plc-add-route[data-netid="127.0.0.2.1.1"]');
   await a.waitForSelector('#live-route-password');
   const both = await a.$eval('#live-route-both', (e) => e.checked).catch(() => null);

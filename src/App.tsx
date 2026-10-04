@@ -1606,6 +1606,9 @@ export const App: React.FC = () => {
   liveNamesRef.current = liveEnumNames;
   const liveEdgesRef = useRef(availableEdges);
   liveEdgesRef.current = availableEdges;
+  // (opened From PLC: once live, which of its instances, when the PLC has several)
+  const pickInstanceRef = useRef(false);
+  const [instancePicker, setInstancePicker] = useState<{ instances: string[]; current: string | null } | null>(null);
   const handleLiveStatus = useCallback((m: Extract<HostMessage, { type: 'liveStatus' }>) => {
     if (m.state === 'plcState') {
       setLiveStatus((prev) =>
@@ -1616,6 +1619,11 @@ export const App: React.FC = () => {
       return;
     }
     const state = m.state;
+    if (state === 'connected' && pickInstanceRef.current) {
+      pickInstanceRef.current = false;
+      if ((m.instances?.length ?? 0) > 1) setInstancePicker({ instances: m.instances!, current: m.instance ?? null });
+    } else if (state === 'error') pickInstanceRef.current = false;
+    // (not reset on stopped: From PLC while live stops first, and that stopped comes after the flag is set)
     setLiveStatus((prev) => ({
       state,
       message: m.message,
@@ -5445,7 +5453,8 @@ export const App: React.FC = () => {
       else if (m.type === 'liveVars') handleLiveVars(m.values);
       else if (m.type === 'liveBrowseResult') handleLiveBrowseResult(m);
       else if (m.type === 'plcBuildProgress') setPlcBuild((b) => (b && b.phase !== 'done' ? { ...b, step: String(m.text ?? '') } : b));
-      else if (m.type === 'closed') setLiveStatus((prev) => ({ ...prev, state: 'lost', message: m.message }));
+      // (closed: lost when it was live; opened only for From PLC, Browse or Check: nothing was lost)
+      else if (m.type === 'closed') setLiveStatus((prev) => (prev.state === 'connected' || prev.state === 'connecting' ? { ...prev, state: 'lost', message: m.message } : prev));
     });
     return gatewayRef.current;
   }, [handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleLiveBrowseResult]);
@@ -5916,7 +5925,22 @@ export const App: React.FC = () => {
               return gatewayRef.current!.request<PlcSources>({ type: 'plcSources', ...(plcProject ? { plcProject } : {}), connection: conn }, 'plcSourcesResult', 120000);
             })
             .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
-    } else if (offline) p = Promise.resolve({ error: 'A gateway reads the PLC\'s sources while live: go live first' });
+    } else if (offline) {
+      // (a gateway: one of its PLCs chosen; signed in first, without going live)
+      const address = liveSettings.gateway || gatewayOrigin;
+      p = !address || !liveSettings.plc
+        ? Promise.resolve({ error: 'Choose one of the gateway\'s PLCs first' })
+        : !gatewayToken && !ssoUser
+          ? Promise.resolve({ error: ssoHere ? 'Sign in first' : 'Enter your gateway access token' })
+          : gatewayConnection()
+              .connect(address, gatewayToken, !!ssoUser)
+              .then((w) => {
+                setGatewayFeatures(w.features ?? []);
+                if (!w.features?.includes('sourcesOffline')) return { error: 'This gateway reads the PLC\'s sources only while live: go live first (or update the gateway)' };
+                return gatewayRef.current!.request<PlcSources>({ type: 'plcSources', plc: liveSettings.plc, ...(plcProject ? { plcProject } : {}) }, 'plcSourcesResult', 120000);
+              })
+              .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+    }
     else p = gatewayRef.current ? gatewayRef.current.request<PlcSources>({ type: 'plcSources', ...(plcProject ? { plcProject } : {}) }, 'plcSourcesResult', 120000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
     p = p.then((r) => {
       if (r.error && cache.get(plcProject) === p) cache.delete(plcProject);
@@ -5925,7 +5949,7 @@ export const App: React.FC = () => {
     cache.set(plcProject, p);
     return p;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveMode, liveStatus.target, liveStatus.state, liveSettings, liveVia, linkCode, gatewayConnection]);
+  }, [liveMode, liveStatus.target, liveStatus.state, liveSettings, liveVia, linkCode, gatewayConnection, gatewayOrigin, gatewayToken, ssoUser, ssoHere]);
   // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
   // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval MachineScope\PLC projects\<project>; a copy
   // there that differs from the PLC's: Override, Save to a different location (remembered for this PLC), or Keep
@@ -6098,7 +6122,9 @@ export const App: React.FC = () => {
         }
         // (the connection comes along, live or not: the live settings are kept per POU, and From PLC before going live
         // named the Target)
-        applyLoadedPou(src, { live: wasLive, connection: connectionOf(liveSettings) });
+        applyLoadedPou(src, { live: true, connection: connectionOf(liveSettings) });
+        // (live on it: on the PLC's first instance of it; several there: which one, once connected)
+        if (!liveSettings.instance.trim() || wasLive) pickInstanceRef.current = true;
         // (its edits, still to build: unsaved against the PLC's version)
         if (again) setSavedSources((b) => ({ ...b, pou: found.content }));
         // Code help from the whole PLC project (its types, GVLs, the other POUs' members)
@@ -6460,6 +6486,22 @@ export const App: React.FC = () => {
     },
     [linkCode, gatewayConnection, liveSettings.linkPort]
   );
+  // The Link notice's Update Link: Link checks for a newer release and updates itself (it starts again); a Link built
+  // here, newer than the released one, is rebuilt instead. What happened, for the notice
+  const handleUpdateLink = useCallback(async (): Promise<string> => {
+    type UpdateAnswer = { ok?: boolean; message?: string; status?: { version?: string; newer?: boolean; canUpdate?: boolean; error?: string | null; latest?: { version: string } | null } };
+    try {
+      const c = await linkRequest<UpdateAnswer>({ type: 'linkUpdate', action: 'check' }, 'linkUpdateResult');
+      const st = c.status ?? {};
+      if (st.error) return `Could not check: ${st.error}`;
+      if (!st.canUpdate) return 'This Link runs from its sources: update it from the repository (npm run build:link), then start it again';
+      if (!st.newer) return `No newer Link released (Link ${st.version ?? '?'}; this page is a newer build): npm run build:link, then start Link again`;
+      const r = await linkRequest<UpdateAnswer>({ type: 'linkUpdate', action: 'install' }, 'linkUpdateResult');
+      return r.ok === false ? r.message ?? 'Link did not update' : `Link ${st.latest?.version ?? ''} installed: it is starting again (go live again then)`;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }, [linkRequest]);
   // (the PLC's project kept on this computer: see requestPlcCopy)
   const canCopyProject = !replay && (liveMode === 'desktop' ? !!desktopLive()?.projectCopy : liveMode === 'web' && liveVia === 'link' && !!linkBuild?.features?.includes('plcProjectCopy'));
   // Once per PLC connected to (not while replaying a recording)
@@ -9164,7 +9206,8 @@ export const App: React.FC = () => {
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
-            fromPlcOffline={!!liveMode && !replay && !isXaeHost() && liveStatus.state !== 'connected' && liveStatus.state !== 'connecting' && (liveMode === 'desktop' || liveVia === 'link') && /^\d+(\.\d+){5}$/.test(liveSettings.netId.trim())}
+            fromPlcOffline={!!liveMode && !replay && !isXaeHost() && liveStatus.state !== 'connected' && liveStatus.state !== 'connecting' && (liveMode === 'web' && liveVia === 'gateway' ? !!liveSettings.plc : (liveMode === 'desktop' || liveVia === 'link') && /^\d+(\.\d+){5}$/.test(liveSettings.netId.trim()))}
+            onUpdateLink={viaLink && linkBuild?.features?.includes('selfUpdate') ? handleUpdateLink : undefined}
             onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
             onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : liveMode === 'web' && pouContent && !replay && (viaLink ? linkBuild?.features?.includes('projectBuild') : gatewayFeatures.includes('projectBuild')) ? () => void runWebProjectBuild(null) : undefined}
             buildOffline={isXaeHost()}
@@ -9509,6 +9552,23 @@ export const App: React.FC = () => {
               .map((p) => ({ id: `plc-project:${p.name}`, group: 'PLC project', label: p.name, hint: p.port ? `ADS port ${p.port}: its POUs` : 'its POUs', run: () => handleOpenFromPlc(p.name) })),
           ]}
           onClose={() => setPlcPicker(null)}
+        />
+      )}
+      {instancePicker && (
+        <CommandPalette
+          id="live-instance-picker"
+          label="Which instance"
+          placeholder={`The PLC has ${instancePicker.instances.length} instances of ${pouTypeName ?? 'this POU'}: the one to follow here…`}
+          commands={instancePicker.instances.map((i) => ({
+            id: `live-instance:${i}`,
+            group: 'Instance',
+            label: i,
+            hint: instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase() ? 'followed now' : 'follow it here',
+            run: () => {
+              if (!(instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase())) handleGoLiveHere(i);
+            },
+          }))}
+          onClose={() => setInstancePicker(null)}
         />
       )}
       {endPicker && (() => {
