@@ -100,9 +100,12 @@ const hello = (token) =>
   await setField(1, 'name', 'Line 202');
   await setField(1, 'ip', '127.0.0.1:48986');
   await setField(2, 'ip', '127.0.0.1:48987');
-  await p.click('#admin-plcs tr:nth-child(1) .admin-test');
-  await p.click('#admin-plcs tr:nth-child(2) .admin-test');
-  await p.waitForFunction(() => [...document.querySelectorAll('#admin-plcs .status')].every((s) => !/Testing/.test(s.textContent) && s.textContent), { timeout: 25000 }).catch(() => {});
+  // (one after the other: a click while the table re-renders for the first was lost on CI's slow runner; each row's
+  // result waited for, a while on CI)
+  for (const row of [1, 2]) {
+    await p.click(`#admin-plcs tr:nth-child(${row}) .admin-test`);
+    await p.waitForFunction((row) => { const s = document.querySelector(`#admin-plcs tr:nth-child(${row}) .status`); return !!s && !!s.textContent && !/Testing/.test(s.textContent); }, { timeout: 45000 }, row).catch(() => {});
+  }
   const statuses = await p.$$eval('#admin-plcs .status', (s) => s.map((x) => `${x.className}: ${x.textContent}`));
   expect(/ok: OK: PLC on port 851 Run, TwinCAT Run \(FakePlc 3\.1\.4026\)/.test(statuses[0]), `test, the PLC: ${statuses[0]}`);
   expect(/bad: No TwinCAT router at 127\.0\.0\.1:48987/.test(statuses[1]), `test, nothing there: ${statuses[1]}`);
