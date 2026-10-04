@@ -5881,8 +5881,18 @@ export const App: React.FC = () => {
       // per-viewer convenience only
     }
   }, [ioEvents, ioEventsKey]);
+  // (not live: from the PLC the Live tab names, over a connection of its own: its sources are files in its boot
+  // folder, its PLC need not run; the desktop app and Link)
+  const plcSourcesConnection = () => ({
+    netId: liveSettings.netId.trim(),
+    ip: liveSettings.ip.trim() || undefined,
+    port: Number(liveSettings.port) > 0 ? Number(liveSettings.port) : undefined,
+    localNetId: liveSettings.localNetId.trim() || undefined,
+  });
   const fetchPlcSources = useCallback((plcProject = ''): Promise<PlcSources> => {
-    const target = `${liveMode}|${liveStatus.target ?? ''}`;
+    const offline = liveStatus.state !== 'connected';
+    const conn = plcSourcesConnection();
+    const target = `${liveMode}|${offline ? `${conn.netId}:${conn.port ?? 851}` : liveStatus.target ?? ''}`;
     if (plcSourcesTargetRef.current !== target) {
       plcSourcesTargetRef.current = target;
       plcSourcesRef.current = new Map();
@@ -5890,10 +5900,23 @@ export const App: React.FC = () => {
     const cache = plcSourcesRef.current;
     const known = cache.get(plcProject);
     if (known) return known;
-    const req = { requestId: Date.now() % 1e9, ...(plcProject ? { plcProject } : {}) };
+    const req = { requestId: Date.now() % 1e9, ...(plcProject ? { plcProject } : {}), ...(offline ? { connection: conn } : {}) };
     let p: Promise<PlcSources>;
     if (isXaeHost()) p = Promise.resolve({ error: 'XAE opens the project from the target itself' });
     else if (liveMode === 'desktop') p = desktopLive()?.sources?.(req) ?? Promise.resolve({ error: 'Update the desktop app: it cannot read the PLC\'s sources' });
+    else if (offline && liveVia === 'link') {
+      // (Link: connected to it first, without going live; an older Link reads them only while live)
+      p = !linkCode
+        ? Promise.resolve({ error: 'Enter the pairing code shown by Kval MachineScope Link' })
+        : gatewayConnection()
+            .connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode)
+            .then((w) => {
+              setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
+              if (!w?.features?.includes('sourcesOffline')) return { error: 'This Link reads the PLC\'s sources only while live: update it (npm run build:link, or the installer) and start it again, or go live first' };
+              return gatewayRef.current!.request<PlcSources>({ type: 'plcSources', ...(plcProject ? { plcProject } : {}), connection: conn }, 'plcSourcesResult', 120000);
+            })
+            .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+    } else if (offline) p = Promise.resolve({ error: 'A gateway reads the PLC\'s sources while live: go live first' });
     else p = gatewayRef.current ? gatewayRef.current.request<PlcSources>({ type: 'plcSources', ...(plcProject ? { plcProject } : {}) }, 'plcSourcesResult', 120000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })) : Promise.resolve({ error: 'Not connected' });
     p = p.then((r) => {
       if (r.error && cache.get(plcProject) === p) cache.delete(plcProject);
@@ -5901,7 +5924,8 @@ export const App: React.FC = () => {
     });
     cache.set(plcProject, p);
     return p;
-  }, [liveMode, liveStatus.target]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode, liveStatus.target, liveStatus.state, liveSettings, liveVia, linkCode, gatewayConnection]);
   // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
   // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval MachineScope\PLC projects\<project>; a copy
   // there that differs from the PLC's: Override, Save to a different location (remembered for this PLC), or Keep
@@ -6052,7 +6076,8 @@ export const App: React.FC = () => {
   );
   const openPlcPouHere = useCallback(
     (sources: PlcSources, typeName: string) => {
-      const found = sources.files ? plcPouSource(sources.files, typeName, { project: sources.project, plcProject: sources.plcProject, target: liveStatus.target }) : null;
+      const conn = plcSourcesConnection();
+      const found = sources.files ? plcPouSource(sources.files, typeName, { project: sources.project, plcProject: sources.plcProject, target: liveStatus.state === 'connected' ? liveStatus.target : `${conn.netId}:${conn.port ?? 851}` }) : null;
       if (!found) return showCopyToast(`${typeName}.TcPOU is not in the PLC's sources`, 'error');
       // This one from the PLC, edited: its edits kept for the session (built with the others), not discarded
       const keep: Record<string, PlcEdit> = {};
@@ -6071,8 +6096,9 @@ export const App: React.FC = () => {
           handleLiveStopRef.current();
           handleLiveSettingsChange({ ...liveSettings, instance: '' });
         }
-        // (the connection comes along: the live settings are kept per POU)
-        applyLoadedPou(src, wasLive ? { live: true, connection: connectionOf(liveSettings) } : undefined);
+        // (the connection comes along, live or not: the live settings are kept per POU, and From PLC before going live
+        // named the Target)
+        applyLoadedPou(src, { live: wasLive, connection: connectionOf(liveSettings) });
         // (its edits, still to build: unsaved against the PLC's version)
         if (again) setSavedSources((b) => ({ ...b, pou: found.content }));
         // Code help from the whole PLC project (its types, GVLs, the other POUs' members)
@@ -9138,6 +9164,7 @@ export const App: React.FC = () => {
             openTarget={isXaeHost() || liveMode === 'web' ? 'tab' : 'window'}
             onOpenSymbols={liveMode && !replay ? () => setDockLayout((l) => activateDockTab(l, 'symbols')) : undefined}
             onOpenFromPlc={liveMode && !replay && !isXaeHost() ? () => handleOpenFromPlc() : undefined}
+            fromPlcOffline={!!liveMode && !replay && !isXaeHost() && liveStatus.state !== 'connected' && liveStatus.state !== 'connecting' && (liveMode === 'desktop' || liveVia === 'link') && /^\d+(\.\d+){5}$/.test(liveSettings.netId.trim())}
             onCompareWithPlc={liveMode && liveMode !== 'xae' && !replay && !isXaeHost() && pouTypeName ? handleCompareWithPlc : undefined}
             onBuildForPlc={isXaeHost() && pouPath ? runXaeBuild : plcOrigin && liveMode && liveMode !== 'xae' && !replay && !isXaeHost() ? () => runPlcBuild(null) : liveMode === 'desktop' && pouPath && !replay && desktopLive()?.projectBuild ? () => runProjectBuild(null) : liveMode === 'web' && pouContent && !replay && (viaLink ? linkBuild?.features?.includes('projectBuild') : gatewayFeatures.includes('projectBuild')) ? () => void runWebProjectBuild(null) : undefined}
             buildOffline={isXaeHost()}

@@ -328,7 +328,8 @@ function createLiveSession(hooks = {}) {
   /**
    * The PLC project's sources as the PLC keeps them (plcSources): answered with plcSourcesResult { project, files }
    * or { error }. Read once per connection (a few MB). Only while connected; req: { requestId, plcProject? } (another
-   * PLC project on the same target)
+   * PLC project on the same target). Not live: req.connection { netId, ip?, port?, localNetId? } names the PLC, its
+   * sources read over a connection of their own (its PLC need not run)
    */
   /**
    * The PLC's I/O tree (read-only): its devices, boxes, PDO entries and the PLC variables linked to them, from the
@@ -362,9 +363,72 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /**
+   * A connection of its own to a PLC's system service (port 10000: its boot folder), not live: the same way there as
+   * going live (this computer's TwinCAT router first when it has a route, else straight to the PLC with this
+   * computer's NetId). options: { netId, ip?, localNetId? } → a connected client (the caller disconnects it)
+   */
+  async function systemClient(options) {
+    const netId = String(options?.netId ?? '').trim();
+    if (!/^\d+\.\d+\.\d+\.\d+\.\d+\.\d+$/.test(netId)) throw new Error("Enter the PLC's AMS NetId (e.g. 192.168.1.20.1.1)");
+    const [host, tcp] = (String(options.ip ?? '').trim() || netId.split('.').slice(0, 4).join('.')).split(':');
+    const tcpPort = Number(tcp) || 48898;
+    const given = String(options.localNetId ?? '').trim();
+    const localNetId = given || defaultLocalNetId(localIpTowards(host));
+    const viaLocalRouter = /^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host) && tcpPort === 48898 && !given;
+    const make = (router) =>
+      new Client({
+        targetAmsNetId: netId,
+        targetAdsPort: 10000,
+        routerAddress: router ? '127.0.0.1' : host,
+        routerTcpPort: router ? 48898 : tcpPort,
+        ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
+        rawClient: true,
+        autoReconnect: false,
+        timeoutDelay: 5000,
+        hideConsoleWarnings: true,
+      });
+    if (!viaLocalRouter && tcpPort === 48898 && !given && localTwinCatNetId()) {
+      const c = make(true);
+      try {
+        await c.connect();
+        await c.readState();
+        return c;
+      } catch {
+        await c.disconnect().catch(() => {});
+      }
+    }
+    const c = make(viaLocalRouter);
+    try {
+      await c.connect();
+      await c.readState();
+      return c;
+    } catch (err) {
+      await c.disconnect().catch(() => {});
+      throw new Error(`${host} did not answer (${ads.adsErrorText(err)}). Is there an ADS route on the PLC for this computer (AMS NetId ${localNetId})?`);
+    }
+  }
+
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
+    // (not live: from a PLC named in the request, its sources read over a connection of their own, then closed. Its
+    // PLC need not be running: they are files in its boot folder)
+    const target = req?.connection;
+    if ((!s || !s.connected) && target && typeof target === 'object') {
+      let c = null;
+      try {
+        c = await systemClient(target);
+        const port = Number(target.port) || 851;
+        const key = typeof req?.plcProject === 'string' ? req.plcProject.slice(0, 100) : '';
+        send({ type: 'plcSourcesResult', requestId, ...(await readPlcSources(c, port, { plcProject: key })) });
+      } catch (err) {
+        send({ type: 'plcSourcesResult', requestId, error: err?.message ?? ads.adsErrorText(err) });
+      } finally {
+        await c?.disconnect().catch(() => {});
+      }
+      return;
+    }
     if (!s || !s.connected) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
     try {
       const key = typeof req?.plcProject === 'string' ? req.plcProject.slice(0, 100) : '';

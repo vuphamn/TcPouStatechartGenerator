@@ -105,6 +105,8 @@ interface LivePanelProps {
   onOpenSymbols?: () => void;
   /** A POU of the PLC's own sources (the project downloaded with its sources) opened here */
   onOpenFromPlc?: () => void;
+  /** From PLC offered before going live too (a target entered: its sources read from its boot folder) */
+  fromPlcOffline?: boolean;
   /** The POU from the PLC's sources, edited here: the PLC's project rebuilt with it, then written back */
   onBuildForPlc?: () => void;
   /** Build without a live connection (XAE edition: XAE's own project) */
@@ -283,6 +285,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   openTarget = 'window',
   onOpenSymbols,
   onOpenFromPlc,
+  fromPlcOffline,
   onBuildForPlc,
   buildOffline,
   onCompareWithPlc,
@@ -537,12 +540,12 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <ListTree className="w-3 h-3" /> Symbols
             </button>
           )}
-          {onOpenFromPlc && status.state === 'connected' && (
+          {onOpenFromPlc && (status.state === 'connected' || fromPlcOffline) && (
             <button
               id="live-open-from-plc-btn"
               onClick={onOpenFromPlc}
               className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800"
-              title="Open a POU of the PLC's own sources (the project downloaded with its sources, as XAE's Open from Target reads them)"
+              title={`Open a POU of the PLC's own sources (the project downloaded with its sources, as XAE's Open from Target reads them)${status.state === 'connected' ? '' : ': read from the Target, not live (its PLC need not run); go live on it afterwards'}`}
             >
               <FolderDown className="w-3 h-3" /> From PLC
             </button>

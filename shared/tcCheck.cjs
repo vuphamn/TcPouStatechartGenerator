@@ -58,6 +58,24 @@ async function adsState(options) {
 }
 
 /**
+ * The PLC's own state, once it answers: running (Run), stopped (Stop: its values as they are, frozen), or without a
+ * program to run (Invalid and the like: the runtime is there, no application in it) — a step, or null when it runs
+ */
+function plcStateStep(state, adsPort) {
+  const st = String(state ?? '');
+  if (/^run$/i.test(st)) return null;
+  if (/^stop$/i.test(st)) {
+    return { id: 'plc', ok: null, title: `The PLC on port ${adsPort} is stopped`, detail: 'Live shows its values as they are, frozen; start it to follow it (XAE: Start, or set TwinCAT to Run).' };
+  }
+  return {
+    id: 'plc',
+    ok: false,
+    title: `The PLC on port ${adsPort} runs no program (state: ${st || 'unknown'})`,
+    detail: 'Its runtime is there but no PLC application is loaded in it, so there is nothing to go live on. In XAE: Login (download) and Start, or set its boot project to start on its own (PLC project > Autostart Boot Project) and activate. A PLC license that ran out (a 7-day trial) leaves it like this too.',
+  };
+}
+
+/**
  * Checks the way to a PLC: { steps: [{ id, ok: true | false | null (not known / a hint), title, detail, fix? }],
  * verdict: the first failing step's advice (or that all is well), suggest?: { netId } (the PLC's own NetId) }
  */
@@ -93,7 +111,10 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   if (local) {
     const s = await adsState({ targetAmsNetId: netId || '127.0.0.1.1.1', targetAdsPort: adsPort, routerAddress: '127.0.0.1', routerTcpPort: 48898 });
     add({ id: 'ads', ok: s.ok, title: s.ok ? `The PLC on this computer answers (${s.state})` : 'The PLC on this computer does not answer', detail: s.ok ? '' : `${s.error}. Is TwinCAT running here (in Run mode), with a PLC on ADS port ${adsPort}?` });
-    return { steps, verdict: s.ok ? 'All good: go live.' : steps[steps.length - 1].detail };
+    const plc = s.ok ? plcStateStep(s.state, adsPort) : null;
+    if (plc) add(plc);
+    const bad = steps.find((x) => x.ok === false);
+    return { steps, verdict: bad ? `${bad.title}. ${bad.detail}` : plc ? `${plc.title}. ${plc.detail}` : 'All good: go live.' };
   }
 
   // 2. The network: ping, TwinCAT's search, the ADS port
@@ -156,9 +177,11 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   } else if (viaRouter) {
     add({
       id: 'router', ok: viaRouter.ok ? true : null,
-      title: viaRouter.ok ? `This computer's TwinCAT router reaches it (${viaRouter.state}): MachineScope uses its route` : 'This computer\'s TwinCAT router has no route to it',
+      title: viaRouter.ok ? `This computer's TwinCAT router reaches it: MachineScope uses its route (the PLC: ${viaRouter.state})` : 'This computer\'s TwinCAT router has no route to it',
       detail: viaRouter.ok ? '' : `Not needed: MachineScope connects directly with ${myNetId}. (XAE's Add Route would make one here and on the PLC.)`,
     });
+    const plc = viaRouter.ok ? plcStateStep(viaRouter.state, adsPort) : null;
+    if (plc) add(plc);
   }
 
   // 5. ADS: the PLC's state, with this computer's NetId (the route on the PLC)
@@ -169,6 +192,8 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
       id: 'ads', ok: s.ok, title: s.ok ? `The PLC answers (${s.state}) on ADS port ${adsPort}` : `The PLC does not answer ADS (port ${adsPort})`,
       detail: s.ok ? '' : `It has no route for this computer, or not on this port: add one on the PLC for AMS NetId ${myNetId}, IP ${myIp} (Browse > Add route, or TwinCAT's Router > Edit Routes there). ${s.error ? `(${s.error})` : ''}`.trim(),
     });
+    const plc = s.ok ? plcStateStep(s.state, adsPort) : null;
+    if (plc) add(plc);
   }
   // (the PLC answers ADS: a search that went unanswered is not the problem, only Browse and Add Route need it)
   const adsOk = twincatAnswers || steps.some((s) => (s.id === 'ads' || s.id === 'router') && s.ok === true);
@@ -180,8 +205,9 @@ async function checkConnection({ netId = '', ip = '', adsPort = 851, localNetId 
   const failing = steps.find((s) => s.ok === false);
   // (not answering from another network: the router between them is the first thing to look at)
   const netHint = offNet && failing && ['ping', 'search', 'port'].includes(failing.id) ? ` ${steps.find((s) => s.id === 'network').title}: ${steps.find((s) => s.id === 'network').detail}` : '';
-  const verdict = failing ? `${failing.title}. ${failing.detail}${netHint}`.trim() : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';
+  const stopped = steps.find((s) => s.id === 'plc' && s.ok === null);
+  const verdict = failing ? `${failing.title}. ${failing.detail}${netHint}`.trim() : stopped ? `${stopped.title}. ${stopped.detail}` : steps.some((s) => s.id === 'ads' || (s.id === 'router' && s.ok)) ? 'All good: go live.' : 'The PLC is reachable; enter its AMS NetId to check ADS.';
   return { steps, verdict, ...(suggest || portSuggest ? { suggest: { ...(suggest ?? {}), ...(portSuggest ?? {}) } } : {}) };
 }
 
-module.exports = { checkConnection, tcpOpen, networkProfile };
+module.exports = { checkConnection, tcpOpen, networkProfile, plcStateStep };
