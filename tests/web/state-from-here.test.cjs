@@ -41,7 +41,13 @@ const S = (n) => `TABLEMANAGER_${n}`;
   expect(title === `Transition ${S('CLAMPED')} → ${S('CLAMPED_NEXT')}`, `then the condition: "${title}"`);
   await p.evaluate(() => document.getElementById('text-prompt-input').select());
   await p.keyboard.type('bNextStep');
-  await p.keyboard.press('Enter');
+  // (its submit button, not Enter: on CI's slow runner the names offered while typing came up as Enter was pressed,
+  // and Enter took one of them; the dialog stayed open. Clicked again while it is still there)
+  for (let k = 0; k < 3 && (await p.$('#text-prompt-dialog')); k++) {
+    await h.sleep(400);
+    await p.evaluate(() => document.getElementById('text-prompt-submit')?.click());
+    await waitFor(async () => !(await p.$('#text-prompt-dialog')), 3000);
+  }
   const drawn = await waitFor(() => p.evaluate((k) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${k}"]`), `${S('CLAMPED')}->${S('CLAMPED_NEXT')}`), 20000);
   // (not there: what the page shows, said in the failure: seen on CI only)
   const why = drawn
