@@ -25,10 +25,13 @@ const CONFIG = 48946;
 const runCfg = writeSymbolsPlc('fake-ams2-offline-run.json', [], { sources: true });
 const stopCfg = writeSymbolsPlc('fake-ams2-offline-stop.json', [], { adsState: 6 });
 const configCfg = writeSymbolsPlc('fake-ams2-offline-config.json');
+// (no program: ADS state 0, its trial license ran out five hours ago)
+const INVALID = 48947;
+const invalidCfg = writeSymbolsPlc('fake-ams2-offline-invalid.json', [], { adsState: 0, license: -5 });
 fs.writeFileSync(configCfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(configCfg, 'utf8')), configMode: true }));
 
 (async () => {
-  const plcs = [[RUN, runCfg], [STOP, stopCfg], [CONFIG, configCfg]].map(([port, cfg]) => spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), String(port), cfg], { stdio: 'ignore' }));
+  const plcs = [[RUN, runCfg], [STOP, stopCfg], [CONFIG, configCfg], [INVALID, invalidCfg]].map(([port, cfg]) => spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), String(port), cfg], { stdio: 'ignore' }));
   await sleep(1200);
   // (GitHub's releases, stood in for: a desktop installer with its SHA-256, and one whose SHA-256 is not its own)
   const installer = Buffer.from('MZ fake installer ' + 'x'.repeat(1000));
@@ -58,6 +61,10 @@ fs.writeFileSync(configCfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(confi
     const cfgMode = await call(session, 'instancesAt', { requestId: 5, connection: conn(CONFIG), typeName: 'SM_TableManager', stateVar: 'machineState' });
     expect(/Config mode/.test(cfgMode.error ?? '') && cfgMode.plcState === 'Config' && !cfgMode.instances, `TwinCAT in Config mode: said (${(cfgMode.error ?? '').slice(0, 80)})`);
 
+    // No program, its trial license ran out: said with its state
+    const lic = await call(session, 'plcStates', { requestId: 13, localNetId: '127.0.0.1.1.1', devices: [{ netId: '127.0.0.1.1.1', ip: `127.0.0.1:${INVALID}` }, { netId: '127.0.0.1.1.1', ip: `127.0.0.1:${RUN}` }] });
+    const [inv, fine] = lic.devices ?? [];
+    expect(inv?.state?.plc === 'Invalid' && inv.state.license?.state === 'expired' && !!Date.parse(inv.state.license.expires) && !fine?.state?.license, `no program, its license ran out: ${JSON.stringify(inv?.state)}`);
     // The found PLCs' states again
     const states = await call(session, 'plcStates', { requestId: 6, localNetId: '127.0.0.1.1.1', devices: [{ netId: '127.0.0.1.1.1', ip: `127.0.0.1:${STOP}`, name: 'stopped' }, { netId: '127.0.0.1.1.1', ip: `127.0.0.1:${CONFIG}`, name: 'config' }, { netId: 'x; y', ip: '1' }] });
     const [s1, s2] = states.devices ?? [];

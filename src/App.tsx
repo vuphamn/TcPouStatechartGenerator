@@ -250,6 +250,7 @@ import {
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { type PlcInstancesResult, desktopLive } from './utils/liveHost.ts';
 import { ALL_PLC_CONTROLS, type PlcControlMode, type PlcControlResult, type PlcState } from './components/PlcControls.tsx';
+import type { PlcActionEntry } from './utils/plcActionLog.ts';
 
 // (the layout file: its POU's name, of a path or of the web edition's web:<name>; routes compared key by key; no look)
 const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB_LAYOUT_PREFIX, '');
@@ -1637,6 +1638,9 @@ export const App: React.FC = () => {
       route: m.route ?? prev.route,
       ports: state === 'error' ? m.ports : undefined,
       versions: state === 'connected' ? (m.twinCatBuild || m.xaeBuild ? { plc: m.twinCatBuild ?? null, xae: m.xaeBuild ?? null } : undefined) : prev.versions,
+      // (the gateway's user and PLCs: from its welcome, kept)
+      user: prev.user,
+      plcs: prev.plcs,
     }));
   }, []);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
@@ -5452,6 +5456,8 @@ export const App: React.FC = () => {
   const gatewayFeaturesRef = useRef(gatewayFeatures);
   gatewayFeaturesRef.current = gatewayFeatures;
   const gatewayRequestRef = useRef<<T>(message: Record<string, unknown>, replyType: string) => Promise<T>>(() => Promise.reject(new Error('Not connected')));
+  // (a token tried once each: a gateway blocks an address after 10 failed attempts in a minute)
+  const gatewayTriedRef = useRef(new Set<string>());
   const gatewayConnection = useCallback(() => {
     gatewayRef.current ??= new GatewayConnection((m) => {
       if (m.type === 'liveStatus') handleLiveStatus(m);
@@ -6448,6 +6454,32 @@ export const App: React.FC = () => {
     [liveSettings.gateway, gatewayOrigin, gatewayToken, ssoUser, ssoHere, gatewayConnection]
   );
   gatewayRequestRef.current = gatewayRequest;
+  // The gateway signed in to as soon as its address and a token (or the company sign-in) are there, not only when going
+  // live: its PLCs listed (one chosen when it has only one), their states and what it offers shown before going live
+  const liveSettingsNow = useRef(liveSettings);
+  liveSettingsNow.current = liveSettings;
+  useEffect(() => {
+    if (liveMode !== 'web' || liveVia !== 'gateway') return;
+    const address = liveSettings.gateway || gatewayOrigin;
+    if (!address || (!gatewayToken && !ssoUser)) return;
+    const key = `${address}|${ssoUser ? `sso:${ssoUser}` : gatewayToken}`;
+    if (gatewayTriedRef.current.has(key)) return;
+    // (a moment after the last change: not each key typed)
+    const t = window.setTimeout(() => {
+      gatewayTriedRef.current.add(key);
+      gatewayConnection()
+        .connect(address, gatewayToken, !!ssoUser)
+        .then(({ user, plcs, features }) => {
+          setGatewayFeatures(features ?? []);
+          setLiveStatus((prev) => ({ ...prev, user, plcs, ...(prev.state === 'connected' || prev.state === 'connecting' ? {} : { message: `Signed in as ${user}: ${plcs.length === 1 ? plcs[0].name : `${plcs.length} PLCs`}` }) }));
+          const now = liveSettingsNow.current;
+          if (!plcs.some((x) => x.id === now.plc) && plcs.length === 1) handleLiveSettingsChange({ ...now, plc: plcs[0].id });
+        })
+        .catch((err: Error) => setLiveStatus((prev) => (prev.state === 'connected' || prev.state === 'connecting' ? prev : { ...prev, message: err.message })));
+    }, 1200);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode, liveVia, liveSettings.gateway, gatewayOrigin, gatewayToken, ssoUser]);
   // The replay's clock: 100 ms steps times the speed, until the end
   const replayPlaying = !!replay?.playing;
   useEffect(() => {
@@ -6963,6 +6995,19 @@ export const App: React.FC = () => {
     return (mode: PlcControlMode) => gatewayRequest<PlcControlResult>({ type: 'plcStartAt', plc, mode }, 'plcStartAtResult').catch((e: Error) => ({ state: null, ok: false, error: e.message }));
   }, [viaGatewayHere, liveSettings.plc, gatewayFeatures, gatewayRequest]);
   const gatewayPlcControlModes: PlcControlMode[] = gatewayFeatures.includes('plcStopAt') ? ALL_PLC_CONTROLS : [];
+  const handleGatewayPlcStates = useMemo(() => {
+    if (!viaGatewayHere || !gatewayFeatures.includes('plcStatesRefresh')) return undefined;
+    return (ids: string[]) => gatewayRequest<{ devices?: { id?: string; state?: PlcState }[] }>({ type: 'plcStates', plcs: ids }, 'plcStatesResult').then((r) => r.devices ?? []);
+  }, [viaGatewayHere, gatewayFeatures, gatewayRequest]);
+  const handleGatewayPlcHistory = useMemo(() => {
+    if (!viaGatewayHere || !liveSettings.plc || !gatewayFeatures.includes('plcHistory')) return undefined;
+    const plc = liveSettings.plc;
+    return () =>
+      gatewayRequest<{ entries?: PlcActionEntry[]; error?: string }>({ type: 'plcHistory', plc }, 'plcHistoryResult').then((r) => {
+        if (r.error) throw new Error(r.error);
+        return r.entries ?? [];
+      });
+  }, [viaGatewayHere, liveSettings.plc, gatewayFeatures, gatewayRequest]);
   const handleRefreshPlcStates = useMemo(() => {
     const localNetId = liveSettings.localNetId.trim() || undefined;
     const req = (devices: FoundPlc[]) => ({ requestId: Date.now() % 1e9, localNetId, devices: devices.map((d) => ({ netId: d.netId, ip: d.ip ?? '', name: d.name })) });
@@ -9312,6 +9357,8 @@ export const App: React.FC = () => {
             onGatewayPlcState={handleGatewayPlcState}
             onGatewayPlcControl={handleGatewayPlcControl}
             gatewayPlcControlModes={gatewayPlcControlModes}
+            onGatewayPlcStates={handleGatewayPlcStates}
+            onGatewayPlcHistory={handleGatewayPlcHistory}
             onRefreshPlcStates={handleRefreshPlcStates}
             onCheckConnection={handleCheckConnection}
             onCheckPlc={handleCheckPlc}

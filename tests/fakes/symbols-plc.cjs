@@ -122,7 +122,7 @@ const trialLicense = (hours) => { const t = (d) => d.toISOString().slice(0, 19);
 // (adsState: the PLC runtime's state, 5 Run by default, 6 Stop)
 function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = [], { sources = false, license = null, adsState } = {}) {
   const file = path.join(h.OUT, name);
-  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(adsState ? { adsState } : {}), ...(sources || license !== null ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}) } } : {}) }));
+  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(adsState !== undefined ? { adsState } : {}), ...(sources || license !== null ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}) } } : {}) }));
   return file;
 }
 

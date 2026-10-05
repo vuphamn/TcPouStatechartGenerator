@@ -1,8 +1,9 @@
 const h = require('../lib/harness.cjs');
-// Web edition through a gateway (allowWrite, the tester among writeUsers), not live: the chosen PLC's state in the Live
-// tab (read every few seconds); Stop PLC asked first, then stopped: its badge Stop, marked as changed (was Run); Start
-// PLC again. From PLC before going live: SM_TableManager has two instances there: which one before connecting; the
-// second picked: live on it
+// Web edition through a gateway (allowWrite, the tester among writeUsers), never live first: signed in as soon as the
+// token is there, its two PLCs listed with their states (All PLCs); one chosen there: its state (read every few
+// seconds); Stop PLC asked first, then stopped: its badge Stop, marked as changed (was Run); Start PLC again; its
+// History (the gateway's audit log): both, by the tester. From PLC before going live: SM_TableManager has two
+// instances there: which one before connecting; the second picked: live on it
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -22,7 +23,7 @@ const PLC = 48930;
   fs.writeFileSync(gwConfig, JSON.stringify({
     port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [h.APP_ORIGIN, h.APP_ORIGIN.replace('localhost', '127.0.0.1')],
     allowWrite: true, writeUsers: ['tester'],
-    plcs: [{ id: 'line', name: 'Line', netId: '127.0.0.1.1.1', ip: `127.0.0.1:${PLC}`, port: 851 }], tokens: [],
+    plcs: [{ id: 'line', name: 'Line', netId: '127.0.0.1.1.1', ip: `127.0.0.1:${PLC}`, port: 851 }, { id: 'line2', name: 'Line 2', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48927', port: 851 }], tokens: [],
   }, null, 1));
   const token = execFileSync(process.execPath, [path.join(h.REPO, 'gateway', 'gateway.cjs'), 'add-token', 'tester', '--config', gwConfig], { encoding: 'utf8' }).match(/\n\s+(\S+)\s*\n/)[1];
   const gwLog = h.out('gw-control-run.txt');
@@ -48,12 +49,15 @@ const PLC = 48930;
     await set('live-gateway-input', `http://localhost:${PORT}`);
     await set('live-token-input', token);
     await a.click('#live-guards-off').catch(() => {});
-    // Live once (its PLCs and what it offers known), then stopped
-    await a.click('#live-start-btn');
-    await a.waitForSelector('#live-stop-btn', { timeout: 20000 }).catch(() => {});
-    await sleep(1500);
-    await a.click('#live-stop-btn').catch(() => {});
-    const row = await a.waitForSelector('#live-gw-plc-state', { timeout: 15000 }).catch(() => null);
+    // Signed in, not live: its PLCs listed, each with its state (Line 2: nothing there)
+    await a.waitForSelector('#live-gw-overview .live-gw-overview-row[data-plc="line"] .live-plc-state', { timeout: 20000 }).catch(() => {});
+    await a.waitForSelector('#live-gw-overview .live-gw-overview-row[data-plc="line2"] .live-plc-state', { timeout: 15000 }).catch(() => {});
+    const overview = await a.$$eval('#live-gw-overview .live-gw-overview-row', (rows) => rows.map((r) => `${r.getAttribute('data-plc')}:${r.querySelector('.live-plc-state')?.getAttribute('data-state') ?? ''}`).join(' '));
+    const statusText = await a.$eval('#live-status', (e) => e.textContent).catch(() => '');
+    expect(overview === 'line:Run line2:error' && !!(await a.$('#live-start-btn')), `signed in, never live: all its PLCs (${overview}; "${statusText.trim().slice(0, 50)}")`);
+    // One chosen there
+    await a.click('#live-gw-overview .live-gw-overview-row[data-plc="line"]').catch(() => {});
+    const row =await a.waitForSelector('#live-gw-plc-state', { timeout: 15000 }).catch(() => null);
     const badge = () => a.$eval('#live-gw-plc-state', (e) => `${e.getAttribute('data-state')}|${e.getAttribute('data-changed') ?? ''}|${e.textContent}`).catch(() => '');
     const waitBadge = async (re, ms) => {
       let b = '';
@@ -78,6 +82,11 @@ const PLC = 48930;
     await a.click('#live-gw-plc-control-confirm').catch(() => {});
     const again = await waitBadge(/^Run\|/, 12000);
     expect(/^Run\|/.test(again), `started again: ${again}`);
+    // Its history: the gateway's audit log, newest first
+    await a.click('#live-gw-plc-history-btn').catch(() => {});
+    await a.waitForSelector('#live-gw-plc-history .plc-action-entry', { timeout: 10000 }).catch(() => {});
+    const past = await a.$$eval('#live-gw-plc-history .plc-action-entry', (els) => els.map((e) => `${e.getAttribute('data-mode')}:${e.getAttribute('data-ok')}:${e.textContent.includes('tester')}`).join(' '));
+    expect(past === 'plc:true:true stop:true:true', `its history: ${past}`);
 
     // From PLC before going live: which instance, before connecting
     await a.click('#live-open-from-plc-btn').catch(() => {});

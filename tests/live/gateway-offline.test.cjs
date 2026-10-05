@@ -41,6 +41,8 @@ async function gateway(port, write) {
 
 (async () => {
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), String(PLC), cfg], { stdio: 'ignore' });
+  // (a clean folder: its audit log only this run's)
+  fs.rmSync(path.join(h.OUT, 'gw-offline-test'), { recursive: true, force: true });
   await sleep(1000);
   let a = null;
   let b = null;
@@ -48,7 +50,7 @@ async function gateway(port, write) {
     a = await gateway(48932, true);
     const welcome = await a.reply('welcome');
     const f = welcome?.features ?? [];
-    expect(['instancesOffline', 'plcStatesRefresh', 'plcStartAt', 'plcStopAt'].every((x) => f.includes(x)), `the welcome says what it offers (${f.join(', ')})`);
+    expect(['instancesOffline', 'plcStatesRefresh', 'plcStartAt', 'plcStopAt', 'plcHistory'].every((x) => f.includes(x)), `the welcome says what it offers (${f.join(', ')})`);
     // Instances, not live
     const two = await a.ask({ type: 'liveInstances', requestId: 1, plc: 'line', typeName: 'SM_TableManager', stateVar: 'machineState' }, 'liveInstancesResult');
     expect((two?.instances ?? []).length === 2 && two.plcState === 'Run', `SM_TableManager's instances: ${two?.error ?? two?.instances?.join(', ')}`);
@@ -72,6 +74,12 @@ async function gateway(port, write) {
     await sleep(500);
     const audit = fs.readdirSync(a.dir).filter((x) => /^audit-.*\.jsonl$/.test(x)).map((x) => fs.readFileSync(path.join(a.dir, x), 'utf8')).join('');
     expect(['plc.stop', 'plc.start', 'plc.restart'].every((x) => audit.includes(`"${x}"`)), 'each in its audit log');
+    // Its history: from the audit log, newest first, with what each answered and who
+    const hist = await a.ask({ type: 'plcHistory', requestId: 10, plc: 'line' }, 'plcHistoryResult');
+    const seen = (hist?.entries ?? []).map((e) => `${e.mode}:${e.ok}:${e.state}:${e.user}`);
+    expect(seen.join() === 'restart:true:Run:tester,plc:true:Run:tester,stop:true:Stop:tester', `its history: ${hist?.error ?? seen.join(' | ')}`);
+    const histNone = await a.ask({ type: 'plcHistory', requestId: 11, plc: 'nope' }, 'plcHistoryResult');
+    expect(/Choose one/.test(histNone?.error ?? ''), `a PLC it does not have: "${histNone?.error}"`);
     const logged = fs.readFileSync(a.out, 'utf8').match(/plc: tester [^\n]*/g) ?? [];
     expect(logged.some((l) => /stopped line: Stop/.test(l)) && logged.some((l) => /restarted line: Run/.test(l)), `logged: ${logged.join(' | ')}`);
     a.ws.close();

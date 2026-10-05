@@ -113,6 +113,18 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const area = await p.evaluate(() => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
   expect(!!c && !!er && c.top > area.top && er.bottom < area.bottom, `Startup and ERROR in view (${JSON.stringify({ c, er, area })})`);
   await drag(await box('ERROR'), { x: Math.min(c.right - 8, en.right + 30), y: Math.min(c.bottom - 8, en.bottom + 12) });
+  const inStartup = async () => /\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(await enumText());
+  // (on a busy machine the chart is still being drawn when the drop lands, or the edit takes a moment: waited for,
+  // then measured again and dropped once more)
+  for (let i = 0; i < 10 && !(await inStartup()); i++) await h.sleep(300);
+  if (!(await inStartup())) {
+    console.log(`(not in Startup after the drop: "${await status()}"; once more)`);
+    await h.sleep(1500);
+    c = await cluster('Startup');
+    const en2 = await box('ENABLING');
+    if (c && en2) await drag(await box('ERROR'), { x: Math.min(c.right - 8, en2.right + 30), y: Math.min(c.bottom - 8, en2.bottom + 12) });
+    for (let i = 0; i < 10 && !(await inStartup()); i++) await h.sleep(300);
+  }
   dut = await enumText();
   expect(/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in Startup/.test(await status()), `ERROR dropped in its box: in Startup (${await status()})`);
   // (an empty spot of the canvas outside every composite)

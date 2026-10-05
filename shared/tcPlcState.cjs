@@ -2,9 +2,12 @@
 // PLC's (port 851: Run, Stop, Invalid when it runs no program, or none there) and its project's name, read over a
 // connection of their own (this computer's TwinCAT router first, else straight with this computer's NetId; read-only).
 // One that does not answer: no route for this computer (or not reachable). Each within a few seconds, all at once.
+// Its TwinCAT trial license too, when it has one (license: { state: expired | soon | ok, expires }): a PLC that runs no
+// program because its trial ran out is told apart from one never started.
 const ads = require('./tcAds.cjs');
 const { systemClient } = require('./liveSession.cjs');
 const { readBootFile, projectInfoOf } = require('./tcSources.cjs');
+const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 
 const adsCode = (err) => err?.adsError?.errorCode ?? err?.parent?.adsError?.errorCode ?? null;
 const ADS_PORT_NOT_FOUND = 6;
@@ -29,7 +32,15 @@ async function describePlc(device, { plcPort = 851, localNetId, localAdsPort } =
     } catch {
       // (no project in its boot folder)
     }
-    return { system, plc, project };
+    let license = null;
+    try {
+      const trial = await readTrialLicense(c);
+      const st = licenseState(trial);
+      if (st) license = { state: st.state, expires: trial.expires };
+    } catch {
+      // (no trial license there)
+    }
+    return { system, plc, project, ...(license ? { license } : {}) };
   } catch (err) {
     return { error: /route/i.test(String(err?.message ?? '')) ? 'no route for this computer' : String(err?.message ?? err).slice(0, 160) };
   } finally {

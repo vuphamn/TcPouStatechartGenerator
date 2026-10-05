@@ -1,0 +1,46 @@
+name: Installer check
+
+# The desktop installer, built as the Release workflow builds it, run the way the app's Update now runs it quietly:
+# served as a stand-in release, found, downloaded and checked by shared/desktopUpdate.cjs, started with /S --force-run;
+# then the app must be installed and started again by the installer; finally it is uninstalled quietly
+# (scripts/installer-check.cjs). On a fresh runner only: it installs the app (shortcuts, registry entries).
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'electron/**'
+      - 'build/**'
+      - 'package.json'
+      - 'shared/desktopUpdate.cjs'
+      - 'shared/releases.cjs'
+      - 'scripts/prepare-installer.cjs'
+      - 'scripts/installer-check.cjs'
+      - '.github/workflows/installer-check.yml'
+  workflow_dispatch:
+
+jobs:
+  quiet-install:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix gateway
+      # The XAE extension (inside the installer); builds the web app too
+      - name: XAE extension (VSIX)
+        run: ./xae-extension/build.ps1
+      - name: Desktop installer
+        run: |
+          node scripts/prepare-installer.cjs
+          npx electron-builder --win nsis --publish never
+      - name: Quiet install, started again, uninstalled
+        run: node scripts/installer-check.cjs

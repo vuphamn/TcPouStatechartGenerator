@@ -549,7 +549,7 @@ function start() {
     // (what this gateway offers its pages, by its settings)
     const features = () => {
       const browse = config.allowBrowse !== false;
-      return ['appInfo', ...(browse ? ['deviceInfo', 'instancesOffline', 'plcStatesRefresh'] : []), ...(browse && config.allowSources !== false ? ['sourcesOffline'] : []), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart', 'plcStartAt', 'plcStopAt'] : [])];
+      return ['appInfo', ...(browse ? ['deviceInfo', 'instancesOffline', 'plcStatesRefresh'] : []), ...(browse && config.allowSources !== false ? ['sourcesOffline'] : []), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart', 'plcStartAt', 'plcStopAt', 'plcHistory'] : [])];
     };
 
     const stopSession = async () => {
@@ -639,11 +639,27 @@ function start() {
         const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
         const mode = ['plc', 'stop', 'restart', 'run'].includes(m.mode) ? m.mode : null;
         if (!plc || !mode) return send({ type: 'plcStartAtResult', requestId, state: null, ok: false, error: !plc ? 'Choose one of the gateway\'s PLCs' : 'Start, stop, restart or Run mode?' });
-        audit.add(user, `plc.${mode === 'plc' ? 'start' : mode}`, { plc: plc.id, live: false });
         return void startAt((r) => {
+          // (in the audit log with what it answered: the Live tab's history of this PLC)
+          audit.add(user, `plc.${mode === 'plc' ? 'start' : mode}`, { plc: plc.id, live: false, ok: r.ok, state: r.state ?? null, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}) });
           log(`plc: ${user} ${{ plc: 'started', stop: 'stopped', restart: 'restarted', run: 'set Run mode on' }[mode]} ${plc.id}: ${r.ok ? r.state : r.error}`);
           send(r);
         }, { requestId, connection: ownConnection(plc), mode });
+      }
+      // What was done to one of its PLCs (started, stopped, restarted, Run mode; live or not): from its audit log, the
+      // last 20, for the users who may see its states (allowWrite: the actions exist only then)
+      if (m.type === 'plcHistory') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+        if (config.allowWrite !== true) return send({ type: 'plcHistoryResult', requestId, error: 'Starting and stopping PLCs is turned off on this gateway (allowWrite)' });
+        if (!plc) return send({ type: 'plcHistoryResult', requestId, error: 'Choose one of the gateway\'s PLCs' });
+        const modes = { 'plc.start': 'plc', 'plc.stop': 'stop', 'plc.restart': 'restart', 'plc.run': 'run' };
+        const entries = audit
+          .search({ from: Date.now() - 90 * 86400000, q: `"plc":"${plc.id}"`, limit: 200 })
+          .filter((e) => modes[e.action] && e.plc === plc.id)
+          .slice(0, 20)
+          .map((e) => ({ t: e.t, netId: plc.netId, name: plc.name, mode: modes[e.action], ok: e.ok !== false, state: e.state ?? null, ...(e.error ? { error: e.error } : {}), user: e.user, ...(e.live === false ? {} : { live: true }) }));
+        return send({ type: 'plcHistoryResult', requestId, entries });
       }
 
       // Operator board: the machines of these PLCs (default: all), once a second
@@ -775,8 +791,9 @@ function start() {
         const writers = Array.isArray(config.writeUsers) ? config.writeUsers.map((u) => String(u).toLowerCase()) : null;
         if (config.allowWrite !== true || (writers && !writers.includes(String(user ?? '').toLowerCase()))) return send({ type: 'plcStartResult', requestId, state: null, ok: false, error: config.allowWrite !== true ? 'Writing to the PLC is turned off on this gateway (allowWrite)' : `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)` });
         if (!session?.conn.client) return send({ type: 'plcStartResult', requestId, state: null, ok: false, error: 'Not connected' });
-        audit.add(user, 'plc.start', { plc: session.conn.plc.id });
+        const plcId = session.conn.plc.id;
         const r = await startPlc(session.conn.client);
+        audit.add(user, 'plc.start', { plc: plcId, ok: r.ok, state: r.state ?? null, ...(r.error ? { error: String(r.error).slice(0, 200) } : {}) });
         log(`plc: ${user} started ${session.conn.plc.id}: ${r.ok ? 'Run' : r.error}`);
         return send({ type: 'plcStartResult', requestId, ...r });
       }

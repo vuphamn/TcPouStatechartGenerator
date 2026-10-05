@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
 import { firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
-import { ALL_PLC_CONTROLS, PlcActionButtons, PlcActionConfirm, PlcStateBadge, plcActionDone, plcActions, plcStateText, stateChanges, type PlcControlMode, type PlcControlResult } from './PlcControls.tsx';
+import { ALL_PLC_CONTROLS, PlcActionButtons, PlcActionConfirm, PlcActionHistory, PlcStateBadge, RenewLicenseSteps, needsRenew, plcActionDone, plcActions, plcStateText, stateChanges, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
+import { addPlcAction, loadPlcActions, type PlcActionEntry } from '../utils/plcActionLog.ts';
 
 export interface PickedPlc {
   name: string;
@@ -179,17 +180,29 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   resultRef.current = result;
   const refreshingRef = useRef(false);
   const [changed, setChanged] = useState<Record<string, { from: string; at: number }>>({});
+  // (the remembered ones too, by their NetId: each with its state, as on the network)
+  const [rememberedStates, setRememberedStates] = useState<Record<string, PlcState>>({});
+  const rememberedStatesRef = useRef(rememberedStates);
+  rememberedStatesRef.current = rememberedStates;
+  const rememberedRef = useRef(remembered);
+  rememberedRef.current = remembered;
   const refreshNow = useCallback(() => {
-    const devices = (resultRef.current?.devices ?? []).filter((d) => d.state && d.ip && d.source !== 'project');
+    const found = (resultRef.current?.devices ?? []).filter((d) => d.state && d.ip && d.source !== 'project');
+    const known = new Set(found.map((d) => d.netId));
+    const kept = rememberedRef.current.filter((p) => !known.has(p.netId)).map((p): FoundPlc => ({ netId: p.netId, ip: p.ip ?? '', name: p.name, twincat: '', os: '', fingerprint: '' } as FoundPlc));
+    const devices = [...found, ...kept];
     if (!refreshStates || refreshingRef.current || !devices.length) return;
     refreshingRef.current = true;
-    const before = new Map(devices.map((d) => [d.netId, plcStateText(d.state!)]));
+    const before = new Map<string, string>();
+    for (const d of found) before.set(d.netId, plcStateText(d.state!));
+    for (const [netId, st] of Object.entries(rememberedStatesRef.current)) if (!before.has(netId)) before.set(netId, plcStateText(st));
     void refreshStates(devices)
       .then((list) => {
-        const states = new Map(list.filter((d) => d.state).map((d) => [d.netId, d.state]));
+        const states = new Map(list.filter((d) => d.state).map((d) => [d.netId, d.state!]));
         const now = stateChanges(before, [...states.entries()], Date.now());
         if (Object.keys(now).length) setChanged((c) => ({ ...c, ...now }));
         setResult((r) => (r ? { ...r, devices: r.devices.map((d) => (states.has(d.netId) ? { ...d, state: states.get(d.netId) } : d)) } : r));
+        setRememberedStates(Object.fromEntries(states));
       })
       .catch(() => {})
       .finally(() => {
@@ -198,6 +211,8 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   }, [refreshStates]);
   useEffect(() => {
     if (!refreshStates) return;
+    // (the remembered ones at once, then all every few seconds)
+    refreshNow();
     const t = setInterval(refreshNow, PLC_STATES_REFRESH_MS);
     return () => clearInterval(t);
   }, [refreshStates, refreshNow]);
@@ -215,12 +230,25 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   const [startBusy, setStartBusy] = useState(false);
   const [startResult, setStartResult] = useState<{ netId: string; ok: boolean; text: string } | null>(null);
   const [xaeText, setXaeText] = useState<{ netId: string; text: string } | null>(null);
+  // Renew license (its trial ran out): the steps under its row; History: what was done from here
+  const [renewFor, setRenewFor] = useState<string | null>(null);
+  const [history, setHistory] = useState<PlcActionEntry[] | null>(null);
+  const renewButton = (netId: string, st: PlcState | undefined) =>
+    needsRenew(st) ? (
+      <button className="live-plc-renew shrink-0 ml-1 px-1.5 rounded border border-rose-800 text-[10px] text-rose-300 hover:bg-slate-800" data-netid={netId} onClick={() => setRenewFor(renewFor === netId ? null : netId)} aria-expanded={renewFor === netId} title="Its TwinCAT trial license ran out (or runs out soon): how to renew it">
+        Renew license
+      </button>
+    ) : null;
+  const renewSteps = (netId: string, st: PlcState | undefined) =>
+    renewFor === netId && needsRenew(st) ? <RenewLicenseSteps idPrefix="live-plc-renew" openXae={openXae} onRecheck={refreshNow} className="ml-2 mr-1 my-1 p-1.5 rounded border border-rose-900 bg-slate-900 space-y-1 text-slate-300" /> : null;
   const doStart = (d: FoundPlc, how: PlcControlMode) => {
     if (!startPlc) return;
     setStartBusy(true);
     setStartResult(null);
     void startPlc(d, how)
       .then((r) => {
+        const list = addPlcAction({ t: Date.now(), netId: d.netId, name: d.name || d.netId, mode: how, ok: r.ok, state: r.state, ...(r.error ? { error: r.error } : {}) });
+        if (history) setHistory(list);
         setStartResult({ netId: d.netId, ok: r.ok, text: plcActionDone(how, r, d.name || d.netId) });
         if (r.ok) setStartFor(null);
       })
@@ -250,6 +278,11 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
       <div className="flex items-center gap-2 px-2 py-1 border-b border-slate-800">
         <span className="font-semibold text-slate-300">PLCs</span>
         <span className="flex-1" />
+        {startPlc && (
+          <button id="live-plc-history-btn" onClick={() => setHistory(history ? null : loadPlcActions())} aria-expanded={!!history} className="px-1.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800" title="What was started, stopped or restarted from here">
+            History
+          </button>
+        )}
         {scan && (
           <button id="live-plc-rescan" onClick={run} disabled={scanning} className="flex items-center gap-1 px-1.5 rounded text-slate-300 hover:bg-slate-800 disabled:opacity-50" title="Search the network again">
             <RefreshCw className="w-3 h-3" /> Search again
@@ -259,6 +292,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
           <X className="w-3 h-3" />
         </button>
       </div>
+      {history && <PlcActionHistory id="live-plc-history" entries={history} />}
       <div className="max-h-64 overflow-y-auto p-1 space-y-1">
         {remembered.length > 0 && (
           <div>
@@ -308,6 +342,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                     <span className="truncate text-slate-200">{p.name}</span>
                     <span className="ml-auto shrink-0 font-mono text-slate-400">{p.netId}{p.port ? `:${p.port}` : ''}</span>
                     {p.ip && <span className="shrink-0 font-mono text-slate-500">{p.ip}</span>}
+                    <PlcStateBadge state={rememberedStates[p.netId]} changed={changed[p.netId]} />
                     {(p.twincat || p.seen) && (
                       <span className="live-plc-remembered-seen shrink-0 text-[10px] text-slate-500" title={[p.twincat && `TwinCAT ${p.twincat}`, p.os, p.seen && `last found ${new Date(p.seen).toLocaleString()}`].filter(Boolean).join(', ')}>
                         {p.twincat ? `TC ${p.twincat}` : ''}{p.twincat && p.seen ? ' · ' : ''}{p.seen ? `seen ${new Date(p.seen).toLocaleDateString() === new Date().toLocaleDateString() ? new Date(p.seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date(p.seen).toLocaleDateString()}` : ''}
@@ -323,9 +358,11 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                 <button className="live-plc-forget shrink-0 p-0.5 ml-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800" onClick={() => onForget(p.netId)} title="Forget this PLC">
                   <X className="w-3 h-3" />
                 </button>
+                {renewButton(p.netId, rememberedStates[p.netId])}
                 {checkMark(p.netId)}
               </div>
             ))}
+            {remembered.map((p) => <React.Fragment key={`renew-${p.netId}`}>{renewSteps(p.netId, rememberedStates[p.netId])}</React.Fragment>)}
           </div>
         )}
         {scan && (
@@ -378,7 +415,8 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                         }}
                       />
                     )}
-                    {openXae && d.state?.plc === 'Invalid' && d.state.system !== 'Config' && (
+                    {renewButton(d.netId, d.state)}
+                    {openXae && d.state?.plc === 'Invalid' && d.state.system !== 'Config' && !needsRenew(d.state) && (
                       <button
                         className="live-plc-open-xae shrink-0 ml-1 px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
                         data-netid={d.netId}
@@ -400,6 +438,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                     )}
                   </div>
                   {xaeText?.netId === d.netId && <div className="live-plc-xae-result ml-2 my-0.5 text-slate-400">{xaeText.text}</div>}
+                  {renewSteps(d.netId, d.state)}
                   {startFor?.netId === d.netId && (
                     <PlcActionConfirm idPrefix="live-plc-start" mode={startFor.mode} name={d.name || d.netId} busy={startBusy} onConfirm={() => doStart(d, startFor.mode)} onCancel={() => setStartFor(null)} />
                   )}

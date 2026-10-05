@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
-import { GatewayPlcState, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
+import { GatewayPlcOverview, GatewayPlcState, RenewLicenseSteps, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
+import type { PlcActionEntry } from '../utils/plcActionLog.ts';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
 import { checkAsText, firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
@@ -160,6 +161,10 @@ interface LivePanelProps {
   /** The gateway's PLC chosen, not live: its state (read every few seconds) and what can be done to it */
   onGatewayPlcState?: () => Promise<{ state?: PlcState; name?: string } | undefined>;
   onGatewayPlcControl?: (mode: PlcControlMode) => Promise<PlcControlResult>;
+  /** The gateway's PLCs' states (its overview, while not live) */
+  onGatewayPlcStates?: (ids: string[]) => Promise<{ id?: string; state?: PlcState }[]>;
+  /** What was done to the chosen gateway PLC (its audit log) */
+  onGatewayPlcHistory?: () => Promise<PlcActionEntry[]>;
   gatewayPlcControlModes?: PlcControlMode[];
   /** Browse: the found PLCs' states again (while it is open) */
   onRefreshPlcStates?: (devices: FoundPlc[]) => Promise<FoundPlc[]>;
@@ -322,6 +327,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   plcControlModes,
   onGatewayPlcState,
   onGatewayPlcControl,
+  onGatewayPlcStates,
+  onGatewayPlcHistory,
   gatewayPlcControlModes,
   onRefreshPlcStates,
   onCheckConnection,
@@ -398,7 +405,6 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   useEffect(() => {
     if (status.plcState === 'Run' && startPlc?.phase !== 'done') setStartPlc(null);
   }, [status.plcState, startPlc?.phase]);
-  const [xaeOpened, setXaeOpened] = useState('');
   // The connection check: running (no result yet) or its steps
   const [checking, setChecking] = useState<{ result: CheckResult | null } | null>(null);
   const [checkCopied, setCheckCopied] = useState('');
@@ -919,7 +925,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               {onGatewayPlcState && settings.plc && !running && (
                 <>
                   <span className="text-slate-400">State</span>
-                  <GatewayPlcState key={settings.plc} name={status.plcs?.find((p) => p.id === settings.plc)?.name ?? settings.plc} read={onGatewayPlcState} control={onGatewayPlcControl} modes={gatewayPlcControlModes ?? []} />
+                  <GatewayPlcState key={settings.plc} name={status.plcs?.find((p) => p.id === settings.plc)?.name ?? settings.plc} read={onGatewayPlcState} control={onGatewayPlcControl} modes={gatewayPlcControlModes ?? []} history={onGatewayPlcHistory} />
+                </>
+              )}
+              {onGatewayPlcStates && (status.plcs?.length ?? 0) > 1 && !running && (
+                <>
+                  <span className="text-slate-400">All PLCs</span>
+                  <GatewayPlcOverview plcs={status.plcs!} chosen={settings.plc} read={onGatewayPlcStates} onChoose={(id) => onSettingsChange({ ...settings, plc: id })} />
                 </>
               )}
               {boardUrl && (
@@ -1047,28 +1059,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             <button type="button" id="live-license-renew" onClick={() => setRenewing((r) => !r)} className="underline hover:text-white" aria-expanded={renewing}>
               {renewing ? 'Hide' : 'Renew…'}
             </button>
-            {renewing && (
-              <div id="live-license-steps" className="mt-1 space-y-1 text-slate-300">
-                <ol className="list-decimal pl-4 space-y-0.5">
-                  <li>In TwinCAT XAE, with this PLC chosen as the target: Solution Explorer › <b>SYSTEM › License</b>.</li>
-                  <li><b>7 Days Trial License…</b>, and type the characters it shows (TwinCAT asks a person, so MachineScope cannot do it).</li>
-                  <li>Activate the configuration, or restart TwinCAT on the target, so the PLC takes the new license.</li>
-                </ol>
-                <div className="flex items-center gap-2">
-                  {onOpenXae && (
-                    <button type="button" id="live-license-open-xae" onClick={() => void onOpenXae().then((r) => setXaeOpened(r.message))} className="px-1.5 rounded border border-slate-600 hover:bg-slate-800">
-                      Open XAE
-                    </button>
-                  )}
-                  {onRecheckLicense && (
-                    <button type="button" id="live-license-recheck" onClick={onRecheckLicense} className="px-1.5 rounded border border-slate-600 hover:bg-slate-800" title="Read the PLC's license again">
-                      Check again
-                    </button>
-                  )}
-                  {xaeOpened && <span id="live-license-xae">{xaeOpened}</span>}
-                </div>
-              </div>
-            )}
+            {renewing && <RenewLicenseSteps idPrefix="live-license" openXae={onOpenXae} onRecheck={onRecheckLicense} />}
           </div>
         )}
         {checking && !running && (

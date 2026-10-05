@@ -19,7 +19,7 @@ export interface FoundPlc {
    * As going live would see it (desktop, Link): TwinCAT's state, its PLC's (port 851: Run, Stop, Invalid when it runs
    * no program, "none" when there is none), its project's name; or why it did not answer (no route for this computer)
    */
-  state?: { system?: string; plc?: string | null; project?: string | null; error?: string };
+  state?: { system?: string; plc?: string | null; project?: string | null; error?: string; license?: { state: 'expired' | 'soon' | 'ok'; expires: string } };
 }
 
 export interface PlcScanResult {

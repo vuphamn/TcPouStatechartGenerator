@@ -2,7 +2,7 @@
 // What a PLC's state offers (Browse, the gateway's PLC): Config: Run mode; stopped: Start; running: Stop, Restart; no
 // program, no answer: nothing; only what is allowed (an older Link: start and Run mode). Its badge's text; the states
 // that changed when read again; a remembered PLC that ran and does not now (stopped, or gone), for its notification
-import { ALL_PLC_CONTROLS, plcActionDone, plcActionQuestion, plcActions, plcStateText, stateChanges, type PlcState } from '../../src/components/PlcControls.tsx';
+import { ALL_PLC_CONTROLS, needsRenew, plcActionDone, plcActionQuestion, plcActions, plcStateText, stateChanges, type PlcState } from '../../src/components/PlcControls.tsx';
 import { checkRuns } from '../../src/components/PlcBrowser.tsx';
 import type { CheckResult } from '../../src/utils/connectionCheck.ts';
 
@@ -23,6 +23,10 @@ expect(plcActions(run, ['plc', 'run']).length === 0 && plcActions(stop, ['plc', 
 expect(plcActions(run, []).length === 0, 'nothing allowed: nothing');
 
 expect([run, stop, config, invalid, gone, { system: 'Run', plc: 'none' } as PlcState].map(plcStateText).join() === 'Run,Stop,Config,no program,no route,no PLC', 'the badges\' texts');
+const ranOut: PlcState = { system: 'Run', plc: 'Invalid', license: { state: 'expired', expires: '2026-01-01T00:00:00Z' } };
+const soon: PlcState = { system: 'Run', plc: 'Run', license: { state: 'soon', expires: '2026-01-01T00:00:00Z' } };
+expect(plcStateText(ranOut) === 'license ran out' && plcStateText(soon) === 'Run', 'no program, its license ran out: said so');
+expect(needsRenew(ranOut) && needsRenew(soon) && !needsRenew(run) && !needsRenew(gone) && !needsRenew({ ...run, license: { state: 'ok', expires: 'x' } }), 'Renew license: ran out, or soon');
 expect(/Stop the PLC on Line\?/.test(plcActionQuestion('stop', 'Line')) && /Run mode\?/.test(plcActionQuestion('run', 'Line')) && /initial values/.test(plcActionQuestion('restart', 'Line')), 'each asked in its own words');
 expect(plcActionDone('stop', { ok: true, state: 'Stop' }, 'Line') === 'Its PLC is stopped (Stop)' && plcActionDone('restart', { ok: false, state: 'Error', error: 'x' }, 'Line') === 'Not restarted (Error): x', 'what it answered, in words');
 

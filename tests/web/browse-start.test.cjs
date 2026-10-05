@@ -88,6 +88,11 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-brows
     await a.waitForFunction(() => /restarted/.test(document.getElementById('live-plc-start-result')?.textContent ?? ''), { timeout: 15000 }).catch(() => {});
     const restarted = await a.$eval('#live-plc-start-result', (e) => e.textContent).catch(() => '');
     expect(/Restart the PLC on CX-203\? Its variables go back/.test(askedRestart) && /restarted and runs/.test(restarted), `Restart: asked, then "${restarted}"`);
+    // History: what was done from here, newest first (kept in this browser)
+    await a.click('#live-plc-history-btn').catch(() => {});
+    const past = await a.$$eval('#live-plc-history .plc-action-entry', (els) => els.map((e) => `${e.getAttribute('data-mode')}:${e.getAttribute('data-ok')}`).join(' ')).catch(() => '');
+    const pastText = await a.$eval('#live-plc-history', (e) => e.textContent).catch(() => '');
+    expect(past === 'restart:true plc:true plc:true' && /CX-203/.test(pastText), `History: ${past}`);
     // Go live from its row: its Target set, and live
     await a.click('.live-plc-go-live[data-netid="127.0.0.2.1.1"]').catch(() => {});
     await a.waitForSelector('#live-stop-btn', { timeout: 20000 }).catch(() => {});
