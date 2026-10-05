@@ -98,6 +98,7 @@ The gateway follows the state machines of a PLC by itself, with no browser open,
 - **stuck:** a machine is longer in a state than the rule's limit (**Stuck after**, or a limit per state name);
 - **error:** a machine goes into a state whose name matches the error pattern (default `ERROR|FAULT|ALARM|E_?STOP|ABORT`);
 - **recovered:** a stuck machine, or one in an error state, leaves that state (unless turned off).
+- **plcStopped:** the PLC itself stops running (Stop, no program) or stops answering, after it was running: one alert (*"⏹️ the PLC is stopped (it was running)"*), then **recovered** when it runs again. On by default (`"onPlcStop": false` turns it off; the setup page: **The PLC**). Its machine is `PLC`, its state the PLC's ADS state (read every 2 s).
 
 There is one message per machine and kind per stay; a machine that goes in and out of an error again sends at most one error message every 5 minutes. The machines are found like the Machine Overview finds them: every member under the root (`MAIN.mainStateMachine` by default) that has the state variable, with state names from the PLC's enum types. The monitor shares the PLC's ADS connection with the viewers, and connects again after a lost connection.
 
@@ -114,7 +115,7 @@ Set the rules up on the setup page (**Alerts**), or in `config.json`:
 ```
 - **Teams:** a channel's *Workflows* ("Post to a channel when a webhook request is received"), or an *Incoming Webhook* connector; `"format": "teams"` sends `{ "text": ... }`.
 - **Slack:** an incoming webhook; `"format": "slack"`.
-- **`"format": "json"`:** the event as JSON, for your own service: `event` (stuck, error, recovered), `plc`, `plcName`, `machine`, `type`, `state`, `value`, `since`, `durationMs`, `text`, `at`.
+- **`"format": "json"`:** the event as JSON, for your own service: `event` (stuck, error, recovered, plcStopped), `plc`, `plcName`, `machine`, `type`, `state`, `value`, `since`, `durationMs`, `text`, `at`.
 
 The time in state counts from when the gateway first saw the machine in it (after a restart, from then).
 
@@ -140,6 +141,7 @@ Per shift (`"shifts": [{ "name": "Early", "from": "06:00", "to": "14:00" }, { "n
 ## Operator board
 
 A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/?board`. The Live tab links to it (**Operator board**) when it goes through a gateway.
+- **Each PLC's state** beside its name: **PLC runs** in green, or in amber **PLC: Stop**, **PLC: no program**… (its machines then keep their last states).
 - **One tile per state machine** of the gateway's PLCs. Green is normal, amber is stuck (longer in a state than its limit), red is an error state; problems come first. Each tile shows the machine, its state and its time in state ("≥" when it was already in that state when the gateway began watching). The header counts the machines, the errors and the stuck ones, and has a clock.
 - **The alerts panel** lists the alert history, newest first, with **Acknowledge** on the open ones. The bell hides it and counts the open ones.
 - **A new alert** chimes (error: three times, stuck: once, escalated: its own tone) and its machine's tile flashes until the alert is acknowledged or resolved (at most a minute); the header flashes too. The speaker button turns the sound off and on (kept in that browser; `&sound=0` starts with it off). Browsers play sound only after the page was clicked or tapped once: until then the board says "tap once to enable sound".

@@ -153,6 +153,13 @@ function handle(sock, f) {
     if (target.port !== 10000) return result(6);
     if (cmd === 4) { const st = Buffer.alloc(4); st.writeUInt16LE(15, 0); return result(0, st); }
   }
+  // (Reset to its system service while running: TwinCAT restarts; its boot project starts (config.afterRestart: the
+  // PLC's state then, default Run))
+  if (target.port === 10000 && cmd === 5 && d.readUInt16LE(0) === 2) {
+    config.adsState = config.afterRestart ?? 5;
+    log('write control: TwinCAT restarted');
+    return result(0);
+  }
   switch (cmd) {
     case 1: {
       const b = Buffer.alloc(20);

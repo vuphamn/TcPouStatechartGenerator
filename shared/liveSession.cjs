@@ -198,7 +198,17 @@ async function startAt(send, req) {
         state = await c.readState().then((s) => ads.ADS_STATES[s.adsState] ?? 'unknown').catch(() => null);
         if (state === 'Run') break;
       }
-      return send({ type: 'plcStartAtResult', requestId, ok: state === 'Run', state, ...(state === 'Run' ? {} : { error: `TwinCAT is in ${state ?? 'no answer'} after the restart: look at its messages there (its license, its configuration)` }) });
+      if (state !== 'Run') return send({ type: 'plcStartAtResult', requestId, ok: false, state, error: `TwinCAT is in ${state ?? 'no answer'} after the restart: look at its messages there (its license, its configuration)` });
+      // (then its PLC: running once its boot project is loaded, when it starts on its own; else said as it is)
+      const netId = String(req?.connection?.netId ?? '');
+      const plcPort = Number(req?.connection?.port) || 851;
+      let plc = null;
+      for (const until = Date.now() + Math.min(15000, timeoutMs); Date.now() < until; ) {
+        plc = await c.readState({ amsNetId: netId, adsPort: plcPort }).then((s) => ads.ADS_STATES[s.adsState] ?? 'unknown').catch(() => 'none');
+        if (plc === 'Run') break;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return send({ type: 'plcStartAtResult', requestId, ok: true, state, plc });
     }
     c = await systemClient(req?.connection, Number(req?.connection?.port) || 851);
     const how = req?.mode === 'stop' ? stopPlc : req?.mode === 'restart' ? restartPlc : startPlc;

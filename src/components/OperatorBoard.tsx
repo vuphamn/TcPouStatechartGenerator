@@ -50,6 +50,8 @@ interface BoardPlc {
   name: string;
   state: string;
   message: string;
+  /** Its PLC's ADS state (Run, Stop, Invalid: no program …); null while the gateway is not connected to it */
+  plcState?: string | null;
   machines: BoardMachine[];
   maintenance?: Maintenance | null;
   /** Planned maintenance windows (not started yet) */
@@ -58,7 +60,7 @@ interface BoardPlc {
 
 export interface AlertEvent {
   id: string;
-  event: 'stuck' | 'error' | 'recovered' | 'slower';
+  event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped';
   plc: string;
   plcName: string;
   machine: string;
@@ -163,7 +165,7 @@ export const OperatorBoard: React.FC = () => {
     const escalated = !!was && !was.escalatedAt && !!e.escalatedAt && !e.ack;
     if (!isNew && !escalated) return;
     setFlashing((f) => ({ ...f, [e.machine.toLowerCase()]: Date.now() + 60000 }));
-    if (soundRef.current && canPlay()) playAlert(escalated ? 'escalated' : e.event === 'error' ? 'error' : 'stuck');
+    if (soundRef.current && canPlay()) playAlert(escalated ? 'escalated' : e.event === 'error' || e.event === 'plcStopped' ? 'error' : 'stuck');
   };
 
   useEffect(() => {
@@ -447,9 +449,15 @@ export const OperatorBoard: React.FC = () => {
           <main className={`flex-1 min-w-0 overflow-y-auto ${narrow ? 'p-2 space-y-3' : 'p-4 space-y-5'}`}>
             {status.state === 'error' && <div className="px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{status.message}</div>}
             {tiles.map((p) => (
-              <section key={p.id} className="board-plc" data-plc={p.id}>
+              <section key={p.id} className="board-plc" data-plc={p.id} data-plc-state={p.plcState ?? ''}>
                 <h2 className="flex items-center gap-3 mb-2">
                   <span className="text-xl font-semibold">{p.name}</span>
+                  {/* (its PLC: green when it runs; amber, and said, when it does not: the machines below are frozen) */}
+                  {p.plcState && (
+                    <span className={`board-plc-state px-2 py-0.5 rounded-full text-sm ${p.plcState === 'Run' ? 'bg-emerald-900/70 text-emerald-200' : 'bg-amber-700 text-amber-50'}`} title={p.plcState === 'Run' ? 'Its PLC runs' : 'Its PLC does not run: the machines below keep their last states'}>
+                      {p.plcState === 'Run' ? 'PLC runs' : p.plcState === 'Invalid' ? 'PLC: no program' : `PLC: ${p.plcState}`}
+                    </span>
+                  )}
                   <span className={`text-sm ${p.state === 'watching' ? 'text-emerald-400' : p.state === 'error' ? 'text-rose-400' : 'text-sky-400'}`}>{p.state === 'watching' ? '' : p.message || p.state}</span>
                   {p.maintenance ? (
                     <span className="board-maintenance ml-auto flex items-center gap-2 px-3 py-0.5 rounded-full bg-violet-800 text-violet-100 text-sm">
@@ -541,7 +549,7 @@ export const OperatorBoard: React.FC = () => {
                 {alerts.slice(0, 200).map((a) => {
                   const openOne = a.event !== 'recovered' && !a.ack && !a.resolvedAt;
                   return (
-                    <div key={a.id} className={`board-alert rounded border px-3 py-2 text-sm ${a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' ? 'border-rose-700 bg-rose-950/60' : a.event === 'slower' ? 'border-sky-700 bg-sky-950/50' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
+                    <div key={a.id} className={`board-alert rounded border px-3 py-2 text-sm ${a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' || a.event === 'plcStopped' ? 'border-rose-700 bg-rose-950/60' : a.event === 'slower' ? 'border-sky-700 bg-sky-950/50' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs text-slate-400">{new Date(a.at).toLocaleString()}</span>
                         {a.escalatedAt && !a.ack && <span className="board-escalated px-1.5 rounded bg-rose-600 text-[10px] font-bold uppercase text-white">escalated</span>}

@@ -139,9 +139,16 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const note = await page.evaluate((s) => !!document.getElementById(`note-overlay-${s}`) && !!document.querySelector(`#mermaid-diagram-svg-container svg g.node.has-diagram-note[data-state-id="${s}"]`), S);
   expect(note, 'its note on the canvas');
   if (lab && labelMoved) {
-    const labelAgain = await page.evaluate((from, to) => [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgeLabel')].find((l) => l.getAttribute('data-from') === from && l.getAttribute('data-to') === to)?.getAttribute('transform'), lab.from, lab.to);
     const xy = (tf) => (tf ?? '').match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
     const [a1, b1] = xy(labelMoved);
+    // (its move applied once the chart is drawn: later on a busy machine)
+    let labelAgain = null;
+    for (let i = 0; i < 40; i++) {
+      labelAgain = await page.evaluate((from, to) => [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.edgeLabel')].find((l) => l.getAttribute('data-from') === from && l.getAttribute('data-to') === to)?.getAttribute('transform'), lab.from, lab.to);
+      const [x, y] = xy(labelAgain);
+      if (Math.hypot(a1 - x, b1 - y) <= 2) break;
+      await sleep(250);
+    }
     const [a2, b2] = xy(labelAgain);
     expect(Math.hypot(a1 - a2, b1 - b2) <= 2, `its label where it was dragged to (${labelMoved} vs ${labelAgain})`);
   }

@@ -1,6 +1,8 @@
 // Alerts: the gateway follows the state machines of a PLC by itself (no browser needed) and posts to a webhook
 // (Teams, Slack, or any JSON endpoint) when one is stuck (longer in a state than its limit) or goes into an error
 // state, and when it recovers. Rules are in config.json "alerts" (the setup page edits them). Read-only on the PLC.
+// The PLC itself too (onPlcStop, on by default): it stops running (Stop, no program, its runtime gone: from its ADS
+// state, read every 2 s by its connection) or stops answering: one alert; running again: recovered.
 const ads = require(require('fs').existsSync(require('path').join(__dirname, 'shared', 'tcAds.cjs')) ? './shared/tcAds.cjs' : '../shared/tcAds.cjs');
 const { VarWatcher } = require(require('fs').existsSync(require('path').join(__dirname, 'shared', 'liveVars.cjs')) ? './shared/liveVars.cjs' : '../shared/liveVars.cjs');
 
@@ -106,7 +108,7 @@ function checkRule(r, i, plcIds) {
     throw new Error(`${where}: quiet hours: ${err.message}`);
   }
   return {
-    id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, stuckAfterMs, stateLimits,
+    id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, stuckAfterMs, stateLimits, onPlcStop: r?.onPlcStop !== false,
     onError: r?.onError !== false, errorPattern, notifyRecovery: r?.notifyRecovery !== false, webhook, format,
     escalateAfterMin, escalateWebhook, escalateFormat: ['teams', 'slack', 'json'].includes(r?.escalateFormat) ? r.escalateFormat : format, quietHours,
   };
@@ -146,7 +148,28 @@ class AlertMonitor {
     this.timer = null;
     this.retry = null;
     this.conn = null;
-    this.viewer = { send: () => {}, push: () => {}, lost: (message) => this.lost(message) };
+    this.viewer = { send: (m) => m?.type === 'liveStatus' && m.state === 'plcState' && this.plcState(m.plcState), push: () => {}, lost: (message) => this.lost(message) };
+    // The PLC itself, as one more thing followed (its ADS state; down: it stopped running or answering, alerted)
+    this.plc = { value: null, since: Date.now(), sent: {}, down: false };
+  }
+
+  /** The PLC, as alerts name it (its state names are its ADS states) */
+  plcMachine(value) {
+    return { path: 'PLC', type: 'PLC', stateNames: { [String(value)]: String(value) } };
+  }
+
+  /** Its ADS state changed: it stopped running (from Run), or runs again (after it was alerted) */
+  plcState(state) {
+    const was = this.plc.value;
+    this.plc = { ...this.plc, value: state, since: Date.now() };
+    if (this.rule.onPlcStop !== true) return;
+    if (was === 'Run' && state !== 'Run' && !this.plc.down) {
+      const why = state === 'Stop' ? 'is stopped' : state === 'Invalid' ? 'runs no program' : `is in ${state}`;
+      if (this.alert('plcStopped', this.plcMachine(state), this.plc, `⏹️ the PLC ${why} (it was running)`)) this.plc.down = true;
+    } else if (state === 'Run' && this.plc.down) {
+      this.plc.down = false;
+      if (this.rule.notifyRecovery) this.alert('recovered', this.plcMachine(state), this.plc, '✅ the PLC runs again');
+    }
   }
 
   status() {
@@ -179,6 +202,8 @@ class AlertMonitor {
         ...(this.rule.extraVars ?? []).map((p) => ({ id: `var:${p.toLowerCase()}`, candidates: [p] })),
       ]);
       this.timer = setInterval(() => this.tick(), 1000);
+      // (its PLC's state as connected: running again after it was lost or stopped: recovered)
+      this.plcState(conn.plcState);
       this.state = 'watching';
       this.message = `${this.machines.length} machine${this.machines.length === 1 ? '' : 's'} on ${plc.name}`;
       this.env.log(`alerts: "${this.rule.name}" watches ${this.machines.length} machine(s) under ${this.rule.root} on ${plc.id}`);
@@ -305,6 +330,11 @@ class AlertMonitor {
 
   lost(message) {
     if (this.stopped) return;
+    // (it was running and no longer answers: alerted once, until it runs again)
+    if (this.rule.onPlcStop === true && this.state === 'watching' && !this.plc.down) {
+      if (this.alert('plcStopped', this.plcMachine('no answer'), { ...this.plc, value: 'no answer', since: Date.now() }, `📵 the PLC stopped answering: ${message}`)) this.plc.down = true;
+      this.plc = { ...this.plc, value: null };
+    }
     this.state = 'error';
     this.message = message;
     this.cleanup();

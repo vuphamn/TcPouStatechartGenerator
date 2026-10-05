@@ -7003,7 +7003,7 @@ export const App: React.FC = () => {
     if (!viaGatewayHere || !liveSettings.plc || !gatewayFeatures.includes('plcHistory')) return undefined;
     const plc = liveSettings.plc;
     return () =>
-      gatewayRequest<{ entries?: PlcActionEntry[]; error?: string }>({ type: 'plcHistory', plc }, 'plcHistoryResult').then((r) => {
+      gatewayRequest<{ entries?: PlcActionEntry[]; error?: string }>({ type: 'plcHistory', plc, limit: 500 }, 'plcHistoryResult').then((r) => {
         if (r.error) throw new Error(r.error);
         return r.entries ?? [];
       });

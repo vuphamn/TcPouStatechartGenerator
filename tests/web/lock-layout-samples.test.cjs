@@ -20,25 +20,41 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     const special = /startNode|AnyState/;
     const rest = nodes.filter((n) => !special.test(n.id));
     return {
+      ids: nodes.map((n) => n.id).sort().join(),
       special: Object.fromEntries(nodes.filter((n) => special.test(n.id)).map((n) => [/startNode/.test(n.id) ? 'start' : 'any', Math.round(n.x)])),
       box: [Math.min(...rest.map((n) => n.x)), Math.max(...rest.map((n) => n.x))].map(Math.round),
     };
   });
+  // (the new chart drawn and settled: other states than the chart before, the same places three reads in a row; a
+  // busy machine draws it later)
+  let shown = await where();
+  const settled = async () => {
+    await h.sleep(1500);
+    let last = null;
+    let same = 0;
+    for (let i = 0; i < 60 && same < 2; i++) {
+      const w = await where();
+      const key = JSON.stringify(w);
+      same = w.ids !== shown.ids && key === last ? same + 1 : 0;
+      last = key;
+      if (same < 2) await h.sleep(400);
+    }
+    shown = await where();
+    return shown;
+  };
   const SAMPLES = ['door-dasher-237', 'k-servo-supply-manager', 'table-manager-202'];
   const free = {};
   for (const s of SAMPLES) {
     await p.select('#sample-selector', s);
-    await h.sleep(4000);
-    free[s] = await where();
+    free[s] = await settled();
   }
   await p.click('#lock-diagram-layout-toggle-btn');
   await h.sleep(500);
   for (const s of SAMPLES) {
     await p.select('#sample-selector', s);
-    await h.sleep(4000);
-    const w = await where();
+    const w = await settled();
     const near = (a, b) => a !== undefined && b !== undefined && Math.abs(a - b) <= 30;
-    expect(near(w.special.start, free[s].special.start) && (free[s].special.any === undefined || near(w.special.any, free[s].special.any)) && w.special.start >= w.box[0] - 200 && w.special.start <= w.box[1] + 200, `${s}, layout locked: the start symbol / AnyState in its own chart (${JSON.stringify(w)}; unlocked: ${JSON.stringify(free[s].special)})`);
+    expect(near(w.special.start, free[s].special.start) && (free[s].special.any === undefined || near(w.special.any, free[s].special.any)) && w.special.start >= w.box[0] - 200 && w.special.start <= w.box[1] + 200, `${s}, layout locked: the start symbol / AnyState in its own chart (${JSON.stringify({ special: w.special, box: w.box })}; unlocked: ${JSON.stringify(free[s].special)})`);
   }
   await p.click('#lock-diagram-layout-toggle-btn');
 

@@ -74,7 +74,7 @@ function client() {
   const machines = board?.plcs[0].machines ?? [];
   const door2 = machines.find((x) => x.path === `${R}.aDoors[2]`);
   const door1 = machines.find((x) => x.path === `${R}.aDoors[1]`);
-  expect(board?.plcs[0].name === 'Line 202' && typeof board.now === 'number', 'boardState: the PLC and the gateway\'s time');
+  expect(board?.plcs[0].name === 'Line 202' && typeof board.now === 'number' && board.plcs[0].plcState === 'Run', `boardState: the PLC, its state (${board?.plcs[0]?.plcState}) and the gateway's time`);
   expect(door2?.error === true && door2.state === 'DOOR_DASHER_ERROR' && door1?.state === 'DOOR_DASHER_DISABLED' && door1.limitMs === 2000 && machines.every((x) => typeof x.since === 'number'), `machines: ${machines.map((x) => `${x.path.replace(R, '')}=${x.state}${x.error ? '!' : ''}`).join(' ')}`);
   expect(!!(await a.wait((m) => m.type === 'alertsList')), 'alertsList answered');
   const errorAlert = await a.wait((m) => m.type === 'alertEvent' && m.event.event === 'error' && m.event.machine === `${R}.aDoors[2]`);
@@ -122,6 +122,8 @@ function client() {
     const tiles = await p.$$eval('.board-tile', (t) => t.map((x) => `${x.getAttribute('data-path').split('.').pop()}=${x.getAttribute('data-kind')}`));
     expect(tiles.length === 5 && tiles[0] === 'aDoors[2]=error', `tiles, problems first: ${tiles.join(' ')}`);
     expect(/Line 202/.test(await p.$eval('#board-title', (e) => e.textContent)) && /1 in error/.test(await p.$eval('#board-counts', (e) => e.textContent)), 'the title and the counts');
+    const plcBadge = await p.$eval('.board-plc[data-plc="line202"] .board-plc-state', (e) => e.textContent).catch(() => '');
+    expect(plcBadge === 'PLC runs', `its PLC's state beside its name: "${plcBadge}"`);
     const alertsShown = await p.$$eval('.board-alert', (a) => a.length);
     expect(alertsShown >= 3 && /operator/.test(await p.$eval('#board-alerts', (e) => e.innerText)), `the alerts panel: ${alertsShown}, with the acknowledgement`);
     // Acknowledge the open error alert there

@@ -647,7 +647,8 @@ function start() {
         }, { requestId, connection: ownConnection(plc), mode });
       }
       // What was done to one of its PLCs (started, stopped, restarted, Run mode; live or not): from its audit log, the
-      // last 20, for the users who may see its states (allowWrite: the actions exist only then)
+      // last 20 (limit: up to 500, for its CSV), for the users who may see its states (allowWrite: the actions exist
+      // only then)
       if (m.type === 'plcHistory') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
@@ -655,9 +656,9 @@ function start() {
         if (!plc) return send({ type: 'plcHistoryResult', requestId, error: 'Choose one of the gateway\'s PLCs' });
         const modes = { 'plc.start': 'plc', 'plc.stop': 'stop', 'plc.restart': 'restart', 'plc.run': 'run' };
         const entries = audit
-          .search({ from: Date.now() - 90 * 86400000, q: `"plc":"${plc.id}"`, limit: 200 })
+          .search({ from: Date.now() - 90 * 86400000, q: `"plc":"${plc.id}"`, limit: 2000 })
           .filter((e) => modes[e.action] && e.plc === plc.id)
-          .slice(0, 20)
+          .slice(0, Math.min(500, Math.max(1, Number(m.limit) || 20)))
           .map((e) => ({ t: e.t, netId: plc.netId, name: plc.name, mode: modes[e.action], ok: e.ok !== false, state: e.state ?? null, ...(e.error ? { error: e.error } : {}), user: e.user, ...(e.live === false ? {} : { live: true }) }));
         return send({ type: 'plcHistoryResult', requestId, entries });
       }

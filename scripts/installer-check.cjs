@@ -2,7 +2,8 @@
 // built in release/ run the way Update now runs it quietly. A stand-in for GitHub's releases serves it; the app's own
 // code (shared/desktopUpdate.cjs) finds it, downloads it, checks its SHA-256 and starts it with the quiet switches
 // (/S --force-run), as electron/main.cjs does. Then: the app is installed, and started again by the installer; finally
-// it is closed and uninstalled quietly. Exit code 0 when all of that holds.
+// it is closed and uninstalled quietly. Exit code 0 when all of that holds. Each check also in the run's summary
+// (GITHUB_STEP_SUMMARY), as a table.
 //   node scripts/installer-check.cjs [--keep]   (--keep: not uninstalled)
 const fs = require('fs');
 const os = require('os');
@@ -17,7 +18,14 @@ const product = pkg.build?.productName ?? 'Kval MachineScope';
 const exeName = `${product}.exe`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
-const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
+const checks = [];
+const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); checks.push([c, w]); if (!c) fails++; };
+// (the run's summary: each check and its outcome)
+const summary = (title) => {
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  const rows = checks.map(([c, w]) => `| ${c ? '✅' : '❌'} | ${String(w).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')} |`);
+  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [`### ${title}`, '', '| | Check |', '|---|---|', ...rows, '', `${fails} failures`, ''].join('\n'));
+};
 
 if (process.platform !== 'win32' || (!process.env.CI && !process.argv.includes('--yes'))) {
   console.error('This installs the app on this computer (shortcuts, registry entries): it runs on CI only (or with --yes)');
@@ -107,8 +115,12 @@ const installedExe = () => {
   }
   fs.rmSync(path.join(os.tmpdir(), `KvalMachineScope-Setup-${version}.exe`), { force: true });
   console.log(`${fails} failures`);
+  summary('Installer check: the quiet update');
   process.exit(fails ? 1 : 0);
 })().catch((e) => {
   console.error(e);
+  checks.push([false, `stopped: ${e?.message ?? e}`]);
+  fails++;
+  summary('Installer check: the quiet update');
   process.exit(2);
 });

@@ -93,8 +93,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   if (b?.title) await p.mouse.click(b.title.x, b.title.y, { button: 'right' });
   const collapse = await p.waitForSelector('#context-menu-composite-collapse-btn', { timeout: 3000 }).catch(() => null);
   expect(!!collapse, `its menu: Collapse to one box (${JSON.stringify(b?.title)}; ${await p.evaluate(() => [...document.querySelectorAll('[id^=context-menu-]')].map((e) => e.id).slice(0, 12).join(', '))})`);
-  if (collapse) await collapse.click();
-  await h.sleep(2500);
+  // (clicked in the page; then waited for: drawn again as one box, later on a busy machine)
+  if (collapse) await collapse.evaluate((el) => el.click());
+  for (let i = 0; i < 60 && !((await p.$(`#mermaid-canvas-area g.node[data-state-id="${inner}"]`)) && !(await box(inner))); i++) await h.sleep(200);
+  await h.sleep(500);
   const node = await p.$(`#mermaid-canvas-area g.node[data-state-id="${inner}"]`);
   expect(!!node && !(await box(inner)), `collapsed: one box ${inner}, no composite drawn`);
   if (node) {

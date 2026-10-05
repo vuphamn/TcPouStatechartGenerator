@@ -65,6 +65,9 @@ fs.writeFileSync(configCfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(confi
     const lic = await call(session, 'plcStates', { requestId: 13, localNetId: '127.0.0.1.1.1', devices: [{ netId: '127.0.0.1.1.1', ip: `127.0.0.1:${INVALID}` }, { netId: '127.0.0.1.1.1', ip: `127.0.0.1:${RUN}` }] });
     const [inv, fine] = lic.devices ?? [];
     expect(inv?.state?.plc === 'Invalid' && inv.state.license?.state === 'expired' && !!Date.parse(inv.state.license.expires) && !fine?.state?.license, `no program, its license ran out: ${JSON.stringify(inv?.state)}`);
+    // No program: TwinCAT restarted (the same command as Run mode): its boot project loaded, its PLC runs, said
+    const restartedTc = await call(session, 'startAt', { requestId: 14, connection: { ...conn(INVALID), port: 851 }, mode: 'run', timeoutMs: 8000 });
+    expect(restartedTc.ok === true && restartedTc.state === 'Run' && restartedTc.plc === 'Run', `no program: TwinCAT restarted, its PLC runs (${JSON.stringify(restartedTc)})`);
     // The found PLCs' states again
     const states = await call(session, 'plcStates', { requestId: 6, localNetId: '127.0.0.1.1.1', devices: [{ netId: '127.0.0.1.1.1', ip: `127.0.0.1:${STOP}`, name: 'stopped' }, { netId: '127.0.0.1.1.1', ip: `127.0.0.1:${CONFIG}`, name: 'config' }, { netId: 'x; y', ip: '1' }] });
     const [s1, s2] = states.devices ?? [];

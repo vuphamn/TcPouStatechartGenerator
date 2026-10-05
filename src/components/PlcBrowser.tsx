@@ -408,6 +408,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       <PlcActionButtons
                         modes={plcActions(d.state, controlModes)}
                         className="live-plc-start"
+                        state={d.state}
                         netId={d.netId}
                         onPick={(how) => {
                           setStartFor(startFor?.netId === d.netId && startFor.mode === how ? null : { netId: d.netId, mode: how });
@@ -440,7 +441,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                   {xaeText?.netId === d.netId && <div className="live-plc-xae-result ml-2 my-0.5 text-slate-400">{xaeText.text}</div>}
                   {renewSteps(d.netId, d.state)}
                   {startFor?.netId === d.netId && (
-                    <PlcActionConfirm idPrefix="live-plc-start" mode={startFor.mode} name={d.name || d.netId} busy={startBusy} onConfirm={() => doStart(d, startFor.mode)} onCancel={() => setStartFor(null)} />
+                    <PlcActionConfirm idPrefix="live-plc-start" mode={startFor.mode} name={d.name || d.netId} state={d.state} busy={startBusy} onConfirm={() => doStart(d, startFor.mode)} onCancel={() => setStartFor(null)} />
                   )}
                   {startResult?.netId === d.netId && (
                     <div id="live-plc-start-result" data-ok={String(startResult.ok)} className={`ml-2 my-0.5 ${startResult.ok ? 'text-emerald-300' : 'text-rose-300'}`}>

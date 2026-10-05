@@ -81,6 +81,26 @@ const request = (method, p, body) =>
   const st = (await request('GET', '/admin/api/alerts')).json?.status?.[0];
   expect(st?.state === 'watching' && st.machines === 5 && !!st.lastAlert, `status: ${st?.state}, ${st?.message}`);
 
+  // The PLC itself (onPlcStop, on by default): stopped (an ADS client of the test's own): one alert; running again:
+  // recovered
+  expect(saved.json.rules[0].onPlcStop === true, 'the PLC followed too (on by default)');
+  const { Client } = require('ads-client');
+  const control = async (state) => {
+    const c = new Client({ targetAmsNetId: '127.0.0.1.1.1', targetAdsPort: 851, routerAddress: '127.0.0.1', routerTcpPort: 48971, localAmsNetId: '127.0.0.9.1.1', localAdsPort: 32913, rawClient: true, autoReconnect: false, hideConsoleWarnings: true });
+    await c.connect();
+    await c.writeControl(state, 0);
+    await c.disconnect().catch(() => {});
+  };
+  const plcEvents = () => posts.filter((p) => p.path === '/hook' && p.body.machine === 'PLC').map((p) => p.body);
+  await control('Stop');
+  for (let i = 0; i < 40 && !plcEvents().some((e) => e.event === 'plcStopped'); i++) await h.sleep(250);
+  await control('Run');
+  for (let i = 0; i < 40 && !plcEvents().some((e) => e.event === 'recovered'); i++) await h.sleep(250);
+  const pe = plcEvents();
+  console.log('   ', pe.map((e) => `${e.event} ${e.state}: ${e.text}`).join(' | '));
+  expect(pe.filter((e) => e.event === 'plcStopped').length === 1 && pe[0]?.state === 'Stop' && /Line 202: ⏹️ the PLC is stopped \(it was running\)/.test(pe[0].text), 'the PLC stopped: one alert');
+  expect(pe.some((e) => e.event === 'recovered' && e.state === 'Run' && /the PLC runs again/.test(e.text)), 'running again: recovered');
+
   // The setup page shows it
   const browser = await h.launchBrowser({ defaultViewport: { width: 1200, height: 1500 } });
   const p = await browser.newPage();
@@ -90,6 +110,7 @@ const request = (method, p, body) =>
   await p.waitForSelector('.admin-alert', { timeout: 5000 }).catch(() => {});
   const card = await p.$eval('.admin-alert', (e) => e.innerText).catch(() => '');
   expect(/watching: 5 machines on Line 202/.test(card) && (await p.$eval('.admin-alert input[data-key="webhook"]', (e) => e.value)) === 'http://127.0.0.1:48972/hook', 'the page: the rule, watching');
+  expect((await p.$eval('.admin-alert input[data-key="onPlcStop"]', (e) => e.checked).catch(() => null)) === true, 'the page: "alert when it stops running", on');
   await p.evaluate(() => document.querySelector('.admin-alert').scrollIntoView());
   await p.screenshot({ path: h.out('gateway-alerts.png') });
   expect(errors.length === 0, `no page errors ${errors.slice(0, 2).join(' | ')}`);

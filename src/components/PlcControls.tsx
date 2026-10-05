@@ -2,12 +2,22 @@ import React from 'react';
 import { Loader2 } from 'lucide-react';
 import type { FoundPlc } from '../utils/plcDiscovery.ts';
 import type { PlcActionEntry } from '../utils/plcActionLog.ts';
+import { downloadCsv, toCsv } from '../utils/csv.ts';
+
+/** The history as CSV (all its entries, not only those shown): time, PLC, what, what it answered, who */
+export function plcHistoryCsv(entries: PlcActionEntry[]): string {
+  return toCsv(
+    ['time', 'PLC', 'AMS NetId', 'action', 'ok', 'state', 'error', 'by'],
+    entries.map((e) => [new Date(e.t).toISOString(), e.name, e.netId, plcActionLabel(e.mode), e.ok ? 'yes' : 'no', e.state ?? '', e.error ?? '', e.user ?? 'this computer'])
+  );
+}
 
 /** A PLC's state as going live would see it (TwinCAT's, its PLC's, its project), or why it did not answer */
 export type PlcState = NonNullable<FoundPlc['state']>;
 /** What can be done to a PLC from here, not live: start its PLC, stop it, restart it, or TwinCAT to Run mode */
 export type PlcControlMode = 'plc' | 'stop' | 'restart' | 'run';
-export type PlcControlResult = { state: string | null; ok: boolean; error?: string };
+/** (TwinCAT to Run mode / restarted: plc, its PLC's state afterwards) */
+export type PlcControlResult = { state: string | null; ok: boolean; error?: string; plc?: string | null };
 export const ALL_PLC_CONTROLS: PlcControlMode[] = ['plc', 'stop', 'restart', 'run'];
 
 /** Its badge's text: Run, Config, no program, no PLC, Stop …; no route / no answer when it did not answer */
@@ -94,9 +104,14 @@ export const RenewLicenseSteps: React.FC<{ idPrefix: string; openXae?: () => Pro
   );
 };
 
-/** What was done to the PLCs (newest first): when, which, what, who, what it answered */
-export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] | null; error?: string | null; showPlc?: boolean }> = ({ id, entries, error, showPlc = true }) => (
-  <div id={id} className="ml-2 mr-1 my-1 p-1.5 rounded border border-slate-700 bg-slate-900 text-[11px]">
+/** What was done to the PLCs (newest first): when, which, what, who, what it answered; CSV: all of it */
+export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] | null; error?: string | null; showPlc?: boolean; csvName?: string }> = ({ id, entries, error, showPlc = true, csvName = 'plc-history' }) => (
+  <div id={id} className="relative ml-2 mr-1 my-1 p-1.5 rounded border border-slate-700 bg-slate-900 text-[11px]">
+    {!!entries?.length && (
+      <button type="button" id={`${id}-csv`} className="absolute top-1 right-1 px-1.5 rounded text-[10px] text-slate-400 hover:text-sky-300 hover:bg-slate-800" title={`All ${entries.length} as a CSV file (Excel)`} onClick={() => void downloadCsv(`${csvName}-${new Date().toISOString().slice(0, 10)}.csv`, plcHistoryCsv(entries))}>
+        CSV
+      </button>
+    )}
     {error ? (
       <div className="text-rose-300">{error}</div>
     ) : !entries ? (
@@ -121,17 +136,23 @@ export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] 
   </div>
 );
 
-/** What its state offers (of those allowed here): Config: Run mode; stopped: Start; running: Stop, Restart */
+/**
+ * What its state offers (of those allowed here): Config: Run mode; stopped: Start; running: Stop, Restart; no program
+ * (its license fine): Restart TwinCAT (its boot project loaded)
+ */
 export function plcActions(s: PlcState | null | undefined, allowed: PlcControlMode[]): PlcControlMode[] {
   if (!s || s.error) return [];
-  const want: PlcControlMode[] = s.system === 'Config' ? ['run'] : s.plc === 'Stop' ? ['plc'] : s.plc === 'Run' ? ['stop', 'restart'] : [];
+  const want: PlcControlMode[] = s.system === 'Config' ? ['run'] : s.plc === 'Stop' ? ['plc'] : s.plc === 'Run' ? ['stop', 'restart'] : s.plc === 'Invalid' && s.license?.state !== 'expired' ? ['run'] : [];
   return want.filter((m) => allowed.includes(m));
 }
 
-export const plcActionLabel = (mode: PlcControlMode) => ({ plc: 'Start PLC', stop: 'Stop PLC', restart: 'Restart', run: 'Run mode' })[mode];
+/** (TwinCAT already running, its PLC with no program: the same command restarts it) */
+const restartsTwinCat = (mode: PlcControlMode, s?: PlcState | null) => mode === 'run' && !!s && s.system !== 'Config';
+export const plcActionLabel = (mode: PlcControlMode, s?: PlcState | null) => (restartsTwinCat(mode, s) ? 'Restart TwinCAT' : { plc: 'Start PLC', stop: 'Stop PLC', restart: 'Restart', run: 'Run mode' }[mode]);
 
 /** Asked first: what it drives may move (or stop) */
-export function plcActionQuestion(mode: PlcControlMode, name: string): string {
+export function plcActionQuestion(mode: PlcControlMode, name: string, s?: PlcState | null): string {
+  if (restartsTwinCat(mode, s)) return `Restart TwinCAT on ${name}? Everything there stops, TwinCAT starts again with its activated configuration and loads its PLC's boot project (when it is set to start on its own): what it drives may move.`;
   if (mode === 'run') return `Set TwinCAT on ${name} to Run mode? It restarts with its activated configuration, and its PLC starts as its boot project says: what it drives may move.`;
   if (mode === 'stop') return `Stop the PLC on ${name}? Its program stops where it is: what it drives stops being controlled (outputs as its configuration says).`;
   if (mode === 'restart') return `Restart the PLC on ${name}? Its variables go back to their initial values (retained ones kept) and its program runs again from the start: what it drives may move.`;
@@ -141,19 +162,22 @@ export function plcActionQuestion(mode: PlcControlMode, name: string): string {
 /** What it answered, in words */
 export function plcActionDone(mode: PlcControlMode, r: PlcControlResult, name: string): string {
   if (!r.ok) return `Not ${mode === 'stop' ? 'stopped' : mode === 'restart' ? 'restarted' : 'started'}${r.state ? ` (${r.state})` : ''}: ${r.error ?? 'no answer'}`;
-  if (mode === 'run') return `TwinCAT is in Run mode on ${name}`;
+  if (mode === 'run') {
+    const plc = r.plc === 'Run' ? 'its PLC runs' : r.plc === 'Invalid' ? 'its PLC still runs no program: download it from XAE (Login), or set its boot project to start on its own' : r.plc ? `its PLC is in ${r.plc === 'none' ? 'no PLC' : r.plc}` : '';
+    return `TwinCAT is in Run mode on ${name}${plc ? `; ${plc}` : ''}`;
+  }
   if (mode === 'stop') return `Its PLC is stopped (${r.state ?? 'Stop'})`;
   if (mode === 'restart') return `Its PLC restarted and runs (${r.state ?? 'Run'})`;
   return `Its PLC runs (${r.state ?? 'Run'})`;
 }
 
 /** The question and its buttons (ids: <idPrefix>-form, -confirm) */
-export const PlcActionConfirm: React.FC<{ idPrefix: string; mode: PlcControlMode; name: string; busy: boolean; onConfirm: () => void; onCancel: () => void }> = ({ idPrefix, mode, name, busy, onConfirm, onCancel }) => (
+export const PlcActionConfirm: React.FC<{ idPrefix: string; mode: PlcControlMode; name: string; state?: PlcState | null; busy: boolean; onConfirm: () => void; onCancel: () => void }> = ({ idPrefix, mode, name, state, busy, onConfirm, onCancel }) => (
   <div id={`${idPrefix}-form`} data-mode={mode} className="ml-2 mr-1 my-1 p-1.5 rounded border border-amber-800 bg-slate-900 space-y-1 text-[11px]">
-    <div className="text-amber-200">{plcActionQuestion(mode, name)}</div>
+    <div className="text-amber-200">{plcActionQuestion(mode, name, state)}</div>
     <div className="flex items-center gap-1">
       <button id={`${idPrefix}-confirm`} disabled={busy} onClick={onConfirm} className="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white">
-        {busy ? <Loader2 className="inline w-3 h-3 animate-spin" /> : mode === 'plc' ? 'Start' : mode === 'stop' ? 'Stop' : plcActionLabel(mode)}
+        {busy ? <Loader2 className="inline w-3 h-3 animate-spin" /> : mode === 'plc' ? 'Start' : mode === 'stop' ? 'Stop' : plcActionLabel(mode, state)}
       </button>
       <button onClick={onCancel} className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">
         Cancel
@@ -163,7 +187,7 @@ export const PlcActionConfirm: React.FC<{ idPrefix: string; mode: PlcControlMode
 );
 
 /** The buttons its state offers (class: <className>, data-mode) */
-export const PlcActionButtons: React.FC<{ modes: PlcControlMode[]; className: string; netId?: string; onPick: (mode: PlcControlMode) => void }> = ({ modes, className, netId, onPick }) => (
+export const PlcActionButtons: React.FC<{ modes: PlcControlMode[]; className: string; netId?: string; state?: PlcState | null; onPick: (mode: PlcControlMode) => void }> = ({ modes, className, netId, state, onPick }) => (
   <>
     {modes.map((mode) => (
       <button
@@ -172,9 +196,9 @@ export const PlcActionButtons: React.FC<{ modes: PlcControlMode[]; className: st
         data-netid={netId}
         data-mode={mode}
         onClick={() => onPick(mode)}
-        title={mode === 'run' ? 'Set TwinCAT there to Run mode (it restarts; asked first)' : `${plcActionLabel(mode)} (asked first)`}
+        title={restartsTwinCat(mode, state) ? 'Restart TwinCAT there: its PLC\'s boot project loaded (asked first)' : mode === 'run' ? 'Set TwinCAT there to Run mode (it restarts; asked first)' : `${plcActionLabel(mode)} (asked first)`}
       >
-        {plcActionLabel(mode)}
+        {plcActionLabel(mode, state)}
       </button>
     ))}
   </>
@@ -267,7 +291,7 @@ export const GatewayPlcState: React.FC<{
     <div id="live-gw-plc" className="min-w-0 text-[11px]">
       <div className="flex items-center flex-wrap gap-y-1">
         {state ? <PlcStateBadge id="live-gw-plc-state" state={state} changed={changed} /> : <Loader2 className="w-3 h-3 animate-spin text-slate-500" />}
-        {control && <PlcActionButtons modes={plcActions(state, modes)} className="live-gw-plc-control" onPick={(m) => { setAsking(asking === m ? null : m); setResult(null); }} />}
+        {control && <PlcActionButtons modes={plcActions(state, modes)} className="live-gw-plc-control" state={state} onPick={(m) => { setAsking(asking === m ? null : m); setResult(null); }} />}
         {needsRenew(state) && (
           <button id="live-gw-plc-renew" className="shrink-0 ml-1 px-1.5 rounded border border-rose-800 text-[10px] text-rose-300 hover:bg-slate-800" onClick={() => setRenewing((r) => !r)} aria-expanded={renewing}>
             Renew license
@@ -280,8 +304,8 @@ export const GatewayPlcState: React.FC<{
         )}
       </div>
       {renewing && needsRenew(state) && <RenewLicenseSteps idPrefix="live-gw-plc-renew" onRecheck={refresh} className="ml-2 my-1 space-y-1 text-slate-300" />}
-      {past && <PlcActionHistory id="live-gw-plc-history" entries={past.entries} error={past.error} showPlc={false} />}
-      {asking && <PlcActionConfirm idPrefix="live-gw-plc-control" mode={asking} name={name} busy={busy} onConfirm={() => run(asking)} onCancel={() => setAsking(null)} />}
+      {past && <PlcActionHistory id="live-gw-plc-history" entries={past.entries} error={past.error} showPlc={false} csvName={`plc-history-${name}`} />}
+      {asking && <PlcActionConfirm idPrefix="live-gw-plc-control" mode={asking} name={name} state={state} busy={busy} onConfirm={() => run(asking)} onCancel={() => setAsking(null)} />}
       {result && (
         <div id="live-gw-plc-control-result" data-ok={String(result.ok)} className={result.ok ? 'text-emerald-300' : 'text-rose-300'}>
           {result.text}

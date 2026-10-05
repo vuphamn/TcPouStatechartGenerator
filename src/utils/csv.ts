@@ -3,8 +3,6 @@
  * it). Saved with a save dialog (XAE, desktop) or downloaded (web).
  */
 
-import { saveDocument } from './projectFiles.ts';
-
 const cell = (v: unknown) => {
   const s = v === null || v === undefined ? '' : String(v);
   return /[",;\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -15,5 +13,7 @@ export function toCsv(header: string[], rows: unknown[][]): string {
 }
 
 export async function downloadCsv(name: string, csv: string): Promise<void> {
+  // (loaded when saving: toCsv stays free of the page's file access, for code that only builds the text)
+  const { saveDocument } = await import('./projectFiles.ts');
   await saveDocument(name.replace(/[^\w.[\]-]+/g, '_'), csv);
 }

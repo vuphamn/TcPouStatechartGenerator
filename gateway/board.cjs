@@ -290,7 +290,8 @@ function createBoards({ connectionFor, plcOf, rules, log, retryMs, maintenance }
             const m = monitors.get(k)?.monitor;
             const plc = plcOf(k.split('|')[0]);
             const id = plc?.id ?? k.split('|')[0];
-            return { id, name: plc?.name ?? id, state: m?.state ?? 'stopped', message: m?.message ?? '', machines: m?.snapshot() ?? [], maintenance: maintenance?.get(id) ?? null, planned: maintenance?.planned(id) ?? [] };
+            // (its PLC's ADS state: Run, Stop, Invalid (no program) …; null while not connected)
+            return { id, name: plc?.name ?? id, state: m?.state ?? 'stopped', message: m?.message ?? '', plcState: m?.state === 'watching' ? m.conn?.plcState ?? null : null, machines: m?.snapshot() ?? [], maintenance: maintenance?.get(id) ?? null, planned: maintenance?.planned(id) ?? [] };
           }),
         });
       };
