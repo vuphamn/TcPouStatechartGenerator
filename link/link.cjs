@@ -271,7 +271,7 @@ wss.on('connection', (ws, req) => {
       clients.add(client);
       clearTimeout(helloTimer);
       log(`connected: ${origin}`);
-      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'layoutFile', 'ioTree', 'ecatStates', 'deviceInfo', 'sourcesOffline', 'plcStates', 'selfUpdate'] });
+      return send({ type: 'welcome', user: os.userInfo().username, plcs: [], helper: 'link', version: VERSION, build: BUILD, features: ['projectBuild', 'appInfo', 'openXae', 'plcStart', 'plcProjectCopy', 'projectPou', 'layoutFile', 'ioTree', 'ecatStates', 'deviceInfo', 'sourcesOffline', 'plcStates', 'selfUpdate', 'instancesOffline', 'plcStartAt', 'plcStatesRefresh'] });
     }
     if (m.type === 'liveStop') {
       client.following = null;
@@ -282,6 +282,9 @@ wss.on('connection', (ws, req) => {
     // Symbol browser: a symbol's members in the connected PLC
     if (m.type === 'liveBrowse') return void session.browse(send, m);
     if (m.type === 'plcSources') return void session.sources(send, m);
+    if (m.type === 'liveInstances') return void session.instancesAt(send, m);
+    if (m.type === 'plcStartAt') return void session.startAt(send, m);
+    if (m.type === 'plcStates') return void session.plcStates(send, m);
     // The PLC's I/O tree (read-only)
     if (m.type === 'ioTree') return void session.ioTree(send, m);
     // The EtherCAT masters' slave states (read-only)
@@ -359,6 +362,8 @@ wss.on('connection', (ws, req) => {
     if (m.type === 'discover') {
       const addresses = (Array.isArray(m.addresses) ? m.addresses : []).map((a) => String(a).trim()).filter((a) => hostRx.test(a)).slice(0, 64);
       const result = await discovery.discover({ localNetId: defaultLocalNetId(localIpTowards(addresses[0] ?? '')), addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
+      // (the tests: KSS_DISCOVERY_ADS_PORT, the found PLCs' ADS router on that port of their address, a simulated one)
+      if (Number(process.env.KSS_DISCOVERY_ADS_PORT) > 0) for (const d of result.devices) d.ip = `${d.ip}:${Number(process.env.KSS_DISCOVERY_ADS_PORT)}`;
       // (each described as going live would see it: TwinCAT's state, its PLC's, its project)
       result.devices = await require('../shared/tcPlcState.cjs').describePlcs(result.devices);
       log(`browse: ${origin} searched the network, ${result.devices.length} device(s)`);

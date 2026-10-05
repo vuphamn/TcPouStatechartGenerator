@@ -23,6 +23,30 @@ export interface DesktopLiveOptions {
   localNetId?: string;
 }
 
+/** A PLC named by the Live tab's settings, over a connection of its own (not live) */
+export interface PlcConnection {
+  netId: string;
+  ip?: string;
+  port?: number;
+  localNetId?: string;
+}
+export interface PlcInstancesRequest {
+  requestId: number;
+  connection: PlcConnection;
+  typeName: string;
+  stateVar: string;
+}
+export interface PlcInstancesResult {
+  instances?: string[];
+  plcState?: string;
+  error?: string;
+}
+export interface PlcStartAtRequest {
+  requestId: number;
+  connection: PlcConnection;
+  mode: 'plc' | 'run';
+}
+
 interface DesktopLiveApi {
   start: (options: DesktopLiveOptions) => Promise<void>;
   stop: () => Promise<void>;
@@ -53,6 +77,12 @@ interface DesktopLiveApi {
   appInfo?: (req: { requestId: number }) => Promise<import('./plcBuild.ts').PlcAppInfo>;
   /** The PLC application started (after a write left it in Stop) */
   startPlc?: (req: { requestId: number }) => Promise<{ state: string | null; ok: boolean; error?: string }>;
+  /** A POU type's instances in a PLC, not live (the one to go live on chosen first) */
+  instances?: (req: PlcInstancesRequest) => Promise<PlcInstancesResult>;
+  /** A PLC started from Browse, not live: its PLC from Stop ('plc'), or TwinCAT from Config to Run mode ('run') */
+  startAt?: (req: PlcStartAtRequest) => Promise<{ state: string | null; ok: boolean; error?: string }>;
+  /** The found PLCs' states again (Browse, while open) */
+  plcStates?: (req: { requestId: number; devices: { netId: string; ip: string; name?: string }[] }) => Promise<{ devices: import('./plcDiscovery.ts').FoundPlc[] }>;
   /** TwinCAT XAE opened for the user */
   openXae?: () => Promise<{ ok: boolean; message: string }>;
   /** The engineering project for a POU from the PLC: its folder chosen, a file saved into it */

@@ -38,8 +38,17 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       await h.sleep(500);
     }
   };
-  // A point of the edge's line, right-clicked; the menu's item picked; the state typed in the list
+  // A point of the edge's line, right-clicked; the menu's item picked; the state typed in the list (the list read
+  // while the chart was still being drawn again, without the state: closed, and opened once more once settled)
   const move = async (src, to, item, pick) => {
+    for (let attempt = 0; ; attempt++) {
+      const r = await openList(src, to, item, pick, attempt === 1);
+      if (r !== 'again') return r;
+      await p.keyboard.press('Escape');
+      await h.sleep(1500);
+    }
+  };
+  const openList = async (src, to, item, pick, last) => {
     await settled();
     const pt = await p.evaluate((src, to) => {
       const el = [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].find((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to);
@@ -62,7 +71,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     expect(!!input, 'the list of states opens');
     if (!input) return false;
     const listed = await p.$$eval('#edge-end-picker [data-id]', (els) => els.map((e) => e.getAttribute('data-id')));
-    expect(listed.includes(`edge-end:${pick}`) && !listed.includes(`edge-end:${item === 'move-start-btn' ? src : to}`), `${pick} listed, the end it has now not (${listed.length} states)`);
+    const right = listed.includes(`edge-end:${pick}`) && !listed.includes(`edge-end:${item === 'move-start-btn' ? src : to}`);
+    if (!right && !last) {
+      console.log(`(the list without ${pick}: ${listed.map((x) => x.replace('edge-end:', '')).join(', ')}; once more)`);
+      return 'again';
+    }
+    expect(right, `${pick} listed, the end it has now not (${listed.length} states${right ? '' : `: ${listed.map((x) => x.replace('edge-end:', '')).join(', ')}`})`);
     await p.type('#edge-end-picker-input', pick);
     await h.sleep(200);
     await p.keyboard.press('Enter');

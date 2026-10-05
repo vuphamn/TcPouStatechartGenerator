@@ -344,6 +344,11 @@ ipcMain.handle('tc:live-browse', (event, req) => {
 });
 // The PLC project's sources as the PLC keeps them (read-only: its boot folder over ADS), for the window's session
 ipcMain.handle('tc:live-sources', (event, req) => new Promise((resolve) => liveFor(event.sender).sources(resolve, req)));
+// A POU type's instances in a PLC before going live; a PLC started (or TwinCAT set to Run) from Browse; the found
+// PLCs' states again
+ipcMain.handle('tc:live-instances', (event, req) => new Promise((resolve) => liveFor(event.sender).instancesAt(resolve, req)));
+ipcMain.handle('tc:plc-start-at', (event, req) => new Promise((resolve) => liveFor(event.sender).startAt(resolve, req)));
+ipcMain.handle('tc:plc-states', (event, req) => new Promise((resolve) => liveFor(event.sender).plcStates(resolve, req)));
 // The PLC's I/O tree (read-only: its boot folder's TwinCAT project), for the window's session
 ipcMain.handle('tc:live-io-tree', (event, req) => new Promise((resolve) => liveFor(event.sender).ioTree(resolve, req)));
 // A device's details for the I/O tab: TwinCAT's device descriptions (ESI), the user's pictures of it
@@ -454,7 +459,23 @@ ipcMain.handle('tc:check-connection', (_event, req) => {
   if ((netId && !/^\d{1,3}(\.\d{1,3}){5}$/.test(netId)) || (ip && !/^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(ip))) return { steps: [], verdict: 'Check the PLC address and AMS NetIds' };
   return checkConnection({ netId, ip, adsPort: Number.isInteger(req?.port) && req.port > 0 ? req.port : 851, localNetId: /^\d{1,3}(\.\d{1,3}){5}$/.test(req?.localNetId ?? '') ? req.localNetId : '', discoveryPort: Number(process.env.KSS_DISCOVERY_PORT) || 48899 });
 });
-ipcMain.handle('tc:app-info', () => ({ version: app.getVersion() }));
+// (installable: an installed app updates itself with its release's installer; the portable one, or one run from its
+// sources, is updated by hand. KSS_DESKTOP_RELEASES: the tests' stand-in for the releases)
+const installable = () => (app.isPackaged && !process.env.PORTABLE_EXECUTABLE_FILE) || !!process.env.KSS_DESKTOP_RELEASES;
+ipcMain.handle('tc:app-info', () => ({ version: app.getVersion(), installable: installable() }));
+// Update now: the release's installer downloaded and checked, then started; this app closes for it
+ipcMain.handle('tc:install-update', (_event, req) => {
+  if (!installable()) return { ok: false, message: 'This app is not installed (portable, or run from its sources): download the new one from its release' };
+  return require('../shared/desktopUpdate.cjs').installUpdate({
+    repo: req?.repo,
+    token: req?.token,
+    version: req?.version,
+    start: (file) => {
+      require('child_process').spawn(file, [], { detached: true, stdio: 'ignore' }).unref();
+      setTimeout(() => app.quit(), 800);
+    },
+  });
+});
 // The PLC switcher: which remembered PLCs answer (a TCP connect to their ADS router port, nothing sent)
 ipcMain.handle('tc:probe-plcs', (_event, targets) => require('../shared/tcDiscovery.cjs').probeAll(Array.isArray(targets) ? targets.slice(0, 50) : []));
 // Add Route: a route on the PLC to this computer (its IP towards the PLC and the AMS NetId the live view uses), with

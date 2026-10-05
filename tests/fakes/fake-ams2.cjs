@@ -143,6 +143,13 @@ function handle(sock, f) {
   // config.plcPorts: the only ADS ports with a PLC runtime (the others: not found; the system service answers Run)
   if (config.plcPorts && target.port !== 10000 && !config.plcPorts.includes(target.port)) return result(6);
   if (config.configMode) {
+    // (Reset to its system service: TwinCAT restarts in Run mode, its PLC running)
+    if (target.port === 10000 && cmd === 5 && d.readUInt16LE(0) === 2) {
+      config.configMode = false;
+      config.adsState = 5;
+      log('write control: TwinCAT to Run mode');
+      return result(0);
+    }
     if (target.port !== 10000) return result(6);
     if (cmd === 4) { const st = Buffer.alloc(4); st.writeUInt16LE(15, 0); return result(0, st); }
   }

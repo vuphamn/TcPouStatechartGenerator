@@ -248,7 +248,7 @@ import {
   type WatchedVar,
 } from './utils/liveGuards.ts';
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
-import { desktopLive } from './utils/liveHost.ts';
+import { type PlcInstancesResult, desktopLive } from './utils/liveHost.ts';
 
 // (the layout file: its POU's name, of a path or of the web edition's web:<name>; routes compared key by key; no look)
 const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB_LAYOUT_PREFIX, '');
@@ -269,7 +269,7 @@ import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.ts
 import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
 import { loadPathChecks, pathCheckFindings, pathCheckFrom, runPathChecks, savePathChecks, type PathCheck } from './utils/pathChecks.ts';
 import { downloadCsv, toCsv } from './utils/csv.ts';
-import { appInfo, checkForUpdate, loadUpdateSettings, saveUpdateSettings } from './utils/updates.ts';
+import { appInfo, checkForUpdate, installDesktopUpdate, loadUpdateSettings, saveUpdateSettings } from './utils/updates.ts';
 import type { SidePlc, SideVia } from './utils/sideLive.ts';
 import { formatLimit, limitFor, notifyStuck, parseDuration, requestNotifyPermission, setDefaultLimit, setNotify, setStateLimit, useDefaultLimit, useNotify, useStateLimits } from './utils/stateLimits.ts';
 
@@ -1608,7 +1608,9 @@ export const App: React.FC = () => {
   liveEdgesRef.current = availableEdges;
   // (opened From PLC: once live, which of its instances, when the PLC has several)
   const pickInstanceRef = useRef(false);
-  const [instancePicker, setInstancePicker] = useState<{ instances: string[]; current: string | null } | null>(null);
+  // (before going live, From PLC: onPick opens the POU live on the one chosen; closed without one: onDismiss)
+  const [instancePicker, setInstancePicker] = useState<{ instances: string[]; current: string | null; typeName?: string; onPick?: (instance: string) => void; onDismiss?: () => void } | null>(null);
+  const instancePickedRef = useRef(false);
   const handleLiveStatus = useCallback((m: Extract<HostMessage, { type: 'liveStatus' }>) => {
     if (m.state === 'plcState') {
       setLiveStatus((prev) =>
@@ -5890,6 +5892,17 @@ export const App: React.FC = () => {
       // per-viewer convenience only
     }
   }, [ioEvents, ioEventsKey]);
+  // Browse through Link (web edition): the search and Add Route run in Link, on this computer
+  const linkRequest = useCallback(
+    async <T,>(message: Record<string, unknown>, replyType: string, timeoutMs?: number): Promise<T> => {
+      if (!linkCode) throw new Error('Enter the pairing code shown by Kval MachineScope Link first');
+      const c = gatewayConnection();
+      const w = await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
+      setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
+      return c.request<T>(message, replyType, timeoutMs);
+    },
+    [linkCode, gatewayConnection, liveSettings.linkPort]
+  );
   // (not live: from the PLC the Live tab names, over a connection of its own: its sources are files in its boot
   // folder, its PLC need not run; the desktop app and Link)
   const plcSourcesConnection = () => ({
@@ -5950,6 +5963,16 @@ export const App: React.FC = () => {
     return p;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMode, liveStatus.target, liveStatus.state, liveSettings, liveVia, linkCode, gatewayConnection, gatewayOrigin, gatewayToken, ssoUser, ssoHere]);
+  // A POU type's instances on the PLC the Live tab names, before going live (the one to follow chosen first): the
+  // desktop app, a Link that can (instancesOffline); null elsewhere (a gateway: which one, once live)
+  const fetchInstancesBeforeLive = (typeName: string, stateVar: string): Promise<PlcInstancesResult> | null => {
+    if (isXaeHost()) return null;
+    const req = { requestId: Date.now() % 1e9, connection: plcSourcesConnection(), typeName, stateVar };
+    if (liveMode === 'desktop') return desktopLive()?.instances?.(req) ?? null;
+    if (liveMode === 'web' && liveVia === 'link' && linkBuildRef.current?.features?.includes('instancesOffline'))
+      return linkRequest<PlcInstancesResult>({ type: 'liveInstances', ...req }, 'liveInstancesResult', 60000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+    return null;
+  };
   // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
   // loaded POU's, its whole TwinCAT project is downloaded into Documents\Kval MachineScope\PLC projects\<project>; a copy
   // there that differs from the PLC's: Override, Save to a different location (remembered for this PLC), or Keep
@@ -6120,22 +6143,39 @@ export const App: React.FC = () => {
           handleLiveStopRef.current();
           handleLiveSettingsChange({ ...liveSettings, instance: '' });
         }
-        // (the connection comes along, live or not: the live settings are kept per POU, and From PLC before going live
-        // named the Target)
-        applyLoadedPou(src, { live: true, connection: connectionOf(liveSettings) });
-        // (live on it: on the PLC's first instance of it; several there: which one, once connected)
-        if (!liveSettings.instance.trim() || wasLive) pickInstanceRef.current = true;
-        // (its edits, still to build: unsaved against the PLC's version)
-        if (again) setSavedSources((b) => ({ ...b, pou: found.content }));
-        // Code help from the whole PLC project (its types, GVLs, the other POUs' members)
-        setPlcCodeFiles({ project: sources.project, files: plcProjectFiles(sources.files ?? []) });
-        const keptNote = Object.keys(keep).length ? ` Kept your edits of ${Object.values(keep).map((e) => e.path.split('/').pop()).join(', ')} for the build.` : '';
-        if (sources.stale) showCopyToast(`${sources.stale}${keptNote}`, 'error', 12000);
-        else showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer.${keptNote}`, 'success', 7000);
+        // The POU opened: live (on the instance chosen; none: the PLC's first of it, several there: which one, once
+        // connected), or not (its instances not read: said after)
+        const open = (live: boolean, instance?: string) => {
+          // (the connection comes along, live or not: the live settings are kept per POU, and From PLC before going
+          // live named the Target)
+          applyLoadedPou(src, { live, ...(instance ? { instance } : {}), connection: connectionOf(liveSettings) });
+          if (live && !instance && (!liveSettings.instance.trim() || wasLive)) pickInstanceRef.current = true;
+          // (its edits, still to build: unsaved against the PLC's version)
+          if (again) setSavedSources((b) => ({ ...b, pou: found.content }));
+          // Code help from the whole PLC project (its types, GVLs, the other POUs' members)
+          setPlcCodeFiles({ project: sources.project, files: plcProjectFiles(sources.files ?? []) });
+          const keptNote = Object.keys(keep).length ? ` Kept your edits of ${Object.values(keep).map((e) => e.path.split('/').pop()).join(', ')} for the build.` : '';
+          if (sources.stale) showCopyToast(`${sources.stale}${keptNote}`, 'error', 12000);
+          else showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer.${keptNote}`, 'success', 7000);
+        };
+        // Not live: its instances on the PLC read first (desktop app, Link), so the one to follow is chosen before
+        // connecting; while live: which one once live again (the connection there is the live one)
+        const stateVar = extractIdentifiedStatesFromPou(src.content, '').stateVarName || 'machineState';
+        const before = wasLive ? null : fetchInstancesBeforeLive(typeName, stateVar);
+        if (!before) return open(true);
+        showCopyToast(`${typeName}: its instances on the PLC…`, 'success', 4000);
+        void before.then((r) => {
+          const list = r.instances ?? [];
+          if (r.error || !list.length) {
+            open(false);
+            showCopyToast(`${src.name} opened, not live: ${r.error ?? `the PLC has no instance of ${typeName}`}`, 'error', 9000);
+          } else if (list.length === 1) open(true, list[0]);
+          else setInstancePicker({ instances: list, current: null, typeName, onPick: (i) => open(true, i), onDismiss: () => open(false) });
+        });
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showCopyToast, applyLoadedPou, liveStatus.state, liveSettings, handleLiveSettingsChange, plcOrigin, pouDirty, dutDirty, pouContent, dutContent, dutFileName, plcSessionEdits]
+    [showCopyToast, applyLoadedPou, liveStatus.state, liveSettings, handleLiveSettingsChange, plcOrigin, pouDirty, dutDirty, pouContent, dutContent, dutFileName, plcSessionEdits, liveMode, liveVia, linkRequest]
   );
   // Watch: the state machine's diagram in its own tab / window, live on that instance (its transitions are recorded)
   const handleWatchMachine = useCallback(
@@ -6475,17 +6515,6 @@ export const App: React.FC = () => {
       ? 'The Link on this computer is an older version (from before it said which). Update it: npm run build:link, or the installer, then start Link again.'
       : `The Link on this computer is another version than this page (${linkBuild.from === 'source' ? 'run from source' : `built ${linkBuild.built ? new Date(linkBuild.built).toLocaleString() : '?'}`}, code ${linkBuild.stamp}; this page: ${__KSS_LINK_STAMP__}). Update it: npm run build:link, or the installer, then start Link again.`
     : null;
-  // Browse through Link (web edition): the search and Add Route run in Link, on this computer
-  const linkRequest = useCallback(
-    async <T,>(message: Record<string, unknown>, replyType: string): Promise<T> => {
-      if (!linkCode) throw new Error('Enter the pairing code shown by Kval MachineScope Link first');
-      const c = gatewayConnection();
-      const w = await c.connect(`ws://127.0.0.1:${parseInt(liveSettings.linkPort, 10) || 48960}`, linkCode);
-      setLinkBuild(w?.build ?? { stamp: '', built: null, from: 'old' });
-      return c.request<T>(message, replyType);
-    },
-    [linkCode, gatewayConnection, liveSettings.linkPort]
-  );
   // The Link notice's Update Link: Link checks for a newer release and updates itself (it starts again); a Link built
   // here, newer than the released one, is rebuilt instead. What happened, for the notice
   const handleUpdateLink = useCallback(async (): Promise<string> => {
@@ -6899,6 +6928,27 @@ export const App: React.FC = () => {
     }
     return canScanPlcs() ? (d: FoundPlc, user: string, password: string, both?: AddRouteBoth) => addRouteOnPlc({ plcIp: d.ip, netId: d.netId, name: d.name, user, password, localNetId, ...(both ?? {}) }) : undefined;
   }, [viaLink, linkRequest, liveSettings.localNetId]);
+  // Browse: a found PLC started, not live (after a confirmation: its PLC from Stop, or TwinCAT from Config to Run
+  // mode), and the found PLCs' states again while Browse is open (the desktop app, a Link that can)
+  const handlePlcStartAt = useMemo(() => {
+    const localNetId = liveSettings.localNetId.trim() || undefined;
+    const req = (d: FoundPlc, mode: 'plc' | 'run') => ({ requestId: Date.now() % 1e9, connection: { netId: d.netId, ip: d.ip || undefined, localNetId }, mode });
+    const api = desktopLive();
+    if (api?.startAt) return (d: FoundPlc, mode: 'plc' | 'run') => api.startAt!(req(d, mode));
+    if (viaLink && linkBuild?.features?.includes('plcStartAt'))
+      return (d: FoundPlc, mode: 'plc' | 'run') =>
+        linkRequest<{ state: string | null; ok: boolean; error?: string }>({ type: 'plcStartAt', ...req(d, mode) }, 'plcStartAtResult', 70000).catch((e: Error) => ({ state: null, ok: false, error: e.message }));
+    return undefined;
+  }, [viaLink, linkBuild, linkRequest, liveSettings.localNetId]);
+  const handleRefreshPlcStates = useMemo(() => {
+    const localNetId = liveSettings.localNetId.trim() || undefined;
+    const req = (devices: FoundPlc[]) => ({ requestId: Date.now() % 1e9, localNetId, devices: devices.map((d) => ({ netId: d.netId, ip: d.ip ?? '', name: d.name })) });
+    const api = desktopLive();
+    if (api?.plcStates) return (devices: FoundPlc[]) => api.plcStates!(req(devices)).then((r) => r.devices ?? []);
+    if (viaLink && linkBuild?.features?.includes('plcStatesRefresh'))
+      return (devices: FoundPlc[]) => linkRequest<{ devices?: FoundPlc[] }>({ type: 'plcStates', ...req(devices) }, 'plcStatesResult', 20000).then((r) => r.devices ?? []);
+    return undefined;
+  }, [viaLink, linkBuild, linkRequest, liveSettings.localNetId]);
   // TwinCAT XAE opened on this computer (the desktop app, Link): its license page renews a trial license
   const handleOpenXae = useMemo(() => {
     const api = desktopLive();
@@ -7070,7 +7120,15 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probeKey]);
   // Updates (desktop, XAE): quietly once a day at start; from the Window menu on request
-  const [updateOffer, setUpdateOffer] = useState<{ edition: string; version: string; current: string; url: string } | null>(null);
+  // (installable: the installed desktop app's Update now; installing: its answer, while it downloads and after)
+  const [updateOffer, setUpdateOffer] = useState<{ edition: string; version: string; current: string; url: string; installable?: boolean } | null>(null);
+  const [updateInstall, setUpdateInstall] = useState<{ busy: boolean; text: string } | null>(null);
+  const handleInstallUpdate = useCallback(async () => {
+    if (!updateOffer) return;
+    setUpdateInstall({ busy: true, text: `Downloading ${updateOffer.version}…` });
+    const r = await installDesktopUpdate(updateOffer.version, loadUpdateSettings());
+    setUpdateInstall({ busy: r.ok, text: r.message });
+  }, [updateOffer]);
   const runUpdateCheck = useCallback(
     async (quiet: boolean) => {
       const info = await appInfo();
@@ -7083,7 +7141,8 @@ export const App: React.FC = () => {
       saveUpdateSettings({ ...settings, lastCheck: Date.now() });
       if (r.state === 'newer') {
         if (quiet && settings.skipped === r.version) return;
-        setUpdateOffer({ edition: info.edition, version: r.version, current: info.version, url: r.url });
+        setUpdateInstall(null);
+        setUpdateOffer({ edition: info.edition, version: r.version, current: info.version, url: r.url, installable: info.edition === 'desktop' && !!info.installable });
       } else if (!quiet) {
         if (r.state === 'current') showCopyToast(`Kval MachineScope ${info.edition === 'xae' ? 'for XAE' : 'desktop'} ${info.version} is the newest`, 'success');
         else if (r.state === 'no-access') {
@@ -9224,6 +9283,8 @@ export const App: React.FC = () => {
             onForgetPlc={(netId) => updateRememberedPlcs((list) => list.filter((p) => p.netId !== netId))}
             onScanPlcs={handleScanPlcs}
             onAddRoute={handleAddRoute}
+            onPlcStartAt={handlePlcStartAt}
+            onRefreshPlcStates={handleRefreshPlcStates}
             onCheckConnection={handleCheckConnection}
             onCheckPlc={handleCheckPlc}
             linkNotice={viaLink ? linkNotice : null}
@@ -9558,17 +9619,25 @@ export const App: React.FC = () => {
         <CommandPalette
           id="live-instance-picker"
           label="Which instance"
-          placeholder={`The PLC has ${instancePicker.instances.length} instances of ${pouTypeName ?? 'this POU'}: the one to follow here…`}
+          placeholder={`The PLC has ${instancePicker.instances.length} instances of ${instancePicker.typeName ?? pouTypeName ?? 'this POU'}: the one to ${instancePicker.onPick ? 'go live on' : 'follow here'}…`}
           commands={instancePicker.instances.map((i) => ({
             id: `live-instance:${i}`,
             group: 'Instance',
             label: i,
-            hint: instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase() ? 'followed now' : 'follow it here',
+            hint: instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase() ? 'followed now' : instancePicker.onPick ? 'go live on it' : 'follow it here',
             run: () => {
-              if (!(instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase())) handleGoLiveHere(i);
+              instancePickedRef.current = true;
+              if (instancePicker.onPick) instancePicker.onPick(i);
+              else if (!(instancePicker.current && i.toLowerCase() === instancePicker.current.toLowerCase())) handleGoLiveHere(i);
             },
           }))}
-          onClose={() => setInstancePicker(null)}
+          onClose={() => {
+            // (a pick runs after the palette closes: not picked by then, it was dismissed)
+            const dismiss = instancePicker.onDismiss;
+            instancePickedRef.current = false;
+            setInstancePicker(null);
+            if (dismiss) setTimeout(() => !instancePickedRef.current && dismiss(), 50);
+          }}
         />
       )}
       {endPicker && (() => {
@@ -9610,8 +9679,25 @@ export const App: React.FC = () => {
           <span>
             Kval MachineScope {updateOffer.edition === 'xae' ? 'for XAE' : 'desktop'} <b>{updateOffer.version}</b> is available (this is {updateOffer.current})
           </span>
-          <a id="update-open" href={updateOffer.url} target="_blank" rel="noreferrer" onClick={() => setUpdateOffer(null)} className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
-            Get it
+          {updateInstall && (
+            <span id="update-install-state" data-busy={String(updateInstall.busy)} className={updateInstall.busy ? 'text-emerald-300' : 'text-rose-300'}>
+              {updateInstall.busy && <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />}
+              {updateInstall.text}
+            </span>
+          )}
+          {updateOffer.installable && (
+            <button
+              id="update-install"
+              disabled={!!updateInstall?.busy}
+              onClick={() => void handleInstallUpdate()}
+              title="Downloads its installer from the release, checks it, and starts it: this app closes (save your work first)"
+              className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white"
+            >
+              Update now
+            </button>
+          )}
+          <a id="update-open" href={updateOffer.url} target="_blank" rel="noreferrer" onClick={() => setUpdateOffer(null)} className={`px-3 py-1 rounded text-white ${updateOffer.installable ? 'border border-slate-600 hover:bg-slate-800' : 'bg-emerald-700 hover:bg-emerald-600'}`}>
+            {updateOffer.installable ? 'Release' : 'Get it'}
           </a>
           <button
             onClick={() => {

@@ -152,6 +152,10 @@ interface LivePanelProps {
   onCheckConnection?: () => Promise<CheckResult>;
   /** Browse: Add Route to a found PLC (desktop, Link, XAE) */
   onAddRoute?: (plc: FoundPlc, user: string, password: string, both?: AddRouteBoth) => Promise<AddRouteResult>;
+  /** Browse: a found PLC started, not live (its PLC from Stop: 'plc'; TwinCAT from Config to Run mode: 'run') */
+  onPlcStartAt?: (plc: FoundPlc, mode: 'plc' | 'run') => Promise<{ state: string | null; ok: boolean; error?: string }>;
+  /** Browse: the found PLCs' states again (while it is open) */
+  onRefreshPlcStates?: (devices: FoundPlc[]) => Promise<FoundPlc[]>;
   onRenamePlc?: (netId: string, name: string) => void;
   /** The PLC switcher while live: stop, then go live on that remembered PLC */
   onSwitchPlc?: (plc: RememberedPlc) => void;
@@ -307,6 +311,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onForgetPlc,
   onScanPlcs,
   onAddRoute,
+  onPlcStartAt,
+  onRefreshPlcStates,
   onCheckConnection,
   onCheckPlc,
   linkNotice,
@@ -1131,6 +1137,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             onClose={() => setBrowsing(false)}
             scan={onScanPlcs}
             addRoute={onAddRoute}
+            startPlc={onPlcStartAt}
+            refreshStates={onRefreshPlcStates}
+            openXae={onOpenXae}
             onRename={onRenamePlc}
           />
         )}

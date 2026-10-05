@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   isDesktop: true,
   /** The app's version (updates: compared with the newest desktop release) */
   appInfo: () => ipcRenderer.invoke('tc:app-info'),
+  /** Update now (an installed app): { repo, token?, version } -> { ok, message }; the installer starts, the app closes */
+  installUpdate: (req) => ipcRenderer.invoke('tc:install-update', req),
   /** Native open dialog for a .TcPOU; resolves with its content and the .TcDUT files in its folder tree, or null */
   openPou: () => ipcRenderer.invoke('tc:open-pou'),
   /** The .TcPOU the app was started with (Explorer's Open in Kval MachineScope), once; null when none */
@@ -48,6 +50,12 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
     /** The PLC project's sources as the PLC keeps them: { project, plcProject, files: [{ path, content }] } or { error } */
     sources: (req) => ipcRenderer.invoke('tc:live-sources', req),
+    /** A POU type's instances in a PLC, not live: { connection, typeName, stateVar } -> { instances, plcState } or { error } */
+    instances: (req) => ipcRenderer.invoke('tc:live-instances', req),
+    /** A PLC started, not live: { connection, mode: 'plc' | 'run' } -> { ok, state, error? } */
+    startAt: (req) => ipcRenderer.invoke('tc:plc-start-at', req),
+    /** The found PLCs' states again: { devices } -> { devices } */
+    plcStates: (req) => ipcRenderer.invoke('tc:plc-states', req),
     /** The PLC's I/O tree: { devices, links, project } or { error } */
     ioTree: (req) => ipcRenderer.invoke('tc:live-io-tree', req),
     /** The EtherCAT masters' slave states: { netIds } -> { masters } or { error } */

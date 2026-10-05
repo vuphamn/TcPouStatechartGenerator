@@ -6,58 +6,21 @@
 //   KSS_LINK_RELEASES: the release list's URL (the tests: a local stand-in); KSS_SERVICE_DRYRUN=1: downloaded and
 //   checked, nothing replaced or started (the tests)
 const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
 const { execFile, spawn } = require('child_process');
+const releases = require('../shared/releases.cjs');
+const { compareVersions } = releases;
 
-const RELEASES = () => process.env.KSS_LINK_RELEASES || 'https://api.github.com/repos/vuphamn/TcPouStatechartGenerator/releases?per_page=30';
+const RELEASES = () => process.env.KSS_LINK_RELEASES || releases.releasesUrl();
+const AGENT = 'KvalMachineScope-Link';
 const dry = () => process.env.KSS_SERVICE_DRYRUN === '1';
 // (a PowerShell string: single quotes doubled)
 const ps = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
-/** 1.2.10 against 1.2.9: > 0 when a is newer */
-function compareVersions(a, b) {
-  const pa = String(a).split('.').map(Number);
-  const pb = String(b).split('.').map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0);
-    if (d) return d;
-  }
-  return 0;
-}
-
 /** The newest released Link: { version, tag, url, size, sha256, page } or null (none) */
-async function latestRelease() {
-  const r = await fetch(RELEASES(), { headers: { 'User-Agent': 'KvalMachineScope-Link', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(20000) });
-  if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
-  const list = await r.json();
-  let best = null;
-  for (const rel of Array.isArray(list) ? list : []) {
-    if (rel.draft || rel.prerelease) continue;
-    const m = /^web-v(\d+\.\d+\.\d+)$/.exec(rel.tag_name ?? '');
-    const asset = (rel.assets ?? []).find((a) => /^KvalMachineScope-Link-[\d.]+\.exe$/i.test(a.name ?? ''));
-    if (!m || !asset) continue;
-    if (!best || compareVersions(m[1], best.version) > 0) {
-      best = { version: m[1], tag: rel.tag_name, url: asset.browser_download_url, size: asset.size, sha256: /^sha256:([0-9a-f]{64})$/i.exec(asset.digest ?? '')?.[1]?.toLowerCase() ?? null, page: rel.html_url };
-    }
-  }
-  return best;
-}
+const latestRelease = () => releases.latestRelease({ url: RELEASES(), tagPrefix: 'web', asset: /^KvalMachineScope-Link-[\d.]+\.exe$/i, agent: AGENT });
 
 /** The release's Link downloaded to a file of its own, its size and SHA-256 checked: its path */
-async function download(rel) {
-  if (!rel.sha256) throw new Error('The release gives no SHA-256 for its Link: download it by hand');
-  const r = await fetch(rel.url, { headers: { 'User-Agent': 'KvalMachineScope-Link' }, signal: AbortSignal.timeout(10 * 60000) });
-  if (!r.ok) throw new Error(`The download answered ${r.status}`);
-  const data = Buffer.from(await r.arrayBuffer());
-  if (Number.isFinite(rel.size) && data.length !== rel.size) throw new Error(`The download is ${data.length} bytes, not ${rel.size}`);
-  const sha = crypto.createHash('sha256').update(data).digest('hex');
-  if (sha !== rel.sha256) throw new Error('The download does not match the release\'s SHA-256: not used');
-  const file = path.join(os.tmpdir(), `kss-link-${rel.version}-${process.pid}.exe`);
-  fs.writeFileSync(file, data);
-  return file;
-}
+const download = (rel) => releases.download(rel, { agent: AGENT, name: `kss-link-${rel.version}-${process.pid}.exe` });
 
 /**
  * This Link's file replaced by the downloaded one (renamed to .old first: a running .exe can be renamed, not

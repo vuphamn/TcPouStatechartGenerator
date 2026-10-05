@@ -36,7 +36,7 @@ export function saveUpdateSettings(s: UpdateSettings): void {
 }
 
 /** This edition and its version (desktop: the app's; XAE: the extension's); null in the web edition */
-export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: string } | null> {
+export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: string; installable?: boolean } | null> {
   if (isXaeHost()) {
     return new Promise((resolve) => {
       const timer = window.setTimeout(() => {
@@ -53,10 +53,10 @@ export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: 
       postToHost({ type: 'hostInfo' } as unknown as Parameters<typeof postToHost>[0]);
     });
   }
-  const d = (window as unknown as { tcDesktop?: { appInfo?: () => Promise<{ version: string }> } }).tcDesktop;
+  const d = (window as unknown as { tcDesktop?: { appInfo?: () => Promise<{ version: string; installable?: boolean }> } }).tcDesktop;
   if (d?.appInfo) {
     const i = await d.appInfo().catch(() => null);
-    return i?.version ? { edition: 'desktop', version: i.version } : null;
+    return i?.version ? { edition: 'desktop', version: i.version, installable: !!i.installable } : null;
   }
   return null;
 }
@@ -73,6 +73,13 @@ export type UpdateResult =
   | { state: 'current'; version: string }
   | { state: 'no-access'; message: string }
   | { state: 'error'; message: string };
+
+/** Update now (an installed desktop app): its release's installer downloaded, checked and started; the app closes */
+export async function installDesktopUpdate(version: string, settings: UpdateSettings): Promise<{ ok: boolean; message: string }> {
+  const d = (window as unknown as { tcDesktop?: { installUpdate?: (req: { repo: string; token?: string; version: string }) => Promise<{ ok: boolean; message: string }> } }).tcDesktop;
+  if (!d?.installUpdate) return { ok: false, message: 'Update the app by hand: this one cannot install its update' };
+  return d.installUpdate({ repo: settings.repo, token: settings.token || undefined, version }).catch((e: unknown) => ({ ok: false, message: e instanceof Error ? e.message : String(e) }));
+}
 
 /** The newest release of the edition, against the current version */
 export async function checkForUpdate(edition: 'desktop' | 'xae', current: string, settings: UpdateSettings): Promise<UpdateResult> {
