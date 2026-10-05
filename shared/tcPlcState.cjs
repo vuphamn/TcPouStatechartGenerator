@@ -10,10 +10,10 @@ const adsCode = (err) => err?.adsError?.errorCode ?? err?.parent?.adsError?.erro
 const ADS_PORT_NOT_FOUND = 6;
 
 /** One PLC: { system, plc, project } or { error } */
-async function describePlc(device, { plcPort = 851, localNetId } = {}) {
+async function describePlc(device, { plcPort = 851, localNetId, localAdsPort } = {}) {
   let c = null;
   try {
-    c = await systemClient({ netId: device.netId, ip: device.ip, ...(localNetId ? { localNetId } : {}) });
+    c = await systemClient({ netId: device.netId, ip: device.ip, ...(localNetId ? { localNetId } : {}), ...(localAdsPort ? { localAdsPort } : {}) });
     const system = ads.ADS_STATES[(await c.readState()).adsState] ?? 'unknown';
     let plc = null;
     if (system !== 'Config') {

@@ -462,7 +462,7 @@ ipcMain.handle('tc:check-connection', (_event, req) => {
 // (installable: an installed app updates itself with its release's installer; the portable one, or one run from its
 // sources, is updated by hand. KSS_DESKTOP_RELEASES: the tests' stand-in for the releases)
 const installable = () => (app.isPackaged && !process.env.PORTABLE_EXECUTABLE_FILE) || !!process.env.KSS_DESKTOP_RELEASES;
-ipcMain.handle('tc:app-info', () => ({ version: app.getVersion(), installable: installable() }));
+ipcMain.handle('tc:app-info', () => ({ version: app.getVersion(), installable: installable(), ...(process.env.KSS_DESKTOP_RELEASES ? { releasesUrl: process.env.KSS_DESKTOP_RELEASES } : {}) }));
 // Update now: the release's installer downloaded and checked, then started; this app closes for it
 ipcMain.handle('tc:install-update', (_event, req) => {
   if (!installable()) return { ok: false, message: 'This app is not installed (portable, or run from its sources): download the new one from its release' };
@@ -470,8 +470,9 @@ ipcMain.handle('tc:install-update', (_event, req) => {
     repo: req?.repo,
     token: req?.token,
     version: req?.version,
-    start: (file) => {
-      require('child_process').spawn(file, [], { detached: true, stdio: 'ignore' }).unref();
+    quiet: req?.quiet === true,
+    start: (file, args) => {
+      require('child_process').spawn(file, args, { detached: true, stdio: 'ignore' }).unref();
       setTimeout(() => app.quit(), 800);
     },
   });

@@ -47,8 +47,9 @@ const TO = 'KANALOGMEASURE_ERROR';
   await p.waitForFunction((src, to) => [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].some((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to), { timeout: 15000 }, SRC, TO).catch(() => {});
   await h.sleep(1200);
 
-  // The edge from the composite, selected; its start dragged onto DISABLED
-  const pt = await p.evaluate((src, to) => {
+  // The edge from the composite, selected; its start dragged onto DISABLED (looked for until it is on screen: on a busy
+  // machine the chart is drawn again a while after the edit)
+  const find = () => p.evaluate((src, to) => {
     const el = [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].find((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to);
     if (!el) return null;
     const len = el.getTotalLength(); const m = el.getScreenCTM();
@@ -58,7 +59,10 @@ const TO = 'KANALOGMEASURE_ERROR';
     }
     return null;
   }, SRC, TO);
-  expect(!!pt, `the edge ${SRC} -> ${TO} on screen`);
+  let pt = null;
+  for (let i = 0; i < 30 && !(pt = await find()); i++) await h.sleep(500);
+  const there = await p.evaluate((src, to) => [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].some((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to), SRC, TO);
+  expect(!!pt, `the edge ${SRC} -> ${TO} on screen${pt ? '' : ` (drawn: ${there})`}`);
   if (pt) {
     await p.mouse.click(pt.x, pt.y);
     await h.sleep(700);

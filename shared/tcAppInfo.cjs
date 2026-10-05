@@ -34,7 +34,7 @@ async function plcAppInfo(client) {
  * After a write: the PLC's state until it is Run, or the time is up (a download starts the application within a few
  * seconds; activating restarts TwinCAT first). → { state, ok, waitedMs }
  */
-async function waitForRun(client, { timeoutMs = 20000, pollMs = 1000 } = {}) {
+async function waitForRun(client, { timeoutMs = 20000, pollMs = 1000, want = 'Run' } = {}) {
   const started = Date.now();
   let state = null;
   for (;;) {
@@ -43,10 +43,10 @@ async function waitForRun(client, { timeoutMs = 20000, pollMs = 1000 } = {}) {
     } catch {
       state = null;
     }
-    if (state === 'Run' || Date.now() - started >= timeoutMs) break;
+    if (state === want || Date.now() - started >= timeoutMs) break;
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  return { state, ok: state === 'Run', waitedMs: Date.now() - started };
+  return { state, ok: state === want, waitedMs: Date.now() - started };
 }
 
 /** The PLC application started (ADS: Run), then waited for until it runs: { state, ok } or { state, ok: false, error } */
@@ -61,4 +61,28 @@ async function startPlc(client, { timeoutMs = 10000 } = {}) {
   return { state: run.state, ok: run.ok, ...(run.ok ? {} : { error: `The PLC is in ${run.state ?? '?'} after Start: look at TwinCAT's messages on the target (its license, an exception)` }) };
 }
 
-module.exports = { plcAppInfo, waitForRun, startPlc, ONLINE_CHANGES };
+/** The PLC application stopped (ADS: Stop), then waited for until it is: { state, ok } or { state, ok: false, error } */
+async function stopPlc(client, { timeoutMs = 10000 } = {}) {
+  try {
+    await client.stopPlc();
+  } catch (err) {
+    const why = err?.adsError?.errorStr ?? err?.parent?.adsError?.errorStr ?? err?.message ?? String(err);
+    return { state: null, ok: false, error: `The PLC did not stop: ${why}` };
+  }
+  const r = await waitForRun(client, { timeoutMs, want: 'Stop' });
+  return { state: r.state, ok: r.ok, ...(r.ok ? {} : { error: `The PLC is in ${r.state ?? '?'} after Stop` }) };
+}
+
+/** The PLC application restarted (ADS: Reset, then Run: its variables to their initial values), until it runs again */
+async function restartPlc(client, { timeoutMs = 10000 } = {}) {
+  try {
+    await client.restartPlc();
+  } catch (err) {
+    const why = err?.adsError?.errorStr ?? err?.parent?.adsError?.errorStr ?? err?.message ?? String(err);
+    return { state: null, ok: false, error: `The PLC did not restart: ${why}` };
+  }
+  const run = await waitForRun(client, { timeoutMs });
+  return { state: run.state, ok: run.ok, ...(run.ok ? {} : { error: `The PLC is in ${run.state ?? '?'} after Restart: look at TwinCAT's messages on the target` }) };
+}
+
+module.exports = { plcAppInfo, waitForRun, startPlc, stopPlc, restartPlc, ONLINE_CHANGES };

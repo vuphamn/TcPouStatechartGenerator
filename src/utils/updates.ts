@@ -17,6 +17,8 @@ export interface UpdateSettings {
   lastCheck?: number;
   /** A version the user said "later" to (not shown again until a newer one) */
   skipped?: string;
+  /** Update now quietly: the installer without its pages, the app started again (desktop) */
+  quiet?: boolean;
 }
 
 export function loadUpdateSettings(): UpdateSettings {
@@ -36,7 +38,7 @@ export function saveUpdateSettings(s: UpdateSettings): void {
 }
 
 /** This edition and its version (desktop: the app's; XAE: the extension's); null in the web edition */
-export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: string; installable?: boolean } | null> {
+export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: string; installable?: boolean; releasesUrl?: string } | null> {
   if (isXaeHost()) {
     return new Promise((resolve) => {
       const timer = window.setTimeout(() => {
@@ -53,10 +55,10 @@ export async function appInfo(): Promise<{ edition: 'desktop' | 'xae'; version: 
       postToHost({ type: 'hostInfo' } as unknown as Parameters<typeof postToHost>[0]);
     });
   }
-  const d = (window as unknown as { tcDesktop?: { appInfo?: () => Promise<{ version: string; installable?: boolean }> } }).tcDesktop;
+  const d = (window as unknown as { tcDesktop?: { appInfo?: () => Promise<{ version: string; installable?: boolean; releasesUrl?: string }> } }).tcDesktop;
   if (d?.appInfo) {
     const i = await d.appInfo().catch(() => null);
-    return i?.version ? { edition: 'desktop', version: i.version, installable: !!i.installable } : null;
+    return i?.version ? { edition: 'desktop', version: i.version, installable: !!i.installable, ...(i.releasesUrl ? { releasesUrl: i.releasesUrl } : {}) } : null;
   }
   return null;
 }
@@ -76,18 +78,18 @@ export type UpdateResult =
 
 /** Update now (an installed desktop app): its release's installer downloaded, checked and started; the app closes */
 export async function installDesktopUpdate(version: string, settings: UpdateSettings): Promise<{ ok: boolean; message: string }> {
-  const d = (window as unknown as { tcDesktop?: { installUpdate?: (req: { repo: string; token?: string; version: string }) => Promise<{ ok: boolean; message: string }> } }).tcDesktop;
+  const d = (window as unknown as { tcDesktop?: { installUpdate?: (req: { repo: string; token?: string; version: string; quiet?: boolean }) => Promise<{ ok: boolean; message: string }> } }).tcDesktop;
   if (!d?.installUpdate) return { ok: false, message: 'Update the app by hand: this one cannot install its update' };
-  return d.installUpdate({ repo: settings.repo, token: settings.token || undefined, version }).catch((e: unknown) => ({ ok: false, message: e instanceof Error ? e.message : String(e) }));
+  return d.installUpdate({ repo: settings.repo, token: settings.token || undefined, version, quiet: !!settings.quiet }).catch((e: unknown) => ({ ok: false, message: e instanceof Error ? e.message : String(e) }));
 }
 
-/** The newest release of the edition, against the current version */
-export async function checkForUpdate(edition: 'desktop' | 'xae', current: string, settings: UpdateSettings): Promise<UpdateResult> {
+/** The newest release of the edition, against the current version (releasesUrl: the tests' stand-in for GitHub's) */
+export async function checkForUpdate(edition: 'desktop' | 'xae', current: string, settings: UpdateSettings, releasesUrl?: string): Promise<UpdateResult> {
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
   if (settings.token) headers.Authorization = `Bearer ${settings.token}`;
   let res: Response;
   try {
-    res = await fetch(`https://api.github.com/repos/${settings.repo}/releases?per_page=50`, { headers, cache: 'no-store' });
+    res = await fetch(releasesUrl || `https://api.github.com/repos/${settings.repo}/releases?per_page=50`, { headers, cache: 'no-store' });
   } catch (err) {
     return { state: 'error', message: `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}` };
   }

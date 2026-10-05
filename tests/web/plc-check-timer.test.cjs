@@ -1,7 +1,8 @@
 const h = require('../lib/harness.cjs');
 // Browse's Check all on a timer (web edition, through Link): a remembered PLC checked (it answers), checked again by
 // itself every few seconds (the interval set here for the test); the PLC stops: its row marked with the time it
-// stopped answering, and the Live tab's Browse button says so while Browse is closed
+// stopped answering, and the Live tab's Browse button says so while Browse is closed. Notify on: its PLC stopped first
+// (an ADS client of the test's own), still answering: "stopped running"; then gone: "stopped answering"
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -57,6 +58,16 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   const every = await a.$eval('#live-plc-check-every', (e) => e.value).catch(() => '');
   expect(/^true\|/.test(first) && every === '0.05', `checked: it answers ("${first.slice(0, 80)}"), again every ${every} min`);
 
+  // Its PLC stopped (it still answers): the next check says so with a notification
+  const { Client } = require('ads-client');
+  const other = new Client({ targetAmsNetId: '127.0.0.1.1.1', targetAdsPort: 851, routerAddress: '127.0.0.1', routerTcpPort: 48976, localAmsNetId: '127.0.0.9.1.1', localAdsPort: 32912, rawClient: true, autoReconnect: false, hideConsoleWarnings: true });
+  await other.connect();
+  await other.writeControl('Stop', 0);
+  await other.disconnect().catch(() => {});
+  await a.waitForFunction(() => window.__notes.length > 0, { timeout: 30000, polling: 200 }).catch(() => {});
+  const stoppedNote = (await a.evaluate(() => window.__notes))[0] ?? '';
+  expect(/^Kval MachineScope: Fake line stopped running \| Since .*stopped/.test(stoppedNote), `its PLC stopped: "${stoppedNote.slice(0, 100)}"`);
+
   // The PLC stops answering: the next check (by itself) marks it; Browse closed, its button says so
   plc.kill();
   // (read as it is marked: the timer checks it again every 3 s, "Checking…" meanwhile)
@@ -70,7 +81,7 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-check
   const badge = await a.$eval('#live-plc-lost', (e) => e.textContent + '|' + e.getAttribute('title')).catch(() => '');
   expect(/^1 down\|Stopped answering: Fake line/.test(badge), `Browse closed, its button: "${badge.slice(0, 80)}"`);
   const notes = await a.evaluate(() => window.__notes);
-  expect(notes.length === 1 && /^Kval MachineScope: Fake line stopped answering \| Since /.test(notes[0]), `Notify on: a notification (${notes.join(' / ') || 'none'})`);
+  expect(notes.length === 2 && /^Kval MachineScope: Fake line stopped answering \| Since /.test(notes[1]), `Notify on: a notification each (${notes.join(' / ') || 'none'})`);
   await a.screenshot({ path: h.out('plc-check-timer.png') });
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

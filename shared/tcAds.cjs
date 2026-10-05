@@ -10,7 +10,9 @@ const SYM_UPLOAD = 0xf00b;
 const SYM_DT_UPLOAD = 0xf00e;
 const SYM_UPLOAD_INFO2 = 0xf00f;
 
-const ADS_STATES = { 5: 'Run', 6: 'Stop', 15: 'Config', 16: 'Reconfig', 11: 'Error' };
+// (ADS states by their number; 0, Invalid: a PLC runtime there with no program running, as a trial license that ran
+// out leaves it)
+const ADS_STATES = { 0: 'Invalid', 1: 'Idle', 2: 'Reset', 3: 'Init', 4: 'Start', 5: 'Run', 6: 'Stop', 7: 'SaveConfig', 8: 'LoadConfig', 9: 'PowerFailure', 10: 'PowerGood', 11: 'Error', 12: 'Shutdown', 13: 'Suspend', 14: 'Resume', 15: 'Config', 16: 'Reconfig', 17: 'Stopping', 18: 'Incompatible', 19: 'Exception' };
 
 function adsErrorText(err) {
   const code = err?.adsError?.errorCode ?? err?.errorCode;

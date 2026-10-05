@@ -70,6 +70,11 @@ fs.writeFileSync(configCfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(confi
     expect(runMode.ok === true && runMode.state === 'Run', `TwinCAT to Run mode: ${JSON.stringify(runMode)}`);
     const after = await call(session, 'plcStates', { requestId: 9, localNetId: '127.0.0.1.1.1', devices: [{ netId: '127.0.0.1.1.1', ip: `127.0.0.1:${STOP}` }, { netId: '127.0.0.1.1.1', ip: `127.0.0.1:${CONFIG}` }] });
     expect((after.devices ?? []).every((d) => d.state?.system === 'Run' && d.state?.plc === 'Run'), `both run now: ${JSON.stringify(after.devices?.map((d) => d.state))}`);
+    // Stopped, then restarted (Reset, then Run)
+    const stopped = await call(session, 'startAt', { requestId: 11, connection: conn(STOP), mode: 'stop', timeoutMs: 5000 });
+    expect(stopped.ok === true && stopped.state === 'Stop', `stopped: ${JSON.stringify(stopped)}`);
+    const restarted = await call(session, 'startAt', { requestId: 12, connection: conn(STOP), mode: 'restart', timeoutMs: 5000 });
+    expect(restarted.ok === true && restarted.state === 'Run', `restarted: ${JSON.stringify(restarted)}`);
     const gone = await call(session, 'startAt', { requestId: 10, connection: conn(48999), mode: 'plc', timeoutMs: 2000 });
     expect(gone.ok === false && /did not answer/.test(gone.error ?? ''), `nothing there: "${(gone.error ?? '').slice(0, 70)}"`);
 
@@ -91,7 +96,7 @@ fs.writeFileSync(configCfg, JSON.stringify({ ...JSON.parse(fs.readFileSync(confi
       };
       for (let i = 0; i < 20 && !got.some((m) => m.type === 'welcome'); i++) await sleep(150);
       const features = got.find((m) => m.type === 'welcome')?.features ?? [];
-      expect(['instancesOffline', 'plcStartAt', 'plcStatesRefresh'].every((f) => features.includes(f)), `Link says it can (${features.slice(-3).join(', ')})`);
+      expect(['instancesOffline', 'plcStartAt', 'plcStatesRefresh', 'plcStopAt'].every((f) => features.includes(f)), `Link says it can (${features.slice(-4).join(', ')})`);
       ws.send(JSON.stringify({ type: 'liveInstances', requestId: 31, connection: conn(RUN), typeName: 'SM_TableManager', stateVar: 'machineState' }));
       const li = await reply('liveInstancesResult', 31);
       expect((li?.instances ?? []).length === 2, `Link: the instances (${li?.error ?? li?.instances?.join(', ')})`);

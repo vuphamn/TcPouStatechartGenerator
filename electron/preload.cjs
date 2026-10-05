@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   isDesktop: true,
   /** The app's version (updates: compared with the newest desktop release) */
   appInfo: () => ipcRenderer.invoke('tc:app-info'),
-  /** Update now (an installed app): { repo, token?, version } -> { ok, message }; the installer starts, the app closes */
+  /** Update now (an installed app): { repo, token?, version, quiet? } -> { ok, message }; the installer starts, the app closes */
   installUpdate: (req) => ipcRenderer.invoke('tc:install-update', req),
   /** Native open dialog for a .TcPOU; resolves with its content and the .TcDUT files in its folder tree, or null */
   openPou: () => ipcRenderer.invoke('tc:open-pou'),

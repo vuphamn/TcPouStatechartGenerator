@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
+import { GatewayPlcState, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import type { StateTime } from '../utils/stateTimes.ts';
 import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from '../utils/plcDiscovery.ts';
 import { checkAsText, firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
@@ -153,7 +154,13 @@ interface LivePanelProps {
   /** Browse: Add Route to a found PLC (desktop, Link, XAE) */
   onAddRoute?: (plc: FoundPlc, user: string, password: string, both?: AddRouteBoth) => Promise<AddRouteResult>;
   /** Browse: a found PLC started, not live (its PLC from Stop: 'plc'; TwinCAT from Config to Run mode: 'run') */
-  onPlcStartAt?: (plc: FoundPlc, mode: 'plc' | 'run') => Promise<{ state: string | null; ok: boolean; error?: string }>;
+  onPlcStartAt?: (plc: FoundPlc, mode: PlcControlMode) => Promise<PlcControlResult>;
+  /** What onPlcStartAt may do (an older Link: start and Run mode only) */
+  plcControlModes?: PlcControlMode[];
+  /** The gateway's PLC chosen, not live: its state (read every few seconds) and what can be done to it */
+  onGatewayPlcState?: () => Promise<{ state?: PlcState; name?: string } | undefined>;
+  onGatewayPlcControl?: (mode: PlcControlMode) => Promise<PlcControlResult>;
+  gatewayPlcControlModes?: PlcControlMode[];
   /** Browse: the found PLCs' states again (while it is open) */
   onRefreshPlcStates?: (devices: FoundPlc[]) => Promise<FoundPlc[]>;
   onRenamePlc?: (netId: string, name: string) => void;
@@ -312,6 +319,10 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onScanPlcs,
   onAddRoute,
   onPlcStartAt,
+  plcControlModes,
+  onGatewayPlcState,
+  onGatewayPlcControl,
+  gatewayPlcControlModes,
   onRefreshPlcStates,
   onCheckConnection,
   onCheckPlc,
@@ -336,6 +347,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   boardUrl,
 }) => {
   const running = status.state === 'connecting' || status.state === 'connected';
+  // Browse's Go live: the PLC picked, then live once the Live tab has it as its Target
+  const [goLiveFor, setGoLiveFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!goLiveFor || settings.netId !== goLiveFor) return;
+    setGoLiveFor(null);
+    if (!running) onStart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goLiveFor, settings.netId]);
   // The instance this window follows (or will), and the others the PLC has
   const [linkUpdating, setLinkUpdating] = useState(false);
   const [linkUpdateText, setLinkUpdateText] = useState('');
@@ -352,17 +371,26 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   // Check all (Browse), kept here: its timer runs while Browse is closed; the PLCs that stopped answering
   const checker = useRememberedChecks(rememberedPlcs, onCheckPlc);
   const lostPlcs = rememberedPlcs.filter((p) => p.netId in checker.lost);
-  // (Notify on: a notification too, once each time one stops answering)
+  // (Notify on: a notification too, once each time one stops answering, or answers with its PLC no longer in Run:
+  // stopped, or no program; one each time, not both)
   const notifiedLost = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!notify) return;
     for (const p of rememberedPlcs) {
+      const stoppedAt = checker.stopped[p.netId];
       const since = checker.lost[p.netId];
-      if (!since || notifiedLost.current[p.netId] === since) continue;
-      notifiedLost.current[p.netId] = since;
+      if (stoppedAt && notifiedLost.current[p.netId] !== stoppedAt.at) {
+        notifiedLost.current[p.netId] = stoppedAt.at;
+        // (no program: marked as lost in the same check, said once, as stopped running)
+        if (since) notifiedLost.current[`${p.netId}|lost`] = since;
+        void notifyStuck(`Kval MachineScope: ${p.name || p.netId} stopped running`, `Since ${new Date(stoppedAt.at).toLocaleTimeString()}: ${stoppedAt.why}`, `kss-plc-lost-${p.netId}`);
+        continue;
+      }
+      if (!since || notifiedLost.current[`${p.netId}|lost`] === since) continue;
+      notifiedLost.current[`${p.netId}|lost`] = since;
       void notifyStuck(`Kval MachineScope: ${p.name || p.netId} stopped answering`, `Since ${new Date(since).toLocaleTimeString()}: ${checker.checks[p.netId]?.verdict ?? 'it no longer answers'}`, `kss-plc-lost-${p.netId}`);
     }
-  }, [checker.lost, checker.checks, notify, rememberedPlcs]);
+  }, [checker.lost, checker.stopped, checker.checks, notify, rememberedPlcs]);
   // The license notice's Renew: the steps shown, what Open XAE said
   const [renewing, setRenewing] = useState(false);
   // Start the PLC (live, in Stop): asked (its box), running, what it did
@@ -888,6 +916,12 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   </option>
                 ))}
               </select>
+              {onGatewayPlcState && settings.plc && !running && (
+                <>
+                  <span className="text-slate-400">State</span>
+                  <GatewayPlcState key={settings.plc} name={status.plcs?.find((p) => p.id === settings.plc)?.name ?? settings.plc} read={onGatewayPlcState} control={onGatewayPlcControl} modes={gatewayPlcControlModes ?? []} />
+                </>
+              )}
               {boardUrl && (
                 <>
                   <span />
@@ -1138,6 +1172,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             scan={onScanPlcs}
             addRoute={onAddRoute}
             startPlc={onPlcStartAt}
+            controlModes={plcControlModes}
+            onGoLive={running ? undefined : (p) => { pickPlc(p); setGoLiveFor(p.netId); }}
             refreshStates={onRefreshPlcStates}
             openXae={onOpenXae}
             onRename={onRenamePlc}

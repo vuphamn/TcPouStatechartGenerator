@@ -24,6 +24,8 @@ const { ProjectMirror } = require(`${sharedDir}/projectMirror.cjs`);
 const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
 const { checkConnection } = require(`${sharedDir}/tcCheck.cjs`);
 const { plcAppInfo, startPlc } = require(`${sharedDir}/tcAppInfo.cjs`);
+const { instancesAt, startAt } = require(`${sharedDir}/liveSession.cjs`);
+const { describePlc } = require(`${sharedDir}/tcPlcState.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
 const { createAdmin } = require('./admin.cjs');
@@ -544,6 +546,11 @@ function start() {
       },
     };
     const helloTimer = setTimeout(() => !user && ws.close(4401, 'no hello'), 10000);
+    // (what this gateway offers its pages, by its settings)
+    const features = () => {
+      const browse = config.allowBrowse !== false;
+      return ['appInfo', ...(browse ? ['deviceInfo', 'instancesOffline', 'plcStatesRefresh'] : []), ...(browse && config.allowSources !== false ? ['sourcesOffline'] : []), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart', 'plcStartAt', 'plcStopAt'] : [])];
+    };
 
     const stopSession = async () => {
       startSeq++;
@@ -578,7 +585,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBrowse === false || config.allowSources === false ? [] : ['sourcesOffline']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features() });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -604,7 +611,39 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}`);
         audit.add(user, 'sign-in', { ip, how: 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: ['appInfo', ...(config.allowBrowse === false ? [] : ['deviceInfo']), ...(config.allowBrowse === false || config.allowSources === false ? [] : ['sourcesOffline']), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart'] : [])] });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features() });
+      }
+
+      // Before going live on one of its PLCs (over connections of their own, closed after): a POU type's instances
+      // there, the one to follow chosen first; the PLCs' states (the Live tab, while not live); one started, stopped,
+      // restarted or set to Run mode (a write: allowWrite, writeUsers, as Start PLC)
+      const ownConnection = (plc) => ({ netId: plc.netId, ip: plc.ip || undefined, port: Number(plc.port) || 851, localNetId: plc.localNetId || config.localNetId, localAdsPort: 32909 });
+      if (m.type === 'liveInstances') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (config.allowBrowse === false) return send({ type: 'liveInstancesResult', requestId, error: 'Browsing the PLCs is turned off on this gateway' });
+        const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+        if (!plc) return send({ type: 'liveInstancesResult', requestId, error: 'Choose one of the gateway\'s PLCs' });
+        return void instancesAt(send, { requestId, connection: ownConnection(plc), typeName: m.typeName, stateVar: m.stateVar });
+      }
+      if (m.type === 'plcStates') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const list = (Array.isArray(m.plcs) ? m.plcs : []).slice(0, 32).map((id) => plcs.get(String(id))).filter(Boolean);
+        const timeout = () => new Promise((r) => setTimeout(() => r({ error: 'no answer in time' }), 4000));
+        const states = await Promise.all(list.map((p) => Promise.race([describePlc({ netId: p.netId, ip: p.ip || '' }, { plcPort: Number(p.port) || 851, localNetId: p.localNetId || config.localNetId, localAdsPort: 32909 }), timeout()])));
+        return send({ type: 'plcStatesResult', requestId, devices: list.map((p, i) => ({ id: p.id, name: p.name, netId: p.netId, state: states[i] })) });
+      }
+      if (m.type === 'plcStartAt') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const writers = Array.isArray(config.writeUsers) ? config.writeUsers.map((u) => String(u).toLowerCase()) : null;
+        if (config.allowWrite !== true || (writers && !writers.includes(String(user ?? '').toLowerCase()))) return send({ type: 'plcStartAtResult', requestId, state: null, ok: false, error: config.allowWrite !== true ? 'Writing to the PLC is turned off on this gateway (allowWrite)' : `${user ?? 'This account'} may not write to the PLCs of this gateway (writeUsers)` });
+        const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+        const mode = ['plc', 'stop', 'restart', 'run'].includes(m.mode) ? m.mode : null;
+        if (!plc || !mode) return send({ type: 'plcStartAtResult', requestId, state: null, ok: false, error: !plc ? 'Choose one of the gateway\'s PLCs' : 'Start, stop, restart or Run mode?' });
+        audit.add(user, `plc.${mode === 'plc' ? 'start' : mode}`, { plc: plc.id, live: false });
+        return void startAt((r) => {
+          log(`plc: ${user} ${{ plc: 'started', stop: 'stopped', restart: 'restarted', run: 'set Run mode on' }[mode]} ${plc.id}: ${r.ok ? r.state : r.error}`);
+          send(r);
+        }, { requestId, connection: ownConnection(plc), mode });
       }
 
       // Operator board: the machines of these PLCs (default: all), once a second

@@ -44,7 +44,7 @@ export interface PlcInstancesResult {
 export interface PlcStartAtRequest {
   requestId: number;
   connection: PlcConnection;
-  mode: 'plc' | 'run';
+  mode: 'plc' | 'stop' | 'restart' | 'run';
 }
 
 interface DesktopLiveApi {

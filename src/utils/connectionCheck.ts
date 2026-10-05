@@ -4,7 +4,7 @@
  */
 
 export interface CheckStep {
-  id: 'adapter' | 'network' | 'ping' | 'search' | 'port' | 'netid' | 'router' | 'ads';
+  id: 'adapter' | 'network' | 'ping' | 'search' | 'port' | 'netid' | 'router' | 'ads' | 'local' | 'plc';
   /** true: fine; false: the problem; null: a hint (not known, or not needed) */
   ok: boolean | null;
   title: string;

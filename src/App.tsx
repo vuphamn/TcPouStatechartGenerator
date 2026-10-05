@@ -249,6 +249,7 @@ import {
 } from './utils/liveGuards.ts';
 import type { LiveBrowseResult, LiveWatchVar, SymbolChild } from './utils/xaeHost.ts';
 import { type PlcInstancesResult, desktopLive } from './utils/liveHost.ts';
+import { ALL_PLC_CONTROLS, type PlcControlMode, type PlcControlResult, type PlcState } from './components/PlcControls.tsx';
 
 // (the layout file: its POU's name, of a path or of the web edition's web:<name>; routes compared key by key; no look)
 const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB_LAYOUT_PREFIX, '');
@@ -5447,6 +5448,10 @@ export const App: React.FC = () => {
   const linkBuildRef = useRef<HelperBuild | null>(null);
   // What the gateway can do beyond going live (its welcome: projectBuild, plcStart, ...)
   const [gatewayFeatures, setGatewayFeatures] = useState<string[]>([]);
+  // (for the callbacks declared before them)
+  const gatewayFeaturesRef = useRef(gatewayFeatures);
+  gatewayFeaturesRef.current = gatewayFeatures;
+  const gatewayRequestRef = useRef<<T>(message: Record<string, unknown>, replyType: string) => Promise<T>>(() => Promise.reject(new Error('Not connected')));
   const gatewayConnection = useCallback(() => {
     gatewayRef.current ??= new GatewayConnection((m) => {
       if (m.type === 'liveStatus') handleLiveStatus(m);
@@ -5971,6 +5976,8 @@ export const App: React.FC = () => {
     if (liveMode === 'desktop') return desktopLive()?.instances?.(req) ?? null;
     if (liveMode === 'web' && liveVia === 'link' && linkBuildRef.current?.features?.includes('instancesOffline'))
       return linkRequest<PlcInstancesResult>({ type: 'liveInstances', ...req }, 'liveInstancesResult', 60000).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
+    if (liveMode === 'web' && liveVia === 'gateway' && liveSettings.plc && gatewayFeaturesRef.current.includes('instancesOffline'))
+      return gatewayRequestRef.current<PlcInstancesResult>({ type: 'liveInstances', plc: liveSettings.plc, typeName, stateVar }, 'liveInstancesResult').catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }));
     return null;
   };
   // A PLC's project kept on this computer (desktop app, Link): going live on a PLC that runs another project than the
@@ -6440,6 +6447,7 @@ export const App: React.FC = () => {
     },
     [liveSettings.gateway, gatewayOrigin, gatewayToken, ssoUser, ssoHere, gatewayConnection]
   );
+  gatewayRequestRef.current = gatewayRequest;
   // The replay's clock: 100 ms steps times the speed, until the end
   const replayPlaying = !!replay?.playing;
   useEffect(() => {
@@ -6932,14 +6940,29 @@ export const App: React.FC = () => {
   // mode), and the found PLCs' states again while Browse is open (the desktop app, a Link that can)
   const handlePlcStartAt = useMemo(() => {
     const localNetId = liveSettings.localNetId.trim() || undefined;
-    const req = (d: FoundPlc, mode: 'plc' | 'run') => ({ requestId: Date.now() % 1e9, connection: { netId: d.netId, ip: d.ip || undefined, localNetId }, mode });
+    const req = (d: FoundPlc, mode: PlcControlMode) => ({ requestId: Date.now() % 1e9, connection: { netId: d.netId, ip: d.ip || undefined, localNetId }, mode });
     const api = desktopLive();
-    if (api?.startAt) return (d: FoundPlc, mode: 'plc' | 'run') => api.startAt!(req(d, mode));
+    if (api?.startAt) return (d: FoundPlc, mode: PlcControlMode) => api.startAt!(req(d, mode));
     if (viaLink && linkBuild?.features?.includes('plcStartAt'))
-      return (d: FoundPlc, mode: 'plc' | 'run') =>
-        linkRequest<{ state: string | null; ok: boolean; error?: string }>({ type: 'plcStartAt', ...req(d, mode) }, 'plcStartAtResult', 70000).catch((e: Error) => ({ state: null, ok: false, error: e.message }));
+      return (d: FoundPlc, mode: PlcControlMode) =>
+        linkRequest<PlcControlResult>({ type: 'plcStartAt', ...req(d, mode) }, 'plcStartAtResult', 70000).catch((e: Error) => ({ state: null, ok: false, error: e.message }));
     return undefined;
   }, [viaLink, linkBuild, linkRequest, liveSettings.localNetId]);
+  const plcControlModes: PlcControlMode[] = viaLink && !linkBuild?.features?.includes('plcStopAt') ? ['plc', 'run'] : ALL_PLC_CONTROLS;
+  // The gateway's PLC chosen, not live: its state (the Live tab reads it every few seconds) and Start / Stop / Restart /
+  // Run mode (a write: as the gateway allows; asked first)
+  const viaGatewayHere = liveMode === 'web' && liveVia === 'gateway';
+  const handleGatewayPlcState = useMemo(() => {
+    if (!viaGatewayHere || !liveSettings.plc || !gatewayFeatures.includes('plcStatesRefresh')) return undefined;
+    const plc = liveSettings.plc;
+    return () => gatewayRequest<{ devices?: { state?: PlcState; name?: string }[] }>({ type: 'plcStates', plcs: [plc] }, 'plcStatesResult').then((r) => r.devices?.[0]);
+  }, [viaGatewayHere, liveSettings.plc, gatewayFeatures, gatewayRequest]);
+  const handleGatewayPlcControl = useMemo(() => {
+    if (!viaGatewayHere || !liveSettings.plc || !gatewayFeatures.includes('plcStartAt')) return undefined;
+    const plc = liveSettings.plc;
+    return (mode: PlcControlMode) => gatewayRequest<PlcControlResult>({ type: 'plcStartAt', plc, mode }, 'plcStartAtResult').catch((e: Error) => ({ state: null, ok: false, error: e.message }));
+  }, [viaGatewayHere, liveSettings.plc, gatewayFeatures, gatewayRequest]);
+  const gatewayPlcControlModes: PlcControlMode[] = gatewayFeatures.includes('plcStopAt') ? ALL_PLC_CONTROLS : [];
   const handleRefreshPlcStates = useMemo(() => {
     const localNetId = liveSettings.localNetId.trim() || undefined;
     const req = (devices: FoundPlc[]) => ({ requestId: Date.now() % 1e9, localNetId, devices: devices.map((d) => ({ netId: d.netId, ip: d.ip ?? '', name: d.name })) });
@@ -7123,6 +7146,7 @@ export const App: React.FC = () => {
   // (installable: the installed desktop app's Update now; installing: its answer, while it downloads and after)
   const [updateOffer, setUpdateOffer] = useState<{ edition: string; version: string; current: string; url: string; installable?: boolean } | null>(null);
   const [updateInstall, setUpdateInstall] = useState<{ busy: boolean; text: string } | null>(null);
+  const [updateQuiet, setUpdateQuiet] = useState(() => !!loadUpdateSettings().quiet);
   const handleInstallUpdate = useCallback(async () => {
     if (!updateOffer) return;
     setUpdateInstall({ busy: true, text: `Downloading ${updateOffer.version}…` });
@@ -7137,7 +7161,7 @@ export const App: React.FC = () => {
         return;
       }
       const settings = loadUpdateSettings();
-      const r = await checkForUpdate(info.edition, info.version, settings);
+      const r = await checkForUpdate(info.edition, info.version, settings, info.releasesUrl);
       saveUpdateSettings({ ...settings, lastCheck: Date.now() });
       if (r.state === 'newer') {
         if (quiet && settings.skipped === r.version) return;
@@ -9284,6 +9308,10 @@ export const App: React.FC = () => {
             onScanPlcs={handleScanPlcs}
             onAddRoute={handleAddRoute}
             onPlcStartAt={handlePlcStartAt}
+            plcControlModes={plcControlModes}
+            onGatewayPlcState={handleGatewayPlcState}
+            onGatewayPlcControl={handleGatewayPlcControl}
+            gatewayPlcControlModes={gatewayPlcControlModes}
             onRefreshPlcStates={handleRefreshPlcStates}
             onCheckConnection={handleCheckConnection}
             onCheckPlc={handleCheckPlc}
@@ -9684,6 +9712,12 @@ export const App: React.FC = () => {
               {updateInstall.busy && <Loader2 className="inline w-3 h-3 mr-1 animate-spin" />}
               {updateInstall.text}
             </span>
+          )}
+          {updateOffer.installable && !updateInstall?.busy && (
+            <label className="flex items-center gap-1 text-xs text-slate-400 cursor-pointer" title="The installer without its pages; the app starts again when it is installed">
+              <input id="update-quiet" type="checkbox" checked={updateQuiet} onChange={(e) => { setUpdateQuiet(e.target.checked); saveUpdateSettings({ ...loadUpdateSettings(), quiet: e.target.checked }); }} />
+              quietly, then start again
+            </label>
           )}
           {updateOffer.installable && (
             <button

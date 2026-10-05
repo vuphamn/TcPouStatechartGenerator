@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
 import { firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
+import { ALL_PLC_CONTROLS, PlcActionButtons, PlcActionConfirm, PlcStateBadge, plcActionDone, plcActions, plcStateText, stateChanges, type PlcControlMode, type PlcControlResult } from './PlcControls.tsx';
 
 export interface PickedPlc {
   name: string;
@@ -16,6 +17,8 @@ export interface PickedPlc {
 
 /** A check's verdict: true (all steps pass), false (one fails), null (none yet) */
 const checkOk = (r: CheckResult | null | undefined) => (r ? r.steps.length > 0 && !r.steps.some((s) => s.ok === false) : null);
+/** Its PLC runs (answers, and no step about its PLC's state: that one is there only when it is not in Run) */
+export const checkRuns = (r: CheckResult | null | undefined) => (r ? checkOk(r) === true && !r.steps.some((s) => s.id === 'plc') : null);
 const EVERY_KEY = 'kss.plcCheckEvery';
 
 /**
@@ -28,6 +31,8 @@ export function useRememberedChecks(remembered: RememberedPlc[], checkPlc?: (req
   const [checks, setChecks] = useState<Record<string, CheckResult | null>>({});
   const [checkingAll, setCheckingAll] = useState(false);
   const [lost, setLost] = useState<Record<string, number>>({});
+  // (those that ran and answer with their PLC not in Run now: when, and what the check said)
+  const [stopped, setStopped] = useState<Record<string, { at: number; why: string }>>({});
   const [every, setEveryState] = useState<number>(() => {
     try {
       return Number(localStorage.getItem(EVERY_KEY)) || 0;
@@ -54,6 +59,11 @@ export function useRememberedChecks(remembered: RememberedPlc[], checkPlc?: (req
       const r = await checkPlc({ netId: p.netId, ip: p.ip, port: parseInt(p.port, 10) || undefined, localNetId: p.localNetId || undefined }).catch((e: unknown) => ({ steps: [], verdict: e instanceof Error ? e.message : String(e) }) as CheckResult);
       const was = checkOk(last.current[p.netId]);
       const now = checkOk(r);
+      // (it ran, and answers with its PLC not in Run now: stopped, or no program; Notify says so. One that stopped
+      // answering: lost)
+      const plcStep = r.steps.find((s) => s.id === 'plc');
+      if (checkRuns(last.current[p.netId]) === true && plcStep) setStopped((x) => ({ ...x, [p.netId]: { at: Date.now(), why: plcStep.title } }));
+      else if (checkRuns(r) === true) setStopped((x) => (p.netId in x ? Object.fromEntries(Object.entries(x).filter(([k]) => k !== p.netId)) : x));
       last.current[p.netId] = r;
       setChecks((c) => ({ ...c, [p.netId]: r }));
       setLost((l) => {
@@ -74,7 +84,7 @@ export function useRememberedChecks(remembered: RememberedPlc[], checkPlc?: (req
     const t = window.setInterval(() => void checkAllRef.current(), every * 60000);
     return () => window.clearInterval(t);
   }, [every, checkPlc]);
-  return { checks, checkingAll, checkAll, every, setEvery, lost };
+  return { checks, checkingAll, checkAll, every, setEvery, lost, stopped };
 }
 export type RememberedChecks = ReturnType<typeof useRememberedChecks>;
 
@@ -100,7 +110,11 @@ interface PlcBrowserProps {
   onRename?: (netId: string, name: string) => void;
   /** A found PLC started, not live, after a confirmation: its PLC from Stop ('plc'), TwinCAT from Config to Run mode
    * ('run') (absent: not offered) */
-  startPlc?: (plc: FoundPlc, mode: 'plc' | 'run') => Promise<{ state: string | null; ok: boolean; error?: string }>;
+  startPlc?: (plc: FoundPlc, mode: PlcControlMode) => Promise<PlcControlResult>;
+  /** What startPlc may do here (an older Link: start and Run mode only) */
+  controlModes?: PlcControlMode[];
+  /** A found PLC used and gone live on at once (absent: not offered) */
+  onGoLive?: (plc: PickedPlc) => void;
   /** The found PLCs' states again, every few seconds while open (absent: as the search found them) */
   refreshStates?: (devices: FoundPlc[]) => Promise<FoundPlc[]>;
   /** TwinCAT XAE opened on this computer (a PLC that runs no program: its project activated, its program downloaded) */
@@ -109,12 +123,14 @@ interface PlcBrowserProps {
 
 /** How often the found PLCs' states are read again while Browse is open */
 export const PLC_STATES_REFRESH_MS = 5000;
+/** How long a state that changed is marked */
+const CHANGE_SHOWN_MS = 30000;
 
 const rowClass = (current: boolean) =>
   `w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 ${current ? 'bg-sky-950/60' : ''}`;
 
 /** The Live tab's Browse: the remembered PLCs and the TwinCAT devices found on the network; a click picks one */
-export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc, checker, startPlc, refreshStates, openXae }) => {
+export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc, checker, startPlc, refreshStates, openXae, controlModes = ALL_PLC_CONTROLS, onGoLive }) => {
   // Check all: each remembered PLC in turn (the Live tab's, else this list's own)
   const own = useRememberedChecks(remembered, checker ? undefined : checkPlc);
   const { checks, checkingAll, checkAll, every, setEvery, lost } = checker ?? own;
@@ -157,17 +173,22 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => run(), []);
 
-  // Their states read again every few seconds while open: a PLC started (here or elsewhere) or stopped shown as it is
+  // Their states read again every few seconds while open: a PLC started (here or elsewhere) or stopped shown as it is;
+  // one that changed marked for a while (what it was, since when)
   const resultRef = useRef(result);
   resultRef.current = result;
   const refreshingRef = useRef(false);
+  const [changed, setChanged] = useState<Record<string, { from: string; at: number }>>({});
   const refreshNow = useCallback(() => {
     const devices = (resultRef.current?.devices ?? []).filter((d) => d.state && d.ip && d.source !== 'project');
     if (!refreshStates || refreshingRef.current || !devices.length) return;
     refreshingRef.current = true;
+    const before = new Map(devices.map((d) => [d.netId, plcStateText(d.state!)]));
     void refreshStates(devices)
       .then((list) => {
         const states = new Map(list.filter((d) => d.state).map((d) => [d.netId, d.state]));
+        const now = stateChanges(before, [...states.entries()], Date.now());
+        if (Object.keys(now).length) setChanged((c) => ({ ...c, ...now }));
         setResult((r) => (r ? { ...r, devices: r.devices.map((d) => (states.has(d.netId) ? { ...d, state: states.get(d.netId) } : d)) } : r));
       })
       .catch(() => {})
@@ -180,33 +201,27 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
     const t = setInterval(refreshNow, PLC_STATES_REFRESH_MS);
     return () => clearInterval(t);
   }, [refreshStates, refreshNow]);
+  // (a change shown for half a minute)
+  useEffect(() => {
+    const keys = Object.keys(changed);
+    if (!keys.length) return;
+    const t = setTimeout(() => setChanged((c) => Object.fromEntries(Object.entries(c).filter(([, v]) => Date.now() - v.at < CHANGE_SHOWN_MS))), CHANGE_SHOWN_MS);
+    return () => clearTimeout(t);
+  }, [changed]);
 
-  // A found PLC started from here: which one, how (asked first: what it drives may move), what it answered
-  const [startFor, setStartFor] = useState<{ netId: string; mode: 'plc' | 'run' } | null>(null);
+  // A found PLC started, stopped or restarted from here (or TwinCAT to Run mode): which one, how (asked first: what it
+  // drives may move), what it answered
+  const [startFor, setStartFor] = useState<{ netId: string; mode: PlcControlMode } | null>(null);
   const [startBusy, setStartBusy] = useState(false);
   const [startResult, setStartResult] = useState<{ netId: string; ok: boolean; text: string } | null>(null);
   const [xaeText, setXaeText] = useState<{ netId: string; text: string } | null>(null);
-  // (what its state offers: its PLC stopped: Start PLC; TwinCAT in Config mode: Run mode; no program: XAE)
-  const fixFor = (d: FoundPlc): 'plc' | 'run' | 'xae' | null => {
-    const s = d.state;
-    if (!s || s.error) return null;
-    if (s.system === 'Config') return 'run';
-    if (s.plc === 'Stop') return 'plc';
-    if (s.plc === 'Invalid') return 'xae';
-    return null;
-  };
-  const doStart = (d: FoundPlc, how: 'plc' | 'run') => {
+  const doStart = (d: FoundPlc, how: PlcControlMode) => {
     if (!startPlc) return;
     setStartBusy(true);
     setStartResult(null);
     void startPlc(d, how)
       .then((r) => {
-        const text = r.ok
-          ? how === 'run'
-            ? `TwinCAT is in Run mode on ${d.name || d.netId}`
-            : `Its PLC runs (${r.state ?? 'Run'})`
-          : `Not started${r.state ? ` (${r.state})` : ''}: ${r.error ?? 'no answer'}`;
-        setStartResult({ netId: d.netId, ok: r.ok, text });
+        setStartResult({ netId: d.netId, ok: r.ok, text: plcActionDone(how, r, d.name || d.netId) });
         if (r.ok) setStartFor(null);
       })
       .finally(() => {
@@ -215,39 +230,6 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
       });
   };
 
-  // (its state, as going live would see it: green when its PLC runs, amber when it does not, grey when it did not
-  // answer; its project's name beside it)
-  const stateBadge = (d: FoundPlc) => {
-    const s = d.state;
-    if (!s) return null;
-    if (s.error) {
-      return (
-        <span className="live-plc-state shrink-0 px-1 rounded bg-slate-800 text-slate-400 text-[10px]" data-state="error" title={`Did not answer: ${s.error}. Add route gives it one for this computer`}>
-          {/route/i.test(s.error) ? 'no route' : 'no answer'}
-        </span>
-      );
-    }
-    const running = s.plc === 'Run';
-    const text = s.system === 'Config' ? 'Config' : !s.plc || s.plc === 'none' ? 'no PLC' : s.plc === 'Invalid' ? 'no program' : s.plc === 'Run' ? 'Run' : s.plc;
-    const why =
-      s.system === 'Config'
-        ? 'TwinCAT is in Config mode: no PLC runs'
-        : s.plc === 'Invalid'
-          ? 'Its PLC runs no program (not started, or its license ran out)'
-          : !s.plc || s.plc === 'none'
-            ? 'No PLC on ADS port 851'
-            : `Its PLC is in ${s.plc}`;
-    return (
-      <span
-        className={`live-plc-state shrink-0 px-1 rounded text-[10px] ${running ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'}`}
-        data-state={text}
-        title={`TwinCAT ${s.system ?? '?'}; ${why}${s.project ? `; project ${s.project}` : ''}`}
-      >
-        {text}
-        {s.project ? ` · ${s.project}` : ''}
-      </span>
-    );
-  };
   const routeBadge = (d: FoundPlc) =>
     mode !== 'xae' ? null : d.route ? (
       <span className="shrink-0 px-1 rounded bg-emerald-900/60 text-emerald-300 text-[10px]" title="The TwinCAT router of this computer has a route to it: XAE can go live on it">
@@ -292,7 +274,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                     value={String(every)}
                     onChange={(e) => setEvery(Number(e.target.value))}
                     className="bg-slate-950 border border-slate-700 rounded text-[10px] text-slate-300 px-0.5"
-                    title="Check them all again every few minutes (while this app is open): a PLC that stops answering is marked"
+                    title="Check them all again every few minutes (while this app is open): a PLC that stops answering is marked; with Notify on, one that stops answering or stops running is said with a notification"
                   >
                     <option value="0">once</option>
                     <option value="1">every minute</option>
@@ -369,7 +351,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       <span className="ml-auto shrink-0 font-mono text-slate-400">{d.netId}</span>
                       {d.ip && <span className="shrink-0 font-mono text-slate-500">{d.ip}</span>}
                       {d.twincat && <span className="shrink-0 text-slate-500">{d.twincat}</span>}
-                      {stateBadge(d)}
+                      <PlcStateBadge state={d.state} changed={changed[d.netId]} />
                       {routeBadge(d)}
                     </button>
                     {canRoute && (
@@ -385,22 +367,18 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                         Add route
                       </button>
                     )}
-                    {startPlc && (fixFor(d) === 'plc' || fixFor(d) === 'run') && (
-                      <button
-                        className="live-plc-start shrink-0 ml-1 px-1.5 rounded border border-amber-700 text-[10px] text-amber-300 hover:bg-slate-800"
-                        data-netid={d.netId}
-                        data-mode={fixFor(d)!}
-                        onClick={() => {
-                          const how = fixFor(d) as 'plc' | 'run';
-                          setStartFor(startFor?.netId === d.netId ? null : { netId: d.netId, mode: how });
+                    {startPlc && (
+                      <PlcActionButtons
+                        modes={plcActions(d.state, controlModes)}
+                        className="live-plc-start"
+                        netId={d.netId}
+                        onPick={(how) => {
+                          setStartFor(startFor?.netId === d.netId && startFor.mode === how ? null : { netId: d.netId, mode: how });
                           setStartResult(null);
                         }}
-                        title={fixFor(d) === 'run' ? 'Set TwinCAT there to Run mode (it restarts; asked first)' : 'Start its PLC (asked first)'}
-                      >
-                        {fixFor(d) === 'run' ? 'Run mode' : 'Start PLC'}
-                      </button>
+                      />
                     )}
-                    {openXae && fixFor(d) === 'xae' && (
+                    {openXae && d.state?.plc === 'Invalid' && d.state.system !== 'Config' && (
                       <button
                         className="live-plc-open-xae shrink-0 ml-1 px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:text-sky-300 hover:bg-slate-800"
                         data-netid={d.netId}
@@ -410,24 +388,20 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                         Open in XAE
                       </button>
                     )}
+                    {onGoLive && d.state && !d.state.error && d.source !== 'project' && (
+                      <button
+                        className="live-plc-go-live shrink-0 ml-1 px-1.5 rounded border border-emerald-700 text-[10px] text-emerald-300 hover:bg-slate-800"
+                        data-netid={d.netId}
+                        onClick={() => onGoLive({ name: d.name || d.ip || d.netId, netId: d.netId, ip: d.ip, twincat: d.twincat, os: d.os })}
+                        title="Use this PLC and go live on it"
+                      >
+                        Go live
+                      </button>
+                    )}
                   </div>
                   {xaeText?.netId === d.netId && <div className="live-plc-xae-result ml-2 my-0.5 text-slate-400">{xaeText.text}</div>}
                   {startFor?.netId === d.netId && (
-                    <div id="live-plc-start-form" className="ml-2 mr-1 my-1 p-1.5 rounded border border-amber-800 bg-slate-900 space-y-1">
-                      <div className="text-amber-200">
-                        {startFor.mode === 'run'
-                          ? `Set TwinCAT on ${d.name || d.netId} to Run mode? It restarts with its activated configuration, and its PLC starts as its boot project says: what it drives may move.`
-                          : `Start the PLC on ${d.name || d.netId}? Its program runs from where it stopped: what it drives may move.`}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button id="live-plc-start-confirm" disabled={startBusy} onClick={() => doStart(d, startFor.mode)} className="px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white">
-                          {startBusy ? <Loader2 className="inline w-3 h-3 animate-spin" /> : startFor.mode === 'run' ? 'Run mode' : 'Start'}
-                        </button>
-                        <button onClick={() => setStartFor(null)} className="px-2 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800">
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
+                    <PlcActionConfirm idPrefix="live-plc-start" mode={startFor.mode} name={d.name || d.netId} busy={startBusy} onConfirm={() => doStart(d, startFor.mode)} onCancel={() => setStartFor(null)} />
                   )}
                   {startResult?.netId === d.netId && (
                     <div id="live-plc-start-result" data-ok={String(startResult.ok)} className={`ml-2 my-0.5 ${startResult.ok ? 'text-emerald-300' : 'text-rose-300'}`}>

@@ -13,10 +13,13 @@ const { readMasters } = require('./tcEcat.cjs');
 const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
-const { plcAppInfo, startPlc } = require('./tcAppInfo.cjs');
+const { plcAppInfo, startPlc, stopPlc, restartPlc } = require('./tcAppInfo.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
 
 const LOCAL_ADS_PORT = 32905;
+// (the connections of their own, not live: another local port than the live session's, so that one to the same PLC
+// at the same time, Browse's states read again while live, does not take the live one's place on the PLC)
+const OWN_ADS_PORT = 32908;
 
 // Adapters that do not reach a PLC on the network: virtual switches (Hyper-V, WSL, VirtualBox, VMware), Bluetooth,
 // Wi-Fi Direct; and addresses without a network (169.254: no DHCP answer)
@@ -98,7 +101,8 @@ function defaultLocalNetId(localIp) {
 /**
  * A connection of its own to a PLC's system service (port 10000: its boot folder), not live: the same way there as
  * going live (this computer's TwinCAT router first when it has a route, else straight to the PLC with this
- * computer's NetId). options: { netId, ip?, localNetId? }; port: the ADS port (its PLC's: 851 …) → a connected client
+ * computer's NetId). options: { netId, ip?, localNetId?, localAdsPort? (default OWN_ADS_PORT) }; port: the ADS port
+ * (its PLC's: 851 …) → a connected client
  * (the caller disconnects it)
  */
 async function systemClient(options, port = 10000) {
@@ -115,7 +119,7 @@ async function systemClient(options, port = 10000) {
       targetAdsPort: port,
       routerAddress: router ? '127.0.0.1' : host,
       routerTcpPort: router ? 48898 : tcpPort,
-      ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: LOCAL_ADS_PORT }),
+      ...(router ? {} : { localAmsNetId: localNetId, localAdsPort: Number(options.localAdsPort) || OWN_ADS_PORT }),
       rawClient: true,
       autoReconnect: false,
       timeoutDelay: 5000,
@@ -140,6 +144,80 @@ async function systemClient(options, port = 10000) {
     await c.disconnect().catch(() => {});
     throw new Error(`${host} did not answer (${ads.adsErrorText(err)}). Is there an ADS route on the PLC for this computer (AMS NetId ${localNetId})?`);
   }
+}
+
+/**
+ * The instances of a POU type in a PLC, before going live (the one to follow chosen first): req { requestId,
+ * connection: { netId, ip?, port?, localNetId? }, typeName, stateVar } → liveInstancesResult { requestId, instances,
+ * plcState } (only those whose state variable is there), or { error } (its PLC not running: said)
+ */
+async function instancesAt(send, req) {
+  const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+  const typeName = String(req?.typeName ?? '');
+  const stateVar = String(req?.stateVar ?? 'machineState');
+  if (!/^[A-Za-z_][\w.]*$/.test(typeName) || !/^[A-Za-z_]\w*$/.test(stateVar)) return send({ type: 'liveInstancesResult', requestId, error: 'Invalid type or state variable' });
+  let c = null;
+  try {
+    const port = Number(req?.connection?.port) || 851;
+    c = await systemClient(req?.connection, port);
+    const plcState = ads.ADS_STATES[(await c.readState()).adsState] ?? 'unknown';
+    if (plcState !== 'Run' && plcState !== 'Stop') return send({ type: 'liveInstancesResult', requestId, plcState, error: `Its PLC runs no program (${plcState}): not started, or its license ran out (Browse: Open in XAE)` });
+    const candidates = await ads.discoverInstances(c, typeName);
+    const instances = [];
+    for (const p of candidates) if (await ads.probe(c, `${p}.${stateVar}`)) instances.push(p);
+    send({ type: 'liveInstancesResult', requestId, instances, plcState });
+  } catch (err) {
+    // (no PLC there: TwinCAT in Config mode said as such, from its system service)
+    let system = null;
+    if (!c) system = await systemClient(req?.connection, 10000).then(async (s) => { try { return ads.ADS_STATES[(await s.readState()).adsState] ?? null; } finally { await s.disconnect().catch(() => {}); } }).catch(() => null);
+    const error = system === 'Config' ? 'TwinCAT is in Config mode there: no PLC runs (Browse offers Run mode)' : err?.message ?? ads.adsErrorText(err);
+    send({ type: 'liveInstancesResult', requestId, ...(system === 'Config' ? { plcState: 'Config' } : {}), error });
+  } finally {
+    await c?.disconnect().catch(() => {});
+  }
+}
+
+/**
+ * A PLC started (or stopped) from Browse, not live (after the user confirmed): req { requestId, connection, mode:
+ * 'plc' (its PLC from Stop to Run) | 'stop' (to Stop) | 'restart' (Reset, then Run: its variables to their initial
+ * values) | 'run' (TwinCAT from Config to Run mode: it restarts; its activated configuration), timeoutMs? }
+ * → plcStartAtResult { requestId, ok, state, error? }
+ */
+async function startAt(send, req) {
+  const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+  const timeoutMs = Math.min(60000, Math.max(2000, Number(req?.timeoutMs) || 30000));
+  let c = null;
+  try {
+    if (req?.mode === 'run') {
+      c = await systemClient(req?.connection, 10000);
+      await c.writeControl('Reset', 0);
+      // (TwinCAT restarts: its system service answers again, in Run)
+      let state = null;
+      for (const until = Date.now() + timeoutMs; Date.now() < until; ) {
+        await new Promise((r) => setTimeout(r, 1000));
+        state = await c.readState().then((s) => ads.ADS_STATES[s.adsState] ?? 'unknown').catch(() => null);
+        if (state === 'Run') break;
+      }
+      return send({ type: 'plcStartAtResult', requestId, ok: state === 'Run', state, ...(state === 'Run' ? {} : { error: `TwinCAT is in ${state ?? 'no answer'} after the restart: look at its messages there (its license, its configuration)` }) });
+    }
+    c = await systemClient(req?.connection, Number(req?.connection?.port) || 851);
+    const how = req?.mode === 'stop' ? stopPlc : req?.mode === 'restart' ? restartPlc : startPlc;
+    send({ type: 'plcStartAtResult', requestId, ...(await how(c, { timeoutMs })) });
+  } catch (err) {
+    send({ type: 'plcStartAtResult', requestId, ok: false, state: null, error: err?.message ?? ads.adsErrorText(err) });
+  } finally {
+    await c?.disconnect().catch(() => {});
+  }
+}
+
+/** The found PLCs' states again (Browse, refreshed while open): req { requestId, devices } → plcStatesResult { devices } */
+async function plcStates(send, req) {
+  const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
+  const devices = (Array.isArray(req?.devices) ? req.devices : [])
+    .filter((d) => d && /^\d+(\.\d+){5}$/.test(String(d.netId ?? '')) && /^[A-Za-z0-9.-]{0,253}(:\d{1,5})?$/.test(String(d.ip ?? '')))
+    .slice(0, 32)
+    .map((d) => ({ netId: String(d.netId), ip: String(d.ip ?? ''), name: String(d.name ?? '').slice(0, 100) }));
+  send({ type: 'plcStatesResult', requestId, devices: await require('./tcPlcState.cjs').describePlcs(devices, { localNetId: /^\d+(\.\d+){5}$/.test(String(req?.localNetId ?? '')) ? req.localNetId : undefined }) });
 }
 
 function createLiveSession(hooks = {}) {
@@ -410,78 +488,6 @@ function createLiveSession(hooks = {}) {
     }
   }
 
-  /**
-   * The instances of a POU type in a PLC, before going live (the one to follow chosen first): req { requestId,
-   * connection: { netId, ip?, port?, localNetId? }, typeName, stateVar } → liveInstancesResult { requestId, instances,
-   * plcState } (only those whose state variable is there), or { error } (its PLC not running: said)
-   */
-  async function instancesAt(send, req) {
-    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
-    const typeName = String(req?.typeName ?? '');
-    const stateVar = String(req?.stateVar ?? 'machineState');
-    if (!/^[A-Za-z_][\w.]*$/.test(typeName) || !/^[A-Za-z_]\w*$/.test(stateVar)) return send({ type: 'liveInstancesResult', requestId, error: 'Invalid type or state variable' });
-    let c = null;
-    try {
-      const port = Number(req?.connection?.port) || 851;
-      c = await systemClient(req?.connection, port);
-      const plcState = ads.ADS_STATES[(await c.readState()).adsState] ?? 'unknown';
-      if (plcState !== 'Run' && plcState !== 'Stop') return send({ type: 'liveInstancesResult', requestId, plcState, error: `Its PLC runs no program (${plcState})` });
-      const candidates = await ads.discoverInstances(c, typeName);
-      const instances = [];
-      for (const p of candidates) if (await ads.probe(c, `${p}.${stateVar}`)) instances.push(p);
-      send({ type: 'liveInstancesResult', requestId, instances, plcState });
-    } catch (err) {
-      // (no PLC there: TwinCAT in Config mode said as such, from its system service)
-      let system = null;
-      if (!c) system = await systemClient(req?.connection, 10000).then(async (s) => { try { return ads.ADS_STATES[(await s.readState()).adsState] ?? null; } finally { await s.disconnect().catch(() => {}); } }).catch(() => null);
-      const error = system === 'Config' ? 'TwinCAT is in Config mode there: no PLC runs (Browse offers Run mode)' : err?.message ?? ads.adsErrorText(err);
-      send({ type: 'liveInstancesResult', requestId, ...(system === 'Config' ? { plcState: 'Config' } : {}), error });
-    } finally {
-      await c?.disconnect().catch(() => {});
-    }
-  }
-
-  /**
-   * A PLC started from Browse, not live (after the user confirmed): req { requestId, connection, mode: 'plc' (its PLC
-   * from Stop to Run) | 'run' (TwinCAT from Config to Run mode: it restarts; its activated configuration), timeoutMs? }
-   * → plcStartAtResult { requestId, ok, state, error? }
-   */
-  async function startAt(send, req) {
-    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
-    const timeoutMs = Math.min(60000, Math.max(2000, Number(req?.timeoutMs) || 30000));
-    let c = null;
-    try {
-      if (req?.mode === 'run') {
-        c = await systemClient(req?.connection, 10000);
-        await c.writeControl('Reset', 0);
-        // (TwinCAT restarts: its system service answers again, in Run)
-        let state = null;
-        for (const until = Date.now() + timeoutMs; Date.now() < until; ) {
-          await new Promise((r) => setTimeout(r, 1000));
-          state = await c.readState().then((s) => ads.ADS_STATES[s.adsState] ?? 'unknown').catch(() => null);
-          if (state === 'Run') break;
-        }
-        return send({ type: 'plcStartAtResult', requestId, ok: state === 'Run', state, ...(state === 'Run' ? {} : { error: `TwinCAT is in ${state ?? 'no answer'} after the restart: look at its messages there (its license, its configuration)` }) });
-      }
-      c = await systemClient(req?.connection, Number(req?.connection?.port) || 851);
-      send({ type: 'plcStartAtResult', requestId, ...(await startPlc(c, { timeoutMs })) });
-    } catch (err) {
-      send({ type: 'plcStartAtResult', requestId, ok: false, state: null, error: err?.message ?? ads.adsErrorText(err) });
-    } finally {
-      await c?.disconnect().catch(() => {});
-    }
-  }
-
-  /** The found PLCs' states again (Browse, refreshed while open): req { requestId, devices } → plcStatesResult { devices } */
-  async function plcStates(send, req) {
-    const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
-    const devices = (Array.isArray(req?.devices) ? req.devices : [])
-      .filter((d) => d && /^\d+(\.\d+){5}$/.test(String(d.netId ?? '')) && /^[A-Za-z0-9.-]{0,253}(:\d{1,5})?$/.test(String(d.ip ?? '')))
-      .slice(0, 32)
-      .map((d) => ({ netId: String(d.netId), ip: String(d.ip ?? ''), name: String(d.name ?? '').slice(0, 100) }));
-    send({ type: 'plcStatesResult', requestId, devices: await require('./tcPlcState.cjs').describePlcs(devices, { localNetId: /^\d+(\.\d+){5}$/.test(String(req?.localNetId ?? '')) ? req.localNetId : undefined }) });
-  }
-
   async function sources(send, req) {
     const requestId = Number.isInteger(req?.requestId) ? req.requestId : 0;
     const s = session;
@@ -685,4 +691,4 @@ function createLiveSession(hooks = {}) {
   return { start, stop, watch, browse, sources, instancesAt, startAt, plcStates, ioTree, ecatStates, projectCopy, projectPou, layoutFile, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
-module.exports = { createLiveSession, systemClient, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };
+module.exports = { createLiveSession, systemClient, instancesAt, startAt, plcStates, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };
