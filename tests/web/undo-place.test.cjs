@@ -31,13 +31,19 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(Math.hypot(a1.x - a0.x, a1.y - a0.y) > 40, `${S} moved (${(a1.x - a0.x).toFixed(0)},${(a1.y - a0.y).toFixed(0)})`);
 
   // Deleted (Delete, confirmed)
-  await p.mouse.click(a1.x, a1.y);
-  await h.sleep(200);
-  await p.keyboard.press('Delete');
-  await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+  // (selected first: on a busy machine the click after the drag may land before the chart is drawn again; asked once
+  // more when the question did not come)
+  let asked = null;
+  for (let i = 0; i < 2 && !asked; i++) {
+    const now = (await at()) ?? a1;
+    await p.mouse.click(now.x, now.y);
+    await h.sleep(400);
+    await p.keyboard.press('Delete');
+    asked = await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => null);
+  }
   await p.click('#text-prompt-submit').catch(() => {});
-  await h.sleep(1500);
-  expect(!(await at()), `${S} deleted`);
+  for (let i = 0; i < 30 && (await at()); i++) await h.sleep(200);
+  expect(!(await at()), `${S} deleted${asked ? '' : ' (no question came)'}`);
 
   // Ctrl+Z: back, where it was moved to
   // (the canvas's focus: a click on an empty spot of it)

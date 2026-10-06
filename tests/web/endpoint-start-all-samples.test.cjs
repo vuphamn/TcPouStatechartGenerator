@@ -80,7 +80,8 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
     const state = (id) => !!svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`);
     return [...new Set([...svg.querySelectorAll('path.tc-edge-path[data-edge-key]')].map((x) => x.getAttribute('data-edge-key')))].filter((k) => {
       const [from, to] = k.split('->');
-      return from !== '[*]' && from !== 'AnyState' && to !== '[*]' && state(from) && state(to);
+      // (a sub-machine's transitions, <state>__<method>__<name>: changed in its method, not by dragging)
+      return from !== '[*]' && from !== 'AnyState' && to !== '[*]' && state(from) && state(to) && !from.includes('__') && !to.includes('__');
     });
   });
   // A point of the edge's own line on screen (not covered), and the state to drop on (near, not its ends)

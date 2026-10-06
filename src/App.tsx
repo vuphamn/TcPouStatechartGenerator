@@ -80,7 +80,7 @@ import {
   AlignVerticalSpaceAround,
   Grid3x3,
 } from 'lucide-react';
-import { generateStatechart, generateStatechartModel, inferredComposites, PriorityFormat } from './generator.ts';
+import { generateStatechart, generateStatechartModel, inferredComposites, PriorityFormat, subMachinesOf } from './generator.ts';
 import {
   MermaidViewer,
   MermaidViewerHandle,
@@ -183,7 +183,7 @@ import type { CheckRequest, CheckResult } from './utils/connectionCheck.ts';
 import { base64ToBytes, buildItemWhere, bytesToBase64, itemInPou, placeOfXaeFile, plcEdits, type PlcAppInfo, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
-import { locateState, locateTransition } from './utils/sourceLocation.ts';
+import { locateState, locateTransition, subMachineId } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
 import { StatusBar, type LayoutMenu, type LayoutStatus } from './components/StatusBar.tsx';
@@ -2153,6 +2153,14 @@ export const App: React.FC = () => {
     },
     [pouFileName, showCopyToast]
   );
+  // (a state's branch that calls a method with a state machine of its own: its sub-machine; see setSubMachineExpanded)
+  const subMachines = useMemo(() => {
+    try {
+      return pouContent ? subMachinesOf(pouContent) : [];
+    } catch {
+      return [];
+    }
+  }, [pouContent]);
   // A state's tooltip on the canvas: its entry / do / exit actions in full (a few lines each)
   const stateTooltips = useMemo(() => {
     const out: Record<string, string> = {};
@@ -2175,9 +2183,28 @@ export const App: React.FC = () => {
       if (lines.length > MAX) shown.push(`… ${lines.length - MAX} more lines (Method Editor)`);
       out[st.id] = `${st.id}\n${shown.join('\n')}`;
     }
+    // A sub-machine's states (drawn inside the state that calls its method): their branch in that method's CASE
+    for (const m of subMachines) {
+      const code = getMethodCodeFromPou(pouContent, m.method);
+      if (!code.methodFound) continue;
+      const mLines = code.code.replace(/\r\n/g, '\n').split('\n');
+      const mBlank = blankComments(mLines.join('\n')).split('\n');
+      for (const name of m.states) {
+        const range = caseBranchRange(mBlank, name);
+        if (!range) continue;
+        const lines = mLines.slice(range.start + 1, range.end);
+        while (lines.length && !lines[0].trim()) lines.shift();
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+        if (!lines.length) continue;
+        const common = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0].replace(/\t/g, '    ').length));
+        const shown = lines.slice(0, MAX).map((l) => `  ${l.replace(/\t/g, '    ').slice(common)}`);
+        if (lines.length > MAX) shown.push(`… ${lines.length - MAX} more lines (Method Editor)`);
+        out[`${m.parent}__${m.method}__${name}`] = `${m.method}() · ${name}\n${shown.join('\n')}`;
+      }
+    }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pouContent, dutContent, identifiedStatesResult]);
+  }, [pouContent, dutContent, identifiedStatesResult, subMachines]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   // The watched variables, kept per POU
   const userWatchRef = useRef<string[]>([]);
@@ -2871,6 +2898,12 @@ export const App: React.FC = () => {
   const handleEdgeEndpointDrop = useCallback(
     (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => {
       if (!pouContent) return;
+      // (a sub-machine's transition, or a drop on one of its states: written in its method, changed there)
+      const sub = subMachineId(pouContent, edge.to) ?? subMachineId(pouContent, edge.from) ?? subMachineId(pouContent, stateId);
+      if (sub) {
+        showCopyToast(`${sub.method}()'s transitions are changed in its code (Go to code on the transition: the Method Editor)`, 'error', 6000);
+        return;
+      }
       if (!knownStates.has(stateId)) {
         showCopyToast(`${stateId} is not a state of the enum / doState() (a composite state?)`, 'error');
         return;
@@ -3488,8 +3521,8 @@ export const App: React.FC = () => {
     }
   }, [pouContent, dutContent, composites]);
   // A composite collapsed (one box) or expanded again: kept per POU in this browser
-  const setCollapsed = useCallback(
-    (name: string, on: boolean) => {
+  const storeCollapsed = useCallback(
+    (name: string, on: boolean) =>
       setCollapsedComposites((cur) => {
         const next = on ? [...new Set([...cur, name])] : cur.filter((x) => x !== name);
         try {
@@ -3500,10 +3533,24 @@ export const App: React.FC = () => {
           // (this session only)
         }
         return next;
-      });
+      }),
+    [pouFileName]
+  );
+  const setCollapsed = useCallback(
+    (name: string, on: boolean) => {
+      storeCollapsed(name, on);
       showCopyToast(on ? `${name} collapsed: one box (right-click it: Expand)` : `${name} expanded`, 'success');
     },
-    [pouFileName, showCopyToast]
+    [storeCollapsed, showCopyToast]
+  );
+  // Sub-machines (a state's branch calls a method with a state machine of its own): drawn inside it unless collapsed
+  // ("-<state>" kept with the collapsed composites: per POU, in the layout file too)
+  const setSubMachineExpanded = useCallback(
+    (parent: string, method: string, on: boolean) => {
+      storeCollapsed(`-${parent}`, !on);
+      showCopyToast(on ? `${parent}: its sub-machine ${method} shown inside it (right-click its title: Collapse)` : `${parent}: its sub-machine ${method} collapsed`, 'success');
+    },
+    [storeCollapsed, showCopyToast]
   );
   // A composite dragged into another one (its {region} block nested there), or out of the one it is in
   const handleCompositeDropped = useCallback(
@@ -4640,6 +4687,12 @@ export const App: React.FC = () => {
       }
       // A composite's title or border: its colour
       if (target.type === 'composite') {
+        // (a state drawn with its sub-machine inside: Collapse)
+        const sub = subMachines.find((m) => m.parent === target.id || m.parent.replace(/[.\-\s]/g, '_') === target.id);
+        if (sub && !collapsedComposites.includes(`-${sub.parent}`)) {
+          items.push({ id: 'submachine-collapse-btn', label: `Collapse sub-machine ${sub.method}`, icon: <Minimize2 className="w-3.5 h-3.5" />, title: `${sub.parent} drawn as one state again (its label says it has one)`, onSelect: () => setSubMachineExpanded(sub.parent, sub.method, false) });
+          return items;
+        }
         // (the name drawn: the enum's region, spaces and dots made _)
         const name = composites.find((c) => c.name === target.id || c.name.replace(/[.\-\s]/g, '_') === target.id)?.name;
         if (!name) return items;
@@ -4705,6 +4758,36 @@ export const App: React.FC = () => {
       if (target.type === 'node' && collapsedComposites.includes(target.id)) {
         items.push({ id: 'composite-expand-btn', label: `Expand ${target.id}`, icon: <Maximize2 className="w-3.5 h-3.5" />, title: 'Drawn with its states again', onSelect: () => setCollapsed(target.id, false) });
         return items;
+      }
+      // A sub-machine's state (drawn inside the state that calls its method): its code is in that method
+      const subStateId = target.type === 'node' ? target.id : '';
+      const subState = subStateId ? subMachineId(pouContent, subStateId) : null;
+      if (subState) {
+        items.push({
+          id: 'goto-code-btn',
+          label: 'Go to code',
+          icon: <Code2 className="w-3.5 h-3.5" />,
+          title: `${subState.name}'s branch in ${subState.method}(), in the Method Editor`,
+          onSelect: () => {
+            const loc = locateState(pouContent, subStateId);
+            if (!loc) return showCopyToast(`${subState.name} was not found in ${subState.method}()`, 'error');
+            handleOpenInspectorPanel('method', { method: `${loc.method}()` });
+            setCodeJump({ method: loc.method, line: loc.line, nonce: Date.now() });
+          },
+        });
+        return items;
+      }
+      // (a state whose branch calls a method with its own state machine: shown inside it, or collapsed again)
+      const subOf = target.type === 'node' ? subMachines.find((m) => m.parent === target.id) : undefined;
+      if (subOf) {
+        const open = !collapsedComposites.includes(`-${subOf.parent}`);
+        items.push({
+          id: open ? 'submachine-collapse-btn' : 'submachine-expand-btn',
+          label: `${open ? 'Collapse' : 'Expand'} sub-machine ${subOf.method}`,
+          icon: open ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />,
+          title: open ? `${subOf.parent} drawn as one state again` : `${subOf.method}()'s states drawn inside ${subOf.parent} (it is called from its branch)`,
+          onSelect: () => setSubMachineExpanded(subOf.parent, subOf.method, !open),
+        });
       }
       if (target.type === 'node') {
         items.push(
@@ -4862,9 +4945,9 @@ export const App: React.FC = () => {
       // A transition's priority (its order in the state's doState() branch, or in preProcess())
       if (target.type === 'edge' && pouContent) {
         const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
-        // Go to code: its condition where it is, in doState() or preProcess()
-        if (edge.from !== '[*]')
-          items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()'}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
+        // Go to code: its condition where it is, in doState() or preProcess(); a sub-machine's entry: where its start is set
+        if (edge.from !== '[*]' || subMachineId(pouContent, edge.to))
+          items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${subMachineId(pouContent, currentEdge(edge).to) ? `${subMachineId(pouContent, currentEdge(edge).to)!.method}()` : edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()'}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
         // (a choice's arm: its state's order)
         const real = currentEdge(edge);
         const order = transitionOrder(pouContent, real, varFor(real.from));
@@ -4956,7 +5039,7 @@ export const App: React.FC = () => {
       }
       return items;
     },
-    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance, drawnEdge, composites, compositeOwnColors, compositeColor, handleCompositeColor, pendingComposites, handleWriteCompositeMarkers, historyState, stepHistory, collapsedComposites, setCollapsed]
+    [findPathsFor, groupSnapEach, setGroupSnapEach, pouContent, dutContent, handleRenameState, handleAddState, machineMembers, availableEdges, handleOpenReferenced, stateVarName, handleTransitionPriority, handleCopyState, handlePasteState, handleDeleteState, handleDeleteTransition, knownStates, handleSetInitial, handleToggleFinal, handleMoveToComposite, compositeOfState, handleSetCompositeInitial, isFinal, handleAddStateFrom, handleEditCondition, bookmarks, handleToggleBookmark, handleFindReferences, multiSelected, seen, learnedPou, seenPouType, liveStatus.instance, windowInstance, drawnEdge, composites, compositeOwnColors, compositeColor, handleCompositeColor, pendingComposites, handleWriteCompositeMarkers, historyState, stepHistory, collapsedComposites, setCollapsed, subMachines, setSubMachineExpanded, currentEdge, handleOpenInspectorPanel, showCopyToast]
   );
   // Go to Symbol: the project's types and GVL variables, this POU's methods, members and states
   const symbolCommands = (): PaletteCommand[] => {

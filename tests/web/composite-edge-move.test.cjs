@@ -3,6 +3,7 @@
 // KANALOGMEASURE_DISABLED moves the IF into DISABLED's branch of doState() (not "no CASE branch" for the composite).
 // (READY is marked final first: only a final state's transitions leave from the border)
 // Collapse error-sink edges is off by default
+// (KAnalogMeasure's sub-machine, readDiagnostics() in KANALOGMEASURE_ENABLING, collapsed: the layout it was written for)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -15,7 +16,7 @@ const TO = 'KANALOGMEASURE_ERROR';
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
-  await p.evaluate(() => localStorage.clear());
+  await p.evaluate(() => { localStorage.clear(); localStorage.setItem('kss.collapsed.SM_KAnalogMeasure', JSON.stringify(['-KANALOGMEASURE_ENABLING'])); });
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   expect(await p.$eval('#collapse-errors-checkbox', (e) => !e.checked).catch(() => false), 'Collapse error-sink edges: off by default');

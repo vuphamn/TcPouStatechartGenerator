@@ -1,6 +1,7 @@
 // A transition nested in IFs (KAnalogMeasure: ENABLING → ERROR, inside "ELSIF status_bDeviceCommReady"): its start
 // endpoint dragged onto DISABLED moves its code there, inside the IF it was in; the Method Editor's Diff (no edits of
 // its own) shows the POU's change; Dagre: the handle under the pointer while dragged
+// (KAnalogMeasure's sub-machine, readDiagnostics() in KANALOGMEASURE_ENABLING, collapsed: the layout it was written for)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -16,7 +17,7 @@ const NEW = 'KANALOGMEASURE_DISABLED';
   // (a reload with the POU changed: the page asks first; yes)
   p.on('dialog', (d) => void d.accept().catch(() => {}));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
-  await p.evaluate(() => localStorage.clear());
+  await p.evaluate(() => { localStorage.clear(); localStorage.setItem('kss.collapsed.SM_KAnalogMeasure', JSON.stringify(['-KANALOGMEASURE_ENABLING'])); });
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.select('#sample-selector', 'k-analog-measure');
@@ -86,7 +87,7 @@ const NEW = 'KANALOGMEASURE_DISABLED';
   await h.sleep(300);
 
   // Dagre: the handle stays under the pointer (the sample loaded afresh)
-  await p.evaluate(() => localStorage.clear());
+  await p.evaluate(() => { localStorage.clear(); localStorage.setItem('kss.collapsed.SM_KAnalogMeasure', JSON.stringify(['-KANALOGMEASURE_ENABLING'])); });
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.select('#sample-selector', 'k-analog-measure');

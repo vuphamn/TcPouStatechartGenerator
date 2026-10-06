@@ -1,5 +1,6 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
+import { findSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
 
@@ -105,6 +106,8 @@ export interface StatechartModel {
   markdown: string;
   stateVar: string;
   edges: ModelEdge[];
+  /** The states with a sub-machine (a method's state machine they call), and whether it is drawn expanded */
+  subMachines?: { parent: string; method: string; expanded: boolean }[];
   /** The composites (as drawn) and their own states */
   composites: Record<string, string[]>;
 }
@@ -219,6 +222,22 @@ function getMethodSt(doc: Document | null, rawXml: string, name: string): string
     .replace(/&amp;/g, '&')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'");
+}
+
+/** The states of a POU that call a method with a state machine of its own (its sub-machines; see subMachines.ts) */
+export function subMachinesOf(tcPouContent: string): { parent: string; method: string; states: string[] }[] {
+  const doc = parseXmlDoc(tcPouContent);
+  return findSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methodsOf(doc, tcPouContent), stripComments(tcPouContent)).map((m) => ({ parent: m.parent, method: m.method, states: m.states }));
+}
+
+/** The POU's methods: their ST and declaration, by name */
+function methodsOf(doc: Document | null, rawXml: string): Map<string, { st: string | null; decl: string | null }> {
+  const out = new Map<string, { st: string | null; decl: string | null }>();
+  for (const m of rawXml.matchAll(/<Method[^>]*\bName=["']([^"']+)["'][^>]*>([\s\S]*?)<\/Method>/gi)) {
+    const decl = m[2].match(/<Declaration>\s*<!\[CDATA\[([\s\S]*?)\]\]>/i)?.[1] ?? null;
+    out.set(m[1], { st: getMethodSt(doc, rawXml, m[1]), decl });
+  }
+  return out;
 }
 
 function stripComments(s: string): string {
@@ -915,6 +934,14 @@ export interface ParallelRegion {
   start: string | null;
   finals: string[];
   transitions: { from: string; to: string; guard: string | null }[];
+  /** A sub-machine's (a method's state machine): its states' names as drawn (their ids: <state>__<method>__<name>) */
+  labels?: Record<string, string>;
+  /** Its title (flowchart: the subgraph's) */
+  title?: string;
+  /** When it starts (its entry's label) */
+  entry?: string | null;
+  /** Its states nothing goes to: drawn dashed, "never reached" */
+  unreachable?: string[];
 }
 
 /**
@@ -1368,12 +1395,14 @@ function emitFlowchartRegions(lines: string[], indent: string, state: string, re
   for (const r of regions) {
     const rid = `${san(state)}__${san(r.variable)}`;
     const inner = `${indent}        `;
-    lines.push(`${indent}    subgraph ${rid}["${r.variable}"]`);
+    lines.push(`${indent}    subgraph ${rid}["${r.title ?? r.variable}"]`);
     for (const s of r.states) {
-      lines.push(`${inner}${san(s)}["${flowNodeLabel(s, stateDescriptions)}"]`);
+      const name = r.labels?.[s];
+      lines.push(`${inner}${san(s)}["${name ? `${name}${r.unreachable?.includes(s) ? "<br/><span class='node-desc'>never reached</span>" : ''}` : flowNodeLabel(s, stateDescriptions)}"]`);
       declared.add(s);
     }
-    if (r.start) lines.push(`${inner}startNode_${rid}((" ")) --> ${san(r.start)}`);
+    for (const s of r.unreachable ?? []) lines.push(`${inner}class ${san(s)} kssUnreachable`);
+    if (r.start) lines.push(`${inner}startNode_${rid}((" ")) -->${r.entry ? `|"${flowLabel(r.entry)}"|` : ''} ${san(r.start)}`);
     for (const t of r.transitions) lines.push(`${inner}${san(t.from)} -->${t.guard ? `|"${flowLabel(t.guard)}"|` : ''} ${san(t.to)}`);
     for (const f of r.finals) lines.push(`${inner}${san(f)} --> endNode_${rid}(((" ")))`);
     lines.push(`${indent}    end`);
@@ -1390,8 +1419,13 @@ function emitStateRegions(lines: string[], indent: string, state: string, region
   regions.forEach((r, i) => {
     const inner = `${indent}    `;
     if (i > 0) lines.push(`${inner}--`);
-    if (r.start) lines.push(`${inner}[*] --> ${san(r.start)}`);
-    for (const s of r.states) lines.push(`${inner}${san(s)}`);
+    if (r.start) lines.push(`${inner}[*] --> ${san(r.start)}${r.entry ? `: ${esc(r.entry)}` : ''}`);
+    for (const s of r.states) {
+      const name = r.labels?.[s];
+      if (!name) lines.push(`${inner}${san(s)}`);
+      else lines.push(`${inner}state "${name}${r.unreachable?.includes(s) ? "<br/><span class='node-desc'>never reached</span>" : ''}" as ${san(s)}`);
+    }
+    for (const s of r.unreachable ?? []) lines.push(`${inner}class ${san(s)} kssUnreachable`);
     for (const t of r.transitions) lines.push(`${inner}${san(t.from)} --> ${san(t.to)}${t.guard ? `: ${esc(t.guard)}` : ''}`);
     for (const f of r.finals) lines.push(`${inner}${san(f)} --> [*]`);
   });
@@ -1810,7 +1844,9 @@ function buildMermaid(
     if (stateDescriptions && stateDescriptions.size > 0) {
       const sortedStates = Array.from(states).sort();
       for (const s of sortedStates) {
-        if (groups.stateToGroup.has(s)) continue;
+        // (a state drawn as a box, its regions or sub-machine inside: declared with its label there; once more here
+        // Mermaid refuses: "Group nodes can only have label")
+        if (groups.stateToGroup.has(s) || regions.has(s)) continue;
         const desc = stateDescriptions.get(s);
         if (desc) {
           const formattedDesc = wrapDescription(desc.replace(/"/g, "'"), 32);
@@ -1957,6 +1993,38 @@ export function generateStatechartModel(
   // Every state of the enum drawn, one without a CASE branch or transitions too (not a parallel region's: drawn in
   // its state)
   const inRegions = new Set([...regions.values()].flatMap((list) => list.flatMap((r) => r.states)));
+  // Sub-machines: a method of the POU with its own state machine, called from a state's branch (EFX_IDLE's
+  // RpsSimulation()): drawn inside that state (by default: a mark in it was easy to miss), unless collapsed ("-<state>"
+  // among the collapsed composites): then the state's label says it has one
+  const collapsedSubs = new Set((options.collapsedComposites ?? []).filter((n) => n.startsWith('-')).map((n) => n.slice(1)));
+  const subMachines = findSubMachines(doStateSt, methodsOf(doc, tcPouContent), stripComments(tcPouContent));
+  let anyUnreachable = false;
+  for (const m of subMachines) {
+    if (!enumOrder.includes(m.parent) && !states.has(m.parent)) continue;
+    if (collapsedSubs.has(m.parent)) {
+      stateDescriptions = new Map(stateDescriptions ?? []);
+      const desc = stateDescriptions.get(m.parent);
+      stateDescriptions.set(m.parent, [...(desc ? [desc] : []), `⊞ ${m.method}`].join('<br/>'));
+      continue;
+    }
+    const id = (x: string) => `${m.parent}__${m.method}__${x}`;
+    if (m.unreachable.length) anyUnreachable = true;
+    // (its title under the state's name: a stateDiagram region has none of its own; a flowchart's subgraph has)
+    if (!flowchartOutput) {
+      stateDescriptions = new Map(stateDescriptions ?? []);
+      const own = stateDescriptions.get(m.parent);
+      stateDescriptions.set(m.parent, [...(own ? [own] : []), `⊟ ${m.method}${m.when ? ` · while ${m.when}` : ''}`].join('<br/>'));
+    }
+    regions.set(m.parent, [
+      ...(regions.get(m.parent) ?? []),
+      {
+        parent: m.parent, variable: `${m.method}.${m.variable}`, states: m.states.map(id), start: m.start ? id(m.start) : null, finals: [],
+        transitions: m.transitions.map((t) => ({ from: id(t.from), to: id(t.to), guard: t.guard })),
+        labels: Object.fromEntries(m.states.map((x) => [id(x), x])), title: `${m.method}${m.when ? ` · while ${m.when}` : ''}`, entry: m.entry,
+        unreachable: m.unreachable.map(id),
+      },
+    ]);
+  }
   for (const s of enumOrder) if (!inRegions.has(s)) states.add(s);
   reorderGroupsByEnum(groups, enumOrder);
   applyEnumConventions(groups, enumOrder);
@@ -1980,7 +2048,9 @@ export function generateStatechartModel(
     const g = groups.stateToGroup.get(s);
     if (g) groups.groupFinals.set(g, [...(groups.groupFinals.get(g) ?? []), s]);
   }
-  if (options.collapsedComposites?.length) collapseComposites(options.collapsedComposites, transitions, states, groups, finalStates, stateDescriptions);
+  // ("-<state>": a sub-machine collapsed, not a composite; "+<state>": expanded, as it was before it was the default)
+  const collapsedNames = (options.collapsedComposites ?? []).filter((n) => !n.startsWith('+') && !n.startsWith('-'));
+  if (collapsedNames.length) collapseComposites(collapsedNames, transitions, states, groups, finalStates, stateDescriptions);
   extractErrorSinkStates(transitions, groups, collapseErrorSinkEdges);
 
   const edges: ModelEdge[] = [];
@@ -1997,5 +2067,7 @@ export function generateStatechartModel(
     regions,
     options.choiceNodes ?? false
   );
-  return { markdown, stateVar: stateVarName, edges, composites: Object.fromEntries([...groups.groups].map(([k, v]) => [k, [...v]])) };
+  // (a sub-machine's states nothing goes to: dashed)
+  const finalMarkdown = anyUnreachable ? `${markdown.replace(/\n*$/, '')}\n    classDef kssUnreachable stroke-dasharray: 3 3,opacity:0.6\n` : markdown;
+  return { markdown: finalMarkdown, stateVar: stateVarName, edges, subMachines: subMachines.map((m) => ({ parent: m.parent, method: m.method, expanded: !collapsedSubs.has(m.parent) })), composites: Object.fromEntries([...groups.groups].map(([k, v]) => [k, [...v]])) };
 }

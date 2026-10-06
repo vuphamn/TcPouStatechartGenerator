@@ -168,7 +168,7 @@ export function compositeStyle(theme: MermaidTheme | undefined, preset: string =
     return `:where(${flow}) > rect, :where(${state}) > rect.outer, :where(${state}) > g:not(.cluster-label) > :is(path, rect) { stroke: ${c.line} !important; stroke-width: 1.5px !important; stroke-dasharray: 8 4 !important; fill: ${c.tint} !important; rx: 8px; ry: 8px; }
 :where(${state}) > rect.inner { fill: transparent !important; stroke: none !important; }
 :where(${state}) .divider { stroke: ${c.line} !important; stroke-dasharray: 8 4 !important; }
-:where(${flow.split(', ').map((s) => `${s} .cluster-label`).join(', ')}, ${state.split(', ').map((s) => `${s} .cluster-label`).join(', ')}) :is(span, p, text, div) { color: ${c.title} !important; fill: ${c.title} !important; font-weight: 600 !important; }
+:where(${flow.split(', ').map((s) => `${s} .cluster-label`).join(', ')}, ${state.split(', ').map((s) => `${s} .cluster-label`).join(', ')}) :is(span, p, text, div) { color: ${c.title} !important; fill: ${c.title} !important; text-shadow: 0.3px 0 0 currentColor, -0.3px 0 0 currentColor; }
 `;
   };
   // (a composite's cluster: its id is its name, after the render's id and a dash)
@@ -1025,6 +1025,9 @@ function resolveEdgeFromElement(
       }
     }
 
+    // A start arrow (a composite's, a sub-machine's entry): itself, not a transition matched by its label
+    if (sourceId === '[*]' && targetId) return { id: pathId || `[*]->${targetId}`, from: '[*]', to: targetId, pathId };
+
     // Parallel edges share source and target: the label linked to this path names the exact transition
     if (svg && pathId) {
       const linkedEdgeId = svg
@@ -1699,7 +1702,9 @@ function enhanceSvgWithPriorityCircles(
         }
 
         let matchedEdge: EdgeInfo | null = null;
-        if (availableEdgesList && availableEdgesList.length > 0) {
+        // (a start arrow's label, a sub-machine's entry "↑ …": no transition of the code, matched to none)
+        const startLink = /(?:^|[-_])L[_-]startNode[_-]/.test(labelDataId || pathEl?.getAttribute('data-id') || pathEl?.getAttribute('id') || '') || pathEl?.getAttribute('data-source-id') === '[*]';
+        if (availableEdgesList && availableEdgesList.length > 0 && !startLink) {
           const directId = labelEl.getAttribute('data-edge-id');
           if (directId) {
             matchedEdge = availableEdgesList.find((e) => e.id === directId || e.pathId === directId) || null;
@@ -4313,7 +4318,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
   // A state's entry / do / exit actions on hover: at once, in the app's own box (in the heat-map's, when that
   // one shows); no browser tooltip, which came late and covered it
-  const [hoveredActions, setHoveredActions] = useState<{ id: string; text: string; x: number; y: number; rect: ScreenRect } | null>(null);
+  const [hoveredActions, setHoveredActions] = useState<{ id: string; title: string; text: string; x: number; y: number; rect: ScreenRect } | null>(null);
 
   const onToggleStateBookmarkRef = useRef(onToggleStateBookmark);
   onToggleStateBookmarkRef.current = onToggleStateBookmark;
@@ -4609,6 +4614,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   ).length;
 
   // A state's shape on screen (a hover box goes beside it)
+  // A state drawn as a box (its sub-machine or regions inside; not a composite of the enum, which is no state): the
+  // box an element is in, and its state (its sub-machine's frame, <state>__<method>…: that state too); null otherwise
+  const stateOfBox = (el: Element | null): { el: SVGGElement; id: string } | null => {
+    const boxEl = el?.closest('g.cluster, .statediagram-cluster') as SVGGElement | null;
+    if (!boxEl || !stateTooltips) return null;
+    const name = boxEl.getAttribute('data-id') || boxEl.id.replace(/^.*?render-[a-z0-9]+-/i, '');
+    const id = name && stateTooltips[name] ? name : name.includes('__') && stateTooltips[name.split('__')[0]] ? name.split('__')[0] : '';
+    return id ? { el: boxEl, id } : null;
+  };
+
   const stateScreenRect = (id: string): ScreenRect | null => {
     const svg = getDiagramSvg();
     if (!svg) return null;
@@ -5803,13 +5818,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       if (hoveredActions) setHoveredActions(null);
     } else if (stateTooltips && !isDraggingNodeRef.current && !isDraggingEdgeHandleRef.current) {
       const nodeEl = target?.closest('g.node[data-state-id]');
-      const sId = nodeEl?.getAttribute('data-state-id') || '';
+      // (a state drawn as a box, a sub-machine inside it: its blank area, or its sub-machine's frame, is the state's)
+      const box = nodeEl ? null : stateOfBox(target);
+      const boxEl = box?.el ?? null;
+      const sId = nodeEl?.getAttribute('data-state-id') || box?.id || '';
       const tip = sId ? stateTooltips[sId] : undefined;
       if (tip) {
         if (hoveredActions?.id !== sId) {
-          // (its box goes beside the state: the state's own shape, not its badges)
-          const r = nodeShapeOf(nodeEl!).getBoundingClientRect();
-          setHoveredActions({ id: sId, text: tip.split('\n').slice(1).join('\n'), x: e.clientX, y: e.clientY, rect: { l: r.left, t: r.top, r: r.right, b: r.bottom } });
+          // (its box goes beside the state: the state's own shape, not its badges; a state drawn as a box: that box)
+          const r = (nodeEl ? nodeShapeOf(nodeEl) : boxEl!).getBoundingClientRect();
+          setHoveredActions({ id: sId, title: tip.split('\n')[0], text: tip.split('\n').slice(1).join('\n'), x: e.clientX, y: e.clientY, rect: { l: r.left, t: r.top, r: r.right, b: r.bottom } });
         }
       } else if (hoveredActions) setHoveredActions(null);
     }
@@ -6079,6 +6097,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       // Connect mode: a click on the empty canvas cancels
       if (connectFrom) {
         onConnectCancel?.();
+        return;
+      }
+
+      // A state drawn as a box (its sub-machine or regions inside): a click in its blank area selects that state
+      const boxed = stateOfBox(target);
+      if (boxed) {
+        handleSelectState(boxed.id, boxed.id);
+        setSelectedEdge(null);
+        setActiveConditionOverlay(null);
         return;
       }
 
@@ -8063,7 +8090,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
             id="state-actions-hover"
             className="z-50 pointer-events-none max-w-[720px] rounded-lg bg-slate-950/95 border border-slate-700 shadow-2xl px-2.5 py-1.5"
           >
-            <div className="text-[10px] font-semibold text-slate-400 mb-0.5">{hoveredActions.id}</div>
+            <div className="text-[10px] font-semibold text-slate-400 mb-0.5">{hoveredActions.title || hoveredActions.id}</div>
             <StateActionsPreview text={hoveredActions.text} problems={stateProblems?.[hoveredActions.id]} />
           </NodeHoverBox>
         )}

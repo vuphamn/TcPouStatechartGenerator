@@ -1,6 +1,7 @@
 // Lock Layout on, the flowchart and the state diagram: a state dragged into a composite's box is moved into the
 // composite in the code; drawn again, it stays where it was dropped and the composite's box holds it (grown if the
 // layout's box would not). Dragged out again: out of the composite, where it was dropped
+// (KAnalogMeasure's sub-machine, readDiagnostics() in KANALOGMEASURE_ENABLING, collapsed: the layout it was written for)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -35,7 +36,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 
   for (const [view, btn] of [['flowchart', '#format-flowchart-btn'], ['state diagram', '#format-statediagram-btn']]) {
     await p.goto(h.APP_URL, { waitUntil: 'load' });
-    await p.evaluate(() => localStorage.clear());
+    await p.evaluate(() => { localStorage.clear(); localStorage.setItem('kss.collapsed.SM_KAnalogMeasure', JSON.stringify(['-KANALOGMEASURE_ENABLING'])); });
     await p.reload({ waitUntil: 'load' });
     await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
     await p.select('#sample-selector', 'k-analog-measure');
@@ -52,15 +53,16 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     if (!a.node || !a.cluster) continue;
     // 1. Into it: dropped near its bottom-right corner, clear of its states
     const spot = await p.evaluate((c) => {
-      for (let y = c[3] - 30; y > c[1] + 30; y -= 12) {
-        for (let x = c[2] - 60; x > c[0] + 60; x -= 12) {
+      // (as close to its border as a state can be dropped: the box may be small on a wide chart)
+      for (let y = c[3] - 14; y > c[1] + 22; y -= 8) {
+        for (let x = c[2] - 20; x > c[0] + 20; x -= 8) {
           const e = document.elementFromPoint(x, y);
           if (e && !e.closest('g.node, g.edgeLabel, path')) return { x, y };
         }
       }
       return null;
     }, a.cluster);
-    expect(!!spot, `${view}: a free spot in ${C}`);
+    expect(!!spot, `${view}: a free spot in ${C}${spot ? "" : ` (its box ${JSON.stringify(a.cluster)}, the window ${JSON.stringify(await p.evaluate(() => [innerWidth, innerHeight]))})`}`);
     if (!spot) continue;
     await drag(centre(a.node), spot);
     const b = await look();

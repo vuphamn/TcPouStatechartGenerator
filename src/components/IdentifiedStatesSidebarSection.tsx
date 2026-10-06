@@ -590,6 +590,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                   <div
                     key={state.id}
                     id={`state-list-item-${state.id}`}
+                    aria-selected={isSelected}
                     data-live={isLive ? 'true' : undefined}
                     onClick={() => handleItemClick(state.id, state.label)}
                     onContextMenu={

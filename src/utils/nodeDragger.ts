@@ -1086,7 +1086,19 @@ export function initializeSvgDragMetadata(
       const startMatch = rawPathId.match(/(?:^|[-_])L[_-]startNode[_-](.+?)[_-]\d+$/);
       if (startMatch) {
         sourceId = '[*]';
-        targetId = startMatch[1];
+        // (a composite's or a region's start, startNode_<its id>_<target>: its id has "_" too: the target is the
+        // longest tail that is a node of the chart)
+        const rest = startMatch[1];
+        const nodes = [...(path.ownerSVGElement?.querySelectorAll('g.node') ?? [])].map((n) => n.id);
+        const isNode = (id: string) => nodes.some((n) => n.includes(`-flowchart-${id}-`) || n.endsWith(`-${id}`) || n === id);
+        let target = rest;
+        for (let i = 0; i < rest.length; i++) {
+          if ((i === 0 || rest[i - 1] === '_') && isNode(rest.slice(i))) {
+            target = rest.slice(i);
+            break;
+          }
+        }
+        targetId = target;
       }
     }
 

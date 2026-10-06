@@ -632,14 +632,27 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
   };
 
-  // Auto-scroll to CASE label in doState() implementation when a state/node is selected on Diagram Canvas
+  // Auto-scroll to CASE label in doState() implementation when a state/node is selected on Diagram Canvas; a
+  // sub-machine's state (drawn inside the state that calls its method, <state>__<method>__<name>): its CASE label in
+  // that method
   useEffect(() => {
     const isStateChanged = prevSelectedStateIdRef.current !== (selectedStateId || null);
     const methodChanged = prevMethodNameRef.current !== cleanMethodName;
     prevMethodNameRef.current = cleanMethodName;
+    const parts = (selectedStateId ?? '').split('__');
+    let home = 'dostate';
+    let labelName = selectedStateId ?? '';
+    for (let i = 1; i < parts.length - 1; i++) {
+      const m = availableMethods.find((x) => x.replace(/\(\)$/, '').toLowerCase() === parts[i].toLowerCase());
+      if (m) {
+        home = parts[i].toLowerCase();
+        labelName = parts.slice(i + 1).join('__');
+        break;
+      }
+    }
 
-    // When switching back into doState() or when state node changed, permit scrolling to the target state
-    if (methodChanged && cleanMethodName.toLowerCase() === 'dostate') {
+    // When switching back into its method (doState()) or when state node changed, permit scrolling to the target state
+    if (methodChanged && cleanMethodName.toLowerCase() === home) {
       lastScrolledTargetRef.current = null;
     }
 
@@ -654,13 +667,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       lastScrolledTargetRef.current = null;
 
       // When the user deliberately selects a new state on the Diagram Canvas,
-      // switch to doState() so they can inspect this state's code branch.
-      if (selectedStateId && cleanMethodName.toLowerCase() !== 'dostate') {
-        const doStateItem = availableMethods.find(
-          (m) => m.replace(/\(\)$/, '').toLowerCase() === 'dostate'
+      // switch to its method (doState(); a sub-machine's: its own) so they can inspect this state's code branch.
+      if (selectedStateId && cleanMethodName.toLowerCase() !== home) {
+        const homeItem = availableMethods.find(
+          (m) => m.replace(/\(\)$/, '').toLowerCase() === home
         );
-        if (doStateItem) {
-          setSelectedMethod(doStateItem);
+        if (homeItem) {
+          setSelectedMethod(homeItem);
         }
         return;
       }
@@ -671,9 +684,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       isInitialMountRef.current = false;
     }
 
-    // If the currently selected method is NOT doState(), DO NOT force a switch back to doState()!
-    // Non-doState methods (e.g. preProcess, stop, etc.) do not have state machine CASE branches.
-    if (cleanMethodName.toLowerCase() !== 'dostate') {
+    // If the currently selected method is NOT the state's (doState()), DO NOT force a switch back to it!
+    // Other methods (e.g. preProcess, stop, etc.) do not have its CASE branch.
+    if (cleanMethodName.toLowerCase() !== home) {
       return;
     }
 
@@ -685,13 +698,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
 
     // Search for the case label line in the implementation code
-    const lineIndex = findCaseLabelLineIndex(code, selectedStateId, selectedStateLabel);
+    const lineIndex = findCaseLabelLineIndex(code, labelName, home === 'dostate' ? selectedStateLabel : labelName);
     if (lineIndex >= 0) {
       lastScrolledTargetRef.current = selectedStateId;
       const targetLine = lineIndex + 1; // 1-based line number
 
       // If this state block is currently collapsed, automatically unfold it!
-      const stateBlock = findFoldableBlockForState(foldableBlocks, selectedStateId);
+      const stateBlock = findFoldableBlockForState(foldableBlocks, labelName);
       if (stateBlock && foldedBlockIds.has(stateBlock.id)) {
         setFoldedBlockIds((prev) => {
           const next = new Set(prev);

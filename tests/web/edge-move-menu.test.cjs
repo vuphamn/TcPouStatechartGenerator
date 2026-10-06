@@ -1,5 +1,6 @@
 // Move start to… / Move end to… (a transition's menu): the state picked from a list, as dragging its end onto it
 // (KAnalogMeasure: READY's "status_bError" transition to ERROR moved to start at DISABLED, then to go to READY)
+// (KAnalogMeasure's sub-machine, readDiagnostics() in KANALOGMEASURE_ENABLING, collapsed: the layout it was written for)
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -10,7 +11,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
   await p.goto(h.APP_URL, { waitUntil: 'load' });
-  await p.evaluate(() => localStorage.clear());
+  await p.evaluate(() => { localStorage.clear(); localStorage.setItem('kss.collapsed.SM_KAnalogMeasure', JSON.stringify(['-KANALOGMEASURE_ENABLING'])); });
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
   await p.select('#sample-selector', 'k-analog-measure');
