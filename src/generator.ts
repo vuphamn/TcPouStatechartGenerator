@@ -1,8 +1,9 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
-import { findSubMachines } from './utils/subMachines.ts';
+import { findAllSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
+import { caseArmCondition, caseLabelOf, caseSelectorOf, splitStatements } from './utils/stStatements.ts';
 
 export type PriorityFormat = 'paren' | 'bracket' | 'circled';
 
@@ -140,6 +141,10 @@ interface IfFrame {
   negatedPriorConds: (string | null)[];
   /** Which IF statement (for choice nodes) */
   id?: number;
+  /** A CASE nested in a state's branch: its selector (its arms are this frame's conditions, as an IF's) */
+  caseSel?: string;
+  /** (its first arm seen) */
+  armed?: boolean;
 }
 let ifSeq = 0;
 
@@ -245,7 +250,7 @@ export interface SubMachineInfo {
 export function subMachinesOf(tcPouContent: string): SubMachineInfo[] {
   const doc = parseXmlDoc(tcPouContent);
   const methods = methodsOf(doc, tcPouContent);
-  return findSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methods, stripComments(tcPouContent)).map((m) => {
+  return findAllSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methods, stripComments(tcPouContent)).map((m) => {
     const decl = stripComments(methods.get(m.method)?.decl ?? '');
     const type = new RegExp(`(?:^|[\\s;])${m.variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*([A-Za-z_][\\w.]*)`, 'i').exec(decl)?.[1] ?? null;
     return { parent: m.parent, method: m.method, states: m.states, variable: m.variable, variableType: type, start: m.start, entry: m.entry, when: m.when, preempts: m.preempts, transitions: m.transitions };
@@ -474,7 +479,7 @@ function parseDoState(
   members?: Set<string>
 ) {
   const code = stripComments(st);
-  const lines = preprocessDoStateLines(code);
+  const lines = preprocessDoStateLines(code).flatMap(splitStatements);
   let currentStates: string[] = [];
   const statePriorityCounters = new Map<string, number>();
   const ifStack: IfFrame[] = [];
@@ -490,8 +495,31 @@ function parseDoState(
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
-    if (/^CASE\b[\s\S]*\bOF\b/i.test(line)) caseDepth++;
-    else if (/^END_CASE\b/i.test(line)) caseDepth = Math.max(0, caseDepth - 1);
+    if (/^CASE\b[\s\S]*\bOF\b/i.test(line)) {
+      caseDepth++;
+      // A CASE in a state's branch: its arms guard what is under them, as an IF's ("iStep = 1")
+      const sel = caseDepth >= 2 && currentStates.length ? caseSelectorOf(line) : null;
+      if (sel) ifStack.push({ currentCond: null, negatedPriorConds: [], id: ++ifSeq, caseSel: sel, armed: false });
+      continue;
+    }
+    if (/^END_CASE\b/i.test(line)) {
+      if (caseDepth >= 2) {
+        const at = ifStack.map((f) => !!f.caseSel).lastIndexOf(true);
+        if (at >= 0) ifStack.length = at;
+      }
+      caseDepth = Math.max(0, caseDepth - 1);
+      continue;
+    }
+    const top = ifStack[ifStack.length - 1];
+    if (caseDepth >= 2 && top?.caseSel) {
+      const labels = caseLabelOf(line);
+      if (labels) {
+        if (top.armed) top.negatedPriorConds.push(top.currentCond);
+        top.currentCond = caseArmCondition(top.caseSel, labels);
+        top.armed = true;
+        continue;
+      }
+    }
 
     const cm = line.match(caseRx);
     if (cm && caseDepth <= 1 && looksLikeStateLabel(cm[1], members)) {
@@ -1413,9 +1441,12 @@ function flowNodeLabel(state: string, stateDescriptions?: Map<string, string>): 
   return state;
 }
 
+/** Every state's regions (sub-machines' too: a sub-machine's state with one of its own), for the emitters below */
+let allRegions: Map<string, ParallelRegion[]> = new Map();
+
 /** A state with parallel regions, as a flowchart subgraph holding one subgraph per region */
-function emitFlowchartRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], declared: Set<string>, stateDescriptions?: Map<string, string>) {
-  lines.push(`${indent}subgraph ${san(state)}["${flowNodeLabel(state, stateDescriptions)}"]`);
+function emitFlowchartRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], declared: Set<string>, stateDescriptions?: Map<string, string>, title?: string) {
+  lines.push(`${indent}subgraph ${san(state)}["${title ?? flowNodeLabel(state, stateDescriptions)}"]`);
   for (const r of regions) {
     const rid = r.subMachine ? `${san(state)}__${san(r.subMachine.method)}` : `${san(state)}__${san(r.variable)}`;
     const inner = `${indent}        `;
@@ -1423,10 +1454,15 @@ function emitFlowchartRegions(lines: string[], indent: string, state: string, re
     lines.push(`${indent}    subgraph ${rid}["${r.subMachine ? subMachineHeader(r.subMachine) : r.title ?? r.variable}"]`);
     for (const s of r.states) {
       const name = r.labels?.[s];
+      const own = allRegions.get(s);
+      if (own && name) {
+        emitFlowchartRegions(lines, inner, s, own, declared, stateDescriptions, name);
+        continue;
+      }
       lines.push(`${inner}${san(s)}["${name ? `${name}${r.unreachable?.includes(s) ? "<br/><span class='node-desc'>never reached</span>" : ''}` : flowNodeLabel(s, stateDescriptions)}"]`);
       declared.add(s);
     }
-    for (const s of r.unreachable ?? []) lines.push(`${inner}class ${san(s)} kssUnreachable`);
+    for (const s of r.unreachable ?? []) if (!allRegions.has(s)) lines.push(`${inner}class ${san(s)} kssUnreachable`);
     if (r.start) lines.push(`${inner}startNode_${rid}((" ")) -->${r.entry ? `|"${flowLabel(r.entry)}"|` : ''} ${san(r.start)}`);
     for (const t of r.transitions) lines.push(`${inner}${san(t.from)} -->${t.guard ? `|"${flowLabel(t.guard)}"|` : ''} ${san(t.to)}`);
     for (const f of r.finals) lines.push(`${inner}${san(f)} --> endNode_${rid}(((" ")))`);
@@ -1437,9 +1473,9 @@ function emitFlowchartRegions(lines: string[], indent: string, state: string, re
 }
 
 /** A state with parallel regions, as a stateDiagram composite with "--" between the regions */
-function emitStateRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], stateDescriptions?: Map<string, string>) {
+function emitStateRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], stateDescriptions?: Map<string, string>, title?: string) {
   const desc = stateDescriptions?.get(state);
-  const label = desc ? `${state}<br/><span class='node-desc'>${wrapDescription(desc.replace(/"/g, "'"), 32)}</span>` : state;
+  const label = title ?? (desc ? `${state}<br/><span class='node-desc'>${wrapDescription(desc.replace(/"/g, "'"), 32)}</span>` : state);
   lines.push(`${indent}state "${label}" as ${san(state)} {`);
   regions.forEach((r, i) => {
     let inner = `${indent}    `;
@@ -1452,10 +1488,12 @@ function emitStateRegions(lines: string[], indent: string, state: string, region
     if (r.start) lines.push(`${inner}[*] --> ${san(r.start)}${r.entry ? `: ${esc(r.entry)}` : ''}`);
     for (const s of r.states) {
       const name = r.labels?.[s];
-      if (!name) lines.push(`${inner}${san(s)}`);
+      const own = allRegions.get(s);
+      if (own && name) emitStateRegions(lines, inner, s, own, stateDescriptions, name);
+      else if (!name) lines.push(`${inner}${san(s)}`);
       else lines.push(`${inner}state "${name}${r.unreachable?.includes(s) ? "<br/><span class='node-desc'>never reached</span>" : ''}" as ${san(s)}`);
     }
-    for (const s of r.unreachable ?? []) lines.push(`${inner}class ${san(s)} kssUnreachable`);
+    for (const s of r.unreachable ?? []) if (!allRegions.has(s)) lines.push(`${inner}class ${san(s)} kssUnreachable`);
     for (const t of r.transitions) lines.push(`${inner}${san(t.from)} --> ${san(t.to)}${t.guard ? `: ${esc(t.guard)}` : ''}`);
     for (const f of r.finals) lines.push(`${inner}${san(f)} --> [*]`);
     if (r.subMachine) lines.push(`${indent}    }`);
@@ -1593,6 +1631,7 @@ function buildMermaid(
   regions: Map<string, ParallelRegion[]> = new Map(),
   choiceNodes = false
 ): string {
+  allRegions = regions;
   const firstStateToGroup = new Map<string, string>();
   for (const [k, v] of groups.groupFirstState.entries()) {
     firstStateToGroup.set(v, k);
@@ -2033,10 +2072,19 @@ export function generateStatechartModel(
   // RpsSimulation()): drawn inside that state (by default: a mark in it was easy to miss), unless collapsed ("-<state>"
   // among the collapsed composites): then the state's label says it has one
   const collapsedSubs = new Set((options.collapsedComposites ?? []).filter((n) => n.startsWith('-')).map((n) => n.slice(1)));
-  const subMachines = findSubMachines(doStateSt, methodsOf(doc, tcPouContent), stripComments(tcPouContent));
+  const subMachines = findAllSubMachines(doStateSt, methodsOf(doc, tcPouContent), stripComments(tcPouContent));
   let anyUnreachable = false;
+  // (the sub-machines' states drawn: a sub-machine of one of them is drawn inside it, unless its own is collapsed)
+  const drawnSubStates = new Set<string>();
   for (const m of subMachines) {
-    if (!enumOrder.includes(m.parent) && !states.has(m.parent)) continue;
+    const nested = !enumOrder.includes(m.parent) && !states.has(m.parent);
+    if (nested && !drawnSubStates.has(m.parent)) continue;
+    if (collapsedSubs.has(m.parent) && nested) {
+      // (a sub-machine's state with one of its own, collapsed: its label says so)
+      for (const list of regions.values())
+        for (const r of list) if (r.labels?.[m.parent]) r.labels[m.parent] = `${r.labels[m.parent]}<br/><span class='node-desc'>⊞ ${m.method}</span>`;
+      continue;
+    }
     if (collapsedSubs.has(m.parent)) {
       stateDescriptions = new Map(stateDescriptions ?? []);
       const desc = stateDescriptions.get(m.parent);
@@ -2044,6 +2092,7 @@ export function generateStatechartModel(
       continue;
     }
     const id = (x: string) => `${m.parent}__${m.method}__${x}`;
+    for (const x of m.states) drawnSubStates.add(id(x));
     if (m.unreachable.length) anyUnreachable = true;
     regions.set(m.parent, [
       ...(regions.get(m.parent) ?? []),

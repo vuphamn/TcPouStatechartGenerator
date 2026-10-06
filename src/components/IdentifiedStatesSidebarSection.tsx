@@ -60,8 +60,8 @@ export interface IdentifiedStatesSidebarSectionProps {
   subMachines?: { parent: string; method: string; states: string[]; start: string | null; transitions: { from: string; to: string }[]; expanded: boolean }[];
   /** Expand / collapse a sub-machine (the canvas too) */
   onToggleSubMachine?: (parent: string, method: string, expanded: boolean) => void;
-  /** Live or simulated: the sub-machine state current inside the current state (its full id) */
-  liveSubStateId?: string | null;
+  /** Live or simulated: the sub-machines' states current inside the current state (their full ids, outer first) */
+  liveSubStateIds?: string[];
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
@@ -88,10 +88,11 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   transitionCounts,
   subMachines,
   onToggleSubMachine,
-  liveSubStateId,
+  liveSubStateIds,
 }) => {
   // (a sub-machine state's id: its state's card holds it)
-  const subOwner = (id: string | null | undefined) => (id ? subMachines?.find((m) => id.startsWith(`${m.parent}__${m.method}__`)) ?? null : null);
+  // (the outermost: its card is in the list; a nested one's inside its sub-machine's)
+  const subOwner = (id: string | null | undefined) => (id ? subMachines?.filter((m) => id.startsWith(`${m.parent}__${m.method}__`)).sort((a, b) => a.parent.length - b.parent.length)[0] ?? null : null);
   const bookmarkSet = useMemo(() => new Set(bookmarkedStates ?? []), [bookmarkedStates]);
   // A card's right-click menu (Add / Remove bookmark)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -379,11 +380,11 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
               const id = fullId(name);
               const isSelected = selectedStateId === id;
               const isJustNavigated = recentlyNavigatedStateId === id;
-              const isLive = !!liveSubStateId && liveSubStateId === id;
+              const isLive = !!liveSubStateIds?.includes(id);
               const incoming = sub.transitions.filter((t) => t.to === name).length;
               const outgoing = sub.transitions.filter((t) => t.from === name).length;
               const unreachable = name !== sub.start && incoming === 0;
-              return (
+              const subCard = (
                 <div
                   key={id}
                   id={`state-list-item-${id}`}
@@ -434,6 +435,16 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                   </span>
                 </div>
               );
+              // (a state of it with a sub-machine of its own: that one inside its box, as its state's)
+              const nested = subMachines?.find((x) => x.parent === id);
+              return nested ? (
+                <div key={id} id={`state-box-${id}`} className="rounded-md border border-violet-700/50 bg-violet-950/10 p-1 space-y-1">
+                  {subCard}
+                  {renderSubMachine(nested)}
+                </div>
+              ) : (
+                subCard
+              );
             })}
           </div>
         )}
@@ -446,10 +457,10 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     if (!liveFollow || !liveStateId || !isExpanded) return;
     const t = window.setTimeout(() => {
       // (its sub-machine's state inside it, when listed)
-      (document.getElementById(`state-list-item-${liveSubStateId}`) ?? document.getElementById(`state-list-item-${liveStateId}`))?.scrollIntoView({ block: 'nearest' });
+      ([...(liveSubStateIds ?? [])].reverse().map((x) => document.getElementById(`state-list-item-${x}`)).find(Boolean) ?? document.getElementById(`state-list-item-${liveStateId}`))?.scrollIntoView({ block: 'nearest' });
     }, 50);
     return () => window.clearTimeout(t);
-  }, [liveFollow, liveStateId, liveSubStateId, isExpanded]);
+  }, [liveFollow, liveStateId, liveSubStateIds, isExpanded]);
 
   return (
     <section

@@ -658,7 +658,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const parts = (selectedStateId ?? '').split('__');
     let home = 'dostate';
     let labelName = selectedStateId ?? '';
-    for (let i = 1; i < parts.length - 1; i++) {
+    for (let i = parts.length - 2; i >= 1; i--) {
       const m = availableMethods.find((x) => x.replace(/\(\)$/, '').toLowerCase() === parts[i].toLowerCase());
       if (m) {
         home = parts[i].toLowerCase();

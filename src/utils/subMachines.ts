@@ -9,6 +9,44 @@
  */
 
 import { unqualifyState } from './stateNames.ts';
+import { caseArmCondition, caseLabelOf, caseSelectorOf, splitStatements } from './stStatements.ts';
+
+/** A CASE nested in a branch: its arms as conditions in the IFs' list (at: its place there) */
+interface CaseFrame {
+  sel: string;
+  at: number;
+  prior: string[];
+}
+/** A line of a nested CASE (its start, an arm, its ELSE, its end): the IFs' list updated; true when it was one */
+function nestedCaseLine(l: string, nested: boolean, ifs: string[], frames: CaseFrame[]): boolean {
+  const sel = nested ? caseSelectorOf(l) : null;
+  if (sel) {
+    frames.push({ sel, at: ifs.length, prior: [] });
+    ifs.push('');
+    return true;
+  }
+  const top = frames[frames.length - 1];
+  if (!top) return false;
+  if (/^END_CASE\b/i.test(l)) {
+    ifs.length = top.at;
+    frames.pop();
+    return true;
+  }
+  // (an arm or its ELSE: only while no IF of its own is open)
+  if (ifs.length - 1 !== top.at) return false;
+  const labels = caseLabelOf(l);
+  if (labels) {
+    if (ifs[top.at]) top.prior.push(ifs[top.at]);
+    ifs[top.at] = caseArmCondition(top.sel, labels);
+    return true;
+  }
+  if (/^ELSE$/i.test(l)) {
+    if (ifs[top.at]) top.prior.push(ifs[top.at]);
+    ifs[top.at] = top.prior.length ? `NOT (${top.prior.join(' OR ')})` : '';
+    return true;
+  }
+  return false;
+}
 
 export interface SubMachine {
   /** The state whose branch calls it */
@@ -58,7 +96,8 @@ function inputsOf(decl: string | null): string[] {
 
 /** The method's state machine: its first CASE whose labels are names and that sets its own variable */
 function machineOf(st: string): { variable: string; states: string[]; transitions: SubMachine['transitions']; start: string | null; startUnder: string | null } | null {
-  const lines = stripComments(st).split(/\r?\n/).map((l) => l.trim());
+  const lines = stripComments(st).split(/\r?\n/).flatMap((l) => splitStatements(l.trim()));
+  const frames: CaseFrame[] = [];
   const caseAt = lines.findIndex((l) => /^CASE\s*\(?\s*[A-Za-z_][\w.]*\s*\)?\s*OF\b/i.test(l));
   if (caseAt < 0) return null;
   const variable = lines[caseAt].match(/^CASE\s*\(?\s*([A-Za-z_][\w.]*)/i)![1];
@@ -89,13 +128,16 @@ function machineOf(st: string): { variable: string; states: string[]; transition
     if (!l) continue;
     if (/^CASE\b/i.test(l)) {
       depth++;
+      if (current) nestedCaseLine(l, true, ifs, frames);
       continue;
     }
     if (/^END_CASE\b/i.test(l)) {
       if (depth === 0) break;
+      nestedCaseLine(l, false, ifs, frames);
       depth--;
       continue;
     }
+    if (depth > 0 && current && nestedCaseLine(l, false, ifs, frames)) continue;
     if (depth === 0) {
       const lab = l.match(/^((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)\s*$/) ?? l.match(/^((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)/);
       if (lab && !/^(ELSE|ELSIF|IF|END_\w+|THEN)\b/i.test(l)) {
@@ -115,7 +157,8 @@ function machineOf(st: string): { variable: string; states: string[]; transition
     for (const a of l.matchAll(/\b([A-Za-z_][\w.^]*)\s*:=\s*([A-Za-z_][\w.]*)/g)) {
       if (own(a[1]) !== own(variable)) continue;
       const to = unqualifyState(a[2]);
-      if (to !== current) transitions.push({ from: current, to, guard: ifs.length ? ifs.join(' AND ') : null });
+      const guard = ifs.filter(Boolean).join(' AND ');
+      if (to !== current) transitions.push({ from: current, to, guard: guard || null });
     }
     if (/^END_IF\b/i.test(l)) ifs.pop();
   }
@@ -131,9 +174,10 @@ function machineOf(st: string): { variable: string; states: string[]; transition
 export function findSubMachines(st: string | null, methods: Map<string, { st: string | null; decl: string | null }>, allSt = ''): SubMachine[] {
   if (!st || !methods.size) return [];
   const byLower = new Map([...methods.keys()].map((k) => [k.toLowerCase(), k]));
-  const lines = stripComments(st).split(/\r?\n/).map((l) => l.trim());
+  const lines = stripComments(st).split(/\r?\n/).flatMap((l) => splitStatements(l.trim()));
   const out: SubMachine[] = [];
   const seen = new Set<string>();
+  const frames: CaseFrame[] = [];
   let depth = 0;
   let parent: string | null = null;
   const ifs: string[] = [];
@@ -144,16 +188,20 @@ export function findSubMachines(st: string | null, methods: Map<string, { st: st
     const caseM = l.match(/^CASE\s*\(?\s*([A-Za-z_][\w.]*)\s*\)?\s*OF\b/i);
     if (caseM) {
       depth++;
+      if (depth >= 2 && parent) nestedCaseLine(l, true, ifs, frames);
       continue;
     }
     if (/^END_CASE\b/i.test(l)) {
+      if (depth >= 2) nestedCaseLine(l, false, ifs, frames);
       depth = Math.max(0, depth - 1);
       continue;
     }
+    if (depth >= 2 && parent && nestedCaseLine(l, false, ifs, frames)) continue;
     const lab = l.match(/^((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)/);
     if (depth === 1 && lab && !/^(ELSE|ELSIF|IF|END_\w+|THEN)\b/i.test(l)) {
       parent = unqualifyState(lab[1].split(',')[0].trim());
       ifs.length = 0;
+      frames.length = 0;
       continue;
     }
     if (!parent || depth < 1) continue;
@@ -187,7 +235,7 @@ export function findSubMachines(st: string | null, methods: Map<string, { st: st
         }
         if (/^((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)/.test(n) && !/^(ELSE|ELSIF|IF|END_\w+|THEN)\b/i.test(n)) break;
       }
-      const when = ifs.length ? ifs.join(' AND ') : null;
+      const when = ifs.filter(Boolean).join(' AND ') || null;
       // Where it starts, and when: the input its start is set under, and the call's argument for it
       let entry = when;
       if (machine.startUnder) {
@@ -211,5 +259,26 @@ export function findSubMachines(st: string | null, methods: Map<string, { st: st
     }
     if (/^END_IF\b/i.test(l)) ifs.pop();
   }
+  return out;
+}
+
+/**
+ * The sub-machines of doState(), and theirs (a sub-machine's state calling another method with a state machine of
+ * its own: its parent that state's id, <state>__<method>__<name>), outer ones first; a method calling itself or one
+ * around it is not one again; at most `maxDepth` deep
+ */
+export function findAllSubMachines(st: string | null, methods: Map<string, { st: string | null; decl: string | null }>, allSt = '', maxDepth = 4): SubMachine[] {
+  const out: SubMachine[] = [];
+  const walk = (code: string | null, outer: SubMachine | null, prefix: string, chain: string[]) => {
+    for (const m of findSubMachines(code, methods, allSt)) {
+      if (chain.includes(m.method.toLowerCase())) continue;
+      // (in a method: a state of its own state machine)
+      if (outer && !outer.states.includes(m.parent)) continue;
+      const found = { ...m, parent: `${prefix}${m.parent}` };
+      out.push(found);
+      if (chain.length + 1 < maxDepth) walk(methods.get(m.method)?.st ?? null, m, `${found.parent}__${m.method}__`, [...chain, m.method.toLowerCase()]);
+    }
+  };
+  walk(st, null, '', []);
   return out;
 }

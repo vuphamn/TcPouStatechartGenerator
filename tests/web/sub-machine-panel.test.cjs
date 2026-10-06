@@ -154,7 +154,19 @@ const sub = (x) => `${P}__readDiagnostics__${x}`;
   const e3 = await enumAt();
   expect(!!e3 && e3.machine && !e3.note && /^KANALOGMEASURE_READY\b/.test(e3.line), `KANALOGMEASURE_READY selected: the Enum Editor its enum again, editable (${JSON.stringify(e3)})`);
 
-  // 9. Simulated: the sub-machine's current state's card marked, inside the state's
+  // 9. Bookmarked, its sub-machine expanded (the state a box): its ribbon at the box's corner
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await p.click(`#state-list-item-${P}`, { button: 'right' });
+  await p.waitForSelector('#state-list-bookmark-btn', { timeout: 3000 }).catch(() => {});
+  await p.click('#state-list-bookmark-btn').catch(() => {});
+  const ribbon = await waitFor(() => p.evaluate((P) => {
+    const r = document.querySelector(`#mermaid-canvas-area g.state-bookmark-marker[data-state-id="${P}"]`)?.getBoundingClientRect();
+    const box = [...document.querySelectorAll('#mermaid-canvas-area g.cluster, #mermaid-canvas-area g.statediagram-cluster')].find((c) => (c.getAttribute('data-id') || c.id).replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-\d+$/, '') === P)?.getBoundingClientRect();
+    return r && box ? { near: Math.abs(r.left - box.left) < 30 && Math.abs(r.top - box.top) < 30 } : null;
+  }, P), (x) => !!x);
+  expect(!!ribbon?.near, `bookmarked, its sub-machine expanded: its ribbon at its box's top-left corner (${JSON.stringify(ribbon)})`);
+
+  // 10. Simulated: the sub-machine's current state's card marked, inside the state's
   await p.click('#dock-tab-simulate').catch(() => {});
   await p.waitForSelector('#sim-start-state', { timeout: 5000 }).catch(() => {});
   await p.select('#sim-start-state', P).catch(() => {});

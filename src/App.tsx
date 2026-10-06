@@ -7491,7 +7491,7 @@ export const App: React.FC = () => {
   // sub-machine's enum, read-only here (its .TcDUT among the ones found, else made from its method's CASE labels)
   const enumSubView = useMemo(() => {
     const id = selectedStateId;
-    const m = id ? subMachines.find((x) => id.startsWith(`${x.parent}__${x.method}__`)) : null;
+    const m = id ? subMachines.filter((x) => id.startsWith(`${x.parent}__${x.method}__`)).sort((a, b) => b.parent.length - a.parent.length)[0] ?? null : null;
     if (!m) return null;
     const type = m.variableType ?? `${m.method}.${m.variable}`;
     const pool = [dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])];
@@ -7512,16 +7512,27 @@ export const App: React.FC = () => {
   // The live state's sub-machine (a method with its own state machine, called from its branch): its variable followed
   // (a method's VAR_INST: under the instance, found by the method's and the variable's names), its state named from
   // the PLC's enum (else the method's enum, when its .TcDUT is open)
-  const liveSubMachine = useMemo(() => (liveActive && liveSession.current ? subMachines.find((m) => m.parent === liveSession.current!.state) ?? null : null), [liveActive, liveSession.current?.state, subMachines]);
-  const liveSubWatchId = liveSubMachine ? `sub:${liveSubMachine.parent}.${liveSubMachine.method}.${liveSubMachine.variable}`.toLowerCase() : '';
-  const liveSubState = useMemo(() => {
-    if (!liveSubMachine) return null;
-    const v = liveVarValues[liveSubWatchId];
-    if (typeof v !== 'number') return null;
-    const w = liveWatched[liveSubWatchId];
-    const name = w?.enumNames?.[String(v)] ?? liveEnums.types.get((w?.type ?? liveSubMachine.variableType ?? '').toLowerCase())?.get(v);
-    return name && liveSubMachine.states.includes(name) ? name : null;
-  }, [liveSubMachine, liveSubWatchId, liveVarValues, liveWatched, liveEnums]);
+  // (a sub-machine's state calling another with its own: that one's followed too, and so on)
+  const liveSubLevels = useMemo(() => {
+    const levels: { m: (typeof subMachines)[number]; watchId: string; state: string | null; id: (name: string) => string }[] = [];
+    if (!liveActive || !liveSession.current) return levels;
+    let parent: string | null = liveSession.current.state;
+    for (let k = 0; parent && k < 8; k++) {
+      const m = subMachines.find((x) => x.parent === parent);
+      if (!m) break;
+      const watchId = `sub:${m.parent}.${m.method}.${m.variable}`.toLowerCase();
+      const v = liveVarValues[watchId];
+      const w = liveWatched[watchId];
+      const name = typeof v === 'number' ? w?.enumNames?.[String(v)] ?? liveEnums.types.get((w?.type ?? m.variableType ?? '').toLowerCase())?.get(v) : undefined;
+      const state = name && m.states.includes(name) ? name : null;
+      const id = (n: string) => `${m.parent}__${m.method}__${n}`;
+      levels.push({ m, watchId, state, id });
+      if (!state) break;
+      parent = id(state);
+    }
+    return levels;
+  }, [liveActive, liveSession.current?.state, subMachines, liveVarValues, liveWatched, liveEnums]);
+  const liveSubWatchKey = liveSubLevels.map((L) => L.watchId).join('|');
   const liveRegionStates = useMemo(
     () => [
       ...liveRegions
@@ -7531,10 +7542,10 @@ export const App: React.FC = () => {
           return name && r.states.includes(name) ? name : undefined;
         })
         .filter((s): s is string => !!s),
-      // (its sub-machine's state, inside it)
-      ...(liveSubMachine && liveSubState ? [`${liveSubMachine.parent}__${liveSubMachine.method}__${liveSubState}`] : []),
+      // (its sub-machines' states, inside it)
+      ...liveSubLevels.filter((L) => L.state).map((L) => L.id(L.state!)),
     ],
-    [liveRegions, liveVarValues, liveEnumNames, liveSubMachine, liveSubState]
+    [liveRegions, liveVarValues, liveEnumNames, liveSubLevels]
   );
   const liveHighlight = useMemo(() => {
     if (!liveActive || !liveSession.current) return null;
@@ -7601,7 +7612,7 @@ export const App: React.FC = () => {
       return;
     }
     // With the Symbols window's values (full paths, ids "sym:<path>")
-    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}\n#io\n${ioVars.join('\n')}\n#sub\n${liveSubWatchId}`;
+    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}\n#io\n${ioVars.join('\n')}\n#sub\n${liveSubWatchKey}`;
     if (key === lastWatchRef.current) return;
     const instance = liveStatus.instance;
     const timer = window.setTimeout(() => {
@@ -7610,13 +7621,13 @@ export const App: React.FC = () => {
       const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
       const symbols = [...new Set([...symbolPaths, ...ioVars])].filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
       const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
-      // (the live state's sub-machine: its method's VAR_INST, as <instance>.<method>.<variable>, else searched)
-      const sub: LiveWatchVar[] = liveSubMachine && instance ? [{ id: liveSubWatchId, candidates: [`${instance}.${liveSubMachine.method}.${liveSubMachine.variable}`], search: { under: instance, words: [liveSubMachine.method, liveSubMachine.variable] } }] : [];
+      // (the live state's sub-machines: each method's VAR_INST, as <instance>.<method>.<variable>, else searched)
+      const sub: LiveWatchVar[] = instance ? liveSubLevels.map((L) => ({ id: L.watchId, candidates: [`${instance}.${L.m.method}.${L.m.variable}`], search: { under: instance, words: [L.m.method, L.m.variable] } })) : [];
       // The guards first, then the overview's machines; a gateway follows at most 100 by default (more is refused)
       sendLiveWatch([...sub, ...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch, liveSubMachine, liveSubWatchId]);
+  }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch, liveSubLevels, liveSubWatchKey]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -7665,13 +7676,20 @@ export const App: React.FC = () => {
     [liveVarValues]
   );
   // ---- Offline simulation: a state, the values its transitions' conditions read, the steps taken ----
-  // (sub: the state of the current state's sub-machine, while it runs; history: a sub-machine's step says so)
-  const [sim, setSim] = useState<{ active: boolean; current: string | null; history: { from: string; to: string; label: string; sub?: boolean }[]; values: Record<string, LiveValue>; sub?: string | null }>({
+  // (subs: the states of the current state's sub-machines while they run, outer first: its sub-machine's, and the
+  // sub-machine's its state calls, ...; history: a sub-machine's step says so, each step what it was before)
+  const [sim, setSim] = useState<{
+    active: boolean;
+    current: string | null;
+    history: { from: string; to: string; label: string; sub?: boolean; before?: { current: string | null; subs: string[] } }[];
+    values: Record<string, LiveValue>;
+    subs: string[];
+  }>({
     active: false,
     current: null,
     history: [],
     values: {},
-    sub: null,
+    subs: [],
   });
   const simOn = sim.active && !liveActive && !!sim.current;
   const simGuardEdges = useMemo(() => {
@@ -7724,9 +7742,9 @@ export const App: React.FC = () => {
     for (const t of simTransitions) for (const r of simGuardEdges?.edges.find((e) => e.edgeId === t.edgeId)?.refs ?? []) names.add(r);
     return [...names].sort().map((name) => ({ name, value: sim.values[name.toLowerCase()] as boolean | number | string | undefined }));
   }, [simTransitions, simGuardEdges, sim.values]);
-  // The current state's sub-machine: it runs while the condition around its call holds (it starts in its first state
-  // then); its transitions are offered first, and its state's own wait when a RETURN follows its call
-  const simSubMachine = useMemo(() => (simOn ? subMachines.find((m) => m.parent === sim.current) ?? null : null), [simOn, sim.current, subMachines]);
+  // The current state's sub-machines: the one its branch calls, and the one a state of that one calls in turn (...);
+  // each runs while the condition around its call holds (it starts in its first state then). Their transitions are
+  // offered first, the innermost's first; a RETURN after a call keeps the transitions around it waiting
   const simEval = useCallback(
     (text: string): 'true' | 'false' | 'unknown' => {
       const r = evaluateExpr(parseCondition(text), { value: (p) => sim.values[p.toLowerCase()] ?? liveEnums.literals.get(p.split('.').pop()!.toLowerCase()) });
@@ -7734,42 +7752,76 @@ export const App: React.FC = () => {
     },
     [sim.values, liveEnums]
   );
-  const simSubRunning = !!simSubMachine && (!simSubMachine.when || simEval(simSubMachine.when) === 'true');
+  // (each level's sub-machine, and its state while it runs)
+  const simLevels = useMemo(() => {
+    const levels: { m: (typeof subMachines)[number]; state: string | null; id: (name: string) => string }[] = [];
+    if (!simOn) return levels;
+    let parent: string | null = sim.current;
+    for (let k = 0; parent && k < 8; k++) {
+      const m = subMachines.find((x) => x.parent === parent);
+      if (!m) break;
+      const state = sim.subs[k] ?? null;
+      const id = (name: string) => `${m.parent}__${m.method}__${name}`;
+      levels.push({ m, state, id });
+      if (!state) break;
+      parent = id(state);
+    }
+    return levels;
+  }, [simOn, sim.current, sim.subs, subMachines]);
+  // (started where their calls' conditions hold, stopped where they no longer do)
   useEffect(() => {
-    if (simSubRunning && simSubMachine && !sim.sub) setSim((s) => ({ ...s, sub: simSubMachine.start ?? simSubMachine.states[0] }));
-    else if (!simSubRunning && sim.sub) setSim((s) => ({ ...s, sub: null }));
-  }, [simSubRunning, simSubMachine, sim.sub]);
-  const simSubTransitions = useMemo<(SimTransition & { target: string })[]>(() => {
-    if (!simSubMachine || !simSubRunning || !sim.sub) return [];
-    return simSubMachine.transitions
-      .filter((t) => t.from === sim.sub)
-      .map((t, k) => ({ edgeId: `sub:${simSubMachine.method}:${t.from}->${t.to}#${k}`, to: t.to, target: t.to, priority: k + 1, label: t.guard ?? '', source: `${simSubMachine.method}()`, result: t.guard ? simEval(t.guard) : 'always' }));
-  }, [simSubMachine, simSubRunning, sim.sub, simEval]);
-  // (what is offered: its sub-machine's first; its state's own unless a RETURN keeps them waiting)
-  const simOffered = useMemo(() => (simSubTransitions.length || (simSubRunning && simSubMachine?.preempts) ? [...simSubTransitions, ...(simSubMachine?.preempts ? [] : simTransitions)] : simTransitions), [simSubTransitions, simSubRunning, simSubMachine, simTransitions]);
+    if (!simOn) return;
+    const next: string[] = [];
+    let parent: string | null = sim.current;
+    for (let k = 0; parent && k < 8; k++) {
+      const m = subMachines.find((x) => x.parent === parent);
+      if (!m || (m.when && simEval(m.when) !== 'true')) break;
+      const st = sim.subs[k] && m.states.includes(sim.subs[k]) ? sim.subs[k] : m.start ?? m.states[0];
+      next.push(st);
+      parent = `${m.parent}__${m.method}__${st}`;
+    }
+    if (next.join('|') !== sim.subs.join('|')) setSim((s) => ({ ...s, subs: next }));
+  }, [simOn, sim.current, sim.subs, subMachines, simEval]);
+  const { simSubTransitions, simMainWaits } = useMemo(() => {
+    const out: (SimTransition & { target: string; level: number })[] = [];
+    // (a RETURN after a call: the transitions of the code that called it wait, the one level around it; doState()'s
+    // when it is the outermost's)
+    let waits = false;
+    for (let k = simLevels.length - 1; k >= 0; k--) {
+      const L = simLevels[k];
+      if (L.state && !waits)
+        L.m.transitions
+          .filter((t) => t.from === L.state)
+          .forEach((t, j) => out.push({ edgeId: `sub${k}:${L.m.method}:${t.from}->${t.to}#${j}`, to: t.to, target: t.to, level: k, priority: j + 1, label: t.guard ?? '', source: `${L.m.method}()`, result: t.guard ? simEval(t.guard) : 'always' }));
+      waits = !!L.state && L.m.preempts;
+    }
+    return { simSubTransitions: out, simMainWaits: waits };
+  }, [simLevels, simEval]);
+  const simOffered = useMemo(() => [...simSubTransitions, ...(simMainWaits ? [] : simTransitions)], [simSubTransitions, simMainWaits, simTransitions]);
   const simAllVariables = useMemo(() => {
     const names = new Set(simVariables.map((v) => v.name));
-    if (simSubMachine?.when) for (const r of collectRefs(parseCondition(simSubMachine.when))) names.add(r);
+    for (const L of simLevels) if (L.m.when) for (const r of collectRefs(parseCondition(L.m.when))) names.add(r);
     for (const t of simSubTransitions) if (t.label) for (const r of collectRefs(parseCondition(t.label))) names.add(r);
     return [...names].sort().map((name) => ({ name, value: sim.values[name.toLowerCase()] as boolean | number | string | undefined }));
-  }, [simVariables, simSubMachine, simSubTransitions, sim.values]);
+  }, [simVariables, simLevels, simSubTransitions, sim.values]);
   const simTake = useCallback(
     (edgeId: string) => {
+      const before = { current: sim.current, subs: sim.subs };
       const sub = simSubTransitions.find((x) => x.edgeId === edgeId);
-      if (sub && simSubMachine && sim.sub) {
-        const id = (n: string) => `${simSubMachine.parent}__${simSubMachine.method}__${n}`;
-        const from = sim.sub;
-        setSim((s) => ({ ...s, sub: sub.target, history: [...s.history, { from: id(from), to: id(sub.target), label: sub.label, sub: true }] }));
+      const L = sub ? simLevels[sub.level] : null;
+      if (sub && L?.state) {
+        // (its level's state; the ones inside it start again)
+        setSim((s) => ({ ...s, subs: [...s.subs.slice(0, sub.level), sub.target], history: [...s.history, { from: L.id(L.state!), to: L.id(sub.target), label: sub.label, sub: true, before }] }));
         return;
       }
       const t = simTransitions.find((x) => x.edgeId === edgeId);
       if (!t || !sim.current) return;
       const from = sim.current;
-      setSim((s) => ({ ...s, current: t.target, sub: null, history: [...s.history, { from, to: t.target, label: t.label }] }));
+      setSim((s) => ({ ...s, current: t.target, subs: [], history: [...s.history, { from, to: t.target, label: t.label, before }] }));
     },
-    [simTransitions, simSubTransitions, simSubMachine, sim.current, sim.sub]
+    [simTransitions, simSubTransitions, simLevels, sim.current, sim.subs]
   );
-  // (the state glows; while its sub-machine runs, the state too and its sub-machine's state inside it)
+  // (the state glows; while its sub-machines run, their states inside it too)
   const simHighlight = useMemo(
     () =>
       simOn
@@ -7777,10 +7829,10 @@ export const App: React.FC = () => {
             stateId: sim.current!,
             previousStateId: sim.history.filter((h) => !h.sub)[sim.history.filter((h) => !h.sub).length - 1]?.from,
             stuck: false,
-            regionStates: simSubMachine && sim.sub ? [`${simSubMachine.parent}__${simSubMachine.method}__${sim.sub}`] : [],
+            regionStates: simLevels.filter((L) => L.state).map((L) => L.id(L.state!)),
           }
         : null,
-    [simOn, sim.current, sim.history, simSubMachine, sim.sub]
+    [simOn, sim.current, sim.history, simLevels]
   );
   const simStartState = useMemo(() => {
     const init = pouContent ? initialStateOf(pouContent, stateVarName) : null;
@@ -8878,7 +8930,7 @@ export const App: React.FC = () => {
               transitionCounts={edgeMembersAll.size ? stateTransitionCounts : undefined}
               subMachines={identifiedSubMachines}
               onToggleSubMachine={setSubMachineExpanded}
-              liveSubStateId={(liveActive ? liveRegionStates : simHighlight?.regionStates ?? []).find((x) => x.includes('__')) ?? null}
+              liveSubStateIds={(liveActive ? liveRegionStates : simHighlight?.regionStates ?? []).filter((x) => x.includes('__'))}
               selectedStateId={selectedStateId}
               focusStateId={codeFocus?.state ?? null}
               focusNonce={codeFocus?.t}
@@ -9444,12 +9496,13 @@ export const App: React.FC = () => {
             history={sim.history}
             transitions={simOffered}
             variables={simAllVariables}
-            subMachine={simSubMachine ? { method: simSubMachine.method, parent: simSubMachine.parent, when: simSubMachine.when, running: simSubRunning, state: sim.sub ?? null, preempts: simSubMachine.preempts } : null}
+            subMachine={simLevels[0] ? { method: simLevels[0].m.method, parent: simLevels[0].m.parent, when: simLevels[0].m.when, running: !!simLevels[0].state, state: simLevels[0].state, preempts: simLevels[0].m.preempts } : null}
+            nestedSubMachines={simLevels.slice(1).map((L) => ({ method: L.m.method, when: L.m.when, running: !!L.state, state: L.state }))}
             onStart={(state) => {
-              setSim((s) => ({ ...s, active: true, current: state, history: [], sub: null }));
+              setSim((s) => ({ ...s, active: true, current: state, history: [], subs: [] }));
               handleJumpToState(state);
             }}
-            onStop={() => setSim((s) => ({ ...s, active: false, current: null, history: [], sub: null }))}
+            onStop={() => setSim((s) => ({ ...s, active: false, current: null, history: [], subs: [] }))}
             onTake={simTake}
             onStep={() => {
               const t = simOffered.find((x) => x.result === 'true' || x.result === 'always');
@@ -9460,9 +9513,9 @@ export const App: React.FC = () => {
               setSim((s) => {
                 const last = s.history[s.history.length - 1];
                 if (!last) return s;
-                // (a sub-machine's step: back to its state before, inside the same state)
-                if (last.sub) return { ...s, sub: last.from.split('__').slice(2).join('__'), history: s.history.slice(0, -1) };
-                return { ...s, current: last.from, sub: null, history: s.history.slice(0, -1) };
+                // (as it was before that step: the state, its sub-machines' states)
+                if (last.before) return { ...s, current: last.before.current, subs: last.before.subs, history: s.history.slice(0, -1) };
+                return { ...s, current: last.from, subs: [], history: s.history.slice(0, -1) };
               })
             }
             onSetValue={(name, value) =>

@@ -4205,7 +4205,11 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     svg
       .querySelector(`g.cluster[id$="-${CSS.escape(sid)}"], g.cluster[id="${CSS.escape(sid)}"], g.statediagram-cluster[data-id="${CSS.escape(liveHighlight.stateId)}"]`)
       ?.classList.add('live-active-cluster');
-    for (const r of liveHighlight.regionStates ?? []) node(r)?.classList.add('live-region-node');
+    for (const r of liveHighlight.regionStates ?? []) {
+      const n = node(r);
+      if (n) n.classList.add('live-region-node');
+      else svg.querySelector(`g.statediagram-cluster[data-id="${CSS.escape(r)}"], g.cluster[id$="-${CSS.escape(r)}"], g.cluster[id="${CSS.escape(r)}"]`)?.classList.add('live-active-cluster');
+    }
     const prev = liveHighlight.previousStateId;
     if (prev && prev !== liveHighlight.stateId) {
       node(prev)?.classList.add('live-previous-node');
@@ -4409,6 +4413,24 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       g.append(title, ribbon);
       node.appendChild(g);
     });
+    // (a state drawn as a box, its sub-machine inside it: no node of its own; the box's corner)
+    for (const c of svg.querySelectorAll(COMPOSITE_SELECTOR)) {
+      const id = compositeNameOf(c);
+      if (!marked.has(id) || svg.querySelector(`g.node[data-state-id="${CSS.escape(id)}"]`)) continue;
+      const rect = compositeRectsOf(c).outer;
+      if (!rect) continue;
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', 'state-bookmark-marker');
+      g.setAttribute('data-state-id', id);
+      g.setAttribute('transform', `translate(${num(rect, 'x') + 6}, ${num(rect, 'y') - 3})`);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = onToggleStateBookmarkRef.current ? 'Bookmark: a click removes it' : 'Bookmark (right-click the state to remove it)';
+      const ribbon = document.createElementNS(ns, 'path');
+      ribbon.setAttribute('d', 'M0,0 H12 V16 L6,11.5 L0,16 Z');
+      ribbon.setAttribute('style', 'fill:#38bdf8 !important;stroke:#7dd3fc !important;stroke-width:1.2px !important;stroke-linejoin:round;filter:drop-shadow(0 0 3px rgba(56,189,248,0.7));cursor:pointer;');
+      g.append(title, ribbon);
+      c.appendChild(g);
+    }
   }, [renderedSvg, bookmarkKey]);
 
   // Changed since saved: an amber dot at the top-right corner of each such state
@@ -4663,7 +4685,14 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const boxEl = el?.closest('g.cluster, .statediagram-cluster') as SVGGElement | null;
     if (!boxEl || !stateTooltips) return null;
     const name = boxEl.getAttribute('data-id') || boxEl.id.replace(/^.*?render-[a-z0-9]+-/i, '');
-    const id = name && stateTooltips[name] ? name : name.includes('__') && stateTooltips[name.split('__')[0]] ? name.split('__')[0] : '';
+    // (<state>__<method>: <state>, itself maybe <outer state>__<method>__<name>)
+    let id = '';
+    for (let n = name; n; n = n.includes('__') ? n.slice(0, n.lastIndexOf('__')) : '') {
+      if (stateTooltips[n]) {
+        id = n;
+        break;
+      }
+    }
     return id ? { el: boxEl, id } : null;
   };
 

@@ -50,7 +50,8 @@ export function caseVariable(lines: string[]): string | null {
  */
 export function subMachineId(pouXml: string, id: string): { parent: string; method: string; name: string } | null {
   const parts = id.split('__');
-  for (let i = 1; i < parts.length - 1; i++) {
+  // (the innermost: a nested sub-machine's parent is a sub-machine's state, <state>__<method>__<name>)
+  for (let i = parts.length - 2; i >= 1; i--) {
     if (methodLines(pouXml, parts[i])) return { parent: parts.slice(0, i).join('__'), method: parts[i], name: parts.slice(i + 1).join('__') };
   }
   return null;
