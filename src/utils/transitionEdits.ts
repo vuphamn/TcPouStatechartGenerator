@@ -6,7 +6,9 @@
  * - the end: "<stateVar> := OLD" becomes ":= NEW" (the qualifier kept);
  * - the start: the transition's IF block (or IF / ELSIF arm, as an IF of its own) moves to the end of another
  *   state's branch.
- * Each returns the method's new code (the app saves it like the Method Editor does) or why it cannot.
+ * Each returns the method's new code (the app saves it like the Method Editor does) or why it cannot. A sub-machine's
+ * transitions (a method with a state machine of its own, drawn inside the state that calls it): the same in that
+ * method (inMethod: its name; stateVar: its CASE's variable; the states: its own names).
  */
 
 import { blankComments } from './stateMachineLint.ts';
@@ -22,7 +24,8 @@ export interface EdgeRef {
   label?: string;
 }
 
-export type TransitionMethod = 'doState' | 'preProcess';
+/** doState(), preProcess(), or a sub-machine's method (a CASE like doState()'s) */
+export type TransitionMethod = string;
 export type TransitionEditResult = { method: TransitionMethod; code: string; message: string; line: number; removed?: string[] } | { error: string };
 
 /** One "<stateVar> := TARGET" of the scope, in order (0-based line in the method; col / len: the target name) */
@@ -82,29 +85,30 @@ function scopeOf(pouXml: string, method: TransitionMethod, from: string | null, 
   let label = -1;
   let start = 0;
   let end = lines.length;
-  if (method === 'doState') {
+  if (method !== 'preProcess') {
     const range = from ? caseBranchRange(code, from) : null;
-    if (!range) return { error: `${from} has no CASE branch in doState()` };
+    if (!range) return { error: `${from} has no CASE branch in ${method}()` };
     label = range.start;
     start = range.start + 1;
     end = range.end;
   }
-  return { method, eol, lines, code, label, start, end, items: scanItems(code, label, start, end, method === 'doState' ? from : null, stateVar) };
+  return { method, eol, lines, code, label, start, end, items: scanItems(code, label, start, end, method !== 'preProcess' ? from : null, stateVar) };
 }
 
 const rescan = (s: Scope, lines: string[], stateVar: string, from: string | null): Scope => {
   const code = blanked(lines);
-  return { ...s, lines, code, items: scanItems(code, s.label, s.start, s.end, s.method === 'doState' ? from : null, stateVar) };
+  return { ...s, lines, code, items: scanItems(code, s.label, s.start, s.end, s.method !== 'preProcess' ? from : null, stateVar) };
 };
 
-/** The scope of an edge: its source state's branch in doState(), or preProcess() */
-function edgeScope(pouXml: string, edge: EdgeRef, stateVar: string) {
-  if (edge.from === '[*]' || edge.to === '[*]') return { error: 'The initial transition is the state variable’s initial value (in the declaration)' };
+/** The scope of an edge: its source state's branch in doState() (inMethod: in that method), or preProcess() */
+function edgeScope(pouXml: string, edge: EdgeRef, stateVar: string, inMethod?: string) {
+  if (edge.from === '[*]' || edge.to === '[*]') return { error: inMethod ? `Its entry is where ${inMethod}() sets its start, before its CASE: change it there (Go to code)` : 'The initial transition is the state variable’s initial value (in the declaration)' };
+  if (inMethod) return scopeOf(pouXml, inMethod, edge.from, stateVar);
   return isPreProcessEdge(edge) ? scopeOf(pouXml, 'preProcess', null, stateVar) : scopeOf(pouXml, 'doState', edge.from, stateVar);
 }
 
 const notFound = (method: TransitionMethod, edge: EdgeRef, stateVar: string) => ({
-  error: `${stateVar} := ${edge.to} was not found in ${method}()${method === 'doState' ? ` (in ${edge.from}’s branch)` : ''}: a composite state? Change it in the Method Editor`,
+  error: `${stateVar} := ${edge.to} was not found in ${method}()${method !== 'preProcess' ? ` (in ${edge.from}’s branch)` : ''}: a composite state? Change it in the Method Editor`,
 });
 
 /** Which assignment an edge is: by its priority, else the only one to its target, else the one locateTransition finds */
@@ -113,6 +117,8 @@ function pick(pouXml: string, s: Scope, edge: EdgeRef): number {
   if (candidates.length === 0) return -1;
   if (s.method === 'doState' && edge.priority && s.items[edge.priority - 1]?.to === edge.to) return edge.priority - 1;
   if (candidates.length === 1) return candidates[0].i;
+  // (doState()'s by where its guard is; another method's: the first)
+  if (s.method !== 'doState') return candidates[0].i;
   const loc = locateTransition(pouXml, edge);
   return (loc && candidates.find(({ t }) => t.line === loc.line - 1)?.i) ?? candidates[0].i;
 }
@@ -262,11 +268,11 @@ export function setTransitionPriority(pouXml: string, edge: EdgeRef, priority: n
 }
 
 /** The edge's transition goes to another state: its assignment's target changes */
-export function retargetTransition(pouXml: string, edge: EdgeRef, newTo: string, stateVar: string): TransitionEditResult {
-  const s = edgeScope(pouXml, edge, stateVar);
+export function retargetTransition(pouXml: string, edge: EdgeRef, newTo: string, stateVar: string, inMethod?: string): TransitionEditResult {
+  const s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   if (newTo === edge.to) return { error: `It already goes to ${newTo}` };
-  if (s.method === 'doState' && newTo === edge.from) return { error: `${edge.from} cannot go to itself: that is no transition` };
+  if (s.method !== 'preProcess' && newTo === edge.from) return { error: `${edge.from} cannot go to itself: that is no transition` };
   const index = pick(pouXml, s, edge);
   if (index < 0) return notFound(s.method, edge, stateVar);
   const t = s.items[index];
@@ -399,18 +405,18 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
 }
 
 /** The edge's transition leaves another state: its code moves to the end of that state's branch (lowest priority) */
-export function moveTransitionStart(pouXml: string, edge: EdgeRef, newFrom: string, stateVar: string): TransitionEditResult {
+export function moveTransitionStart(pouXml: string, edge: EdgeRef, newFrom: string, stateVar: string, inMethod?: string): TransitionEditResult {
   if (isPreProcessEdge(edge)) return { error: 'A preProcess() transition leaves any state: change its condition in preProcess()' };
   if (newFrom === '[*]') return { error: 'The initial transition is the state variable’s initial value (in the declaration)' };
   if (newFrom === edge.from) return { error: `It already leaves ${newFrom}` };
   if (newFrom === edge.to) return { error: `${newFrom} cannot go to itself: that is no transition` };
-  const s = edgeScope(pouXml, edge, stateVar);
+  const s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   const shared = labelNames(s.code[s.label]);
   if (shared.length > 1) return { error: `The branch of ${edge.from} is shared by ${shared.join(', ')}: move it in the Method Editor` };
-  if (!caseBranchRange(s.code, newFrom)) return { error: `${newFrom} has no CASE branch in doState()` };
+  if (!caseBranchRange(s.code, newFrom)) return { error: `${newFrom} has no CASE branch in ${s.method}()` };
   const index = pick(pouXml, s, edge);
-  if (index < 0) return notFound('doState', edge, stateVar);
+  if (index < 0) return notFound(s.method, edge, stateVar);
   const took = takeTransition(s, s.items[index], 'move', edge, stateVar);
   if ('error' in took) return took;
 
@@ -423,9 +429,9 @@ export function moveTransitionStart(pouXml: string, edge: EdgeRef, newFrom: stri
   const indent = body ? leading(body) : leading(lines[range.start]) + '\t';
   lines = [...lines.slice(0, last + 1), ...reindent(took.taken, indent), ...lines.slice(last + 1)];
   return {
-    method: 'doState',
+    method: s.method,
     code: lines.join(s.eol),
-    message: `${newFrom} → ${edge.to} (was ${edge.from} →), last in ${newFrom}’s branch${took.note}`,
+    message: `${newFrom} → ${edge.to} (was ${edge.from} →), last in ${newFrom}’s branch${s.method !== 'doState' ? ` in ${s.method}()` : ''}${took.note}`,
     line: last + 2,
   };
 }

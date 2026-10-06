@@ -183,7 +183,7 @@ import type { CheckRequest, CheckResult } from './utils/connectionCheck.ts';
 import { base64ToBytes, buildItemWhere, bytesToBase64, itemInPou, placeOfXaeFile, plcEdits, type PlcAppInfo, type PlcBuildItem, type PlcBuildResult, type PlcEdit, type PlcOrigin, type PlcWrite } from './utils/plcBuild.ts';
 import { CommandPalette, type PaletteCommand } from './components/CommandPalette.tsx';
 import { getPouBody } from './utils/pouBody.ts';
-import { locateState, locateTransition, subMachineId } from './utils/sourceLocation.ts';
+import { locateState, locateTransition, subMachineId, caseVariable, methodLines } from './utils/sourceLocation.ts';
 import { LintFinding, addCaseBranch, addEnumMember, enumMembers, lintStateMachine } from './utils/stateMachineLint.ts';
 import { ProblemsPanel } from './components/ProblemsPanel.tsx';
 import { StatusBar, type LayoutMenu, type LayoutStatus } from './components/StatusBar.tsx';
@@ -2898,10 +2898,22 @@ export const App: React.FC = () => {
   const handleEdgeEndpointDrop = useCallback(
     (edge: EdgeInfo, end: 'start' | 'end', stateId: string) => {
       if (!pouContent) return;
-      // (a sub-machine's transition, or a drop on one of its states: written in its method, changed there)
+      // A sub-machine's transition (drawn inside the state that calls its method): moved among its own states, in its
+      // method (its CASE's variable, its states' own names); one between it and the rest of the chart is refused
       const sub = subMachineId(pouContent, edge.to) ?? subMachineId(pouContent, edge.from) ?? subMachineId(pouContent, stateId);
       if (sub) {
-        showCopyToast(`${sub.method}()'s transitions are changed in its code (Go to code on the transition: the Method Editor)`, 'error', 6000);
+        const e0 = currentEdge(edge);
+        const sf = subMachineId(pouContent, e0.from);
+        const st = subMachineId(pouContent, e0.to);
+        const sd = subMachineId(pouContent, stateId);
+        if (!st || !sd || sd.method !== st.method || sd.parent !== st.parent) {
+          showCopyToast(`${sub.method}()'s transitions stay among its own states: drop it on one of them`, 'error', 6000);
+          return;
+        }
+        const variable = caseVariable(methodLines(pouContent, st.method) ?? []);
+        if (!variable) return showCopyToast(`${st.method}() has no CASE`, 'error');
+        const ref = { from: sf?.name ?? '[*]', to: st.name, label: drawnEdge(edge).label ?? edge.label };
+        applyTransitionEdit(end === 'end' ? retargetTransition(pouContent, ref, sd.name, variable, st.method) : moveTransitionStart(pouContent, ref, sd.name, variable, st.method));
         return;
       }
       if (!knownStates.has(stateId)) {
@@ -9820,7 +9832,10 @@ export const App: React.FC = () => {
         const e = currentEdge(endPicker.edge);
         const keep = endPicker.end === 'start' ? e.from : e.to;
         const region = regionOfRef.current.get(e.from)?.variable ?? null;
-        const states = identifiedStatesResult.states.map((st) => st.id).filter((id) => id !== keep && (regionOfRef.current.get(id)?.variable ?? null) === region);
+        // (a sub-machine's transition: the other states of its sub-machine)
+        const subOfEdge = subMachineId(pouContent, e.to) ?? subMachineId(pouContent, e.from);
+        const subStates = subOfEdge ? subMachines.find((m) => m.parent === subOfEdge.parent && m.method === subOfEdge.method)?.states.map((n) => `${subOfEdge.parent}__${subOfEdge.method}__${n}`) ?? [] : null;
+        const states = subStates ? subStates.filter((id) => id !== keep) : identifiedStatesResult.states.map((st) => st.id).filter((id) => id !== keep && (regionOfRef.current.get(id)?.variable ?? null) === region);
         return (
           <CommandPalette
             id="edge-end-picker"

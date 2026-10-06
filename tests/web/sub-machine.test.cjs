@@ -172,6 +172,95 @@ const inner = (x) => `${S}__TestSequence__${x}`;
   await p.click('#dock-tab-diagram').catch(() => {});
   await h.sleep(500);
 
+  // Its transitions moved among its own states, in TestSequence(): an end dragged onto another state; a start moved with
+  // its menu's Move start to… (its list: its own states); Ctrl+Z undoes each
+  // (the chart's own edges: the minimap has a copy of each)
+  const drawnTo = (from) => p.evaluate((from) => [...document.querySelectorAll('#mermaid-diagram-svg-container path.tc-edge-path')].filter((x) => x.getAttribute('data-source-id') === from).map((x) => x.getAttribute('data-target-id')), from);
+  const status = () => p.$eval('#status-message', (e) => e.textContent.trim()).catch(() => '');
+  const midOf = (from, to) => p.evaluate((from, to) => {
+    const el = [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].find((x) => x.getAttribute('data-source-id') === from && x.getAttribute('data-target-id') === to);
+    if (!el) return null;
+    const len = el.getTotalLength();
+    const m = el.getScreenCTM();
+    for (const f of [0.5, 0.4, 0.6, 0.3, 0.7]) {
+      const q = el.getPointAtLength(len * f);
+      const x = q.x * m.a + q.y * m.c + m.e;
+      const y = q.x * m.b + q.y * m.d + m.f;
+      if (document.elementFromPoint(x, y)?.closest('path')?.getAttribute('data-path-id') === el.getAttribute('data-path-id')) return { x, y };
+    }
+    return null;
+  }, from, to);
+  const centreOf = (id) => p.evaluate((id) => {
+    const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect();
+    return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+  }, id);
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await h.sleep(600);
+  // 1. The end of WAITING → RUNNING dragged onto UNUSED
+  const mid = await midOf(inner('WAITING'), inner('RUNNING'));
+  if (mid) await p.mouse.click(mid.x, mid.y);
+  await h.sleep(600);
+  const endHandle = await p.evaluate(() => {
+    const el = [...document.querySelectorAll('#mermaid-canvas-area .tc-edge-handle[data-handle-type="end"]')].find((x) => x.getBoundingClientRect().width > 0);
+    const r = el?.getBoundingClientRect();
+    return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
+  });
+  const unusedAt = await centreOf(inner('UNUSED'));
+  if (endHandle && unusedAt) {
+    await p.mouse.move(endHandle.x, endHandle.y);
+    await p.mouse.down();
+    for (let i = 1; i <= 15; i++) await p.mouse.move(endHandle.x + ((unusedAt.x - endHandle.x) * i) / 15, endHandle.y + ((unusedAt.y - endHandle.y) * i) / 15);
+    await p.mouse.up();
+  }
+  for (let i = 0; i < 30 && !(await drawnTo(inner('WAITING'))).includes(inner('UNUSED')); i++) await h.sleep(250);
+  const moved = await drawnTo(inner('WAITING'));
+  const said = await status();
+  expect(moved.includes(inner('UNUSED')) && !moved.includes(inner('RUNNING')) && /WAITING → UNUSED \(was → RUNNING\), in TestSequence\(\)/.test(said), `its end dragged onto UNUSED: WAITING → UNUSED in TestSequence() ("${said}"; handle: ${!!endHandle})`);
+  await p.keyboard.press('Escape');
+  await p.keyboard.down('Control');
+  await p.keyboard.press('z');
+  await p.keyboard.up('Control');
+  for (let i = 0; i < 30 && !(await drawnTo(inner('WAITING'))).includes(inner('RUNNING')); i++) await h.sleep(250);
+  expect((await drawnTo(inner('WAITING'))).includes(inner('RUNNING')), 'Ctrl+Z: WAITING → RUNNING again');
+  // 2. Move start to…: RUNNING → WAITING to leave INIT instead
+  await h.sleep(800);
+  const mid2 = await midOf(inner('RUNNING'), inner('WAITING'));
+  if (mid2) await p.mouse.click(mid2.x, mid2.y, { button: 'right' });
+  const moveStart = await p.waitForSelector('#context-menu-move-start-btn', { timeout: 3000 }).catch(() => null);
+  if (moveStart) await moveStart.evaluate((e) => e.click());
+  const pickerShown = await p.waitForSelector('#edge-end-picker-input', { timeout: 3000 }).catch(() => null);
+  const offered = await p.$$eval('#edge-end-picker [data-id]', (els) => els.map((e) => e.getAttribute('data-id').replace(/^edge-end:/, ''))).catch(() => []);
+  expect(!!pickerShown && offered.length === 3 && offered.every((x) => x.startsWith(`${S}__TestSequence__`)) && !offered.includes(inner('RUNNING')), `Move start to…: its own states offered (${offered.map((x) => x.split('__').pop()).join(', ')})`);
+  if (pickerShown) {
+    await p.type('#edge-end-picker-input', 'INIT');
+    await h.sleep(200);
+    await p.keyboard.press('Enter');
+  }
+  for (let i = 0; i < 30 && !(await drawnTo(inner('INIT'))).includes(inner('WAITING')) || i < 2; i++) await h.sleep(250);
+  const fromInit = await drawnTo(inner('INIT'));
+  const said2 = await status();
+  expect(fromInit.includes(inner('WAITING')) && !(await drawnTo(inner('RUNNING'))).includes(inner('WAITING')) && /INIT → WAITING \(was RUNNING →\)/.test(said2), `its start moved to INIT ("${said2}"; from INIT: ${fromInit.map((x) => x.split('__').pop()).join(', ')})`);
+  await p.keyboard.press('Escape');
+  // (the canvas focused, as a click on it does: the list closed, the keys go to the page)
+  const emptyAt = await p.evaluate(() => {
+    const a = document.getElementById('mermaid-canvas-area').getBoundingClientRect();
+    for (let y = a.top + 60; y < a.bottom - 40; y += 20) for (let x = a.left + 80; x < a.right - 80; x += 40) {
+      const e = document.elementFromPoint(x, y);
+      if (e && document.getElementById('mermaid-canvas-area').contains(e) && !e.closest('g.node, g.edgeLabel, g.cluster, .statediagram-cluster, path, button, [role="toolbar"]')) return { x, y };
+    }
+    return null;
+  });
+  if (emptyAt) await p.mouse.click(emptyAt.x, emptyAt.y);
+  await h.sleep(300);
+  await p.keyboard.down('Control');
+  await p.keyboard.press('z');
+  await p.keyboard.up('Control');
+  for (let i = 0; i < 30 && !(await drawnTo(inner('RUNNING'))).includes(inner('WAITING')); i++) await h.sleep(250);
+  expect((await drawnTo(inner('RUNNING'))).includes(inner('WAITING')), 'Ctrl+Z: RUNNING → WAITING again');
+  // (one between it and the rest of the chart: refused)
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await h.sleep(500);
+
   // stateDiagram-v2: the same, its title under the state's name (then back to flowchart)
   await p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /stateDiagram/.test(x.textContent))?.click());
   for (let i = 0; i < 40 && (await innerCount()) < 4; i++) await h.sleep(250);
