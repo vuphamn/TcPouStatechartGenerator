@@ -534,6 +534,8 @@ export interface WatchedVar {
   symbol?: string;
   type?: string;
   error?: string;
+  /** An enum's names by value, as the PLC describes it (a sub-machine's state variable) */
+  enumNames?: Record<string, string>;
 }
 
 /** A value for display: TRUE / FALSE, enum member names, durations, rounded reals, quoted strings */

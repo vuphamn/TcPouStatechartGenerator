@@ -108,6 +108,8 @@ export interface LiveBrowseResult {
 export interface LiveWatchVar {
   id: string;
   candidates: string[];
+  /** None of them there: a member of "under" whose name holds these words (a method's VAR_INST: a sub-machine's) */
+  search?: { under: string; words: string[] };
 }
 
 export type AppMessage =

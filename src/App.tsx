@@ -241,6 +241,9 @@ import {
   buildGuardEdges,
   evaluateGuards,
   appliesToState,
+  collectRefs,
+  evaluate as evaluateExpr,
+  parseCondition,
   symbolCandidates,
   variablesToWatch,
   type GuardInputs,
@@ -1656,12 +1659,12 @@ export const App: React.FC = () => {
   const [editorWatch, setEditorWatch] = useState<string[]>([]);
   const [userWatch, setUserWatch] = useState<string[]>([]);
   const liveValuesRef = useRef<{ active: boolean; values: Record<string, LiveValue> }>({ active: false, values: {} });
-  const handleLiveWatchResult = useCallback((vars: { id: string; symbol?: string; type?: string; error?: string }[]) => {
+  const handleLiveWatchResult = useCallback((vars: { id: string; symbol?: string; type?: string; error?: string; enumNames?: Record<string, string> }[]) => {
     recorderRef.current.addWatched(vars);
     if (replayingRef.current) return;
     setLiveWatched((prev) => {
       const next = { ...prev };
-      for (const v of vars) next[v.id] = { symbol: v.symbol, type: v.type, error: v.error };
+      for (const v of vars) next[v.id] = { symbol: v.symbol, type: v.type, error: v.error, ...(v.enumNames ? { enumNames: v.enumNames } : {}) };
       return next;
     });
   }, []);
@@ -2874,23 +2877,37 @@ export const App: React.FC = () => {
     },
     [drawnEdge, edgeMembers]
   );
+  // A sub-machine's transition (drawn inside the state that calls its method): its states' names in that method, its
+  // CASE's variable (null: a transition of doState() / preProcess())
+  const subEdgeOf = useCallback(
+    (e: { from: string; to: string; label?: string; priority?: number }) => {
+      const st = subMachineId(pouContent, e.to);
+      const sf = subMachineId(pouContent, e.from);
+      if (!st || !sf) return null;
+      const variable = caseVariable(methodLines(pouContent, st.method) ?? []);
+      return variable ? { ref: { from: sf.name, to: st.name, label: e.label, priority: e.priority }, variable, method: st.method } : null;
+    },
+    [pouContent]
+  );
   const handleTransitionPriority = useCallback(
     (edge: EdgeInfo, priority: number) => {
       const e = currentEdge(edge);
-      return pouContent && applyTransitionEdit(setTransitionPriority(pouContent, e, priority, varFor(e.from)));
+      const sub = subEdgeOf(e);
+      return pouContent && applyTransitionEdit(sub ? setTransitionPriority(pouContent, sub.ref, priority, sub.variable, sub.method) : setTransitionPriority(pouContent, e, priority, varFor(e.from)));
     },
-    [pouContent, applyTransitionEdit, currentEdge, stateVarName]
+    [pouContent, applyTransitionEdit, currentEdge, stateVarName, subEdgeOf]
   );
   const handleTransitionPriorityStep = useCallback(
     (edge: EdgeInfo, delta: number) => {
       if (!pouContent) return;
       const e = currentEdge(edge);
-      const order = transitionOrder(pouContent, e, varFor(e.from));
+      const sub = subEdgeOf(e);
+      const order = sub ? transitionOrder(pouContent, sub.ref, sub.variable, sub.method) : transitionOrder(pouContent, e, varFor(e.from));
       if ('error' in order) showCopyToast(order.error, 'error', 6000);
       else if (order.count < 2) showCopyToast(`${e.from} has only this transition`, 'error');
       else handleTransitionPriority(edge, order.priority + delta);
     },
-    [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast]
+    [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast, subEdgeOf]
   );
   const knownStates = useMemo(() => new Set(identifiedStatesResult.states.map((st) => st.id)), [identifiedStatesResult]);
   // Move start to… / Move end to… (the transition's menu): a list of the states instead of dragging its end
@@ -4700,7 +4717,7 @@ export const App: React.FC = () => {
       // A composite's title or border: its colour
       if (target.type === 'composite') {
         // (a state drawn with its sub-machine inside: Collapse)
-        const sub = subMachines.find((m) => m.parent === target.id || m.parent.replace(/[.\-\s]/g, '_') === target.id);
+        const sub = subMachines.find((m) => m.parent === target.id || m.parent.replace(/[.\-\s]/g, '_') === target.id || `${m.parent.replace(/[.\-\s]/g, '_')}__${m.method}` === target.id);
         if (sub && !collapsedComposites.includes(`-${sub.parent}`)) {
           items.push({ id: 'submachine-collapse-btn', label: `Collapse sub-machine ${sub.method}`, icon: <Minimize2 className="w-3.5 h-3.5" />, title: `${sub.parent} drawn as one state again (its label says it has one)`, onSelect: () => setSubMachineExpanded(sub.parent, sub.method, false) });
           return items;
@@ -4962,7 +4979,8 @@ export const App: React.FC = () => {
           items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${subMachineId(pouContent, currentEdge(edge).to) ? `${subMachineId(pouContent, currentEdge(edge).to)!.method}()` : edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()'}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
         // (a choice's arm: its state's order)
         const real = currentEdge(edge);
-        const order = transitionOrder(pouContent, real, varFor(real.from));
+        const subReal = subEdgeOf(real);
+        const order = subReal ? transitionOrder(pouContent, subReal.ref, subReal.variable, subReal.method) : transitionOrder(pouContent, real, varFor(real.from));
         if (!('error' in order) && order.count > 1) {
           const pre = order.method === 'preProcess';
           const where = pre ? 'preProcess()' : `${real.from}`;
@@ -7403,27 +7421,6 @@ export const App: React.FC = () => {
     for (const r of regionOf.values()) if (r.parent === cur) byVar.set(r.variable, r.states);
     return [...byVar].map(([variable, states]) => ({ variable, states }));
   }, [liveActive, liveSession.current?.state, regionOf]);
-  const liveRegionStates = useMemo(
-    () =>
-      liveRegions
-        .map((r) => {
-          const v = liveVarValues[r.variable.toLowerCase()];
-          const name = typeof v === 'number' ? liveEnumNames.get(v) : undefined;
-          return name && r.states.includes(name) ? name : undefined;
-        })
-        .filter((s): s is string => !!s),
-    [liveRegions, liveVarValues, liveEnumNames]
-  );
-  const liveHighlight = useMemo(() => {
-    if (!liveActive || !liveSession.current) return null;
-    const last = liveSession.transitions[liveSession.transitions.length - 1];
-    return {
-      stateId: liveSession.current.state,
-      previousStateId: last && last.to === liveSession.current.state ? last.from : undefined,
-      stuck: liveStuck,
-      regionStates: liveRegionStates,
-    };
-  }, [liveActive, liveSession, liveStuck, liveRegionStates]);
   // Follow: keep the active state in view
   const liveCurrentState = liveSession.current?.state;
   useEffect(() => {
@@ -7489,6 +7486,43 @@ export const App: React.FC = () => {
     () => buildEnumTables([dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])]),
     [dutContent, dutPool, projectDuts, pouPath]
   );
+  // The live state's sub-machine (a method with its own state machine, called from its branch): its variable followed
+  // (a method's VAR_INST: under the instance, found by the method's and the variable's names), its state named from
+  // the PLC's enum (else the method's enum, when its .TcDUT is open)
+  const liveSubMachine = useMemo(() => (liveActive && liveSession.current ? subMachines.find((m) => m.parent === liveSession.current!.state) ?? null : null), [liveActive, liveSession.current?.state, subMachines]);
+  const liveSubWatchId = liveSubMachine ? `sub:${liveSubMachine.parent}.${liveSubMachine.method}.${liveSubMachine.variable}`.toLowerCase() : '';
+  const liveSubState = useMemo(() => {
+    if (!liveSubMachine) return null;
+    const v = liveVarValues[liveSubWatchId];
+    if (typeof v !== 'number') return null;
+    const w = liveWatched[liveSubWatchId];
+    const name = w?.enumNames?.[String(v)] ?? liveEnums.types.get((w?.type ?? liveSubMachine.variableType ?? '').toLowerCase())?.get(v);
+    return name && liveSubMachine.states.includes(name) ? name : null;
+  }, [liveSubMachine, liveSubWatchId, liveVarValues, liveWatched, liveEnums]);
+  const liveRegionStates = useMemo(
+    () => [
+      ...liveRegions
+        .map((r) => {
+          const v = liveVarValues[r.variable.toLowerCase()];
+          const name = typeof v === 'number' ? liveEnumNames.get(v) : undefined;
+          return name && r.states.includes(name) ? name : undefined;
+        })
+        .filter((s): s is string => !!s),
+      // (its sub-machine's state, inside it)
+      ...(liveSubMachine && liveSubState ? [`${liveSubMachine.parent}__${liveSubMachine.method}__${liveSubState}`] : []),
+    ],
+    [liveRegions, liveVarValues, liveEnumNames, liveSubMachine, liveSubState]
+  );
+  const liveHighlight = useMemo(() => {
+    if (!liveActive || !liveSession.current) return null;
+    const last = liveSession.transitions[liveSession.transitions.length - 1];
+    return {
+      stateId: liveSession.current.state,
+      previousStateId: last && last.to === liveSession.current.state ? last.from : undefined,
+      stuck: liveStuck,
+      regionStates: liveRegionStates,
+    };
+  }, [liveActive, liveSession, liveStuck, liveRegionStates]);
   const liveGuardEdges = useMemo(() => {
     if (!liveActive || liveGuardScope === 'off') return null;
     try {
@@ -7544,7 +7578,7 @@ export const App: React.FC = () => {
       return;
     }
     // With the Symbols window's values (full paths, ids "sym:<path>")
-    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}\n#io\n${ioVars.join('\n')}`;
+    const key = `${liveWatchKey}\n#overview\n${overviewPaths.join('\n')}\n#symbols\n${symbolPaths.join('\n')}\n#io\n${ioVars.join('\n')}\n#sub\n${liveSubWatchId}`;
     if (key === lastWatchRef.current) return;
     const instance = liveStatus.instance;
     const timer = window.setTimeout(() => {
@@ -7553,11 +7587,13 @@ export const App: React.FC = () => {
       const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
       const symbols = [...new Set([...symbolPaths, ...ioVars])].filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
       const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
+      // (the live state's sub-machine: its method's VAR_INST, as <instance>.<method>.<variable>, else searched)
+      const sub: LiveWatchVar[] = liveSubMachine && instance ? [{ id: liveSubWatchId, candidates: [`${instance}.${liveSubMachine.method}.${liveSubMachine.variable}`], search: { under: instance, words: [liveSubMachine.method, liveSubMachine.variable] } }] : [];
       // The guards first, then the overview's machines; a gateway follows at most 100 by default (more is refused)
-      sendLiveWatch([...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
+      sendLiveWatch([...sub, ...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch]);
+  }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch, liveSubMachine, liveSubWatchId]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -7606,11 +7642,13 @@ export const App: React.FC = () => {
     [liveVarValues]
   );
   // ---- Offline simulation: a state, the values its transitions' conditions read, the steps taken ----
-  const [sim, setSim] = useState<{ active: boolean; current: string | null; history: { from: string; to: string; label: string }[]; values: Record<string, LiveValue> }>({
+  // (sub: the state of the current state's sub-machine, while it runs; history: a sub-machine's step says so)
+  const [sim, setSim] = useState<{ active: boolean; current: string | null; history: { from: string; to: string; label: string; sub?: boolean }[]; values: Record<string, LiveValue>; sub?: string | null }>({
     active: false,
     current: null,
     history: [],
     values: {},
+    sub: null,
   });
   const simOn = sim.active && !liveActive && !!sim.current;
   const simGuardEdges = useMemo(() => {
@@ -7663,18 +7701,63 @@ export const App: React.FC = () => {
     for (const t of simTransitions) for (const r of simGuardEdges?.edges.find((e) => e.edgeId === t.edgeId)?.refs ?? []) names.add(r);
     return [...names].sort().map((name) => ({ name, value: sim.values[name.toLowerCase()] as boolean | number | string | undefined }));
   }, [simTransitions, simGuardEdges, sim.values]);
+  // The current state's sub-machine: it runs while the condition around its call holds (it starts in its first state
+  // then); its transitions are offered first, and its state's own wait when a RETURN follows its call
+  const simSubMachine = useMemo(() => (simOn ? subMachines.find((m) => m.parent === sim.current) ?? null : null), [simOn, sim.current, subMachines]);
+  const simEval = useCallback(
+    (text: string): 'true' | 'false' | 'unknown' => {
+      const r = evaluateExpr(parseCondition(text), { value: (p) => sim.values[p.toLowerCase()] ?? liveEnums.literals.get(p.split('.').pop()!.toLowerCase()) });
+      return r === undefined ? 'unknown' : r === true || (typeof r === 'number' && r !== 0) ? 'true' : 'false';
+    },
+    [sim.values, liveEnums]
+  );
+  const simSubRunning = !!simSubMachine && (!simSubMachine.when || simEval(simSubMachine.when) === 'true');
+  useEffect(() => {
+    if (simSubRunning && simSubMachine && !sim.sub) setSim((s) => ({ ...s, sub: simSubMachine.start ?? simSubMachine.states[0] }));
+    else if (!simSubRunning && sim.sub) setSim((s) => ({ ...s, sub: null }));
+  }, [simSubRunning, simSubMachine, sim.sub]);
+  const simSubTransitions = useMemo<(SimTransition & { target: string })[]>(() => {
+    if (!simSubMachine || !simSubRunning || !sim.sub) return [];
+    return simSubMachine.transitions
+      .filter((t) => t.from === sim.sub)
+      .map((t, k) => ({ edgeId: `sub:${simSubMachine.method}:${t.from}->${t.to}#${k}`, to: t.to, target: t.to, priority: k + 1, label: t.guard ?? '', source: `${simSubMachine.method}()`, result: t.guard ? simEval(t.guard) : 'always' }));
+  }, [simSubMachine, simSubRunning, sim.sub, simEval]);
+  // (what is offered: its sub-machine's first; its state's own unless a RETURN keeps them waiting)
+  const simOffered = useMemo(() => (simSubTransitions.length || (simSubRunning && simSubMachine?.preempts) ? [...simSubTransitions, ...(simSubMachine?.preempts ? [] : simTransitions)] : simTransitions), [simSubTransitions, simSubRunning, simSubMachine, simTransitions]);
+  const simAllVariables = useMemo(() => {
+    const names = new Set(simVariables.map((v) => v.name));
+    if (simSubMachine?.when) for (const r of collectRefs(parseCondition(simSubMachine.when))) names.add(r);
+    for (const t of simSubTransitions) if (t.label) for (const r of collectRefs(parseCondition(t.label))) names.add(r);
+    return [...names].sort().map((name) => ({ name, value: sim.values[name.toLowerCase()] as boolean | number | string | undefined }));
+  }, [simVariables, simSubMachine, simSubTransitions, sim.values]);
   const simTake = useCallback(
     (edgeId: string) => {
+      const sub = simSubTransitions.find((x) => x.edgeId === edgeId);
+      if (sub && simSubMachine && sim.sub) {
+        const id = (n: string) => `${simSubMachine.parent}__${simSubMachine.method}__${n}`;
+        const from = sim.sub;
+        setSim((s) => ({ ...s, sub: sub.target, history: [...s.history, { from: id(from), to: id(sub.target), label: sub.label, sub: true }] }));
+        return;
+      }
       const t = simTransitions.find((x) => x.edgeId === edgeId);
       if (!t || !sim.current) return;
       const from = sim.current;
-      setSim((s) => ({ ...s, current: t.target, history: [...s.history, { from, to: t.target, label: t.label }] }));
+      setSim((s) => ({ ...s, current: t.target, sub: null, history: [...s.history, { from, to: t.target, label: t.label }] }));
     },
-    [simTransitions, sim.current]
+    [simTransitions, simSubTransitions, simSubMachine, sim.current, sim.sub]
   );
+  // (the state glows; while its sub-machine runs, the state too and its sub-machine's state inside it)
   const simHighlight = useMemo(
-    () => (simOn ? { stateId: sim.current!, previousStateId: sim.history[sim.history.length - 1]?.from, stuck: false } : null),
-    [simOn, sim.current, sim.history]
+    () =>
+      simOn
+        ? {
+            stateId: sim.current!,
+            previousStateId: sim.history.filter((h) => !h.sub)[sim.history.filter((h) => !h.sub).length - 1]?.from,
+            stuck: false,
+            regionStates: simSubMachine && sim.sub ? [`${simSubMachine.parent}__${simSubMachine.method}__${sim.sub}`] : [],
+          }
+        : null,
+    [simOn, sim.current, sim.history, simSubMachine, sim.sub]
   );
   const simStartState = useMemo(() => {
     const init = pouContent ? initialStateOf(pouContent, stateVarName) : null;
@@ -9331,21 +9414,28 @@ export const App: React.FC = () => {
             startState={simStartState}
             current={sim.current}
             history={sim.history}
-            transitions={simTransitions}
-            variables={simVariables}
+            transitions={simOffered}
+            variables={simAllVariables}
+            subMachine={simSubMachine ? { method: simSubMachine.method, parent: simSubMachine.parent, when: simSubMachine.when, running: simSubRunning, state: sim.sub ?? null, preempts: simSubMachine.preempts } : null}
             onStart={(state) => {
-              setSim((s) => ({ ...s, active: true, current: state, history: [] }));
+              setSim((s) => ({ ...s, active: true, current: state, history: [], sub: null }));
               handleJumpToState(state);
             }}
-            onStop={() => setSim((s) => ({ ...s, active: false, current: null, history: [] }))}
+            onStop={() => setSim((s) => ({ ...s, active: false, current: null, history: [], sub: null }))}
             onTake={simTake}
             onStep={() => {
-              const t = simTransitions.find((x) => x.result === 'true' || x.result === 'always');
+              const t = simOffered.find((x) => x.result === 'true' || x.result === 'always');
               if (t) simTake(t.edgeId);
               else showCopyToast('No transition holds with these values', 'error');
             }}
             onBack={() =>
-              setSim((s) => (s.history.length ? { ...s, current: s.history[s.history.length - 1].from, history: s.history.slice(0, -1) } : s))
+              setSim((s) => {
+                const last = s.history[s.history.length - 1];
+                if (!last) return s;
+                // (a sub-machine's step: back to its state before, inside the same state)
+                if (last.sub) return { ...s, sub: last.from.split('__').slice(2).join('__'), history: s.history.slice(0, -1) };
+                return { ...s, current: last.from, sub: null, history: s.history.slice(0, -1) };
+              })
             }
             onSetValue={(name, value) =>
               setSim((s) => {

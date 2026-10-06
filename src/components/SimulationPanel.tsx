@@ -29,6 +29,8 @@ export interface SimulationPanelProps {
   onBack: () => void;
   onSetValue: (name: string, value: boolean | number | undefined) => void;
   onGoTo: (state: string) => void;
+  /** The current state's sub-machine: its method, when it runs, whether it runs now and in which state */
+  subMachine?: { method: string; parent: string; when: string | null; running: boolean; state: string | null; preempts: boolean } | null;
 }
 
 const chip = (r: SimTransition['result']) =>
@@ -96,6 +98,25 @@ export const SimulationPanel: React.FC<SimulationPanelProps> = (p) => {
             </button>
           </div>
 
+          {p.subMachine && (
+            <div id="sim-sub-machine" data-running={String(p.subMachine.running)} className={`rounded border px-2 py-1.5 ${p.subMachine.running ? 'border-violet-700 bg-violet-950/40' : 'border-slate-800'}`}>
+              <div className="flex flex-wrap items-center gap-x-1.5">
+                <span className="text-slate-400 whitespace-nowrap">Sub-machine</span>
+                <span className="font-mono text-slate-100">{p.subMachine.method}()</span>
+                {p.subMachine.running ? (
+                  <span className="ml-auto font-mono text-violet-200 whitespace-nowrap">
+                    in <span id="sim-sub-state">{p.subMachine.state}</span>
+                  </span>
+                ) : (
+                  <span className="ml-auto text-slate-500">not running</span>
+                )}
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {p.subMachine.when ? <>Runs while <span className="font-mono">{p.subMachine.when}</span> (set it below). </> : 'Runs while its state is current. '}
+                {p.subMachine.running && p.subMachine.preempts ? `${p.subMachine.parent}'s own transitions wait meanwhile (a RETURN after its call).` : ''}
+              </div>
+            </div>
+          )}
           <div>
             <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Transitions out (checked in this order)</div>
             {p.transitions.length === 0 ? (
@@ -164,7 +185,8 @@ export const SimulationPanel: React.FC<SimulationPanelProps> = (p) => {
               <ol id="sim-history" className="space-y-0.5 font-mono text-[10px] text-slate-400">
                 {p.history.map((h, i) => (
                   <li key={i} className="truncate" title={h.label}>
-                    {i + 1}. {h.from} → {h.to}
+                    {/* (a sub-machine's step: its method, its states' own names) */}
+                    {i + 1}. {h.to.includes('__') ? `${h.to.split('__')[1]}(): ` : ''}{h.from.split('__').pop()} → {h.to.split('__').pop()}
                   </li>
                 ))}
               </ol>

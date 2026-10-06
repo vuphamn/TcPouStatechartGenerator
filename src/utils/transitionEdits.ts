@@ -115,7 +115,7 @@ const notFound = (method: TransitionMethod, edge: EdgeRef, stateVar: string) => 
 function pick(pouXml: string, s: Scope, edge: EdgeRef): number {
   const candidates = s.items.map((t, i) => ({ t, i })).filter(({ t }) => t.to === edge.to);
   if (candidates.length === 0) return -1;
-  if (s.method === 'doState' && edge.priority && s.items[edge.priority - 1]?.to === edge.to) return edge.priority - 1;
+  if (s.method !== 'preProcess' && edge.priority && s.items[edge.priority - 1]?.to === edge.to) return edge.priority - 1;
   if (candidates.length === 1) return candidates[0].i;
   // (doState()'s by where its guard is; another method's: the first)
   if (s.method !== 'doState') return candidates[0].i;
@@ -239,8 +239,8 @@ function swapAdjacent(s: Scope, a: number): string[] | { error: string } {
 }
 
 /** The order of the edge's transition among its source state's (doState) or preProcess()'s transitions */
-export function transitionOrder(pouXml: string, edge: EdgeRef, stateVar: string) {
-  const s = edgeScope(pouXml, edge, stateVar);
+export function transitionOrder(pouXml: string, edge: EdgeRef, stateVar: string, inMethod?: string) {
+  const s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   const index = pick(pouXml, s, edge);
   if (index < 0) return notFound(s.method, edge, stateVar);
@@ -248,14 +248,14 @@ export function transitionOrder(pouXml: string, edge: EdgeRef, stateVar: string)
 }
 
 /** Moves the edge's transition to the given priority (1 = checked first) */
-export function setTransitionPriority(pouXml: string, edge: EdgeRef, priority: number, stateVar: string): TransitionEditResult {
-  let s = edgeScope(pouXml, edge, stateVar);
+export function setTransitionPriority(pouXml: string, edge: EdgeRef, priority: number, stateVar: string, inMethod?: string): TransitionEditResult {
+  let s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   let index = pick(pouXml, s, edge);
   if (index < 0) return notFound(s.method, edge, stateVar);
   const target = Math.max(0, Math.min(s.items.length - 1, Math.round(priority) - 1));
   if (target === index) return { error: `${edge.from} → ${edge.to} already has priority ${index + 1}` };
-  const from = s.method === 'doState' ? edge.from : null;
+  const from = s.method !== 'preProcess' ? edge.from : null;
   while (index !== target) {
     const a = target < index ? index - 1 : index;
     const next = swapAdjacent(s, a);
@@ -263,7 +263,7 @@ export function setTransitionPriority(pouXml: string, edge: EdgeRef, priority: n
     s = rescan(s, next, stateVar, from);
     index = target < index ? index - 1 : index + 1;
   }
-  const what = s.method === 'doState' ? `priority ${target + 1} of ${s.items.length} in ${edge.from}` : `position ${target + 1} of ${s.items.length} in preProcess()`;
+  const what = s.method !== 'preProcess' ? `priority ${target + 1} of ${s.items.length} in ${edge.from}${s.method !== 'doState' ? ` (${s.method}())` : ''}` : `position ${target + 1} of ${s.items.length} in preProcess()`;
   return { method: s.method, code: s.lines.join(s.eol), message: `${edge.from} → ${edge.to} now has ${what}`, line: s.items[target].line + 1 };
 }
 

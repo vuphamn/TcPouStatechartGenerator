@@ -1587,6 +1587,46 @@ function enhanceSvgWithPriorityCircles(
       }
     }
 
+    // A state drawn as a box (its sub-machine inside it, as EFX_IDLE's RpsSimulation()): its complexity badge at the
+    // box's top-right corner, its frame in its level's colour (it has no node of its own)
+    if (heatmapResult) {
+      for (const c of Array.from(doc.querySelectorAll(COMPOSITE_SELECTOR))) {
+        const name = compositeNameOf(c);
+        if (!name || doc.querySelector(`g.node[data-state-id="${CSS.escape(name)}"]`) || !doc.querySelector(`g.node[data-state-id^="${CSS.escape(`${name}__`)}"]`)) continue;
+        const metric = heatmapResult.metrics.get(name);
+        const rect = compositeRectsOf(c).outer;
+        if (!metric || !rect) continue;
+        const isExceeded = metric.score >= complexityThreshold;
+        if (!((showComplexityBadges && isExceeded) || (isHeatmapActive && (!heatmapOnlyRefactor || metric.refactorNeeded)))) continue;
+        const x = parseFloat(rect.getAttribute('x') || '0') + parseFloat(rect.getAttribute('width') || '0');
+        const y = parseFloat(rect.getAttribute('y') || '0');
+        if (isHeatmapActive) {
+          rect.style.setProperty('stroke', metric.color.stroke, 'important');
+          rect.style.setProperty('stroke-width', metric.color.strokeWidth, 'important');
+        }
+        const ns = 'http://www.w3.org/2000/svg';
+        const badgeG = doc.createElementNS(ns, 'g');
+        badgeG.setAttribute('data-state-id', name);
+        badgeG.setAttribute('data-complexity-score', String(metric.score));
+        badgeG.setAttribute('class', `tc-complexity-badge ${isExceeded ? `tc-refactor-flag-badge ${metric.score >= 8 ? 'is-critical' : metric.score >= 5 ? 'is-high' : 'is-moderate'}` : `lvl-${metric.level}`}`);
+        badgeG.setAttribute('transform', `translate(${x - 32}, ${y - 9})`);
+        const titleEl = doc.createElementNS(ns, 'title');
+        titleEl.textContent = isExceeded
+          ? `Cyclomatic Complexity: M=${metric.score} (Exceeds Threshold ${complexityThreshold}) - Potential Refactoring Needed! ${metric.refactorRecommendation || ''}`
+          : `Cyclomatic Complexity: M=${metric.score} (${metric.levelLabel})`;
+        badgeG.appendChild(titleEl);
+        const badgeRect = doc.createElementNS(ns, 'rect');
+        for (const [k, v] of Object.entries({ width: '42', height: '18', rx: '9', ry: '9', fill: metric.color.badgeBg, stroke: metric.color.badgeBorder, 'stroke-width': '1.5', style: `fill: ${metric.color.badgeBg}; stroke: ${metric.color.badgeBorder}` })) badgeRect.setAttribute(k, v);
+        badgeG.appendChild(badgeRect);
+        const badgeText = doc.createElementNS(ns, 'text');
+        for (const [k, v] of Object.entries({ x: '21', y: '12.5', 'text-anchor': 'middle', fill: '#ffffff', 'font-size': '10px', 'font-weight': 'bold', 'font-family': 'ui-monospace, monospace' })) badgeText.setAttribute(k, v);
+        badgeText.textContent = `M=${metric.score}`;
+        badgeG.appendChild(badgeText);
+        wrapBadgeContent(badgeG as SVGGElement);
+        c.appendChild(badgeG);
+      }
+    }
+
     // Find all edgePaths groups across root and subgraphs / composite states
     const pGroups = Array.from(doc.querySelectorAll('g.edgePaths'));
     if (pGroups.length === 0) {
@@ -4161,7 +4201,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (liveHighlight.stuck) node(liveHighlight.stateId)?.classList.add('live-stuck-node');
     // A state with parallel regions is a cluster: it glows as one, each region's state inside it too
     const sid = liveHighlight.stateId.replace(/[.-]/g, '_');
-    svg.querySelector(`g.cluster[id$="-${CSS.escape(sid)}"], g.cluster[id="${CSS.escape(sid)}"]`)?.classList.add('live-active-cluster');
+    // (a composite drawn as Mermaid's own state box: g.statediagram-cluster, its id in data-id)
+    svg
+      .querySelector(`g.cluster[id$="-${CSS.escape(sid)}"], g.cluster[id="${CSS.escape(sid)}"], g.statediagram-cluster[data-id="${CSS.escape(liveHighlight.stateId)}"]`)
+      ?.classList.add('live-active-cluster');
     for (const r of liveHighlight.regionStates ?? []) node(r)?.classList.add('live-region-node');
     const prev = liveHighlight.previousStateId;
     if (prev && prev !== liveHighlight.stateId) {
@@ -4629,7 +4672,12 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     if (!svg) return null;
     const want = id.toLowerCase();
     const el = [...svg.querySelectorAll('g.node[data-state-id]')].find((g) => g.getAttribute('data-state-id')!.toLowerCase() === want) as SVGGElement | undefined;
-    if (!el) return null;
+    if (!el) {
+      // (a state drawn as a box, its sub-machine inside it: that box; its popups just below or above it)
+      const box = [...svg.querySelectorAll(COMPOSITE_SELECTOR)].find((c) => compositeNameOf(c).toLowerCase() === want);
+      const br = box ? (compositeRectsOf(box).outer ?? box).getBoundingClientRect() : null;
+      return br && br.width ? { l: br.left, t: br.top, r: br.right, b: br.bottom } : null;
+    }
     const r = nodeShapeOf(el).getBoundingClientRect();
     return { l: r.left, t: r.top, r: r.right, b: r.bottom };
   };
@@ -5774,13 +5822,16 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     if (shouldTrackComplexityHover) {
       const nodeEl = target?.closest('g.node') as HTMLElement | SVGElement | null;
-      if (nodeEl) {
+      // (a state drawn as a box, its sub-machine inside it: its badge, its blank area)
+      const boxId = nodeEl ? null : target?.closest('.tc-complexity-badge')?.getAttribute('data-state-id') || stateOfBox(target)?.id || null;
+      if (nodeEl || boxId) {
         if (hoveredEdgeCondition) {
           leaveGuardPopup();
         }
         const sId =
-          nodeEl.getAttribute('data-state-id') ||
-          nodeEl.id?.replace(/^flowchart-/, '').replace(/-\d+$/, '');
+          boxId ||
+          nodeEl!.getAttribute('data-state-id') ||
+          nodeEl!.id?.replace(/^flowchart-/, '').replace(/-\d+$/, '');
         if (sId) {
           const metric =
             complexityHeatmapResult.metrics.get(sId) ||

@@ -11,6 +11,8 @@
  * that might need architectural refactoring.
  */
 
+import { methodLines, subMachineId } from './sourceLocation.ts';
+import { caseBranchRange } from './stateEdits.ts';
 import { EdgeInfo, StateNodeInfo } from '../types.ts';
 
 export type ComplexityLevel = 'low' | 'moderate' | 'high' | 'critical';
@@ -241,6 +243,14 @@ export const HEATMAP_PALETTES: Record<HeatmapPalette, {
  */
 function extractStateCodeFromPou(tcPouContent: string, stateId: string): string {
   if (!tcPouContent) return '';
+
+  // A sub-machine's state (<state>__<method>__<name>): its branch in that method's CASE
+  const sub = subMachineId(tcPouContent, stateId);
+  if (sub) {
+    const lines = methodLines(tcPouContent, sub.method) ?? [];
+    const range = caseBranchRange(lines, sub.name);
+    return range ? lines.slice(range.start + 1, range.end).join('\n') : '';
+  }
   
   // Match doState ST body
   const doStateMatch = tcPouContent.match(/<Method[^>]*\bName=["']doState["'][^>]*>([\s\S]*?)<\/Method>/i);

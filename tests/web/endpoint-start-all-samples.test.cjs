@@ -102,7 +102,7 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
     }
     const src = svg.querySelector(`g.node[data-state-id="${CSS.escape(from)}"]`)?.getBoundingClientRect();
     const area = document.getElementById('mermaid-canvas-area').getBoundingClientRect();
-    const others = [...svg.querySelectorAll('g.node[data-state-id]')].filter((n) => { const id = n.getAttribute('data-state-id'); return id !== from && id !== to && id !== 'AnyState' && id !== '[*]' && !/startNode|endNode/.test(id) && !/_start$|_end$|^root_start$/.test(id) && !n.classList.contains('choice'); })
+    const others = [...svg.querySelectorAll('g.node[data-state-id]')].filter((n) => { const id = n.getAttribute('data-state-id'); return id !== from && id !== to && id !== 'AnyState' && id !== '[*]' && !/startNode|endNode/.test(id) && !/_start$|_end$|^root_start$/.test(id) && !id.includes('__') && !n.classList.contains('choice'); })
       .map((n) => ({ id: n.getAttribute('data-state-id'), r: n.querySelector('rect, polygon')?.getBoundingClientRect() ?? n.getBoundingClientRect() }))
       .filter((o) => o.r.width > 6 && o.r.height > 4 && o.r.left > area.left && o.r.right < area.right && o.r.top > area.top && o.r.bottom < area.bottom)
       .map((o) => ({ ...o, d: src ? Math.hypot(o.r.x - src.x, o.r.y - src.y) : 0 }))

@@ -332,6 +332,21 @@ async function stateMemberOf(client, type, stateVar, cache) {
   return (await membersOf(client, dt, cache)).find((m) => m.name.toLowerCase() === want) ?? null;
 }
 
+/**
+ * A member of a symbol's type whose name holds all these words (any case): its full path, or null. A method's VAR_INST
+ * (a sub-machine's state variable) is kept in the FB's instance under a name TwinCAT makes from the method's and the
+ * variable's: found by those two, whatever the exact form.
+ */
+async function findMember(client, under, words, cache) {
+  const info = await probe(client, under);
+  if (!info) return null;
+  const dt = await dataTypeInfo(client, info.type, cache);
+  if (!dt) return null;
+  const want = words.map((w) => String(w).toLowerCase());
+  const m = (await membersOf(client, dt, cache)).find((x) => want.every((w) => x.name.toLowerCase().includes(w)));
+  return m ? `${under}.${m.name}` : null;
+}
+
 /** A state machine's state variable: its type and, for an enum the PLC describes, its names by value */
 async function stateInfo(client, type, stateVar, cache) {
   const m = await stateMemberOf(client, type, stateVar, cache);
@@ -396,6 +411,7 @@ module.exports = {
   readTyped,
   subscribeTyped,
   discoverInstances,
+  findMember,
   isSymbolPath,
   browseSymbol,
   dataTypeInfo,

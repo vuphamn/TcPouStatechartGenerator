@@ -94,7 +94,8 @@ export function locateTransition(
   const guard = (edge.condition || edge.label || '').replace(/<br\s*\/?>/gi, ' ').trim();
   // A sub-machine's transition: in its method; its entry ([*] to its first state): where its start is set, before its CASE
   const subTo = subMachineId(pouXml, edge.to);
-  if (subTo) return locateSubTransition(pouXml, subTo.method, subMachineId(pouXml, edge.from)?.name ?? null, subTo.name, guard);
+  // (its label without its priority: "② cmd_bTestStart")
+  if (subTo) return locateSubTransition(pouXml, subTo.method, subMachineId(pouXml, edge.from)?.name ?? null, subTo.name, guard.replace(/^(?:[①-⑳]|\[\d+\]|\(\d+\))\s*/, ''));
   const fromPreProcess = /^\[preProcess\]/i.test(guard) || edge.from === 'AnyState';
   const method = fromPreProcess ? 'preProcess' : 'doState';
   const lines = methodLines(pouXml, method);

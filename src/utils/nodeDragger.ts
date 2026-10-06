@@ -673,8 +673,8 @@ export function findNodeElement(svg: SVGSVGElement, stateId: string): SVGGElemen
     const escapedCleanId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(cleanId) : cleanId.replace(/["\\]/g, '\\$&');
 
     const direct = (
-      svg.querySelector(`g.node[data-state-id="${escapedStateId}"], g[data-state-id="${escapedStateId}"]`) ||
-      svg.querySelector(`g.node[data-state-id="${escapedCleanId}"], g[data-state-id="${escapedCleanId}"]`) ||
+      svg.querySelector(`g.node[data-state-id="${escapedStateId}"], g[data-state-id="${escapedStateId}"]:not(.tc-complexity-badge)`) ||
+      svg.querySelector(`g.node[data-state-id="${escapedCleanId}"], g[data-state-id="${escapedCleanId}"]:not(.tc-complexity-badge)`) ||
       svg.querySelector(`g.node[id="${escapedStateId}"], g[id="${escapedStateId}"]`) ||
       svg.querySelector(`g.node[id="${escapedCleanId}"], g[id="${escapedCleanId}"]`) ||
       svg.querySelector(`g.node[id*="flowchart-${escapedCleanId}-"], g[id*="flowchart-${escapedCleanId}-"]`) ||

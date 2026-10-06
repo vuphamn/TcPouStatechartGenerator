@@ -75,7 +75,7 @@ const inner = (x) => `${S}__TestSequence__${x}`;
   await h.sleep(1500);
   const label = () => p.$eval(`#mermaid-canvas-area g.node[data-state-id="${S}"]`, (e) => e.textContent).catch(() => '');
   const innerCount = () => p.$$eval('#mermaid-canvas-area g.node', (els, pre) => new Set(els.map((e) => e.getAttribute('data-state-id')).filter((x) => x && x.startsWith(pre))).size, `${S}__TestSequence__`);
-  // (the state's box and its sub-machine's frame: their titles; flowchart: the frame's, stateDiagram: under the state's name)
+  // (the state's box and its sub-machine's: their titles)
   const boxTitle = () => p.evaluate((s) => [...document.querySelectorAll('#mermaid-canvas-area .statediagram-cluster, #mermaid-canvas-area g.cluster')].filter((c) => { const id = c.getAttribute('data-id') || c.id; return id.endsWith(s) || id.includes(`${s}__TestSequence`); }).map((c) => c.querySelector('.cluster-label')?.textContent || c.textContent || '').join(' | '), S);
 
   // Expanded by default
@@ -84,7 +84,7 @@ const inner = (x) => `${S}__TestSequence__${x}`;
     // (its name: the label's first line, upper case)
     return n ? `${n.textContent.trim().match(/^[A-Z0-9_]+/)?.[0] ?? ''}${n.getAttribute('class')?.includes('kssUnreachable') ? '(dashed)' : ''}` : '-';
   }), ['INIT', 'WAITING', 'RUNNING', 'UNUSED'].map(inner));
-  expect(drawn.join(' ') === 'INIT WAITING RUNNING UNUSED(dashed)' && /TestSequence · while cmd_bTestMode/.test(await boxTitle()), `drawn inside ${S} by default (${drawn.join(' ')})`);
+  expect(drawn.join(' ') === 'INIT WAITING RUNNING UNUSED(dashed)' && /TestSequences*while cmd_bTestMode/.test(await boxTitle()), `drawn inside ${S} by default (${drawn.join(' ')})`);
   const unused = await p.$eval(`#mermaid-canvas-area g.node[data-state-id="${inner('UNUSED')}"]`, (e) => e.textContent).catch(() => '');
   expect(/never reached/.test(unused), `UNUSED: "${unused.trim()}"`);
 
@@ -261,13 +261,13 @@ const inner = (x) => `${S}__TestSequence__${x}`;
   await p.click('#dock-tab-diagram').catch(() => {});
   await h.sleep(500);
 
-  // stateDiagram-v2: the same, its title under the state's name (then back to flowchart)
+  // stateDiagram-v2: the same, its sub-machine's box headed by its method (then back to flowchart)
   await p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /stateDiagram/.test(x.textContent))?.click());
   for (let i = 0; i < 40 && (await innerCount()) < 4; i++) await h.sleep(250);
   await h.sleep(800);
   const sdCount = await innerCount();
   const sdTitle = await boxTitle();
-  expect(sdCount >= 4 && /⊟ TestSequence/.test(sdTitle), `stateDiagram-v2: inside its box too (${sdCount} states; "${sdTitle.replace(/\s+/g, ' ').slice(0, 70)}")`);
+  expect(sdCount >= 4 && /TestSequences*while cmd_bTestMode/.test(sdTitle) && !/⊟/.test(sdTitle), `stateDiagram-v2: inside its box too (${sdCount} states; "${sdTitle.replace(/\s+/g, ' ').slice(0, 70)}")`);
   await p.evaluate(() => [...document.querySelectorAll('button')].find((x) => /^flowchart/.test(x.textContent.trim()))?.click());
   await h.sleep(1500);
 
@@ -283,6 +283,10 @@ const inner = (x) => `${S}__TestSequence__${x}`;
   await p.mouse.move(5, 5);
   await h.sleep(300);
   // Hover: the box's blank area (and its sub-machine's frame): the state's own code in doState()
+  // (the state a box titled with its own name; its sub-machine a box of its own inside it, headed by its method)
+  const heads = await p.evaluate((s) => [...document.querySelectorAll('#mermaid-canvas-area g.cluster, #mermaid-canvas-area g.statediagram-cluster')].map((c) => [(c.getAttribute('data-id') || c.id).replace(/^.*?render-[a-z0-9]+-/i, '').replace(/^state-/, '').replace(/-d+$/, ''), (c.querySelector('.cluster-label, g.label, text')?.textContent ?? '').trim()]).filter(([id]) => id === s || id === `${s}__TestSequence`), S);
+  const headOf = (id) => heads.find(([x]) => x === id)?.[1] ?? '';
+  expect(/^TABLEMANAGER_IDLE_FEED_OFF/.test(headOf(S)) && !/TestSequence|while/.test(headOf(S)) && /^TestSequences*while cmd_bTestMode/.test(headOf(`${S}__TestSequence`)), `the state's box titled with its name, its sub-machine's headed by its method (${JSON.stringify(heads)})`);
   const blanks = await p.evaluate((s) => {
     const c = [...document.querySelectorAll('#mermaid-canvas-area g.cluster')].find((x) => (x.getAttribute('data-id') || x.id).endsWith(s));
     const inner = [...document.querySelectorAll('#mermaid-canvas-area g.cluster')].find((x) => /__TestSequence/.test(x.getAttribute('data-id') || x.id));
@@ -336,6 +340,146 @@ const inner = (x) => `${S}__TestSequence__${x}`;
   if (expand) await expand.evaluate((e) => e.click());
   for (let i = 0; i < 40 && (await innerCount()) < 4; i++) await h.sleep(250);
   expect((await innerCount()) >= 4, 'expanded again');
+
+  // The Method Editor's caret in TestSequence(), under a CASE label: the canvas selects that sub-machine's state (Follow
+  // on: and pans to it)
+  {
+    await p.click('#dock-tab-diagram').catch(() => {});
+    await h.sleep(400);
+    const at = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; }, inner('INIT'));
+    if (at) await p.mouse.click(at.x, at.y);
+    await p.click('#dock-tab-method').catch(() => {});
+    // (TestSequence() chosen in the Method Editor)
+    await p.waitForSelector('#method-selector-combobox', { timeout: 8000 }).catch(() => {});
+    await p.evaluate(() => {
+      const sel = document.getElementById('method-selector-combobox');
+      const opt = sel && [...sel.options].find((o) => /TestSequence/.test(o.textContent));
+      if (!opt) return;
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, opt.value);
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await p.waitForFunction(() => /E_TEST_SEQ\.RUNNING\s*:/.test(document.getElementById('method-implementation-editor')?.value ?? ''), { timeout: 8000 }).catch(() => {});
+    if (!(await p.$eval('#method-follow-checkbox', (e) => e.checked).catch(() => true))) await p.click('#method-follow-checkbox');
+    const caretOn = await p.evaluate(() => {
+      const ta = document.getElementById('method-implementation-editor');
+      const lines = ta.value.split('\n');
+      const i = lines.findIndex((l) => /^\s*E_TEST_SEQ\.RUNNING\s*:/.test(l)) + 1;
+      const pos = lines.slice(0, i).reduce((n, l) => n + l.length + 1, 0) + 2;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+      const b = document.getElementById('method-selector-combobox');
+      return `${(b?.value || b?.textContent || '').trim()}: ${(lines[i] ?? '').trim()}`;
+    });
+    await h.sleep(900);
+    await p.click('#dock-tab-diagram').catch(() => {});
+    await h.sleep(600);
+    const sel = await p.evaluate(() => document.querySelector('#mermaid-canvas-area g.node.diagram-selected-node')?.getAttribute('data-state-id') ?? null);
+    expect(sel === inner('RUNNING'), `the Method Editor's caret under E_TEST_SEQ.RUNNING: in TestSequence(): the canvas selects it (${sel}; caret in ${caretOn})`);
+    await p.click("#dock-tab-method").catch(() => {});
+    await p.click("#method-follow-checkbox").catch(() => {});
+    await p.click("#dock-tab-diagram").catch(() => {});
+  }
+
+  // The simulation: in TABLEMANAGER_IDLE_FEED_OFF, cmd_bTestMode set: TestSequence() runs from INIT; the state glows and
+  // its sub-machine's state inside it; its transitions offered, the state's own waiting (the RETURN after its call);
+  // Step through it, Back; cmd_bTestMode off: it stops, the state's own transitions offered again
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await p.click('#dock-tab-simulate');
+  await p.waitForSelector('#sim-start', { timeout: 5000 }).catch(() => {});
+  await p.select('#sim-start-state', S);
+  await p.click('#sim-start');
+  await h.sleep(800);
+  const simNow = () => p.evaluate(() => ({
+    running: document.getElementById('sim-sub-machine')?.getAttribute('data-running') ?? null,
+    sub: document.getElementById('sim-sub-state')?.textContent ?? null,
+    box: [...document.querySelectorAll('#mermaid-diagram-svg-container g.live-active-cluster')].map((c) => (c.getAttribute('data-id') || c.id).replace(/^.*?render-[a-z0-9]+-/i, '')),
+    inner: [...document.querySelectorAll('#mermaid-diagram-svg-container g.node.live-region-node')].map((n) => n.getAttribute('data-state-id').split('__').pop()),
+    offered: [...document.querySelectorAll('#simulation-panel li .font-mono')].map((x) => x.textContent.replace(/^→\s*/, '').trim()).filter((x) => /^[A-Z_]+$/.test(x)),
+  }));
+  const simWait = async (ok, ms = 5000) => {
+    let m = await simNow();
+    for (let t = 0; t < ms && !ok(m); t += 200) { await h.sleep(200); m = await simNow(); }
+    return m;
+  };
+  const s0 = await simNow();
+  expect(s0.running === 'false' && s0.offered.some((x) => x.startsWith('TABLEMANAGER_')) && s0.inner.length === 0, `simulation in ${S}: its sub-machine not running, its own transitions offered (${JSON.stringify(s0)})`);
+  await p.$eval('#sim-var-cmd_bTestMode-true', (e) => e.click()).catch(() => {});
+  const s1 = await simWait((m) => m.running === 'true' && m.inner.includes('INIT'));
+  expect(s1.sub === 'INIT' && s1.box.includes(S) && s1.inner.join() === 'INIT' && s1.offered[0] === 'WAITING' && !s1.offered.some((x) => x.startsWith('TABLEMANAGER_')), `cmd_bTestMode TRUE: TestSequence() runs in INIT, ${S} glows with INIT inside it, its transitions offered first, the state's own waiting (preProcess()'s still checked) (${JSON.stringify(s1)})`);
+  await p.$eval('#sim-step', (e) => e.click()).catch(() => {});
+  const s2 = await simWait((m) => m.sub === 'WAITING');
+  expect(s2.sub === 'WAITING' && s2.inner.join() === 'WAITING' && s2.box.includes(S), `Step: WAITING (${JSON.stringify(s2)})`);
+  await p.$eval('#sim-var-cmd_bTestStart-true', (e) => e.click()).catch(() => {});
+  await h.sleep(300);
+  await p.$eval('#sim-step', (e) => e.click()).catch(() => {});
+  const s3 = await simWait((m) => m.sub === 'RUNNING');
+  expect(s3.sub === 'RUNNING' && s3.inner.join() === 'RUNNING', `cmd_bTestStart TRUE, Step: RUNNING (${JSON.stringify(s3)})`);
+  await p.$eval('#sim-back', (e) => e.click()).catch(() => {});
+  const s4 = await simWait((m) => m.sub === 'WAITING');
+  expect(s4.sub === 'WAITING', `Back: WAITING again (${s4.sub})`);
+  await p.$eval('#sim-var-cmd_bTestMode-false', (e) => e.click()).catch(() => {});
+  const s5 = await simWait((m) => m.running === 'false' && m.inner.length === 0);
+  expect(s5.running === 'false' && s5.inner.length === 0 && s5.offered.some((x) => x.startsWith('TABLEMANAGER_')), `cmd_bTestMode FALSE: it stops, ${S}'s own transitions offered again (${JSON.stringify(s5)})`);
+  await p.click('#sim-stop').catch(() => {});
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await h.sleep(500);
+
+  // The heat map: its states scored from their own code (a badge each, WAITING's above INIT's); the statistics count
+  // its states and transitions
+  await p.click('#toolbar-heatmap-btn').catch(() => {});
+  await h.sleep(1200);
+  await p.screenshot({ path: require('path').join(h.OUT, 'sub-machine-heat.png') }).catch(() => {});
+  const scores = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('#mermaid-diagram-svg-container g[data-complexity-score]')].map((b) => [b.getAttribute('data-state-id'), Number(b.getAttribute('data-complexity-score'))])));
+  expect(scores[inner('WAITING')] > scores[inner('INIT')] && scores[inner('RUNNING')] > 0 && scores[S] > 0, `heat map: its states scored (WAITING ${scores[inner('WAITING')]}, INIT ${scores[inner('INIT')]}, RUNNING ${scores[inner('RUNNING')]}; ${S} ${scores[S]})`);
+  // (the box's blank area: the state's complexity, its own code under it)
+  const boxPt = await p.evaluate((s) => {
+    const r = [...document.querySelectorAll('#mermaid-canvas-area g.cluster')].find((x) => (x.getAttribute('data-id') || x.id).endsWith(s))?.getBoundingClientRect();
+    return r ? { x: r.left + 6, y: r.bottom - 6 } : null;
+  }, S);
+  let heatTip = { tip: '', code: '' };
+  if (boxPt) {
+    await p.mouse.move(boxPt.x, boxPt.y);
+    await h.sleep(600);
+    heatTip = await p.evaluate((s) => {
+      const tipEl = document.getElementById('heatmap-state-hover-tooltip');
+      const t = tipEl?.getBoundingClientRect();
+      const b = [...document.querySelectorAll('#mermaid-canvas-area g.cluster')].find((x) => (x.getAttribute('data-id') || x.id).endsWith(s))?.querySelector(':scope > rect')?.getBoundingClientRect();
+      // (just below or above the state's box, not over its border)
+      const clear = !!t && !!b && (t.top >= b.bottom - 1 || t.bottom <= b.top + 1);
+      return { tip: tipEl?.innerText ?? '', code: document.getElementById('state-actions-in-heatmap')?.innerText ?? '', clear, at: t && b ? `${Math.round(t.top)}-${Math.round(t.bottom)} vs box ${Math.round(b.top)}-${Math.round(b.bottom)}` : '' };
+    }, S);
+    await p.mouse.move(5, 5);
+    await h.sleep(300);
+  }
+  expect(heatTip.clear, `heat map, the box's blank area: its popup just below or above the box (${heatTip.at})`);
+  expect(heatTip.tip.includes(S) && /M\s*=?\s*\d|complexity/i.test(heatTip.tip) && /TestSequence\(rtrigTestMode\.Q\)/.test(heatTip.code), `heat map, the box's blank area: the state's complexity and its code (${heatTip.tip.replace(/\s+/g, ' ').slice(0, 120)})`);
+  await p.click('#toolbar-heatmap-btn').catch(() => {});
+  await h.sleep(500);
+
+  // Priorities: a second transition out of WAITING: both numbered, a badge each in its box; Raise priority on the
+  // second reorders its method
+  const two = pou.replace('\t\t\tIF (cmd_bTestStart) THEN\n', '\t\t\tIF (cmd_bTestAbort) THEN\n\t\t\t\teTestState := E_TEST_SEQ.INIT;\n\t\t\tEND_IF\n\t\t\tIF (cmd_bTestStart) THEN\n');
+  expect(two !== pou, 'a second transition out of WAITING');
+  await toApp({ type: 'loadPou', source: { ...source, content: two } });
+  const badgesOf = () => p.evaluate((w) => [...document.querySelectorAll('#mermaid-diagram-svg-container .tc-priority-badge')].filter((b) => b.getAttribute('data-from') === w).map((b) => `${b.getAttribute('data-to').split('__').pop()}:${b.getAttribute('data-priority')}`).sort(), inner('WAITING'));
+  let badges = await badgesOf();
+  for (let t = 0; t < 8000 && badges.length < 2; t += 250) { await h.sleep(250); badges = await badgesOf(); }
+  expect(badges.join() === 'INIT:1,RUNNING:2', `its priority badges: ${badges.join()}`);
+  const badge = await p.$(`#mermaid-diagram-svg-container .tc-priority-badge[data-from="${inner('WAITING')}"][data-priority="2"]`);
+  if (badge) {
+    await badge.click({ button: 'right' });
+    await p.waitForSelector('#context-menu-priority-up-btn', { timeout: 3000 }).catch(() => {});
+    var menuIds = await p.evaluate(() => [...document.querySelectorAll('[role="menu"] [id], .context-menu [id], button[id$="-btn"]')].map((b) => b.id).filter((x) => /priority|goto|move/.test(x)).join(' '));
+    await p.click('#context-menu-priority-up-btn').catch(() => {});
+  }
+  let after = await badgesOf();
+  for (let t = 0; t < 8000 && after.join() !== 'INIT:2,RUNNING:1'; t += 250) { await h.sleep(250); after = await badgesOf(); }
+  expect(after.join() === 'INIT:2,RUNNING:1', `Raise priority on its second: first now (${after.join()}; menu: ${menuIds ?? 'no badge'})`);
+  // (the state itself: its own transitions numbered from its box)
+  const own = await p.evaluate((s) => [...document.querySelectorAll('#mermaid-diagram-svg-container .tc-priority-badge')].filter((b) => b.getAttribute('data-from') === s).map((b) => b.getAttribute('data-priority')).sort().join(), S);
+  expect(/^1,2/.test(own), `${S}'s own transitions: their priority badges from its box (${own})`);
+  await toApp({ type: 'loadPou', source });
+  await h.sleep(1500);
 
   // The KAnalogMeasure sample: KANALOGMEASURE_ENABLING (outside any composite) calls readDiagnostics(), a state machine
   // of its own: drawn in both styles, with and without the states' descriptions (declared once: no "Group nodes can

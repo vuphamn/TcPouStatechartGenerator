@@ -13,7 +13,10 @@ function parseWatchRequest(vars, max = MAX_VARS) {
   for (const v of vars) {
     if (!v || typeof v.id !== 'string' || v.id.length > 250 || !Array.isArray(v.candidates) || v.candidates.length === 0 || v.candidates.length > 4) return null;
     if (!v.candidates.every(ads.isSymbolPath)) return null;
-    out.push({ id: v.id, candidates: v.candidates });
+    // (search: when no candidate is there, a member of "under" whose name holds these words: a method's VAR_INST)
+    const search = v.search && ads.isSymbolPath(v.search.under) && Array.isArray(v.search.words) && v.search.words.length > 0 && v.search.words.length <= 3 && v.search.words.every((w) => typeof w === 'string' && /^[A-Za-z_]\w{0,80}$/.test(w)) ? { under: v.search.under, words: v.search.words } : null;
+    if (v.search && !search) return null;
+    out.push({ id: v.id, candidates: v.candidates, ...(search ? { search } : {}) });
   }
   return out;
 }
@@ -25,6 +28,7 @@ class VarWatcher {
     this.send = send;
     this.entries = new Map(); // id -> { symbol, handle, info, subscription }
     this.failed = new Set(); // ids not found / not readable: not looked up again while wanted
+    this.cache = new Map(); // the PLC's data types read (a member searched, an enum's names)
     this.queue = [];
     this.chain = Promise.resolve();
     this.closed = false;
@@ -59,6 +63,12 @@ class VarWatcher {
             break;
           }
         }
+        // (a method's VAR_INST: under the FB's instance by the words of its name)
+        if (!found && v.search) {
+          const path = await ads.findMember(this.client, v.search.under, v.search.words, this.cache);
+          const info = path ? await ads.probe(this.client, path) : null;
+          if (info) found = { symbol: path, info };
+        }
         if (!found) {
           result.error = 'not in the PLC (a local of the method, a property or a method?)';
         } else if (!ads.isSimpleValue(found.info)) {
@@ -75,6 +85,9 @@ class VarWatcher {
           });
           result.symbol = found.symbol;
           result.type = found.info.type;
+          // (an enum: its names by value, as the PLC describes it: a sub-machine's states without its .TcDUT)
+          const dt = await ads.dataTypeInfo(this.client, found.info.type, this.cache).catch(() => null);
+          if (dt?.enumValues) result.enumNames = dt.enumValues;
         }
       } catch (err) {
         result.error = ads.adsErrorText(err);

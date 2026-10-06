@@ -75,6 +75,7 @@ import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { caseStateAt, publishCodeFocus, usePersistedFlag, type CodeFocus } from '../utils/codeFocus.ts';
+import { subMachinesOf } from '../generator.ts';
 import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
@@ -562,8 +563,20 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   // (the state this editor made the selection: not scrolled to again when it comes back)
   const selfFocusRef = useRef<string | null>(null);
   const caseStates = useMemo(() => new Set(caseBranches.flatMap((b) => b.label.replace(/:.*$/, '').split(',').map((n) => n.trim().split('.').pop() ?? ''))), [caseBranches]);
+  // (this method a sub-machine's: its states' ids on the canvas, inside the state that calls it)
+  const subMachine = useMemo(() => {
+    try {
+      return subMachinesOf(tcPouContent).find((m) => m.method.toLowerCase() === cleanMethodName.toLowerCase()) ?? null;
+    } catch {
+      return null;
+    }
+  }, [tcPouContent, cleanMethodName]);
+  const canvasStateOf = useCallback(
+    (name: string) => (cleanMethodName.toLowerCase() === 'dostate' ? name : subMachine && subMachine.states.includes(name) ? `${subMachine.parent}__${subMachine.method}__${name}` : null),
+    [cleanMethodName, subMachine]
+  );
   useEffect(() => {
-    const isDoState = cleanMethodName.toLowerCase() === 'dostate';
+    const isDoState = cleanMethodName.toLowerCase() === 'dostate' || !!subMachine;
     const onSel = () => {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       if (!ta || ta.id !== 'method-implementation-editor') return;
@@ -571,7 +584,8 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       const caretLine = implEditorRef.current?.originalLineAt(ta.selectionStart) ?? ta.value.slice(0, ta.selectionStart).split('\n').length;
       setHighlightedCaseLine((h) => (h !== null && h !== caretLine ? null : h));
       if (!isDoState) return;
-      const state = caseStateAt(ta.value, ta.selectionStart, caseStates);
+      const name = caseStateAt(ta.value, ta.selectionStart, caseStates);
+      const state = name ? canvasStateOf(name) : null;
       if (!state || state === caretStateRef.current) return;
       caretStateRef.current = state;
       selfFocusRef.current = state;
@@ -579,7 +593,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     };
     document.addEventListener('selectionchange', onSel);
     return () => document.removeEventListener('selectionchange', onSel);
-  }, [cleanMethodName, caseStates, followCanvas]);
+  }, [cleanMethodName, caseStates, followCanvas, subMachine, canvasStateOf]);
   // An edit here: the highlighted row is no longer known (its lines moved)
   useEffect(() => {
     const onInput = (e: Event) => {
@@ -624,7 +638,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     setScrollNotification(`Jumped to case: ${block.label.slice(0, 30)} (line ${block.startLine})`);
     setTimeout(() => setScrollNotification(null), 3000);
     // Follow: Identified States and the Enum Editor show it; the canvas with Follow on
-    const state = stateLabelOrId.split(',')[0].trim().split('.').pop() ?? '';
+    const state = canvasStateOf(stateLabelOrId.split(',')[0].trim().split('.').pop() ?? '');
     if (state) {
       caretStateRef.current = state;
       selfFocusRef.current = state;

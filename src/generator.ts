@@ -224,10 +224,32 @@ function getMethodSt(doc: Document | null, rawXml: string, name: string): string
     .replace(/&apos;/g, "'");
 }
 
+/** A sub-machine as the app follows it (Live, the simulation): see subMachines.ts */
+export interface SubMachineInfo {
+  parent: string;
+  method: string;
+  states: string[];
+  /** Its state variable, and its declared type (an enum: its names when the PLC does not give them) */
+  variable: string;
+  variableType: string | null;
+  start: string | null;
+  entry: string | null;
+  /** The conditions around its call: it runs only then (null: always, while its state is current) */
+  when: string | null;
+  /** A RETURN after its call: its state's own transitions wait while it runs */
+  preempts: boolean;
+  transitions: { from: string; to: string; guard: string | null }[];
+}
+
 /** The states of a POU that call a method with a state machine of its own (its sub-machines; see subMachines.ts) */
-export function subMachinesOf(tcPouContent: string): { parent: string; method: string; states: string[] }[] {
+export function subMachinesOf(tcPouContent: string): SubMachineInfo[] {
   const doc = parseXmlDoc(tcPouContent);
-  return findSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methodsOf(doc, tcPouContent), stripComments(tcPouContent)).map((m) => ({ parent: m.parent, method: m.method, states: m.states }));
+  const methods = methodsOf(doc, tcPouContent);
+  return findSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methods, stripComments(tcPouContent)).map((m) => {
+    const decl = stripComments(methods.get(m.method)?.decl ?? '');
+    const type = new RegExp(`(?:^|[\\s;])${m.variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*([A-Za-z_][\\w.]*)`, 'i').exec(decl)?.[1] ?? null;
+    return { parent: m.parent, method: m.method, states: m.states, variable: m.variable, variableType: type, start: m.start, entry: m.entry, when: m.when, preempts: m.preempts, transitions: m.transitions };
+  });
 }
 
 /** The POU's methods: their ST and declaration, by name */
@@ -942,6 +964,8 @@ export interface ParallelRegion {
   entry?: string | null;
   /** Its states nothing goes to: drawn dashed, "never reached" */
   unreachable?: string[];
+  /** A sub-machine's: its method (its box's header, the box's id <state>__<method>) and when it runs (under it) */
+  subMachine?: { method: string; when: string | null };
 }
 
 /**
@@ -1393,9 +1417,10 @@ function flowNodeLabel(state: string, stateDescriptions?: Map<string, string>): 
 function emitFlowchartRegions(lines: string[], indent: string, state: string, regions: ParallelRegion[], declared: Set<string>, stateDescriptions?: Map<string, string>) {
   lines.push(`${indent}subgraph ${san(state)}["${flowNodeLabel(state, stateDescriptions)}"]`);
   for (const r of regions) {
-    const rid = `${san(state)}__${san(r.variable)}`;
+    const rid = r.subMachine ? `${san(state)}__${san(r.subMachine.method)}` : `${san(state)}__${san(r.variable)}`;
     const inner = `${indent}        `;
-    lines.push(`${indent}    subgraph ${rid}["${r.title ?? r.variable}"]`);
+    if (r.subMachine) lines.push(`${indent}    %% sub-machine ${san(state)} ${san(r.subMachine.method)}`);
+    lines.push(`${indent}    subgraph ${rid}["${r.subMachine ? subMachineHeader(r.subMachine) : r.title ?? r.variable}"]`);
     for (const s of r.states) {
       const name = r.labels?.[s];
       lines.push(`${inner}${san(s)}["${name ? `${name}${r.unreachable?.includes(s) ? "<br/><span class='node-desc'>never reached</span>" : ''}` : flowNodeLabel(s, stateDescriptions)}"]`);
@@ -1417,8 +1442,13 @@ function emitStateRegions(lines: string[], indent: string, state: string, region
   const label = desc ? `${state}<br/><span class='node-desc'>${wrapDescription(desc.replace(/"/g, "'"), 32)}</span>` : state;
   lines.push(`${indent}state "${label}" as ${san(state)} {`);
   regions.forEach((r, i) => {
-    const inner = `${indent}    `;
+    let inner = `${indent}    `;
     if (i > 0) lines.push(`${inner}--`);
+    if (r.subMachine) {
+      lines.push(`${inner}%% sub-machine ${san(state)} ${san(r.subMachine.method)}`);
+      lines.push(`${inner}state "${subMachineHeader(r.subMachine)}" as ${san(state)}__${san(r.subMachine.method)} {`);
+      inner += '    ';
+    }
     if (r.start) lines.push(`${inner}[*] --> ${san(r.start)}${r.entry ? `: ${esc(r.entry)}` : ''}`);
     for (const s of r.states) {
       const name = r.labels?.[s];
@@ -1428,8 +1458,14 @@ function emitStateRegions(lines: string[], indent: string, state: string, region
     for (const s of r.unreachable ?? []) lines.push(`${inner}class ${san(s)} kssUnreachable`);
     for (const t of r.transitions) lines.push(`${inner}${san(t.from)} --> ${san(t.to)}${t.guard ? `: ${esc(t.guard)}` : ''}`);
     for (const f of r.finals) lines.push(`${inner}${san(f)} --> [*]`);
+    if (r.subMachine) lines.push(`${indent}    }`);
   });
   lines.push(`${indent}}`);
+}
+
+/** A sub-machine's box header: its method; when it runs (the IFs around its call) under it */
+function subMachineHeader(sub: { method: string; when: string | null }) {
+  return sub.when ? `${sub.method}<br/><span class='node-desc'>${wrapDescription(`while ${sub.when}`.replace(/"/g, "'"), 32)}</span>` : sub.method;
 }
 
 function emitFlowchartSubgraph(
@@ -2009,18 +2045,20 @@ export function generateStatechartModel(
     }
     const id = (x: string) => `${m.parent}__${m.method}__${x}`;
     if (m.unreachable.length) anyUnreachable = true;
-    // (its title under the state's name: a stateDiagram region has none of its own; a flowchart's subgraph has)
-    if (!flowchartOutput) {
-      stateDescriptions = new Map(stateDescriptions ?? []);
-      const own = stateDescriptions.get(m.parent);
-      stateDescriptions.set(m.parent, [...(own ? [own] : []), `⊟ ${m.method}${m.when ? ` · while ${m.when}` : ''}`].join('<br/>'));
-    }
     regions.set(m.parent, [
       ...(regions.get(m.parent) ?? []),
       {
         parent: m.parent, variable: `${m.method}.${m.variable}`, states: m.states.map(id), start: m.start ? id(m.start) : null, finals: [],
-        transitions: m.transitions.map((t) => ({ from: id(t.from), to: id(t.to), guard: t.guard })),
-        labels: Object.fromEntries(m.states.map((x) => [id(x), x])), title: `${m.method}${m.when ? ` · while ${m.when}` : ''}`, entry: m.entry,
+        transitions: m.transitions.map((t) => {
+          // (its priority: its place among its state's transitions, numbered when there are several)
+          const own = m.transitions.filter((x) => x.from === t.from);
+          if (!(options.showTransitionPriorities ?? true) || own.length < 2) return { from: id(t.from), to: id(t.to), guard: t.guard };
+          const n = own.indexOf(t) + 1;
+          const fmt = options.priorityFormat ?? 'circled';
+          const mark = fmt === 'bracket' ? `[${n}]` : fmt === 'circled' ? toCircledNumber(n) : `(${n})`;
+          return { from: id(t.from), to: id(t.to), guard: t.guard ? `${mark} ${t.guard}` : mark };
+        }),
+        labels: Object.fromEntries(m.states.map((x) => [id(x), x])), title: m.method, entry: m.entry, subMachine: { method: m.method, when: m.when ?? null },
         unreachable: m.unreachable.map(id),
       },
     ]);

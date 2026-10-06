@@ -9,6 +9,10 @@ import { SAMPLES } from '../../src/samples/samplesData.ts';
 import { generateStatechartModel, subMachinesOf } from '../../src/generator.ts';
 import { findSubMachines } from '../../src/utils/subMachines.ts';
 import { locateState, locateTransition, subMachineId } from '../../src/utils/sourceLocation.ts';
+import { setTransitionPriority, transitionOrder } from '../../src/utils/transitionEdits.ts';
+import { calculateStateComplexityHeatmap } from '../../src/utils/complexityHeatmap.ts';
+import { extractStateNodesFromMermaid } from '../../src/utils/nodeStyles.ts';
+import { extractEdgesFromMermaid } from '../../src/utils/diagramNotes.ts';
 
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -54,7 +58,10 @@ const pou = sample.pouContent
 const dut = sample.dutContent;
 
 const found = subMachinesOf(pou);
-expect(JSON.stringify(found) === JSON.stringify([{ parent: 'TABLEMANAGER_IDLE_FEED_OFF', method: 'TestSequence', states: ['INIT', 'WAITING', 'RUNNING', 'UNUSED'] }]), `found: ${JSON.stringify(found)}`);
+const f0 = found[0];
+expect(found.length === 1 && f0.parent === 'TABLEMANAGER_IDLE_FEED_OFF' && f0.method === 'TestSequence' && f0.states.join() === 'INIT,WAITING,RUNNING,UNUSED', `found: ${JSON.stringify(found)}`);
+// (what Live and the simulation need: its variable and its enum, where it starts, when it runs, its transitions)
+expect(f0?.variable === 'eTestState' && f0.variableType === 'E_TEST_SEQ' && f0.start === 'INIT' && f0.entry === '↑ cmd_bTestMode' && f0.when === 'cmd_bTestMode' && f0.preempts === true && f0.transitions.length === 3, `for Live and the simulation: ${JSON.stringify(f0)}`);
 expect(subMachinesOf(sample.pouContent).length === 0, 'the sample as it is: none (its methods have no state machine of their own)');
 
 // The details
@@ -75,8 +82,8 @@ const open = generateStatechartModel(dut, pou, {});
 expect(generateStatechartModel(dut, pou, { collapsedComposites: ['+TABLEMANAGER_IDLE_FEED_OFF'] }).markdown === open.markdown && JSON.stringify(open.subMachines) === JSON.stringify([{ parent: 'TABLEMANAGER_IDLE_FEED_OFF', method: 'TestSequence', expanded: true }]), 'expanded by default');
 const id = (x: string) => `TABLEMANAGER_IDLE_FEED_OFF__TestSequence__${x}`;
 const md = open.markdown;
-// (the title wrapped as descriptions are)
-expect(/state "TABLEMANAGER_IDLE_FEED_OFF<br\/><span class='node-desc'>⊟ TestSequence · while(?: |<br\/>)cmd_bTestMode<\/span>" as TABLEMANAGER_IDLE_FEED_OFF \{/.test(md), 'expanded: the state a box, titled with it');
+// (the state a box titled with its own name; inside it, its sub-machine's box headed by its method, when it runs under it)
+expect(md.includes('state "TABLEMANAGER_IDLE_FEED_OFF" as TABLEMANAGER_IDLE_FEED_OFF {') && md.includes(`state "TestSequence<br/><span class='node-desc'>while cmd_bTestMode</span>" as TABLEMANAGER_IDLE_FEED_OFF__TestSequence {`) && !md.includes('⊟'), 'expanded: the state a box, its sub-machine a box of its own inside it, headed by its method');
 expect(md.includes(`[*] --> ${id('INIT')}: ↑ cmd_bTestMode`) && md.includes(`state "WAITING" as ${id('WAITING')}`) && md.includes(`${id('WAITING')} --> ${id('RUNNING')}: cmd_bTestStart`), 'its states by their own names, its entry labelled, its transitions');
 expect(md.includes(`state "UNUSED<br/><span class='node-desc'>never reached</span>" as ${id('UNUSED')}`) && md.includes(`class ${id('UNUSED')} kssUnreachable`) && /classDef kssUnreachable/.test(md), 'never reached: said, dashed');
 // (the state's own transitions still drawn, from its box; the composites' list unchanged)
@@ -84,7 +91,7 @@ expect(collapsed.edges.filter((e) => e.from === 'TABLEMANAGER_IDLE_FEED_OFF').le
 expect(JSON.stringify(Object.keys(open.composites)) === JSON.stringify(Object.keys(collapsed.composites)), 'the enum\'s composites unchanged');
 // Flowchart: a subgraph titled with it
 const flow = generateStatechartModel(dut, pou, { flowchartOutput: true }).markdown;
-expect(flow.includes('["TestSequence · while cmd_bTestMode"]') && flow.includes(`${id('RUNNING')}["RUNNING"]`) && flow.includes(`-->|"↑ cmd_bTestMode"| ${id('INIT')}`), 'flowchart: a subgraph titled with it, the entry labelled');
+expect(flow.includes(`subgraph TABLEMANAGER_IDLE_FEED_OFF__TestSequence["TestSequence<br/><span class='node-desc'>while cmd_bTestMode</span>"]`) && flow.includes(`${id('RUNNING')}["RUNNING"]`) && flow.includes(`-->|"↑ cmd_bTestMode"| ${id('INIT')}`), 'flowchart: its subgraph headed by its method, the entry labelled');
 
 // Go to code: its states and transitions in its method (its entry: where its start is set)
 expect(JSON.stringify(subMachineId(pou, id('RUNNING'))) === JSON.stringify({ parent: 'TABLEMANAGER_IDLE_FEED_OFF', method: 'TestSequence', name: 'RUNNING' }) && subMachineId(pou, 'TABLEMANAGER_IDLE_FEED_OFF') === null, 'its ids: the state, the method, its name');
@@ -96,6 +103,31 @@ const back = locateTransition(pou, { from: id('RUNNING'), to: id('WAITING'), lab
 expect(back?.text === 'eTestState := E_TEST_SEQ.WAITING;' && back.line === 15, `another: ${JSON.stringify(back)}`);
 const entry = locateTransition(pou, { from: '[*]', to: id('INIT'), label: '↑ cmd_bTestMode' });
 expect(entry?.method === 'TestSequence' && entry.text === 'eTestState := E_TEST_SEQ.INIT;' && entry.line === 2, `its entry: ${JSON.stringify(entry)}`);
+
+// Priorities: a sub-machine's state with several transitions has them numbered (their order in its branch), and
+// reordered in its method
+const two = pou.replace('\t\t\tIF (cmd_bTestStart) THEN\n', '\t\t\tIF (cmd_bTestAbort) THEN\n\t\t\t\teTestState := E_TEST_SEQ.INIT;\n\t\t\tEND_IF\n\t\t\tIF (cmd_bTestStart) THEN\n');
+expect(two !== pou, 'a second transition out of WAITING');
+const twoMd = generateStatechartModel(dut, two, {}).markdown;
+expect(twoMd.includes(`${id('WAITING')} --> ${id('INIT')}: ① cmd_bTestAbort`) && twoMd.includes(`${id('WAITING')} --> ${id('RUNNING')}: ② cmd_bTestStart`) && twoMd.includes(`${id('RUNNING')} --> ${id('WAITING')}: tonStep.Q`), 'numbered when their state has several: ① ②, a single one not');
+expect(generateStatechartModel(dut, two, { priorityFormat: 'bracket' }).markdown.includes(': [2] cmd_bTestStart') && !generateStatechartModel(dut, two, { showTransitionPriorities: false }).markdown.includes('② cmd_bTestStart'), 'in the chosen format; none when priorities are off');
+const ord = transitionOrder(two, { from: 'WAITING', to: 'RUNNING', label: 'cmd_bTestStart' }, 'eTestState', 'TestSequence');
+expect(!('error' in ord) && ord.priority === 2 && ord.count === 2, `its order in its method: ${JSON.stringify(ord)}`);
+const raised = setTransitionPriority(two, { from: 'WAITING', to: 'RUNNING', label: 'cmd_bTestStart' }, 1, 'eTestState', 'TestSequence');
+expect(!('error' in raised) && raised.method === 'TestSequence' && raised.code.indexOf('cmd_bTestStart') < raised.code.indexOf('cmd_bTestAbort'), `raised: checked first in its method (${'error' in raised ? raised.error : raised.message})`);
+
+// The heat map and the statistics: its states with their own code (their branch in its method)
+const heat = calculateStateComplexityHeatmap(extractStateNodesFromMermaid(twoMd), extractEdgesFromMermaid(twoMd), two);
+const hw = heat.metrics.get(id('WAITING'));
+const hi = heat.metrics.get(id('INIT'));
+expect(!!hw && hw.outgoingTransitionsCount === 2 && hw.internalDecisionsCount >= 2 && hw.hasCaseBranch && hw.score > (hi?.score ?? 99), `WAITING scored from its branch: ${JSON.stringify(hw && { out: hw.outgoingTransitionsCount, dec: hw.internalDecisionsCount, score: hw.score, branch: hw.hasCaseBranch })} (INIT ${hi?.score})`);
+expect(heat.metrics.has(id('RUNNING')) && heat.metrics.has('TABLEMANAGER_IDLE_FEED_OFF'), 'its states and the state itself in the heat map');
+// (the state's label, its popups' header: the same expanded or collapsed, not its box's "· while …")
+const labelOf = (md: string) => extractStateNodesFromMermaid(md).find((s) => s.id === 'TABLEMANAGER_IDLE_FEED_OFF')?.label;
+const collapsedMd = generateStatechartModel(dut, two, { collapsedComposites: ['-TABLEMANAGER_IDLE_FEED_OFF'] }).markdown;
+const text = (l?: string) => (l ?? '').replace(/<[^>]+>/g, '');
+expect(text(labelOf(twoMd)) === text(labelOf(collapsedMd)) && /⊞ TestSequence/.test(labelOf(twoMd) ?? '') && !/while/.test(labelOf(twoMd) ?? ''), `its label: "${labelOf(twoMd)}" expanded, "${labelOf(collapsedMd)}" collapsed`);
+expect(!extractStateNodesFromMermaid(twoMd).some((s) => s.id === 'TABLEMANAGER_IDLE_FEED_OFF__TestSequence') && !extractStateNodesFromMermaid(generateStatechartModel(dut, two, { flowchartOutput: true }).markdown).some((s) => s.id === 'TABLEMANAGER_IDLE_FEED_OFF__TestSequence'), 'its box: no state of its own');
 
 // Not a sub-machine: a method without a state machine; a member's method
 const noMachine = pou.replace(/eTestState := E_TEST_SEQ\.(WAITING|RUNNING);/g, ';');

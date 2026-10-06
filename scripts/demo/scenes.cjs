@@ -307,6 +307,40 @@ module.exports = {
     },
   },
 
+  // 4b. A sub-machine running: KAnalogMeasure's KANALOGMEASURE_ENABLING calls readDiagnostics(), a state machine of
+  // its own, drawn inside it; simulated: its run condition set, it starts, the state glows with its sub-machine's
+  // state inside, Step through it
+  submachine: {
+    async prepare(page, d, url) {
+      await openSample(page, url);
+      // (the samples' list: in the header, or its Hidden menu at this width)
+      if (await page.$('#sample-selector')) await page.select('#sample-selector', 'k-analog-measure');
+      else {
+        await page.click('#header-hidden-controls-btn');
+        await page.waitForSelector('#dock-menu-header-sample-k-analog-measure', { timeout: 5000 });
+        await page.click('#dock-menu-header-sample-k-analog-measure');
+      }
+      await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="KANALOGMEASURE_ENABLING__readDiagnostics__DIAG_READ_FINISH_ADR"]', { timeout: 90000 });
+      await sleep(2500);
+      await page.evaluate(() => document.querySelector('#diagram-minimap-container button[title^="Close Minimap"]')?.click());
+      await focus(page, 'KANALOGMEASURE_ENABLING__readDiagnostics__DIAG_READ_FINISH_ADR', { notches: 4 });
+    },
+    async play(page, d) {
+      await d.caption('A state that calls a method with its own state machine: <b>readDiagnostics()</b>, drawn inside it', 2600);
+      await tab(page, d, 'simulate');
+      await page.select('#sim-start-state', 'KANALOGMEASURE_ENABLING');
+      await sleep(400);
+      await d.clickOn('#sim-start', { after: 1200 });
+      await d.caption('It runs while its call\'s condition holds: <b>status_bDiagnostics</b> = TRUE', 300);
+      await d.clickOn('#sim-var-status_bDiagnostics-true', { after: 1800 });
+      await d.caption('The state glows, and its sub-machine\'s state inside it', 1600);
+      await d.caption('<b>Step</b> through its states (fbEcCoESdoRead.bBusy = FALSE)', 300);
+      await d.clickOn('[id="sim-var-fbEcCoESdoRead.bBusy-false"]', { after: 900 }).catch(() => {});
+      for (let i = 0; i < 4; i++) await d.clickOn('#sim-step', { after: 1300 });
+      await d.caption('Live, the PLC\'s sub-machine state is marked the same way', 2200);
+    },
+  },
+
   // 5. Live: the PLC's state on the chart (values fed through the XAE bridge's messages: a stand-in, no PLC)
   live: {
     async prepare(page, d, url) {

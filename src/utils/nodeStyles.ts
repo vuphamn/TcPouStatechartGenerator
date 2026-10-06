@@ -190,11 +190,21 @@ export function extractStateNodesFromMermaid(code: string): StateNodeInfo[] {
   }
 
   // 3. State diagram definitions: state "Label" as S_NAME or [*] --> S_NAME
+  // (a sub-machine's box, <state>__<method>, after its "%% sub-machine <state> <method>": no state; its state's label
+  // says it has one, as when it is collapsed)
+  const subBoxes = new Map<string, string>();
+  for (const m of code.matchAll(/^\s*%% sub-machine (\S+) (\S+)\s*$/gm)) subBoxes.set(m[1], m[2]);
+  const boxIds = new Set([...subBoxes].map(([state, method]) => `${state}__${method}`));
   const sdPattern = /state\s+"([^"]+)"\s+as\s+([A-Za-z0-9_]+)/g;
   while ((match = sdPattern.exec(code)) !== null) {
-    const label = match[1].replace(/<br\s*\/?>/gi, ' — ');
     const id = match[2];
+    if (boxIds.has(id)) continue;
+    const label = match[1].replace(/<br\s*\/?>/gi, ' — ');
     nodesMap.set(id, label);
+  }
+  for (const [state, method] of subBoxes) {
+    const label = nodesMap.get(state) ?? state;
+    if (!label.includes(`⊞ ${method}`)) nodesMap.set(state, `${label} — ⊞ ${method}`);
   }
 
   const result: StateNodeInfo[] = [];
