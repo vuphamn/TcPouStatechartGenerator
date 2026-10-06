@@ -2818,6 +2818,23 @@ export const App: React.FC = () => {
     }
     return { unique: m, all };
   }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes]);
+  // Each state's transitions in and out, one per transition in the code (two to the same state are two): the
+  // Identified States list's counts, as the chart draws them
+  const stateTransitionCounts = useMemo(() => {
+    const counts = new Map<string, { incoming: number; outgoing: number }>();
+    const of = (id: string) => {
+      let c = counts.get(id);
+      if (!c) counts.set(id, (c = { incoming: 0, outgoing: 0 }));
+      return c;
+    };
+    for (const list of edgeMembersAll.values()) {
+      for (const t of list) {
+        of(t.from).outgoing++;
+        of(t.to).incoming++;
+      }
+    }
+    return counts;
+  }, [edgeMembersAll]);
   const currentEdge = useCallback(
     (edge: EdgeInfo) => {
       const e = drawnEdge(edge);
@@ -8657,6 +8674,7 @@ export const App: React.FC = () => {
             {/* Identified States Sidebar Section */}
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
+              transitionCounts={edgeMembersAll.size ? stateTransitionCounts : undefined}
               selectedStateId={selectedStateId}
               focusStateId={codeFocus?.state ?? null}
               focusNonce={codeFocus?.t}

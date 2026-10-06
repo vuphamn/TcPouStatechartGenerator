@@ -47,6 +47,11 @@ export interface IdentifiedStatesSidebarSectionProps {
   bookmarkedStates?: string[];
   onToggleBookmark?: (stateId: string) => void;
   onShowBookmarks?: () => void;
+  /**
+   * Each state's transitions in and out, one per transition in the code (as the chart draws them: two to the same
+   * state are two); absent: the states it connects to are counted instead
+   */
+  transitionCounts?: Map<string, { incoming: number; outgoing: number }>;
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
@@ -70,6 +75,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   bookmarkedStates,
   onToggleBookmark,
   onShowBookmarks,
+  transitionCounts,
 }) => {
   const bookmarkSet = useMemo(() => new Set(bookmarkedStates ?? []), [bookmarkedStates]);
   // A card's right-click menu (Add / Remove bookmark)
@@ -168,21 +174,25 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
       });
     });
 
-    // 3. Assemble complete stats
+    // 3. Assemble complete stats: the transitions (as drawn: two to the same state are two), and the states they
+    // come from / go to
     states.forEach((s) => {
       const inArray = Array.from(incomingSetMap.get(s.id) || []);
       const outArray = Array.from(outgoingSetMap.get(s.id) || []);
+      const counted = transitionCounts?.get(s.id);
+      const incomingCount = counted ? counted.incoming : inArray.length;
+      const outgoingCount = counted ? counted.outgoing : outArray.length;
       map.set(s.id, {
         incoming: inArray,
         outgoing: outArray,
-        incomingCount: inArray.length,
-        outgoingCount: outArray.length,
-        totalCount: inArray.length + outArray.length,
+        incomingCount,
+        outgoingCount,
+        totalCount: incomingCount + outgoingCount,
       });
     });
 
     return map;
-  }, [states]);
+  }, [states, transitionCounts]);
 
   const totalTransitionsSum = useMemo(() => {
     let sum = 0;
@@ -711,7 +721,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                             }`}
                             title={
                               transStats.incomingCount > 0
-                                ? `Incoming transitions (${transStats.incomingCount}) from: ${transStats.incoming.join(', ')}`
+                                ? `${transStats.incomingCount} incoming transition${transStats.incomingCount === 1 ? '' : 's'} from ${transStats.incoming.length} state${transStats.incoming.length === 1 ? '' : 's'}: ${transStats.incoming.join(', ')}`
                                 : '0 incoming transitions (Possible initial entry or unreachable state)'
                             }
                           >
@@ -729,7 +739,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                             }`}
                             title={
                               transStats.outgoingCount > 0
-                                ? `Outgoing transitions (${transStats.outgoingCount}) to: ${transStats.outgoing.join(', ')}`
+                                ? `${transStats.outgoingCount} outgoing transition${transStats.outgoingCount === 1 ? '' : 's'} to ${transStats.outgoing.length} state${transStats.outgoing.length === 1 ? '' : 's'}: ${transStats.outgoing.join(', ')}`
                                 : '0 outgoing transitions (Terminal or sink state)'
                             }
                           >
