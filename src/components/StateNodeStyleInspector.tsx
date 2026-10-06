@@ -217,6 +217,9 @@ export interface StateNodeStyleInspectorProps {
   /** The state at an editor's caret (the other editor shows it) */
   codeFocus?: import('../utils/codeFocus.ts').CodeFocus | null;
   initialEnumMember?: string;
+  /** The Enum Editor shows a sub-machine's enum: its members' state ids' prefix, and why it is read-only (if so) */
+  enumMemberPrefix?: string;
+  enumReadOnlyNote?: string;
   // Documentation / Notes persistence
   notes?: DiagramNotes;
   onSaveNote?: (target: ContextMenuTarget, noteText: string) => void;
@@ -252,6 +255,8 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
   codeJump,
   codeFocus,
   initialEnumMember,
+  enumMemberPrefix,
+  enumReadOnlyNote,
   notes,
   onSaveNote,
   onDeleteNote,
@@ -579,6 +584,8 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
                 codeFocus={codeFocus}
                 isModal={false}
                 embedded={true}
+                memberIdPrefix={enumMemberPrefix}
+                readOnlyNote={enumReadOnlyNote}
               />
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400">

@@ -650,7 +650,9 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   // sub-machine's state (drawn inside the state that calls its method, <state>__<method>__<name>): its CASE label in
   // that method
   useEffect(() => {
-    const isStateChanged = prevSelectedStateIdRef.current !== (selectedStateId || null);
+    // (opened with a sub-machine's state selected, no method asked for: its method, as if selected now)
+    const isStateChanged =
+      prevSelectedStateIdRef.current !== (selectedStateId || null) || (isInitialMountRef.current && (!initialMethod || /^dostate(\(\))?$/i.test(initialMethod)) && !!selectedStateId && selectedStateId.includes('__'));
     const methodChanged = prevMethodNameRef.current !== cleanMethodName;
     prevMethodNameRef.current = cleanMethodName;
     const parts = (selectedStateId ?? '').split('__');

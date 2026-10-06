@@ -77,6 +77,13 @@ export interface DutEnumEditorProps {
   embedded?: boolean;
   /** The POU file whose bookmarks hold the enum's (its PLC Bookmarks: right-click, Ctrl+F2) */
   bookmarksPou?: string;
+  /**
+   * A sub-machine's enum: its members are the states <state>__<method>__<member> on the canvas (this prefix): a state
+   * selected elsewhere is its member here, the caret's member published with it
+   */
+  memberIdPrefix?: string;
+  /** Not to be edited here (a sub-machine's enum without its .TcDUT open, made from its CASE labels): why */
+  readOnlyNote?: string;
 }
 
 type EditorViewMode = 'st' | 'grid' | 'xml';
@@ -93,7 +100,15 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   codeFocus,
   embedded = false,
   bookmarksPou,
+  memberIdPrefix,
+  readOnlyNote,
 }) => {
+  // (a state's id: its member here; another enum's state: none)
+  const memberOf = (id: string | null | undefined): string | null => {
+    if (!id) return null;
+    if (memberIdPrefix) return id.startsWith(memberIdPrefix) ? id.slice(memberIdPrefix.length) : null;
+    return id;
+  };
   // Parse initial DUT structure
   const parsedDut = useMemo(() => {
     return parseDutContent(dutContent);
@@ -148,16 +163,18 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
       const member = enumMemberAt(ta.value, ta.selectionStart);
       if (!member || member === caretMemberRef.current) return;
       caretMemberRef.current = member;
-      selfFocusRef.current = member;
-      publishCodeFocus({ state: member, from: 'enum', follow: followCanvas });
+      const state = `${memberIdPrefix ?? ''}${member}`;
+      selfFocusRef.current = state;
+      publishCodeFocus({ state, from: 'enum', follow: followCanvas });
     };
     document.addEventListener('selectionchange', onSel);
     return () => document.removeEventListener('selectionchange', onSel);
-  }, [followCanvas]);
+  }, [followCanvas, memberIdPrefix]);
   useEffect(() => {
     // (selected from this editor's caret, Follow on: it is already there)
     if (initialSelectedMember && initialSelectedMember === selfFocusRef.current) return;
-    if (initialSelectedMember) jumpToMember(initialSelectedMember, true);
+    const member = memberOf(initialSelectedMember);
+    if (member) jumpToMember(member, true);
     // Only when the selection changes, not on every edit
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSelectedMember]);
@@ -166,7 +183,8 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
   useEffect(() => {
     if (!codeFocus || codeFocus.from === 'enum') return;
     caretMemberRef.current = null;
-    jumpToMember(codeFocus.state, true);
+    const member = memberOf(codeFocus.state);
+    if (member) jumpToMember(member, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [codeFocus?.t]);
   useEffect(() => {
@@ -1179,6 +1197,11 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
         </div>
       )}
 
+      {readOnlyNote && (
+        <div id="enum-readonly-note" className="px-3 py-1 text-[11px] text-violet-200 bg-violet-950/50 border-b border-violet-800/60">
+          {readOnlyNote}
+        </div>
+      )}
       {/* 5. Main Editor Work Area based on viewMode */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
         {/* VIEW 1: Structured Text Code Editor */}
@@ -1187,7 +1210,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             ref={stEditorRef}
             id="st-dut-editor"
             value={stCode}
-            onChange={(val) => setStCode(val)}
+            onChange={(val) => !readOnlyNote && setStCode(val)}
             highlightedLine={flashLine?.view === 'st' ? flashLine.line : null}
             liveLine={liveStateId ? memberLine(liveStateId, 'st') || null : null}
             enableCodeFolding={true}

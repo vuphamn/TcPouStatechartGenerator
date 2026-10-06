@@ -3581,6 +3581,11 @@ export const App: React.FC = () => {
     },
     [storeCollapsed, showCopyToast]
   );
+  // Identified States: each sub-machine's states inside its state's card, shown while the canvas shows them
+  const identifiedSubMachines = useMemo(
+    () => subMachines.map((m) => ({ parent: m.parent, method: m.method, states: m.states, start: m.start, transitions: m.transitions, expanded: !collapsedComposites.includes(`-${m.parent}`) })),
+    [subMachines, collapsedComposites]
+  );
   // A composite dragged into another one (its {region} block nested there), or out of the one it is in
   const handleCompositeDropped = useCallback(
     (name: string, into: string | null) => {
@@ -7482,6 +7487,24 @@ export const App: React.FC = () => {
         if (projectDutsRequestRef.current === forPou) projectDutsRequestRef.current = null;
       });
   }, [liveActive, liveGuardScope, pouPath, liveMode]);
+  // The Enum Editor, a sub-machine's state selected (on the canvas, in Identified States, at an editor's caret): its
+  // sub-machine's enum, read-only here (its .TcDUT among the ones found, else made from its method's CASE labels)
+  const enumSubView = useMemo(() => {
+    const id = selectedStateId;
+    const m = id ? subMachines.find((x) => id.startsWith(`${x.parent}__${x.method}__`)) : null;
+    if (!m) return null;
+    const type = m.variableType ?? `${m.method}.${m.variable}`;
+    const pool = [dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])];
+    const found = pool.find((c) => !!c && parseDutContent(c).dutName.toLowerCase() === type.toLowerCase());
+    const prefix = `${m.parent}__${m.method}__`;
+    if (found) return { content: found, fileName: `${type}.TcDUT`, prefix, note: `${type}: the states of ${m.method}() (read-only here)` };
+    return {
+      content: `TYPE ${type} :\n(\n${m.states.map((x) => `\t${x}`).join(',\n')}\n);\nEND_TYPE\n`,
+      fileName: `${type} (from ${m.method}())`,
+      prefix,
+      note: `${type}: the states of ${m.method}(), from its CASE labels (its .TcDUT is not open; read-only)`,
+    };
+  }, [selectedStateId, subMachines, dutContent, dutPool, projectDuts, pouPath]);
   const liveEnums = useMemo(
     () => buildEnumTables([dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])]),
     [dutContent, dutPool, projectDuts, pouPath]
@@ -8853,6 +8876,9 @@ export const App: React.FC = () => {
             <IdentifiedStatesSidebarSection
               states={identifiedStatesResult.states}
               transitionCounts={edgeMembersAll.size ? stateTransitionCounts : undefined}
+              subMachines={identifiedSubMachines}
+              onToggleSubMachine={setSubMachineExpanded}
+              liveSubStateId={(liveActive ? liveRegionStates : simHighlight?.regionStates ?? []).find((x) => x.includes('__')) ?? null}
               selectedStateId={selectedStateId}
               focusStateId={codeFocus?.state ?? null}
               focusNonce={codeFocus?.t}
@@ -9385,9 +9411,11 @@ export const App: React.FC = () => {
               onClose={() => setDockLayout((l) => closeDockTab(l, mode))}
               tcPouContent={pouContent}
               tcPouFileName={pouFileName || 'POU.TcPOU'}
-              tcDutContent={dutContent}
-              tcDutFileName={dutFileName || 'EnumDeclaration.TcDUT'}
-              onSaveDutContent={handleSaveDutContent}
+              tcDutContent={enumSubView?.content ?? dutContent}
+              tcDutFileName={enumSubView?.fileName ?? (dutFileName || 'EnumDeclaration.TcDUT')}
+              onSaveDutContent={enumSubView ? () => ({ success: false, error: enumSubView.note }) : handleSaveDutContent}
+              enumMemberPrefix={enumSubView?.prefix}
+              enumReadOnlyNote={enumSubView?.note}
               onSaveMethodCode={handleSaveMethodCode}
               onSaveStateCode={handleSaveStateCode}
               onSavePreProcessCode={handleSavePreProcessCode}

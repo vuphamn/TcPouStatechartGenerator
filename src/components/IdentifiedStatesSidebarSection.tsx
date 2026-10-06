@@ -4,6 +4,7 @@ import {
   Search,
   X,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   Crosshair,
   Target,
@@ -52,6 +53,15 @@ export interface IdentifiedStatesSidebarSectionProps {
    * state are two); absent: the states it connects to are counted instead
    */
   transitionCounts?: Map<string, { incoming: number; outgoing: number }>;
+  /**
+   * Sub-machines (a state's branch calls a method with a state machine of its own): their states listed inside their
+   * state's card (ids <state>__<method>__<name>, as on the canvas), shown while expanded (the canvas' setting)
+   */
+  subMachines?: { parent: string; method: string; states: string[]; start: string | null; transitions: { from: string; to: string }[]; expanded: boolean }[];
+  /** Expand / collapse a sub-machine (the canvas too) */
+  onToggleSubMachine?: (parent: string, method: string, expanded: boolean) => void;
+  /** Live or simulated: the sub-machine state current inside the current state (its full id) */
+  liveSubStateId?: string | null;
 }
 
 type FilterMode = 'all' | 'logic' | 'errors';
@@ -76,7 +86,12 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   onToggleBookmark,
   onShowBookmarks,
   transitionCounts,
+  subMachines,
+  onToggleSubMachine,
+  liveSubStateId,
 }) => {
+  // (a sub-machine state's id: its state's card holds it)
+  const subOwner = (id: string | null | undefined) => (id ? subMachines?.find((m) => id.startsWith(`${m.parent}__${m.method}__`)) ?? null : null);
   const bookmarkSet = useMemo(() => new Set(bookmarkedStates ?? []), [bookmarkedStates]);
   // A card's right-click menu (Add / Remove bookmark)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -269,11 +284,13 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
       setIsExpanded(true);
     }
 
-    // 2. Ensure the state is not hidden by filters
-    const stateExists = states.some((s) => s.id === selectedStateId);
+    // 2. Ensure the state is not hidden by filters (a sub-machine's state: its state's card)
+    const owner = subOwner(selectedStateId);
+    const cardId = owner ? owner.parent : selectedStateId;
+    const stateExists = states.some((s) => s.id === cardId);
     if (!stateExists) return;
 
-    const isVisible = filteredStates.some((s) => s.id === selectedStateId);
+    const isVisible = filteredStates.some((s) => s.id === cardId);
     if (!isVisible) {
       setSearchQuery('');
       setFilterMode('all');
@@ -282,7 +299,8 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
 
     // 3. Scroll to state item after render
     const timer = setTimeout(() => {
-      const itemEl = document.getElementById(`state-list-item-${selectedStateId}`);
+      // (a sub-machine's state collapsed: its state's card)
+      const itemEl = document.getElementById(`state-list-item-${selectedStateId}`) ?? document.getElementById(`state-list-item-${cardId}`);
       if (itemEl) {
         // Ensure parent sidebar also brings this section into view if scrolled away
         const sidebar = document.getElementById('source-files-sidebar');
@@ -305,7 +323,8 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     }, 60);
 
     return () => clearTimeout(timer);
-  }, [selectedStateId, isExpanded, filteredStates, states]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStateId, isExpanded, filteredStates, states, subMachines]);
 
 
   // The state at an editor's caret (the Method or Enum Editor): its card scrolled to and flashed, always (the
@@ -313,7 +332,8 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   useEffect(() => {
     if (!focusStateId || !isExpanded) return;
     const t = window.setTimeout(() => {
-      const el = document.getElementById(`state-list-item-${focusStateId}`);
+      const owner = subOwner(focusStateId);
+      const el = document.getElementById(`state-list-item-${focusStateId}`) ?? (owner ? document.getElementById(`state-list-item-${owner.parent}`) : null);
       if (!el) return;
       el.scrollIntoView({ block: 'nearest' });
       el.classList.remove('state-focus-flash');
@@ -332,14 +352,104 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
     document.querySelectorAll('[data-code-focus="true"]').forEach((x) => x !== keep && x.removeAttribute('data-code-focus'));
   }, [selectedStateId]);
 
+  // A sub-machine inside its state's box: its method (Expand / Collapse, the canvas' too) and its states, each a card
+  // of its own (a click selects it, as on the canvas)
+  const renderSubMachine = (sub: NonNullable<IdentifiedStatesSidebarSectionProps['subMachines']>[number]) => {
+    const fullId = (name: string) => `${sub.parent}__${sub.method}__${name}`;
+    return (
+      <div id={`sub-machine-${sub.parent}`} data-expanded={String(sub.expanded)} className="ml-2 pl-2 border-l-2 border-violet-600/60">
+        <button
+          type="button"
+          id={`sub-machine-toggle-${sub.parent}`}
+          aria-expanded={sub.expanded}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSubMachine?.(sub.parent, sub.method, !sub.expanded);
+          }}
+          className="flex items-center gap-1 w-full text-left px-1 py-0.5 rounded hover:bg-violet-900/30 text-[11px] text-violet-200"
+          title={sub.expanded ? `Collapse sub-machine ${sub.method} (the canvas too)` : `Expand sub-machine ${sub.method} (the canvas too)`}
+        >
+          {sub.expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+          <span className="font-mono font-semibold">{sub.method}()</span>
+          <span className="text-violet-400/80">· {sub.states.length} states</span>
+        </button>
+        {sub.expanded && (
+          <div className="mt-1 space-y-1">
+            {sub.states.map((name) => {
+              const id = fullId(name);
+              const isSelected = selectedStateId === id;
+              const isJustNavigated = recentlyNavigatedStateId === id;
+              const isLive = !!liveSubStateId && liveSubStateId === id;
+              const incoming = sub.transitions.filter((t) => t.to === name).length;
+              const outgoing = sub.transitions.filter((t) => t.from === name).length;
+              const unreachable = name !== sub.start && incoming === 0;
+              return (
+                <div
+                  key={id}
+                  id={`state-list-item-${id}`}
+                  aria-selected={isSelected}
+                  data-live={isLive ? 'true' : undefined}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleItemClick(id, name);
+                  }}
+                  className={`relative flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
+                    isJustNavigated
+                      ? 'bg-sky-950/80 border-sky-400 ring-2 ring-sky-400/80 text-white'
+                      : isSelected
+                      ? 'bg-sky-950/60 border-sky-500/60 ring-1 ring-sky-500/30 text-white'
+                      : `bg-slate-950/50 hover:bg-slate-800/70 border-slate-800/70 hover:border-slate-700 text-slate-300${unreachable ? ' border-dashed' : ''}`
+                  }`}
+                  title={`${name}: a state of ${sub.method}() (its CASE label there)${unreachable ? '; never reached' : ''}`}
+                >
+                  {isLive && (
+                    <span className="absolute -top-2 right-2 z-10 flex items-center gap-1 px-1.5 rounded-full bg-emerald-600 text-[9px] font-bold tracking-wide text-white shadow">
+                      <span className="live-dot" /> LIVE
+                    </span>
+                  )}
+                  <span className="font-mono truncate">
+                    {sub.start === name && <Play className="inline w-2.5 h-2.5 mr-1 text-emerald-400 fill-emerald-400/20" />}
+                    {name}
+                    {unreachable && <span className="ml-1 text-[10px] text-slate-500 italic">never reached</span>}
+                  </span>
+                  <span className="shrink-0 flex items-center gap-1 text-[10px]">
+                    <span id={`state-${id}-incoming-badge`} className="px-1 rounded bg-slate-800/80 text-slate-400" title={`${incoming} transitions in, in ${sub.method}()`}>
+                      {incoming} in
+                    </span>
+                    <span id={`state-${id}-outgoing-badge`} className="px-1 rounded bg-slate-800/80 text-slate-400" title={`${outgoing} transitions out, in ${sub.method}()`}>
+                      {outgoing} out
+                    </span>
+                    <button
+                      type="button"
+                      id={`btn-goto-state-${id}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleTriggerGoToState(id, name);
+                      }}
+                      className="p-0.5 rounded hover:bg-sky-600/25 text-sky-400"
+                      title="Go to State: center it in the Diagram Canvas"
+                    >
+                      <Target className="w-3 h-3" />
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Live, Follow on: the list shows each new live state (the selection stays as it is)
   useEffect(() => {
     if (!liveFollow || !liveStateId || !isExpanded) return;
     const t = window.setTimeout(() => {
-      document.getElementById(`state-list-item-${liveStateId}`)?.scrollIntoView({ block: 'nearest' });
+      // (its sub-machine's state inside it, when listed)
+      (document.getElementById(`state-list-item-${liveSubStateId}`) ?? document.getElementById(`state-list-item-${liveStateId}`))?.scrollIntoView({ block: 'nearest' });
     }, 50);
     return () => window.clearTimeout(t);
-  }, [liveFollow, liveStateId, isExpanded]);
+  }, [liveFollow, liveStateId, liveSubStateId, isExpanded]);
 
   return (
     <section
@@ -586,7 +696,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                   totalCount: 0,
                 };
 
-                return (
+                const card = (
                   <div
                     key={state.id}
                     id={`state-list-item-${state.id}`}
@@ -798,6 +908,16 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                       </button>
                     </div>
                   </div>
+                );
+                // A state with a sub-machine: its card and the sub-machine's states in one box
+                const sub = subMachines?.find((m) => m.parent === state.id);
+                return sub ? (
+                  <div key={state.id} id={`state-box-${state.id}`} className="rounded-lg border border-violet-700/50 bg-violet-950/10 p-1 space-y-1">
+                    {card}
+                    {renderSubMachine(sub)}
+                  </div>
+                ) : (
+                  card
                 );
               })
             )}
