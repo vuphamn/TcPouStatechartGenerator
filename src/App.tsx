@@ -103,7 +103,8 @@ import { SourceFilesHeaderItem, DutSearchStatus } from './components/SourceFiles
 import { rankDutCandidates, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
 import {
   browseForPou,
-  readDroppedPou,
+  readDrop,
+  PICKED_FILE_REFUSED,
   findDutCandidates,
   chooseDutFiles,
   isDesktopApp,
@@ -1426,7 +1427,8 @@ export const App: React.FC = () => {
       const src = await browseForPou();
       if (src) applyLoadedPou(src);
     } catch (e) {
-      showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      const message = e instanceof Error ? e.message : String(e);
+      showCopyToast(message === PICKED_FILE_REFUSED ? message : `Could not open the .TcPOU: ${message}`, 'error', message === PICKED_FILE_REFUSED ? 12000 : undefined);
     }
   }, [applyLoadedPou, showCopyToast]);
   const handleBrowsePou = useCallback(() => confirmDiscard(() => void browseNow()), [browseNow]);
@@ -1501,12 +1503,25 @@ export const App: React.FC = () => {
   }, [watchRequest, applyLoadedPou, showCopyToast]);
 
   const handleDropPou = useCallback(
-    async (file: File, handle?: Promise<unknown>) => {
-      // (the handle is asked for during the drop: taken before any question)
-      const fileHandle = handle ? await handle.catch(() => null) : null;
-      confirmDiscard(() => void readDroppedPou(file, fileHandle).then(applyLoadedPou));
+    async (items: { file: File | null; handle: Promise<unknown> | null }[]) => {
+      // (the handles are asked for during the drop: taken before any question)
+      const settled = await Promise.all(items.map(async (i) => ({ file: i.file, handle: i.handle ? Promise.resolve(await i.handle.catch(() => null)) : null })));
+      confirmDiscard(
+        () =>
+          void readDrop(settled)
+            .then((src) => {
+              if (!src) showCopyToast('Drop a .TcPOU (with its .TcDUT files), or the folder it is in', 'error', 6000);
+              else if ('several' in src) showCopyToast(`The folder has ${src.several.length} .TcPOU files: drop or Browse the one to open (its enum is found in this folder then)`, 'success', 8000);
+              else {
+                applyLoadedPou(src);
+                // (its enum not found: how to give it)
+                if (!src.dutCandidates) showCopyToast('Its enum: drop its .TcDUT too, or the folder it is in (then any .TcPOU dropped from it finds its enum), or click Find .TcDUT…', 'success', 9000);
+              }
+            })
+            .catch((e: unknown) => showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000))
+      );
     },
-    [applyLoadedPou]
+    [applyLoadedPou, showCopyToast]
   );
 
   const handleFindDut = useCallback(async () => {

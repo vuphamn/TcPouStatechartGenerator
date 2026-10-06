@@ -97,7 +97,7 @@ The **Function Block** entry in the header toolbar (left of **Sample**) loads yo
 The state enum is found automatically. By convention the `.TcDUT` sits in the same folder as the `.TcPOU` or in one of its subfolders, and that folder may hold several `.TcDUT` files. So after the `doState()` method is parsed, every `.TcDUT` in that folder tree is checked, and the one whose enum declares the most `doState()` CASE states is used. Build and library folders (`_Boot`, `_CompileInfo`, `_Libraries`, ...) are skipped.
 
 - **Desktop app**: the folder is searched as soon as the `.TcPOU` is opened.
-- **Web (Chrome / Edge)**: browsers do not reveal a file's folder, so the header shows **Find .TcDUT...**. It opens a folder picker at the `.TcPOU`'s folder; after you allow read access, later `.TcPOU` files inside that folder are matched without asking again.
+- **Web (Chrome / Edge)**: browsers do not reveal a file's folder, so the header shows **Find .TcDUT...**. It opens a folder picker at the `.TcPOU`'s folder; after you allow read access, later `.TcPOU` files inside that folder are matched without asking again. Dropping works the same way: drop the `.TcPOU` together with its `.TcDUT`, or drop the folder (its `.TcPOU` opens when it is the only one there, and any `.TcPOU` dropped or browsed from it later finds its enum). If the browser lets you pick a file but then refuses to read it (its file access blocked for the page, by a policy or a site setting), **Browse** says so, and from then on uses the plain file chooser; saving then downloads the file.
 - **Other browsers**: choose the `.TcDUT` file(s) directly; the best match among them is used.
 
 When more than one `.TcDUT` matches, the header shows the count; click the enum name to pick another one.

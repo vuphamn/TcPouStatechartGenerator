@@ -110,11 +110,47 @@ function pickWithInput(accept: string, multiple: boolean): Promise<File[] | null
   });
 }
 
+const PLAIN_PICKER_KEY = 'kss.web.plainPicker';
+/** This browser refused to read a file it let the user pick: the plain file chooser is used instead (kept here) */
+const usesPlainPicker = () => {
+  try {
+    return localStorage.getItem(PLAIN_PICKER_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+/** The message when the browser refuses to read the file picked */
+export const PICKED_FILE_REFUSED =
+  'This browser refused to read the file you picked (its file access is blocked for this page, e.g. by a policy or a site setting). Click Browse again: the plain file chooser opens instead. Saving then downloads the file.';
+
+/** A picked file read; the browser refusing (NotAllowedError): its read permission asked for, else the plain chooser next */
+async function readPicked(handle: FsFileHandle): Promise<File> {
+  try {
+    return await handle.getFile();
+  } catch (e) {
+    if (!(e instanceof DOMException) || e.name !== 'NotAllowedError') throw e;
+    const permission = await handle.requestPermission?.({ mode: 'read' }).catch(() => 'denied' as const);
+    if (permission === 'granted') {
+      try {
+        return await handle.getFile();
+      } catch {
+        // (refused still)
+      }
+    }
+    try {
+      localStorage.setItem(PLAIN_PICKER_KEY, '1');
+    } catch {
+      // (this session: the next Browse still asks the same way)
+    }
+    throw new Error(PICKED_FILE_REFUSED);
+  }
+}
+
 /** Browse for a .TcPOU. Resolves null when the user cancels */
 export async function browseForPou(): Promise<PouSource | null> {
   if (w.tcDesktop) return w.tcDesktop.openPou();
 
-  if (typeof w.showOpenFilePicker === 'function') {
+  if (typeof w.showOpenFilePicker === 'function' && !usesPlainPicker()) {
     let handles: FsFileHandle[];
     try {
       handles = await w.showOpenFilePicker({
@@ -127,8 +163,8 @@ export async function browseForPou(): Promise<PouSource | null> {
       throw e;
     }
     const handle = handles[0];
+    const file = await readPicked(handle);
     lastPouHandle = handle;
-    const file = await handle.getFile();
     const folder = await pouFolderInGrant(handle);
     return { name: file.name, content: await file.text(), dutCandidates: folder ? await readCandidates(folder) : null };
   }
@@ -139,14 +175,51 @@ export async function browseForPou(): Promise<PouSource | null> {
   return { name: files[0].name, content: await files[0].text(), dutCandidates: null };
 }
 
+/** What was dropped: files with their handles (asked for during the drop), maybe a folder */
+export interface DroppedItem {
+  file: File | null;
+  handle: Promise<unknown> | null;
+}
+
 /**
- * A .TcPOU dropped on the page (no folder access: the enum is found with findDutCandidates); with its file handle
- * (Chrome / Edge) it can be written back
+ * A drop on the Function Block box: a .TcPOU (and its enum: a .TcDUT dropped with it, the folder it is in when that
+ * folder was granted, dropped or picked before), or a folder (granted: searched for its .TcPOU, the only one there,
+ * and its enums). Null: no .TcPOU in it; { several }: a folder with several (the user picks one: its enum found then)
  */
-export async function readDroppedPou(file: File, handle?: unknown): Promise<PouSource> {
-  const h = handle as FsFileHandle | null | undefined;
-  lastPouHandle = h && h.kind === 'file' && typeof h.getFile === 'function' ? h : null;
-  return { name: file.name, content: await file.text(), dutCandidates: null };
+export async function readDrop(items: DroppedItem[]): Promise<PouSource | { several: string[] } | null> {
+  const handles = await Promise.all(items.map((i) => (i.handle ? i.handle.catch(() => null) : Promise.resolve(null))));
+  const pouAt = items.findIndex((i) => !!i.file && /\.tcpou$/i.test(i.file.name));
+  const duts = items.filter((i) => i.file && /\.tcdut$/i.test(i.file.name)).map((i) => i.file!);
+  const folder = handles.find((h): h is FsDirectoryHandle => !!h && (h as FsHandle).kind === 'directory') ?? null;
+  if (pouAt >= 0) {
+    const file = items[pouAt].file!;
+    const h = handles[pouAt] as FsFileHandle | null;
+    lastPouHandle = h && h.kind === 'file' && typeof h.getFile === 'function' ? h : null;
+    if (folder) grantedFolder = folder;
+    const content = await file.text();
+    // (its enum: dropped with it; else its folder's, when granted)
+    if (duts.length) return { name: file.name, content, dutCandidates: await Promise.all(duts.map(async (f) => ({ name: f.name, relativePath: f.name, content: await f.text() }))) };
+    const inGrant = lastPouHandle ? await pouFolderInGrant(lastPouHandle) : null;
+    return { name: file.name, content, dutCandidates: inGrant ? await readCandidates(inGrant) : null };
+  }
+  if (!folder) return null;
+  // A folder: granted; its .TcPOU files (in it and below)
+  grantedFolder = folder;
+  const pous: FsFileHandle[] = [];
+  async function walk(d: FsDirectoryHandle, depth: number) {
+    if (depth > MAX_DEPTH || pous.length > 50) return;
+    for await (const entry of d.values()) {
+      if (entry.kind === 'directory') {
+        if (!entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name.toLowerCase())) await walk(entry, depth + 1);
+      } else if (/\.tcpou$/i.test(entry.name)) pous.push(entry);
+    }
+  }
+  await walk(folder, 0);
+  if (pous.length !== 1) return pous.length ? { several: pous.map((x) => x.name).sort() } : null;
+  const file = await pous[0].getFile();
+  lastPouHandle = pous[0];
+  const inGrant = await pouFolderInGrant(pous[0]);
+  return { name: file.name, content: await file.text(), dutCandidates: await readCandidates(inGrant ?? folder) };
 }
 
 /**

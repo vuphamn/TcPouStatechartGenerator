@@ -24,7 +24,8 @@ export interface SourceFilesHeaderItemProps {
   canSearchFolder: boolean;
   onBrowsePou: () => void;
   /** A .TcPOU dropped here, with its file handle when the browser gives one (it can be written back) */
-  onDropPou: (file: File, handle?: Promise<unknown>) => void;
+  /** What was dropped: a .TcPOU (with its .TcDUT files), or a folder; each with its handle (asked for during the drop) */
+  onDropPou: (items: { file: File | null; handle: Promise<unknown> | null }[]) => void;
   onFindDut: () => void;
   onChooseDutFiles: () => void;
   onSelectDut: (match: DutMatch) => void;
@@ -206,11 +207,11 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
       onDrop={(e) => {
         e.preventDefault();
         setIsDragOver(false);
-        const file = Array.from(e.dataTransfer.files).find((f) => /\.tcpou$/i.test(f.name));
-        // (the handle is only given during the drop)
-        const item = Array.from(e.dataTransfer.items ?? []).find((i) => i.kind === 'file' && /\.tcpou$/i.test(i.getAsFile()?.name ?? ''));
-        const handle = (item as unknown as { getAsFileSystemHandle?: () => Promise<unknown> } | undefined)?.getAsFileSystemHandle?.();
-        if (file) onDropPou(file, handle);
+        // (each item's handle is only given during the drop: a .TcPOU's, its .TcDUT files', a folder's)
+        const items = Array.from(e.dataTransfer.items ?? [])
+          .filter((i) => i.kind === 'file')
+          .map((i) => ({ file: i.getAsFile(), handle: (i as unknown as { getAsFileSystemHandle?: () => Promise<unknown> }).getAsFileSystemHandle?.() ?? null }));
+        if (items.length) onDropPou(items);
       }}
       className={`flex items-center whitespace-nowrap gap-1.5 bg-slate-800/80 border rounded-lg px-1.5 sm:px-2 py-1 text-xs shrink-0 transition-colors ${
         isDragOver ? 'border-sky-400 bg-sky-900/40' : 'border-slate-700/60'
