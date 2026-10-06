@@ -443,11 +443,11 @@ After the install folder, the installer offers its components on two pages, each
 
 | Option | What it does |
 |---|---|
-| **Kval MachineScope Link** | The web edition's helper for a browser on this computer, with a Start menu shortcut. |
+| **Kval MachineScope Link** (unchecked) | The web edition's helper for a browser on this computer, with a Start menu shortcut. Unchecked each time the installer is run: check it to install or keep it (an update, **Update now**, keeps it). |
 | **Start Link when I sign in** (under Link) | A shortcut in your Startup folder starts Link minimized, without its page, each time you sign in. It's the same as *Start when I sign in* on Link's page, and either can turn it off. Uninstalling removes it. |
 | **Kval MachineScope gateway** | The web edition's shared server, in `%LocalAppData%\KvalMachineScope\Gateway` (or `C:\ProgramData\KvalMachineScope\Gateway` for all users), with its dependencies. It runs on Node.js 20+; set it up with [gateway/README.md](gateway/README.md) (`node gateway.cjs init`). |
 
-Options for software that is not on the computer are greyed out; a computer with both TwinCAT builds can have the extension in both shells. Running the installer again shows your earlier choices; an update keeps them. A silent first install (`/S`) leaves the XAE extensions out (TcXaeShell's asks for administrator rights).
+Options for software that is not on the computer are greyed out; a computer with both TwinCAT builds can have the extension in both shells. Running the installer again shows your earlier choices (Link excepted: unchecked); an update keeps them all. A silent first install (`/S`) leaves the XAE extensions out (TcXaeShell's asks for administrator rights).
 
 - **Opening a file:** a `.TcPOU` opened this way (or dropped on the exe) is loaded with its `.TcDUT`, found as with *Browse*. When the app is already open, the file opens in a new window, or brings forward the window that already shows it.
 - **Kval MachineScope - check installation** (Start menu, or `installer\check-install.ps1` in the program folder; `-Json` for a report): what is set up on this computer, read-only. One line each: the app, the Explorer menu, the extension in each Visual Studio and each TcXaeShell (4024's and 4026's), the WebView2 Runtime, Link, its start at sign-in, the gateway; OK, `--` (not here, or not chosen) or `!!` (chosen but missing or broken). Its exit code is 1 when a part is `!!`.

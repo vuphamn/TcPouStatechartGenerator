@@ -44,7 +44,8 @@
   Var kssGatewayBox
   Var kssGatewayDir
 
-  ; The previous installation's choices (by default: the context menu and the XAE extension on, Link and the gateway off)
+  ; The previous installation's choices (by default: the context menu and the XAE extension on, Link and the gateway off;
+  ; Link always unchecked on the page, see customInit)
   !macro kssReadChoice name var default
     StrCpy ${var} ${default}
     ClearErrors
@@ -73,8 +74,15 @@
       !insertmacro kssReadChoice "TcXaeShell" $kssXae 1
       !insertmacro kssReadChoice "TcXaeShell4024" $kssXae24 1
     ${EndIf}
-    !insertmacro kssReadChoice "Link" $kssLink 0
-    !insertmacro kssReadChoice "LinkStartup" $kssLinkStartup 0
+    ; (Link and its start at sign-in: unchecked on the page, whatever was chosen before; an update, silent (Update now),
+    ; keeps what was installed)
+    ${If} ${Silent}
+      !insertmacro kssReadChoice "Link" $kssLink 0
+      !insertmacro kssReadChoice "LinkStartup" $kssLinkStartup 0
+    ${Else}
+      StrCpy $kssLink 0
+      StrCpy $kssLinkStartup 0
+    ${EndIf}
     !insertmacro kssReadChoice "Gateway" $kssGateway 0
     StrCpy $kssDetected 0
   !macroend
