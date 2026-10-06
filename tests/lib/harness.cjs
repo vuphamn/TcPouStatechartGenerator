@@ -196,4 +196,26 @@ function reroutedEdges(page) {
 const out = (name) => path.join(OUT, name);
 const fixture = (...parts) => path.join(FIXTURES, ...parts);
 
-module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted, reroutedEdges };
+/**
+ * A desktop test's Electron profile (its --user-data-dir), in tests/.output: removed when the test's process ends
+ * (each is a few dozen MB; they used to pile up). Electron may still hold its files a moment after being killed:
+ * retried, and any left (a crashed or killed test) swept by the runner at its next start (tests/run.cjs)
+ */
+const profiles = new Set();
+function profileDir(name) {
+  const dir = path.join(OUT, `electron-prof-${name}-${Date.now()}`);
+  profiles.add(dir);
+  if (profiles.size === 1) process.on('exit', removeProfiles);
+  return dir;
+}
+function removeProfiles() {
+  for (const dir of profiles) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch {
+      // (still held: swept at the next run)
+    }
+  }
+}
+
+module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted, reroutedEdges, profileDir };

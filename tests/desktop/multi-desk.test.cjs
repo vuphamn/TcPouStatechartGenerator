@@ -11,7 +11,7 @@ let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 const door = path.join(h.FIXTURES, 'sample1', 'SM_DoorDasher.TcPOU');
 const table = path.join(h.FIXTURES, 'sample0', 'SM_TableManager.TcPOU');
-const profile = path.join(h.OUT, 'electron-prof-multi-' + Date.now());
+const profile = h.profileDir('multi');
 const env = (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN }; delete e.ELECTRON_RUN_AS_NODE; return e; })();
 const launch = (args, port) => spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...args], { cwd: APP, env, stdio: 'ignore' });
 

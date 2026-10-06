@@ -14,7 +14,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 (async () => {
   const plcOut = fs.openSync(path.join(h.OUT, 'fake-ams-ui.txt'), 'w');
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams.cjs'), '48951', 'MAIN.mainStateMachine.smTableManager.machineState', seq.seq, '10.9.9.9.1.1'], { stdio: ['ignore', plcOut, plcOut] });
-  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9559', `--user-data-dir=${path.join(h.OUT, 'electron-prof-' + Date.now())}`], {
+  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9559', `--user-data-dir=${h.profileDir('desk-ui')}`], {
     cwd: APP, env: (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN }; delete e.ELECTRON_RUN_AS_NODE; return e; })(), stdio: 'ignore',
   });
   let browser;

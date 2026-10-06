@@ -26,7 +26,7 @@ const cfg = writeSymbolsPlc();
   const plcLog = path.join(h.OUT, 'fake-ams2-sym.txt');
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48958', cfg], { stdio: ['ignore', fs.openSync(plcLog, 'w'), fs.openSync(plcLog, 'a')] });
   const env = (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN }; delete e.ELECTRON_RUN_AS_NODE; return e; })();
-  const profile = path.join(h.OUT, 'electron-prof-sym-' + Date.now());
+  const profile = h.profileDir('sym');
   const app = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9594', `--user-data-dir=${profile}`, table], { cwd: APP, env, stdio: 'ignore' });
   let browser;
   for (let i = 0; i < 80 && !browser; i++) { await sleep(250); browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9594', defaultViewport: null }).catch(() => null); }

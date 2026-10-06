@@ -23,7 +23,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const pouBom = bomOf(pou);
 
   const env = (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN }; delete e.ELECTRON_RUN_AS_NODE; return e; })();
-  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9574', `--user-data-dir=${path.join(h.OUT, 'electron-prof-save-' + Date.now())}`, pou], { cwd: APP, env, stdio: 'ignore' });
+  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9574', `--user-data-dir=${h.profileDir('save')}`, pou], { cwd: APP, env, stdio: 'ignore' });
   let browser;
   for (let i = 0; i < 80 && !browser; i++) { await sleep(250); browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9574', defaultViewport: null }).catch(() => null); }
   let p;

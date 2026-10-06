@@ -30,7 +30,7 @@ fs.writeFileSync(path.join(h.OUT, 'fake-ams2-guards.json'), JSON.stringify(confi
 (async () => {
   const plcOut = fs.openSync(path.join(h.OUT, 'fake-ams2-guards.txt'), 'w');
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48952', path.join(h.OUT, 'fake-ams2-guards.json')], { stdio: ['ignore', plcOut, plcOut] });
-  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9562', `--user-data-dir=${path.join(h.OUT, 'electron-prof-' + Date.now())}`], {
+  const electron = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9562', `--user-data-dir=${h.profileDir('guards-desk')}`], {
     cwd: APP, env: (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN }; delete e.ELECTRON_RUN_AS_NODE; return e; })(), stdio: 'ignore',
   });
   let browser;

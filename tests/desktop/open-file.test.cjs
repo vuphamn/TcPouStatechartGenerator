@@ -11,7 +11,7 @@ const APP = h.REPO;
 const exe = process.argv[2];
 const door = path.join(h.FIXTURES, 'sample1', 'SM_DoorDasher.TcPOU');
 const table = path.join(h.FIXTURES, 'sample0', 'SM_TableManager.TcPOU');
-const profile = path.join(h.OUT, 'electron-prof-open-' + Date.now());
+const profile = h.profileDir('open');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 const env = (() => { const e = { ...process.env }; delete e.ELECTRON_RUN_AS_NODE; if (!exe) e.VITE_DEV_SERVER_URL = h.APP_ORIGIN; return e; })();

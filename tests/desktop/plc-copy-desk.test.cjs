@@ -34,7 +34,7 @@ const cfg = writeSymbolsPlc('fake-ams2-copy.json', [], { sources: true });
   const plcLog = path.join(h.OUT, 'fake-ams2-copy.txt');
   const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48985', cfg], { stdio: ['ignore', fs.openSync(plcLog, 'w'), fs.openSync(plcLog, 'a')] });
   const env = (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN, KSS_DOCUMENTS: docs, KSS_PICK_FOLDER: elsewhere }; delete e.ELECTRON_RUN_AS_NODE; return e; })();
-  const profile = path.join(h.OUT, 'electron-prof-copy-' + Date.now());
+  const profile = h.profileDir('copy');
   const app = spawn(path.join(APP, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9598', `--user-data-dir=${profile}`, table], { cwd: APP, env, stdio: 'ignore' });
   let browser;
   for (let i = 0; i < 80 && !browser; i++) { await sleep(250); browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9598', defaultViewport: null }).catch(() => null); }

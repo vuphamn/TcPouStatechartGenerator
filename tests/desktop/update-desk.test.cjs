@@ -25,7 +25,7 @@ const PORT = 48929;
     res.end(JSON.stringify([{ tag_name: 'desktop-v99.0.0', name: 'Desktop 99.0.0', html_url: 'https://example.invalid/99', body: 'notes', draft: false, prerelease: false, assets: [{ name: 'KvalMachineScope-Setup-99.0.0.exe', browser_download_url: `http://127.0.0.1:${PORT}/files/setup.exe`, url: `http://127.0.0.1:${PORT}/api/1`, size: installer.length, digest: `sha256:${sha}` }] }]));
   });
   await new Promise((r) => releases.listen(PORT, '127.0.0.1', r));
-  const electron = spawn(path.join(h.REPO, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9571', `--user-data-dir=${path.join(h.OUT, 'electron-prof-update-' + Date.now())}`], {
+  const electron = spawn(path.join(h.REPO, 'node_modules/electron/dist/electron.exe'), ['.', '--remote-debugging-port=9571', `--user-data-dir=${h.profileDir('update')}`], {
     cwd: h.REPO,
     env: (() => { const e = { ...process.env, VITE_DEV_SERVER_URL: h.APP_ORIGIN, KSS_DESKTOP_RELEASES: `http://127.0.0.1:${PORT}/releases`, KSS_SERVICE_DRYRUN: '1' }; delete e.ELECTRON_RUN_AS_NODE; return e; })(),
     stdio: 'ignore',

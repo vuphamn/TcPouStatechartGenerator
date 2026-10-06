@@ -32,6 +32,29 @@ process.env.KSS_DOCUMENTS ||= path.join(OUT, 'documents');
 if (process.env.KSS_DOCUMENTS === path.join(OUT, 'documents')) fs.rmSync(process.env.KSS_DOCUMENTS, { recursive: true, force: true });
 const LOGS = path.join(OUT, 'logs');
 fs.mkdirSync(LOGS, { recursive: true });
+// The browsers' profiles a test left (crashed, killed, or its browser still holding them as it ended): removed when an
+// hour old (not a run's still going), here and in the system's temp folder; each is tens of MB, they piled up to GBs
+{
+  const hourAgo = Date.now() - 3600000;
+  const sweep = (dir, rx) => {
+    let names = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => rx.test(n));
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      try {
+        if (fs.statSync(p).mtimeMs < hourAgo) fs.rmSync(p, { recursive: true, force: true, maxRetries: 2 });
+      } catch {
+        // (in use: next time)
+      }
+    }
+  };
+  sweep(OUT, /^(electron-prof-|browser-)/);
+  sweep(require('os').tmpdir(), /^kss-test-browser-/);
+}
 
 const argv = process.argv.slice(2);
 let filter = null;
