@@ -363,15 +363,23 @@ function parenthesizeCondition(c: string): string {
 const snapshotFrames = (s: IfFrame[]): GuardFrame[] =>
   s.map((f) => ({ cond: f.currentCond, prior: f.negatedPriorConds.filter((c): c is string => !!c) }));
 
+/** An ELSE's condition: none of the arms before it ("NOT (a OR b)") */
+const elseOf = (f: IfFrame) => {
+  const prior = f.negatedPriorConds.filter((c): c is string => !!c);
+  return prior.length ? `NOT (${prior.join(' OR ')})` : 'else';
+};
+
 function buildGuard(s: IfFrame[]): string | null {
   if (s.length === 0) return null;
   if (s.length === 1) {
-    return s[0].currentCond ?? 'else';
+    // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else")
+    return s[0].currentCond ?? (s[0].caseSel ? elseOf(s[0]) : 'else');
   }
   const parts: string[] = [];
   for (const f of s) {
     if (f.currentCond === null) {
-      parts.push('else');
+      // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else")
+      parts.push(f.caseSel ? elseOf(f) : 'else');
     } else {
       parts.push(parenthesizeCondition(f.currentCond));
     }

@@ -2614,7 +2614,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
   const renderedChartRef = useRef<string | undefined>(undefined);
   // An edit from the canvas itself (an edge's end dropped on another state): the states kept where they were in the
   // drawing that follows it, locked or not (taken at the drop; dropped when no drawing follows within a few seconds)
-  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; moved: MovedEnd | null; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null }; align?: boolean } | null>(null);
+  const drawingKind = () => `${/^s*flowchart/i.test(code) ? 'flowchart' : 'state'}|${layoutEngine}`;
+  const keepPositionsRef = useRef<{ at: number; chart: string | undefined; version: number; positions: Record<string, { centerX: number; centerY: number }>; edges: Record<string, KeptRoute[]>; clusters: Record<string, KeptCluster>; moved: MovedEnd | null; frame: { viewBox: string | null; style: string | null; width: string | null; height: string | null }; align?: boolean; ttl?: number; drawing?: string } | null>(null);
   // Each state's place at the last edits from the canvas and undos (this chart's; a state gone since too): one that
   // comes back (an undo of its deletion) where it was. (Not at each drawing: a deleted state is drawn once more
   // without its offset before it goes.)
@@ -2641,12 +2642,13 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     lastDrawnPositionsRef.current = drawn;
   };
   /** The states' places now (as drawn: the drawing already has the offsets in it) and its frame, for the next drawing */
-  const keepPositionsForNextDrawing = (moved: MovedEnd | null = null) => {
+  // (ttl: how long it waits for that drawing; a longer one only for a drawing of the same kind: chart style, engine)
+  const keepPositionsForNextDrawing = (moved: MovedEnd | null = null, ttl = 8000) => {
     const svg = getDiagramSvg();
     if (!svg) return;
     rememberDrawnPositions();
     const positions: Record<string, { centerX: number; centerY: number }> = { ...lastDrawnPositionsRef.current };
-    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, edges: keptRoutesOf(svg), clusters: keptClustersOf(svg), moved, frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') } };
+    keepPositionsRef.current = { at: Date.now(), chart: fileName, version: svgVersionRef.current, positions, edges: keptRoutesOf(svg), clusters: keptClustersOf(svg), moved, frame: { viewBox: svg.getAttribute('viewBox'), style: svg.getAttribute('style'), width: svg.getAttribute('width'), height: svg.getAttribute('height') }, ttl, drawing: drawingKind() };
   };
   // (an undo / redo of a code change: the states where they are; the chart drawn again for the code as it was)
   const keepSignalRef = useRef(keepPositionsSignal);
@@ -3647,8 +3649,10 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
 
     let targetNodeOffsets = { ...effectiveNodeOffsets };
 
-    // (the states' places to keep: after a drop on the canvas, else the locked layout's)
-    const kept = keepPositionsRef.current && keepPositionsRef.current.chart === fileName && svgVersionRef.current > keepPositionsRef.current.version && Date.now() - keepPositionsRef.current.at < 8000 ? keepPositionsRef.current : null;
+    // (the states' places to keep: after a drop on the canvas, else the locked layout's; a transition's end dropped:
+    // for the next drawing of this chart even when a big one under load takes long to draw, if it is of the same kind)
+    const k0 = keepPositionsRef.current;
+    const kept = k0 && k0.chart === fileName && svgVersionRef.current > k0.version && Date.now() - k0.at < (k0.ttl ?? 8000) && (!k0.drawing || k0.drawing === drawingKind()) ? k0 : null;
     let keep = kept ? kept.positions : null;
     // (another drawing's places, a layout file's of another engine: moved as a whole to this drawing's top left)
     if (!stale && kept?.align && keep) {
@@ -5336,7 +5340,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const was = svg ? edgePathsOf(svg).find((x) => x.getAttribute('data-path-id') === eId || x.getAttribute('data-edge-id') === eId) ?? edgePathsOf(svg).find((x) => x.getAttribute('data-source-id') === target.edge.from && x.getAttribute('data-target-id') === target.edge.to) : undefined;
     const wasD = edgeInitialDRef.current || was?.getAttribute('d') || '';
     edgeInitialDRef.current = null;
-    keepPositionsForNextDrawing(wasD ? { atStart: target.type === 'start', from: target.edge.from, to: target.edge.to, newId: target.id, d: wasD } : null);
+    keepPositionsForNextDrawing(wasD ? { atStart: target.type === 'start', from: target.edge.from, to: target.edge.to, newId: target.id, d: wasD } : null, 60000);
     onEdgeEndpointDrop?.(target.edge, target.type, target.id);
     return true;
   };

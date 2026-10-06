@@ -145,16 +145,33 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
     return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
   });
 
+  // (the chart still: its states where they were a moment ago, after it is drawn, panned or zoomed; under load it can
+  // still be laid out when a drag would start)
+  const settle = async (ms = 8000) => {
+    const snap = () => p.evaluate(() => [...document.querySelectorAll('#mermaid-diagram-svg-container svg g.node[data-state-id]')].map((n) => { const r = n.getBoundingClientRect(); return `${Math.round(r.x)},${Math.round(r.y)}`; }).join('|'));
+    let last = await snap();
+    for (let t = 0; t < ms; t += 300) {
+      await h.sleep(300);
+      const now = await snap();
+      if (now && now === last) return;
+      last = now;
+    }
+  };
+
   for (const sample of samples) {
     await p.select('#sample-selector', sample);
     await p.waitForFunction(() => document.querySelectorAll('#mermaid-diagram-svg-container svg g.node').length > 2, { timeout: 30000 }).catch(() => {});
     await h.sleep(3000);
+    // (its transitions ready to drag, the chart still)
+    await p.waitForFunction(() => document.querySelectorAll('#mermaid-diagram-svg-container svg path.tc-edge-path[data-edge-key]').length > 2, { timeout: 30000 }).catch(() => {});
+    await settle();
     const all = await candidates();
     const step = Math.max(1, Math.floor(all.length / PER_SAMPLE));
     const picked = all.filter((_, i) => i % step === 0).slice(0, PER_SAMPLE);
     expect(picked.length > 0, `${sample}: ${all.length} transitions with a start to drag (trying ${picked.length})`);
     for (const key of picked) {
       const [from, to] = key.split('->');
+      await settle();
       let pl = await plan(key);
       // (its line covered, or its start not to be grabbed there: the canvas panned to its state, then again)
       let hd = null;
@@ -167,13 +184,17 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
         await p.keyboard.press('Escape');
         // (Go to State: its source centred, zoomed in)
         await p.evaluate((id) => document.getElementById(`btn-goto-state-${id}`)?.click(), from);
-        await h.sleep(1200);
-        if (!(await plan(key)).pt) await panTo(from);
+        await h.sleep(600);
+        await settle();
+        if (!(await plan(key)).pt) {
+          await panTo(from);
+          await settle();
+        }
         pl = await plan(key);
         // (zoomed in too far for a state to drop on: out a step or two)
         for (let z = 0; z < 3 && pl.pt && !pl.target; z++) {
           await p.click('#zoom-out-button').catch(() => {});
-          await h.sleep(500);
+          await settle();
           pl = await plan(key);
         }
         if (pl.pt && pl.target) {
@@ -205,7 +226,8 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       // (moved: the status says so; the chart has it from there)
       let msg = '';
       for (let i = 0; i < 20 && (msg === statusBefore || !msg); i++) { await h.sleep(250); msg = await status(); }
-      await h.sleep(1500);
+      await h.sleep(600);
+      await settle();
       const after = await places();
       const nowKeys = await keys();
       const moved = new RegExp(`\\(was ${from} →\\)`).test(msg);
@@ -236,7 +258,8 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       await p.keyboard.down('Control'); await p.keyboard.press('KeyZ'); await p.keyboard.up('Control');
       let back = false;
       for (let i = 0; i < 20 && !back; i++) { await h.sleep(250); back = (await keys()).includes(key); }
-      await h.sleep(1500);
+      await h.sleep(600);
+      await settle();
       const undone = await places();
       const strayed = Object.keys(before).filter((id) => undone[id] && (Math.abs(undone[id][0] - before[id][0]) > 2 || Math.abs(undone[id][1] - before[id][1]) > 2));
       expect(back && strayed.length === 0, `${sample} ${key}: Ctrl+Z: back from ${from}, every state where it was (${strayed.slice(0, 3).map((id) => `${id} ${before[id]}→${undone[id]}`).join(', ') || 'none moved'})`);

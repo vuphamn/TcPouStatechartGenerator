@@ -12,6 +12,7 @@ import { calculateStateComplexityHeatmap } from '../../src/utils/complexityHeatm
 import { extractStateNodesFromMermaid } from '../../src/utils/nodeStyles.ts';
 import { extractEdgesFromMermaid } from '../../src/utils/diagramNotes.ts';
 import { splitStatements } from '../../src/utils/stStatements.ts';
+import { moveTransitionStart } from '../../src/utils/transitionEdits.ts';
 
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -49,7 +50,7 @@ expect(/iStep = 2 OR iStep = 4/.test(hom), `several labels: either (${hom})`);
 const clamped = guardTo(nested, 'TABLEMANAGER_CLAMPED')[0] ?? '';
 expect(/iStep >= 5 AND iStep <= 7/.test(clamped), `a range (${clamped})`);
 const unc = guardTo(nested, 'TABLEMANAGER_UNCLAMPING')[0] ?? '';
-expect(/else/i.test(unc), `its ELSE: as an IF's ELSE (${unc})`);
+expect(unc.trim() === 'NOT (iStep = 1 OR (iStep = 2 OR iStep = 4) OR (iStep >= 5 AND iStep <= 7))', `its ELSE: none of its arms (${unc})`);
 // (after END_CASE: the state's own transitions as before, not guarded by an arm)
 const after = guardTo(nested, 'TABLEMANAGER_AUTOFEED_INIT')[0] ?? '';
 expect(!/iStep/.test(after) && /cmd_eFeedMode/.test(after), `after END_CASE: no arm in the guard (${after})`);
@@ -129,6 +130,21 @@ expect(!!heat.metrics.get(`${B}__Inner__Y`)?.hasCaseBranch && !heat.metrics.has(
 // (a method calling itself: not one again)
 const self = pou.replace(`E_INNER.X:\n\t\teInner := E_INNER.Y;`, `E_INNER.X:\n\t\tInner();\n\t\teInner := E_INNER.Y;`);
 expect(subMachinesOf(self).length === 2, `a method calling itself: not nested again (${subMachinesOf(self).length})`);
+
+// 5. The K-Test Station sample: CALIBRATING calls Calibrate(), whose CAL_MEASURE calls Measure(); TESTING a nested CASE
+const ts = SAMPLES.find((s) => s.id === 'k-test-station')!;
+const tsSubs = subMachinesOf(ts.pouContent);
+expect(tsSubs.map((m) => `${m.parent}/${m.method}`).join(' ') === 'KTESTSTATION_CALIBRATING/Calibrate KTESTSTATION_CALIBRATING__Calibrate__CAL_MEASURE/Measure', `the sample: its sub-machine and the one inside it (${tsSubs.map((m) => `${m.parent}/${m.method}`).join(' ')})`);
+// (choice nodes: the nested CASE's arms as the choice's branches, its ELSE named)
+const choice = generateStatechartModel(ts.dutContent, ts.pouContent, { choiceNodes: true }).markdown.split('\n').filter((l) => /choice_KTESTSTATION_TESTING_\d+ -->/.test(l)).map((l) => l.replace(/^.*?: /, ''));
+expect(
+  choice.join(' | ') === '① (iTestStep = 1) AND else | ② (iTestStep = 2) AND (rMeasured > 10.0) | ③ (iTestStep = 2) AND (rMeasured < 0.0) | ④ NOT (iTestStep = 1 OR iTestStep = 2)',
+  `choice nodes: TESTING's branches its CASE's arms (${choice.join(' | ')})`
+);
+// (Move start out of a CASE arm: kept under the arm's condition)
+const moved = moveTransitionStart(ts.pouContent, { from: 'KTESTSTATION_TESTING', to: 'KTESTSTATION_DONE', label: '(iTestStep = 2) AND (rMeasured > 10.0)' }, 'KTESTSTATION_IDLE', 'machineState');
+const movedCode = 'error' in moved ? moved.error : moved.code.replace(/\s+/g, ' ');
+expect(!('error' in moved) && /KTESTSTATION_IDLE:.*IF iTestStep = 2 THEN IF \(rMeasured > 10\.0\) THEN machineState := KTESTSTATION_DONE; END_IF END_IF/.test(movedCode), `Move start out of a CASE arm: under IF iTestStep = 2 (${'error' in moved ? moved.error : moved.message})`);
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

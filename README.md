@@ -319,7 +319,7 @@ The toolbar on the left of the canvas holds the elements of TwinCAT's UML statec
 
 ## Pre-Loaded Production Samples
 
-Test the generator immediately with 7 real-world Beckhoff TwinCAT state machine samples:
+Test the generator immediately with 7 real-world Beckhoff TwinCAT state machine samples, and one written to show sub-machines:
 1. **Door Dasher (`SM_DoorDasher`)**: Complex multi-level state machine with nested UML composite states (`Disabled`, `Enabling`, `Enabled`, `Stopping`).
 2. **Table Manager (`SM_TableManager`)**: Indexing rotary table sequencer with error handling and interlocks.
 3. **K-Motor VFD (`SM_KMotorVFDEtherCATi550`)**: EtherCAT Lenze i550 variable frequency drive velocity/position controller.
@@ -327,6 +327,7 @@ Test the generator immediately with 7 real-world Beckhoff TwinCAT state machine 
 5. **Feed Manager (`SM_234FeedManager`)**: Material feeder sequencing and fault recovery logic.
 6. **K-Servo Supply Manager (`SM_KServoSupplyManager`)**: Finds the servo power supplies and enables them as child state machines.
 7. **K-Power Supply AX86x0 (`SM_KPowerSupplyAx86x0`)**: Beckhoff AX86x0 servo power supply enable, reset and error handling.
+8. **K-Test Station, nested sub-machines (`SM_KTestStation`)**: `KTESTSTATION_CALIBRATING` calls `Calibrate()`, a state machine of its own, whose `CAL_MEASURE` calls `Measure()`, another one: both drawn in boxes inside their state. `KTESTSTATION_TESTING` steps through a `CASE iTestStep OF` of its own, its arms guarding its transitions (with **Choices** on: a choice's branches).
 
 Samples 6 and 7 use a `{attribute 'qualified_only'}` enum, so their code names states with the enum's type: `E_KSupplyManager_States.DISABLED:` and `machineState := E_KPowerSupply_States.ERROR;`. Both forms are read everywhere: in `doState()` and `preProcess()`, the Identified States, the Method Editor and Problems. Code the app writes (a new state's CASE branch, a new transition) follows the style the POU already uses.
 

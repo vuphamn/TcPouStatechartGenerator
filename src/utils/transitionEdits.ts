@@ -15,6 +15,7 @@ import { blankComments } from './stateMachineLint.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
 import { escapeRx, labelNames, locateTransition } from './sourceLocation.ts';
 import { caseBranchRange } from './stateEdits.ts';
+import { caseArmCondition, caseLabelOf, caseSelectorOf } from './stStatements.ts';
 
 export interface EdgeRef {
   from: string;
@@ -329,6 +330,35 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
     if (assignsIn(st) === 1) {
       const taken = lines.slice(st.start, st.end);
       return { lines: [...lines.slice(0, st.start), ...lines.slice(st.end)], taken: mode === 'move' ? wrap(taken) : taken, removed: taken, note: mode === 'move' ? aroundNote() : '' };
+    }
+    // A CASE in the branch (on a step, not the states): move inside its arm, kept under the arm's condition
+    // ("IF iTestStep = 2 THEN"; its ELSE: none of the arms before it)
+    // (its CASE line: after the comment lines above it, which belong to it)
+    let caseLine = st.start;
+    while (caseLine < st.end - 1 && !s.code[caseLine].trim()) caseLine++;
+    const caseSel = mode === 'move' ? caseSelectorOf(s.code[caseLine].trim()) : null;
+    if (caseSel) {
+      const heads: { line: number; cond: string | null }[] = [];
+      let depth = 0;
+      for (let i = caseLine + 1; i < st.end - 1; i++) {
+        const l = s.code[i].trim();
+        if (/^(IF|CASE|FOR|WHILE|REPEAT)\b/i.test(l) && !/\bEND_(IF|CASE|FOR|WHILE|REPEAT)\b/i.test(l)) depth++;
+        else if (/^END_(IF|CASE|FOR|WHILE|REPEAT)\b/i.test(l)) depth--;
+        else if (depth === 0) {
+          const labels = caseLabelOf(l);
+          if (labels) heads.push({ line: i, cond: caseArmCondition(caseSel, labels) });
+          else if (/^ELSE$/i.test(l)) heads.push({ line: i, cond: null });
+          else if (/^((?:[A-Za-z_][\w.]*|-?\d+)[\w.,\s]*)\s*:(?!=)\s*\S/.test(l)) return { error: `Cannot move ${name}: its CASE arm has its code on the label's line: move it in the Method Editor` };
+        }
+      }
+      const at = heads.filter((x) => x.line < t.line).pop();
+      if (!at) return { error: `Cannot move ${name}: ${TOGETHER}` };
+      const prior = heads.filter((x) => x.line < at.line && x.cond).map((x) => x.cond!);
+      const cond = at.cond ?? (prior.length ? `NOT (${prior.join(' OR ')})` : null);
+      if (cond) around.push({ cond, indent: leading(lines[caseLine]) });
+      from = at.line + 1;
+      to = heads.find((x) => x.line > at.line)?.line ?? st.end - 1;
+      continue;
     }
     const arms = st.arms;
     const arm = arms?.find((x) => inRange(t.line, x));

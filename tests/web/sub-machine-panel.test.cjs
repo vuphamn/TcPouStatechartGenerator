@@ -178,6 +178,27 @@ const sub = (x) => `${P}__readDiagnostics__${x}`;
   expect(lv.includes(P) && lv.includes(sub('DIAG_READ_START')), `simulated: ${P}'s card and DIAG_READ_START's inside it marked (${lv.join(', ')})`);
   await p.$eval('#sim-stop', (e) => e.click()).catch(() => {});
 
+  // 11. Nested (the K-Test Station sample: CALIBRATING calls Calibrate(), its CAL_MEASURE calls Measure()): Measure()'s
+  // states inside CAL_MEASURE's box, inside CALIBRATING's; Measure() collapsed there: the canvas too
+  await p.select('#sample-selector', 'k-test-station');
+  const CM = 'KTESTSTATION_CALIBRATING__Calibrate__CAL_MEASURE';
+  await p.waitForSelector(`#mermaid-canvas-area g.node[data-state-id="${CM}__Measure__MEAS_READ"]`, { timeout: 30000 }).catch(() => {});
+  await h.sleep(1000);
+  const nest = () => p.evaluate((CM) => ({
+    outer: !!document.querySelector(`#state-box-KTESTSTATION_CALIBRATING #sub-machine-KTESTSTATION_CALIBRATING`),
+    inner: [...document.querySelectorAll(`#state-box-KTESTSTATION_CALIBRATING #state-box-${CSS.escape(CM)} #sub-machine-${CSS.escape(CM)} [id^="state-list-item-"]`)].map((e) => e.id.split('__').pop()),
+    expanded: document.getElementById(`sub-machine-${CM}`)?.getAttribute('data-expanded') ?? null,
+    canvas: document.querySelectorAll(`#mermaid-canvas-area g.node[data-state-id^="${CM}__Measure__"]`).length,
+  }), CM);
+  const m0 = await nest();
+  expect(m0.outer && m0.inner.join() === 'MEAS_SETTLE,MEAS_READ,MEAS_STORE' && m0.expanded === 'true' && m0.canvas >= 3, `nested: Measure()'s states inside CAL_MEASURE's box, inside CALIBRATING's (${JSON.stringify(m0)})`);
+  await p.click(`#sub-machine-toggle-${CM.replace(/[^\w-]/g, '\\$&')}`).catch(() => p.evaluate((id) => document.getElementById(id)?.click(), `sub-machine-toggle-${CM}`));
+  const m1 = await waitFor(nest, (x) => x.canvas === 0);
+  expect(m1.canvas === 0 && m1.expanded === 'false' && m1.outer, `Measure() collapsed there: the canvas too, Calibrate() still shown (${JSON.stringify(m1)})`);
+  await p.evaluate((id) => document.getElementById(id)?.click(), `sub-machine-toggle-${CM}`);
+  const m2 = await waitFor(nest, (x) => x.canvas >= 3);
+  expect(m2.canvas >= 3, `expanded again (${m2.canvas})`);
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);
