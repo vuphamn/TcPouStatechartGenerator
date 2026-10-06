@@ -78,6 +78,26 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const find = await p.$('#tcdut-find-btn');
   expect(/Its enum: drop its \.TcDUT too, or the folder it is in/.test(hint) && !!find, `a .TcPOU alone: it says how to give its enum, Find .TcDUT… offered (${!!find})`);
 
+  // 5. Inside another app (VS Code's built-in browser shows the page in a frame): Browse opens the plain file chooser
+  // at once (its file access would be refused), and the file loads
+  const q = await browser.newPage();
+  q.on('pageerror', (e) => errors.push(e.message));
+  await q.setContent(`<iframe id="app" src="${h.APP_URL}" style="width:1580px;height:980px;border:0"></iframe>`);
+  const frameOf = () => q.frames().find((f) => f !== q.mainFrame());
+  let frame = null;
+  for (let t = 0; t < 60000 && !(frame && (await frame.$('#mermaid-canvas-area g.node').catch(() => null))); t += 500) {
+    await h.sleep(500);
+    frame = frameOf();
+  }
+  expect(!!frame && (await frame.evaluate(() => window.self !== window.top)), 'the app shown in a frame');
+  if (frame) {
+    const [chooser2] = await Promise.all([q.waitForFileChooser({ timeout: 8000 }).catch(() => null), frame.click('#tcpou-choose-file-btn')]);
+    expect(!!chooser2, 'in a frame: Browse opens the plain file chooser at once (no refusal first)');
+    if (chooser2) await chooser2.accept([pouFile]);
+    const inFrame = await waitFor(() => frame.$eval('#tcpou-file-name', (e) => e.textContent).catch(() => ''), (n) => n.includes(sample.pouName.replace(/\.TcPOU$/i, '')));
+    expect(inFrame.includes(sample.pouName.replace(/\.TcPOU$/i, '')) && !/refused to read/.test(await frame.evaluate(() => document.body.innerText)), `in a frame: it loads (${inFrame})`);
+  }
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

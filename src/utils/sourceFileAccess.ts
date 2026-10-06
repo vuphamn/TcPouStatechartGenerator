@@ -34,7 +34,22 @@ interface FsAccessWindow {
   showDirectoryPicker?: (options: unknown) => Promise<FsDirectoryHandle>;
   tcDesktop?: { isDesktop: true; openPou: () => Promise<PouSource | null> };
 }
-const w = window as unknown as FsAccessWindow;
+/**
+ * Shown inside another app: VS Code's built-in browser (an Electron webview, the page in a frame), another app's
+ * webview: its pickers open, but reading what was picked is refused (the app grants no file access). Their file
+ * access is not used there: the plain file chooser, .TcDUT files chosen, a download to save (the desktop app, an
+ * Electron app of its own, has its own file access)
+ */
+export const isEmbeddedBrowser = (() => {
+  try {
+    return window.self !== window.top || /\bElectron\//.test(navigator.userAgent);
+  } catch {
+    // (a frame of another origin)
+    return true;
+  }
+})();
+const rawWindow = window as unknown as FsAccessWindow;
+const w: FsAccessWindow = isEmbeddedBrowser && !rawWindow.tcDesktop ? { tcDesktop: rawWindow.tcDesktop } : rawWindow;
 
 export const isDesktopApp = () => Boolean(w.tcDesktop);
 /** The browser can be granted a folder to search (Chrome / Edge) */
@@ -187,7 +202,8 @@ export interface DroppedItem {
  * and its enums). Null: no .TcPOU in it; { several }: a folder with several (the user picks one: its enum found then)
  */
 export async function readDrop(items: DroppedItem[]): Promise<PouSource | { several: string[] } | null> {
-  const handles = await Promise.all(items.map((i) => (i.handle ? i.handle.catch(() => null) : Promise.resolve(null))));
+  // (inside another app, its handles cannot be read: the dropped files themselves only)
+  const handles = isEmbeddedBrowser ? items.map(() => null) : await Promise.all(items.map((i) => (i.handle ? i.handle.catch(() => null) : Promise.resolve(null))));
   const pouAt = items.findIndex((i) => !!i.file && /\.tcpou$/i.test(i.file.name));
   const duts = items.filter((i) => i.file && /\.tcdut$/i.test(i.file.name)).map((i) => i.file!);
   const folder = handles.find((h): h is FsDirectoryHandle => !!h && (h as FsHandle).kind === 'directory') ?? null;
