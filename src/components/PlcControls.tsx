@@ -29,6 +29,20 @@ export function plcStateText(s: PlcState): string {
   return s.plc;
 }
 
+/**
+ * Why its PLC runs no program, and what to do (null: it runs one, or not known): its license ran out; no boot project
+ * there; a boot project that does not start on its own (the usual case after a restart); one that does (Restart
+ * TwinCAT loads it)
+ */
+export function noProgramWhy(s: PlcState | null | undefined): string | null {
+  if (!s || s.error || s.plc !== 'Invalid' || s.system === 'Config') return null;
+  if (s.license?.state === 'expired') return 'Its TwinCAT trial license ran out: renew it, then restart TwinCAT there.';
+  if (!s.boot) return 'Its PLC runs no program: in XAE, Login and Start, or activate its boot project.';
+  if (!s.boot.app) return 'No boot project on it: in XAE, activate the configuration and download the PLC project (Login, then Start), or Activate Boot Project.';
+  if (!s.boot.autostart) return 'Its boot project is there but does not start on its own (a restart leaves it like this): in XAE, Login and Start, or tick PLC project › Autostart Boot Project and activate.';
+  return 'Its boot project starts on its own but is not running: Restart TwinCAT loads it.';
+}
+
 /** Its TwinCAT trial license ran out, or runs out within two days: renew it (XAE, a person: TwinCAT asks) */
 export const needsRenew = (s: PlcState | null | undefined) => !!s && !s.error && (s.license?.state === 'expired' || s.license?.state === 'soon');
 
@@ -64,7 +78,7 @@ export const PlcStateBadge: React.FC<{ state?: PlcState | null; changed?: { from
       className={`live-plc-state shrink-0 px-1 rounded text-[10px] ${s.plc === 'Run' ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/60 text-amber-300'}${ring}`}
       data-state={text}
       data-changed={changed ? 'true' : undefined}
-      title={`TwinCAT ${s.system ?? '?'}; ${why}${s.project ? `; project ${s.project}` : ''}${s.license ? `; trial license ${s.license.state === 'expired' ? 'ran out' : 'until'} ${new Date(s.license.expires).toLocaleString()}` : ''}.${was}`}
+      title={`TwinCAT ${s.system ?? '?'}; ${noProgramWhy(s) ?? why}${s.project ? `; project ${s.project}` : ''}${s.license ? `; trial license ${s.license.state === 'expired' ? 'ran out' : 'until'} ${new Date(s.license.expires).toLocaleString()}` : ''}.${was}`}
     >
       {text}
       {s.project ? ` · ${s.project}` : ''}
@@ -104,37 +118,73 @@ export const RenewLicenseSteps: React.FC<{ idPrefix: string; openXae?: () => Pro
   );
 };
 
-/** What was done to the PLCs (newest first): when, which, what, who, what it answered; CSV: all of it */
-export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] | null; error?: string | null; showPlc?: boolean; csvName?: string }> = ({ id, entries, error, showPlc = true, csvName = 'plc-history' }) => (
-  <div id={id} className="relative ml-2 mr-1 my-1 p-1.5 rounded border border-slate-700 bg-slate-900 text-[11px]">
-    {!!entries?.length && (
-      <button type="button" id={`${id}-csv`} className="absolute top-1 right-1 px-1.5 rounded text-[10px] text-slate-400 hover:text-sky-300 hover:bg-slate-800" title={`All ${entries.length} as a CSV file (Excel)`} onClick={() => void downloadCsv(`${csvName}-${new Date().toISOString().slice(0, 10)}.csv`, plcHistoryCsv(entries))}>
-        CSV
-      </button>
-    )}
-    {error ? (
-      <div className="text-rose-300">{error}</div>
-    ) : !entries ? (
-      <Loader2 className="w-3 h-3 animate-spin text-slate-500" />
-    ) : entries.length === 0 ? (
-      <div className="text-slate-500">Nothing started, stopped or restarted from here yet.</div>
-    ) : (
-      <ul className="space-y-0.5">
-        {entries.slice(0, 20).map((e, i) => (
-          <li key={`${e.t}-${i}`} className="plc-action-entry flex gap-2" data-mode={e.mode} data-ok={String(e.ok)}>
-            <span className="shrink-0 text-slate-500 font-mono">{new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-            {showPlc && <span className="shrink-0 text-slate-300">{e.name || e.netId}</span>}
-            <span className={e.ok ? 'text-emerald-300' : 'text-rose-300'}>
-              {plcActionLabel(e.mode)}
-              {e.ok ? (e.state ? ` → ${e.state}` : '') : `: ${e.error ?? 'failed'}`}
-            </span>
-            {e.user && <span className="ml-auto shrink-0 text-slate-500">{e.user}</span>}
-          </li>
-        ))}
-      </ul>
-    )}
-  </div>
-);
+/** The entries of one PLC (its AMS NetId) and of one action, or all ('') */
+export function filterPlcActions(entries: PlcActionEntry[], netId: string, mode: string): PlcActionEntry[] {
+  return entries.filter((e) => (!netId || e.netId === netId) && (!mode || e.mode === mode));
+}
+
+/**
+ * What was done to the PLCs (newest first): when, which, what, who, what it answered; filtered by PLC and by action
+ * (ids: <id>-filter-plc, <id>-filter-mode); CSV: all of the filtered ones
+ */
+export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] | null; error?: string | null; showPlc?: boolean; csvName?: string }> = ({ id, entries, error, showPlc = true, csvName = 'plc-history' }) => {
+  const [netId, setNetId] = React.useState('');
+  const [mode, setMode] = React.useState('');
+  const plcs = React.useMemo(() => [...new Map((entries ?? []).map((e) => [e.netId, e.name || e.netId])).entries()], [entries]);
+  const shown = entries ? filterPlcActions(entries, netId, mode) : null;
+  const select = 'bg-slate-950 border border-slate-700 rounded text-[10px] text-slate-300 px-0.5';
+  return (
+    <div id={id} className="ml-2 mr-1 my-1 p-1.5 rounded border border-slate-700 bg-slate-900 text-[11px]">
+      {!!entries?.length && (
+        <div className="flex items-center gap-1 mb-1">
+          {showPlc && plcs.length > 1 && (
+            <select id={`${id}-filter-plc`} className={select} value={netId} onChange={(e) => setNetId(e.target.value)} title="Only this PLC">
+              <option value="">All PLCs</option>
+              {plcs.map(([n, name]) => (
+                <option key={n} value={n}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
+          <select id={`${id}-filter-mode`} className={select} value={mode} onChange={(e) => setMode(e.target.value)} title="Only this action">
+            <option value="">All actions</option>
+            {(['plc', 'stop', 'restart', 'run'] as const).map((m) => (
+              <option key={m} value={m}>
+                {plcActionLabel(m)}
+              </option>
+            ))}
+          </select>
+          <span className="flex-1" />
+          <button type="button" id={`${id}-csv`} disabled={!shown?.length} className="px-1.5 rounded text-[10px] text-slate-400 hover:text-sky-300 hover:bg-slate-800 disabled:opacity-40" title={`These ${shown?.length ?? 0} as a CSV file (Excel)`} onClick={() => void downloadCsv(`${csvName}-${new Date().toISOString().slice(0, 10)}.csv`, plcHistoryCsv(shown ?? []))}>
+            CSV
+          </button>
+        </div>
+      )}
+      {error ? (
+        <div className="text-rose-300">{error}</div>
+      ) : !shown ? (
+        <Loader2 className="w-3 h-3 animate-spin text-slate-500" />
+      ) : shown.length === 0 ? (
+        <div className="text-slate-500">{entries?.length ? 'None of these.' : 'Nothing started, stopped or restarted from here yet.'}</div>
+      ) : (
+        <ul className="space-y-0.5">
+          {shown.slice(0, 20).map((e, i) => (
+            <li key={`${e.t}-${i}`} className="plc-action-entry flex gap-2" data-mode={e.mode} data-ok={String(e.ok)} data-netid={e.netId}>
+              <span className="shrink-0 text-slate-500 font-mono">{new Date(e.t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+              {showPlc && <span className="shrink-0 text-slate-300">{e.name || e.netId}</span>}
+              <span className={e.ok ? 'text-emerald-300' : 'text-rose-300'}>
+                {plcActionLabel(e.mode)}
+                {e.ok ? (e.state ? ` → ${e.state}` : '') : `: ${e.error ?? 'failed'}`}
+              </span>
+              {e.user && <span className="ml-auto shrink-0 text-slate-500">{e.user}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 /**
  * What its state offers (of those allowed here): Config: Run mode; stopped: Start; running: Stop, Restart; no program
@@ -142,7 +192,9 @@ export const PlcActionHistory: React.FC<{ id: string; entries: PlcActionEntry[] 
  */
 export function plcActions(s: PlcState | null | undefined, allowed: PlcControlMode[]): PlcControlMode[] {
   if (!s || s.error) return [];
-  const want: PlcControlMode[] = s.system === 'Config' ? ['run'] : s.plc === 'Stop' ? ['plc'] : s.plc === 'Run' ? ['stop', 'restart'] : s.plc === 'Invalid' && s.license?.state !== 'expired' ? ['run'] : [];
+  // (no program: Restart TwinCAT only when its boot project starts on its own, or that is not known)
+  const restartHelps = s.plc === 'Invalid' && s.license?.state !== 'expired' && (!s.boot || (s.boot.app && s.boot.autostart));
+  const want: PlcControlMode[] = s.system === 'Config' ? ['run'] : s.plc === 'Stop' ? ['plc'] : s.plc === 'Run' ? ['stop', 'restart'] : restartHelps ? ['run'] : [];
   return want.filter((m) => allowed.includes(m));
 }
 
@@ -303,6 +355,7 @@ export const GatewayPlcState: React.FC<{
           </button>
         )}
       </div>
+      {noProgramWhy(state) && !needsRenew(state) && <div id="live-gw-plc-why" className="text-amber-200/90">{noProgramWhy(state)}</div>}
       {renewing && needsRenew(state) && <RenewLicenseSteps idPrefix="live-gw-plc-renew" onRecheck={refresh} className="ml-2 my-1 space-y-1 text-slate-300" />}
       {past && <PlcActionHistory id="live-gw-plc-history" entries={past.entries} error={past.error} showPlc={false} csvName={`plc-history-${name}`} />}
       {asking && <PlcActionConfirm idPrefix="live-gw-plc-control" mode={asking} name={name} state={state} busy={busy} onConfirm={() => run(asking)} onCancel={() => setAsking(null)} />}

@@ -24,11 +24,18 @@ export async function unlockSound(): Promise<boolean> {
 
 export const canPlay = () => context()?.state === 'running';
 
-/** Two tones (error: lower and three times; stuck: once) */
-export function playAlert(kind: 'error' | 'stuck' | 'escalated'): void {
+/** The tones of each kind (Hz, start in s): error: lower and three times; stuck: once; a PLC stopped: falling, slow */
+export const ALERT_TONES: Record<'error' | 'stuck' | 'escalated' | 'plc', number[][]> = {
+  error: [[660, 0], [440, 0.22], [660, 0.5], [440, 0.72], [660, 1.0], [440, 1.22]],
+  escalated: [[880, 0], [660, 0.2], [880, 0.4], [660, 0.6]],
+  stuck: [[880, 0], [660, 0.22]],
+  plc: [[784, 0], [587, 0.3], [392, 0.6], [392, 1.1]],
+};
+
+export function playAlert(kind: 'error' | 'stuck' | 'escalated' | 'plc'): void {
   const c = context();
   if (!c || c.state !== 'running') return;
-  const tones = kind === 'error' ? [[660, 0], [440, 0.22], [660, 0.5], [440, 0.72], [660, 1.0], [440, 1.22]] : kind === 'escalated' ? [[880, 0], [660, 0.2], [880, 0.4], [660, 0.6]] : [[880, 0], [660, 0.22]];
+  const tones = ALERT_TONES[kind];
   for (const [freq, at] of tones) {
     const osc = c.createOscillator();
     const gain = c.createGain();

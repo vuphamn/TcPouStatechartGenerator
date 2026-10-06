@@ -3,10 +3,11 @@
 // connection of their own (this computer's TwinCAT router first, else straight with this computer's NetId; read-only).
 // One that does not answer: no route for this computer (or not reachable). Each within a few seconds, all at once.
 // Its TwinCAT trial license too, when it has one (license: { state: expired | soon | ok, expires }): a PLC that runs no
-// program because its trial ran out is told apart from one never started.
+// program because its trial ran out is told apart from one never started. And with no program, its boot project
+// (boot: { app, autostart }): none there, there but not started on its own, or one that starts on its own.
 const ads = require('./tcAds.cjs');
 const { systemClient } = require('./liveSession.cjs');
-const { readBootFile, projectInfoOf } = require('./tcSources.cjs');
+const { readBootFile, projectInfoOf, bootFileExists } = require('./tcSources.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 
 const adsCode = (err) => err?.adsError?.errorCode ?? err?.parent?.adsError?.errorCode ?? null;
@@ -40,7 +41,10 @@ async function describePlc(device, { plcPort = 851, localNetId, localAdsPort } =
     } catch {
       // (no trial license there)
     }
-    return { system, plc, project, ...(license ? { license } : {}) };
+    // (no program: is there a boot project, and does it start on its own? Restart TwinCAT helps only then)
+    let boot = null;
+    if (plc === 'Invalid') boot = { app: await bootFileExists(c, `Plc/Port_${plcPort}.app`), autostart: await bootFileExists(c, `Plc/Port_${plcPort}.autostart`) };
+    return { system, plc, project, ...(license ? { license } : {}), ...(boot ? { boot } : {}) };
   } catch (err) {
     return { error: /route/i.test(String(err?.message ?? '')) ? 'no route for this computer' : String(err?.message ?? err).slice(0, 160) };
   } finally {

@@ -93,6 +93,10 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-brows
     const past = await a.$$eval('#live-plc-history .plc-action-entry', (els) => els.map((e) => `${e.getAttribute('data-mode')}:${e.getAttribute('data-ok')}`).join(' ')).catch(() => '');
     const pastText = await a.$eval('#live-plc-history', (e) => e.textContent).catch(() => '');
     expect(past === 'restart:true plc:true plc:true' && /CX-203/.test(pastText), `History: ${past}`);
+    // Filtered by action
+    await a.select('#live-plc-history-filter-mode', 'restart').catch(() => {});
+    const onlyRestart = await a.$$eval('#live-plc-history .plc-action-entry', (els) => els.map((e) => e.getAttribute('data-mode')).join(' ')).catch(() => '');
+    expect(onlyRestart === 'restart', `History, only Restart: ${onlyRestart}`);
     // Go live from its row: its Target set, and live
     await a.click('.live-plc-go-live[data-netid="127.0.0.2.1.1"]').catch(() => {});
     await a.waitForSelector('#live-stop-btn', { timeout: 20000 }).catch(() => {});

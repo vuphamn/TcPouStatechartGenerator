@@ -41,6 +41,19 @@ async function readBootFile(client, relPath) {
   }
 }
 
+/** A file in the boot folder there or not (opened and closed, not read: a boot project is megabytes) */
+async function bootFileExists(client, relPath) {
+  const target = { adsPort: SYSTEM_SERVICE_PORT };
+  const name = Buffer.concat([Buffer.from(relPath.replace(/\\/g, '/'), 'latin1'), Buffer.from([0])]);
+  try {
+    const h = (await client.readWriteRaw(FOPEN, (PATH_BOOTPATH << 16) | FOPEN_READ | FOPEN_BINARY, 4, name, target)).readUInt32LE(0);
+    await client.readWriteRaw(FCLOSE, h, 0, Buffer.alloc(0), target).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A zip's files (stored or deflated), from its central directory: [{ path, data }] (keep: which to unpack) */
 function unzip(buf, keep = () => true) {
   // The end of central directory record: the last 'PK\x05\x06' (a comment of up to 64 KB may follow it)
@@ -220,4 +233,4 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
   return { project: info?.project?.name ?? name, plcProject: name, projects, files, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT };
+module.exports = { readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };

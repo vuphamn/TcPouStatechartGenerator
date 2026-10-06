@@ -40,6 +40,8 @@ function createAlertLog({ file, log, rules }) {
     /** A new alert (from an alert monitor) */
     add(event) {
       const e = { id: crypto.randomBytes(8).toString('hex'), ...event, ack: null, resolvedAt: null };
+      // (muted: kept to be seen, never open: no chime, no escalation)
+      if (event.muted) e.resolvedAt = event.at;
       if (event.event === 'recovered') {
         e.resolvedAt = event.at;
         for (const old of events) {

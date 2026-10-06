@@ -161,7 +161,8 @@ class AlertMonitor {
   /** Its ADS state changed: it stopped running (from Run), or runs again (after it was alerted) */
   plcState(state) {
     const was = this.plc.value;
-    this.plc = { ...this.plc, value: state, since: Date.now() };
+    // (a new stay: its muted alert said again)
+    this.plc = { ...this.plc, value: state, since: Date.now(), mutedSent: undefined };
     if (this.rule.onPlcStop !== true) return;
     if (was === 'Run' && state !== 'Run' && !this.plc.down) {
       const why = state === 'Stop' ? 'is stopped' : state === 'Invalid' ? 'runs no program' : `is in ${state}`;
@@ -284,21 +285,32 @@ class AlertMonitor {
     return m.stateNames?.[String(value)] ?? `#${value}`;
   }
 
-  /** Posts an alert; false when muted (maintenance, quiet hours) or repeated too soon */
+  /**
+   * Posts an alert; false when muted (maintenance, quiet hours) or repeated too soon. A muted one is still kept, once
+   * per stay, in the history and on the board as muted (with why): a planned stop does not look like a fault there,
+   * and nobody is called (no webhook, no chime, not open)
+   */
   alert(kind, m, t, text) {
     const now = Date.now();
     if (kind !== 'recovered' && t.sent[kind] && now - t.sent[kind] < REPEAT_MS) return false;
-    if (this.muted(now)) {
-      if (kind !== 'recovered') this.env.log(`alerts: ${kind} ${m.path} muted (${this.env.maintenanceOf?.(this.rule.plc) ? 'maintenance' : 'quiet hours'})`);
-      return false;
-    }
-    t.sent[kind] = now;
     const plc = this.env.plcOf(this.rule.plc);
     const event = {
       event: kind, rule: this.rule.name, ruleId: this.rule.id, plc: this.rule.plc, plcName: plc?.name ?? this.rule.plc, machine: m.path, type: m.type,
       state: this.name(m, t.value), value: t.value, since: new Date(t.since).toISOString(), durationMs: now - t.since,
       text: `${plc?.name ?? this.rule.plc}: ${text}`, at: new Date(now).toISOString(),
     };
+    const muted = this.mutedWhy(now);
+    if (muted) {
+      if (kind !== 'recovered') {
+        this.env.log(`alerts: ${kind} ${m.path} muted (${muted})`);
+        if (!t.mutedSent?.[kind]) {
+          t.mutedSent = { ...(t.mutedSent ?? {}), [kind]: now };
+          this.env.onEvent?.({ ...event, muted }, this.rule);
+        }
+      }
+      return false;
+    }
+    t.sent[kind] = now;
     this.lastAlert = { kind, machine: m.path, state: event.state, at: event.at };
     this.env.log(`alerts: ${kind} ${m.path} (${event.state}) on ${this.rule.plc}`);
     // The alert history (the web app lists and acknowledges it), then the webhook
@@ -309,10 +321,15 @@ class AlertMonitor {
 
   /** In maintenance (set on the board) or within the rule's quiet hours */
   muted(now = Date.now()) {
-    if (this.env.maintenanceOf?.(this.rule.plc)) return true;
-    if (!this.rule.quietHours) return false;
+    return !!this.mutedWhy(now);
+  }
+
+  /** Why its alerts are muted now: 'maintenance', 'quiet hours', or null */
+  mutedWhy(now = Date.now()) {
+    if (this.env.maintenanceOf?.(this.rule.plc)) return 'maintenance';
+    if (!this.rule.quietHours) return null;
     this.quiet ??= parseQuietHours(this.rule.quietHours);
-    return isQuiet(this.quiet, new Date(now));
+    return isQuiet(this.quiet, new Date(now)) ? 'quiet hours' : null;
   }
 
   /** The machines now (the operator board): state, since when (gateway time), in error, the limit that applies */

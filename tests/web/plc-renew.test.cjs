@@ -2,7 +2,8 @@ const h = require('../lib/harness.cjs');
 // Browse (web edition through Link): the remembered PLCs each with their state, read when it opens and every few
 // seconds: one runs; one runs no program because its TwinCAT trial license ran out (fake-ams2.cjs: ADS state 0, its
 // license file five hours past): "license ran out", and Renew license: the steps, Open XAE, Check again (not clicked
-// here: it would start XAE)
+// here: it would start XAE). A third runs no program with its license fine: its boot project there but not starting on
+// its own: said why (and no Restart TwinCAT: it would not help)
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -12,11 +13,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 const { writeSymbolsPlc } = require('../fakes/symbols-plc.cjs');
 const OLD = 48926;
 const GOOD = 48925;
+const IDLE = 48922;
 
 (async () => {
   const plcs = [
     [OLD, writeSymbolsPlc('fake-ams2-renew-old.json', [], { adsState: 0, license: -5 })],
     [GOOD, writeSymbolsPlc('fake-ams2-renew-good.json', [], { license: 100 })],
+    [IDLE, writeSymbolsPlc('fake-ams2-renew-idle.json', [], { adsState: 0, license: 100, boot: { app: true, autostart: false } })],
   ].map(([port, cfg]) => spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), String(port), cfg], { stdio: 'ignore' }));
   const linkOut = path.join(h.OUT, 'link-renew.txt');
   const link = spawn(process.execPath, [path.join(h.REPO, 'link', 'link.cjs'), '--port', '48924'], {
@@ -32,13 +35,14 @@ const GOOD = 48925;
     a.on('pageerror', (e) => errors.push(e.message));
     const set = (id, v) => a.evaluate((id, v) => { const el = document.getElementById(id); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); }, id, v);
     await a.goto(h.APP_URL, { waitUntil: 'load' });
-    await a.evaluate((OLD, GOOD) => {
+    await a.evaluate((OLD, GOOD, IDLE) => {
       localStorage.clear();
       localStorage.setItem('kss.live.plcs', JSON.stringify([
         { name: 'Old line', netId: '127.0.0.3.1.1', ip: `127.0.0.1:${OLD}`, port: '851', localNetId: '', used: Date.now() },
         { name: 'Good line', netId: '127.0.0.4.1.1', ip: `127.0.0.1:${GOOD}`, port: '851', localNetId: '', used: Date.now() - 1000 },
+        { name: 'Idle line', netId: '127.0.0.5.1.1', ip: `127.0.0.1:${IDLE}`, port: '851', localNetId: '', used: Date.now() - 2000 },
       ]));
-    }, OLD, GOOD);
+    }, OLD, GOOD, IDLE);
     await a.reload({ waitUntil: 'load' });
     await a.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
     await a.click('#dock-tab-live');
@@ -71,6 +75,11 @@ const GOOD = 48925;
       await sleep(1500);
       expect((await badge('127.0.0.3.1.1')) === 'license ran out', 'checked again: still ran out');
     }
+    // No program, its license fine: why (its boot project does not start on its own); not Renew
+    await a.waitForSelector('.live-plc-why[data-netid="127.0.0.5.1.1"]', { timeout: 10000 }).catch(() => {});
+    const why = await a.$eval('.live-plc-why[data-netid="127.0.0.5.1.1"]', (e) => e.textContent).catch(() => '');
+    const idle = await badge('127.0.0.5.1.1');
+    expect(idle === 'no program' && /Idle line: Its boot project is there but does not start on its own/.test(why) && !(await a.$('.live-plc-renew[data-netid="127.0.0.5.1.1"]')), `no program, why: "${why.slice(0, 90)}" (${idle})`);
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
     await browser.close().catch(() => {});

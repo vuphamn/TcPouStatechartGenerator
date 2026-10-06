@@ -2,7 +2,8 @@
 // What a PLC's state offers (Browse, the gateway's PLC): Config: Run mode; stopped: Start; running: Stop, Restart; no
 // program, no answer: nothing; only what is allowed (an older Link: start and Run mode). Its badge's text; the states
 // that changed when read again; a remembered PLC that ran and does not now (stopped, or gone), for its notification
-import { ALL_PLC_CONTROLS, needsRenew, plcActionDone, plcActionLabel, plcActionQuestion, plcActions, plcHistoryCsv, plcStateText, stateChanges, type PlcState } from '../../src/components/PlcControls.tsx';
+import { ALL_PLC_CONTROLS, filterPlcActions, needsRenew, noProgramWhy, plcActionDone, plcActionLabel, plcActionQuestion, plcActions, plcHistoryCsv, plcStateText, stateChanges, type PlcState } from '../../src/components/PlcControls.tsx';
+import { ALERT_TONES } from '../../src/utils/boardSound.ts';
 import { checkRuns } from '../../src/components/PlcBrowser.tsx';
 import type { CheckResult } from '../../src/utils/connectionCheck.ts';
 
@@ -52,6 +53,22 @@ const stopped = result([{ id: 'port', ok: true, title: 'p' }, { id: 'ads', ok: t
 const noProgram = result([{ id: 'ads', ok: true, title: 'a' }, { id: 'plc', ok: false, title: 'no program' }]);
 const unreachable = result([{ id: 'port', ok: false, title: 'closed' }]);
 expect(checkRuns(ok) === true && checkRuns(stopped) === false && checkRuns(noProgram) === false && checkRuns(unreachable) === false && checkRuns(null) === null, 'runs: answers with no step about its PLC; stopped, no program, gone: not');
+
+// No program: why, from its boot folder; Restart TwinCAT only when its boot project starts on its own
+const noBoot: PlcState = { system: 'Run', plc: 'Invalid', boot: { app: false, autostart: false } };
+const notAuto: PlcState = { system: 'Run', plc: 'Invalid', boot: { app: true, autostart: false } };
+const auto: PlcState = { system: 'Run', plc: 'Invalid', boot: { app: true, autostart: true } };
+expect(/No boot project on it/.test(noProgramWhy(noBoot) ?? '') && /does not start on its own/.test(noProgramWhy(notAuto) ?? '') && /Restart TwinCAT loads it/.test(noProgramWhy(auto) ?? '') && /license ran out/.test(noProgramWhy(ranOut) ?? '') && noProgramWhy(run) === null && noProgramWhy(config) === null, 'no program: why, in words');
+expect(plcActions(noBoot, ALL_PLC_CONTROLS).length === 0 && plcActions(notAuto, ALL_PLC_CONTROLS).length === 0 && plcActions(auto, ALL_PLC_CONTROLS).join() === 'run' && plcActions(invalid, ALL_PLC_CONTROLS).join() === 'run', 'Restart TwinCAT: only when it would load a boot project (or that is not known)');
+// The history filtered by PLC and action
+const hist = [
+  { t: 3, netId: 'a', name: 'A', mode: 'stop' as const, ok: true },
+  { t: 2, netId: 'b', name: 'B', mode: 'stop' as const, ok: true },
+  { t: 1, netId: 'a', name: 'A', mode: 'plc' as const, ok: true },
+];
+expect(filterPlcActions(hist, 'a', '').map((e) => e.t).join() === '3,1' && filterPlcActions(hist, '', 'stop').map((e) => e.t).join() === '3,2' && filterPlcActions(hist, 'a', 'stop').map((e) => e.t).join() === '3' && filterPlcActions(hist, '', '').length === 3, 'the history filtered by PLC and action');
+// The board: a PLC stopped has its own tone
+expect(JSON.stringify(ALERT_TONES.plc) !== JSON.stringify(ALERT_TONES.error) && JSON.stringify(ALERT_TONES.plc) !== JSON.stringify(ALERT_TONES.stuck), 'a PLC stopped: its own tone on the board');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

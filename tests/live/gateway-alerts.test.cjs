@@ -100,6 +100,18 @@ const request = (method, p, body) =>
   console.log('   ', pe.map((e) => `${e.event} ${e.state}: ${e.text}`).join(' | '));
   expect(pe.filter((e) => e.event === 'plcStopped').length === 1 && pe[0]?.state === 'Stop' && /Line 202: ⏹️ the PLC is stopped \(it was running\)/.test(pe[0].text), 'the PLC stopped: one alert');
   expect(pe.some((e) => e.event === 'recovered' && e.state === 'Run' && /the PLC runs again/.test(e.text)), 'running again: recovered');
+  // In quiet hours (all day here): stopped again: kept in the history as muted (not open), nobody called
+  await request('POST', '/admin/api/alerts', { rules: [{ ...saved.json.rules[0], quietHours: '00:00-24:00' }] });
+  for (let i = 0; i < 40 && (await request('GET', '/admin/api/alerts')).json?.status?.[0]?.state !== 'watching'; i++) await h.sleep(250);
+  const postsBefore = plcEvents().length;
+  await control('Stop');
+  const historyFile = path.join(dir, 'alerts-history.json');
+  const mutedOne = async () => { try { return JSON.parse(fs.readFileSync(historyFile, 'utf8')).find((e) => e.event === 'plcStopped' && e.muted); } catch { return null; } };
+  let muted = null;
+  for (let i = 0; i < 40 && !(muted = await mutedOne()); i++) await h.sleep(250);
+  await control('Run');
+  await h.sleep(500);
+  expect(!!muted && muted.muted === 'quiet hours' && !!muted.resolvedAt && plcEvents().length === postsBefore, `in quiet hours: kept as muted, not open, no webhook (${JSON.stringify(muted && { muted: muted.muted, resolvedAt: !!muted.resolvedAt })}, ${plcEvents().length - postsBefore} posts)`);
 
   // The setup page shows it
   const browser = await h.launchBrowser({ defaultViewport: { width: 1200, height: 1500 } });

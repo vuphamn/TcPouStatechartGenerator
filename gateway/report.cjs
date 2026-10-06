@@ -48,7 +48,8 @@ const mins = (ms) => (ms < 60000 ? `${Math.round(ms / 1000)} s` : ms < 3600000 ?
 /** The report of [from, to] from the alert history and the maintenance windows */
 function buildReport({ name, from, to }, events, maintenanceWindows = []) {
   const inWindow = events.filter((e) => Date.parse(e.at) >= from && Date.parse(e.at) < to);
-  const alerts = inWindow.filter((e) => e.event !== 'recovered');
+  // (muted ones, in maintenance or quiet hours: not counted)
+  const alerts = inWindow.filter((e) => e.event !== 'recovered' && !e.muted);
   const kinds = {};
   for (const e of alerts) kinds[e.event] = (kinds[e.event] ?? 0) + 1;
   const acked = alerts.filter((e) => e.ack);

@@ -61,6 +61,8 @@ interface BoardPlc {
 export interface AlertEvent {
   id: string;
   event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped';
+  /** Muted when it happened (maintenance, quiet hours): kept to be seen, never open */
+  muted?: string;
   plc: string;
   plcName: string;
   machine: string;
@@ -165,7 +167,7 @@ export const OperatorBoard: React.FC = () => {
     const escalated = !!was && !was.escalatedAt && !!e.escalatedAt && !e.ack;
     if (!isNew && !escalated) return;
     setFlashing((f) => ({ ...f, [e.machine.toLowerCase()]: Date.now() + 60000 }));
-    if (soundRef.current && canPlay()) playAlert(escalated ? 'escalated' : e.event === 'error' || e.event === 'plcStopped' ? 'error' : 'stuck');
+    if (soundRef.current && canPlay()) playAlert(escalated ? 'escalated' : e.event === 'plcStopped' ? 'plc' : e.event === 'error' ? 'error' : 'stuck');
   };
 
   useEffect(() => {
@@ -549,10 +551,11 @@ export const OperatorBoard: React.FC = () => {
                 {alerts.slice(0, 200).map((a) => {
                   const openOne = a.event !== 'recovered' && !a.ack && !a.resolvedAt;
                   return (
-                    <div key={a.id} className={`board-alert rounded border px-3 py-2 text-sm ${a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' || a.event === 'plcStopped' ? 'border-rose-700 bg-rose-950/60' : a.event === 'slower' ? 'border-sky-700 bg-sky-950/50' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
+                    <div key={a.id} data-muted={a.muted ? 'true' : undefined} className={`board-alert rounded border px-3 py-2 text-sm ${a.muted ? 'border-slate-800 bg-slate-900/60 text-slate-400' : a.event === 'recovered' ? 'border-emerald-900 bg-emerald-950/40' : openOne ? (a.event === 'error' || a.event === 'plcStopped' ? 'border-rose-700 bg-rose-950/60' : a.event === 'slower' ? 'border-sky-700 bg-sky-950/50' : 'border-amber-600 bg-amber-950/50') : 'border-slate-800 bg-slate-900'}`} data-alert={a.id}>
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-xs text-slate-400">{new Date(a.at).toLocaleString()}</span>
                         {a.escalatedAt && !a.ack && <span className="board-escalated px-1.5 rounded bg-rose-600 text-[10px] font-bold uppercase text-white">escalated</span>}
+                        {a.muted && <span className="board-muted px-1.5 rounded bg-violet-900 text-[10px] font-bold uppercase text-violet-100" title="Nobody was called: the PLC was in maintenance, or in its rule's quiet hours">🔕 muted · {a.muted}</span>}
                         <span className="ml-auto text-xs uppercase tracking-wide text-slate-400">{a.event}</span>
                       </div>
                       <div className="mt-0.5">{a.text}</div>
@@ -562,7 +565,7 @@ export const OperatorBoard: React.FC = () => {
                           {a.ack.note ? `: ${a.ack.note}` : ''}
                         </div>
                       )}
-                      {!a.ack && a.resolvedAt && a.event !== 'recovered' && <div className="mt-1 text-xs text-slate-500">Recovered {new Date(a.resolvedAt).toLocaleTimeString()}</div>}
+                      {!a.ack && a.resolvedAt && a.event !== 'recovered' && !a.muted && <div className="mt-1 text-xs text-slate-500">Recovered {new Date(a.resolvedAt).toLocaleTimeString()}</div>}
                       {openOne &&
                         (noteFor === a.id ? (
                           <form

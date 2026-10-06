@@ -120,9 +120,10 @@ const trialLicense = (hours) => { const t = (d) => d.toISOString().slice(0, 19);
 
 /** Writes the config for fake-ams2.cjs (license: the trial's hours left, when there is one); returns its path */
 // (adsState: the PLC runtime's state, 5 Run by default, 6 Stop)
-function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = [], { sources = false, license = null, adsState } = {}) {
+// boot: { app, autostart }: its boot project's files in its boot folder (Plc/Port_851.app, .autostart)
+function writeSymbolsPlc(name = 'fake-ams2-sym.json', extra = [], { sources = false, license = null, adsState, boot = null } = {}) {
   const file = path.join(h.OUT, name);
-  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(adsState !== undefined ? { adsState } : {}), ...(sources || license !== null ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}) } } : {}) }));
+  fs.writeFileSync(file, JSON.stringify({ ...config, script: [...config.script, ...extra], ...(adsState !== undefined ? { adsState } : {}), ...(sources || license !== null || boot ? { bootFiles: { ...(sources ? plantBootFiles() : {}), ...(license !== null ? { '../License/TrialLicense.tclrs': trialLicense(license) } : {}), ...(boot?.app ? { 'Plc/Port_851.app': Buffer.from('app').toString('base64') } : {}), ...(boot?.autostart ? { 'Plc/Port_851.autostart': '' } : {}) } } : {}) }));
   return file;
 }
 

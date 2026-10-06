@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Pencil, RefreshCw, Star, X } from 'lucide-react';
 import type { AddRouteBoth, AddRouteResult, FoundPlc, PlcScanResult, RememberedPlc } from '../utils/plcDiscovery.ts';
 import { firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
-import { ALL_PLC_CONTROLS, PlcActionButtons, PlcActionConfirm, PlcActionHistory, PlcStateBadge, RenewLicenseSteps, needsRenew, plcActionDone, plcActions, plcStateText, stateChanges, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
+import { ALL_PLC_CONTROLS, PlcActionButtons, PlcActionConfirm, PlcActionHistory, PlcStateBadge, RenewLicenseSteps, needsRenew, noProgramWhy, plcActionDone, plcActions, plcStateText, stateChanges, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import { addPlcAction, loadPlcActions, type PlcActionEntry } from '../utils/plcActionLog.ts';
 
 export interface PickedPlc {
@@ -362,7 +362,16 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                 {checkMark(p.netId)}
               </div>
             ))}
-            {remembered.map((p) => <React.Fragment key={`renew-${p.netId}`}>{renewSteps(p.netId, rememberedStates[p.netId])}</React.Fragment>)}
+            {remembered.map((p) => (
+              <React.Fragment key={`renew-${p.netId}`}>
+                {renewSteps(p.netId, rememberedStates[p.netId])}
+                {noProgramWhy(rememberedStates[p.netId]) && !needsRenew(rememberedStates[p.netId]) && (
+                  <div className="live-plc-why ml-2 my-0.5 text-amber-200/90" data-netid={p.netId}>
+                    {p.name}: {noProgramWhy(rememberedStates[p.netId])}
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
           </div>
         )}
         {scan && (
@@ -440,6 +449,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                   </div>
                   {xaeText?.netId === d.netId && <div className="live-plc-xae-result ml-2 my-0.5 text-slate-400">{xaeText.text}</div>}
                   {renewSteps(d.netId, d.state)}
+                  {noProgramWhy(d.state) && !needsRenew(d.state) && <div className="live-plc-why ml-2 my-0.5 text-amber-200/90" data-netid={d.netId}>{noProgramWhy(d.state)}</div>}
                   {startFor?.netId === d.netId && (
                     <PlcActionConfirm idPrefix="live-plc-start" mode={startFor.mode} name={d.name || d.netId} state={d.state} busy={startBusy} onConfirm={() => doStart(d, startFor.mode)} onCancel={() => setStartFor(null)} />
                   )}
