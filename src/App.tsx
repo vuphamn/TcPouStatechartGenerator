@@ -335,7 +335,7 @@ import {
   loadUserPresets,
   BUILTIN_PRESETS,
 } from './utils/diagramPresets.ts';
-import { applyCustomStylesToMermaid } from './utils/nodeStyles.ts';
+import { applyCustomStylesToMermaid, extractStateNodesFromMermaid } from './utils/nodeStyles.ts';
 import { applyNotesToMermaid } from './utils/diagramNotes.ts';
 import { NodeOffsetsMap, type EdgeOffsetsMap } from './utils/nodeDragger.ts';
 import {
@@ -893,6 +893,8 @@ export const App: React.FC = () => {
   const availableEdges = useMemo(() => {
     return extractEdgesFromMermaid(outputMarkdown);
   }, [outputMarkdown]);
+  // (and the chart's states: the Complexity Report's sub-machines are scored from them)
+  const availableStates = useMemo(() => extractStateNodesFromMermaid(outputMarkdown), [outputMarkdown]);
 
   // Comprehensive POU Cyclomatic Complexity & Transition Density Report
   const pouComplexityReport = useMemo(() => {
@@ -9930,6 +9932,9 @@ export const App: React.FC = () => {
         createPortal(
           <PouComplexityReportTab
             report={pouComplexityReport}
+            pouContent={pouContent}
+            availableStates={availableStates}
+            availableEdges={availableEdges}
             onJumpToState={handleJumpToState}
             onOpenStateEditor={(stateId) => handleOpenEnumEditorModal(stateId)}
             onOpenMethodEditor={(methodName) => handleOpenMethodEditorModal(methodName)}

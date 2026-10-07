@@ -1,3 +1,5 @@
+import { SubMachineStats } from './SubMachineStats.tsx';
+import type { EdgeInfo, StateNodeInfo } from '../types.ts';
 import React, { useState, useMemo } from 'react';
 import {
   Activity,
@@ -40,6 +42,10 @@ export interface PouComplexityReportTabProps {
   onOpenStateEditor?: (stateId: string) => void;
   onOpenMethodEditor?: (methodName: string) => void;
   onToast?: (message: string, type?: 'success' | 'error') => void;
+  /** Its sub-machines' section: the POU, and the chart's states and transitions (their states' scores) */
+  pouContent?: string;
+  availableStates?: StateNodeInfo[];
+  availableEdges?: EdgeInfo[];
 }
 
 export type FilterCategory = 'all' | 'critical' | 'high' | 'moderate' | 'low' | 'refactor' | 'hubs';
@@ -51,6 +57,9 @@ export const PouComplexityReportTab: React.FC<PouComplexityReportTabProps> = ({
   onOpenStateEditor,
   onOpenMethodEditor,
   onToast,
+  pouContent,
+  availableStates = [],
+  availableEdges = [],
 }) => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<FilterCategory>('all');
@@ -465,6 +474,11 @@ export const PouComplexityReportTab: React.FC<PouComplexityReportTabProps> = ({
               </span>
             </div>
           </div>
+        </div>
+
+        {/* Sub-machines: each one's states, transitions, complexity */}
+        <div className="px-4">
+          <SubMachineStats id="report-sub-machines" pou={pouContent} availableStates={availableStates} availableEdges={availableEdges} onSelectState={(id) => onJumpToState(id)} />
         </div>
 
         {/* Section 2: Refactoring Opportunities & Action Plan */}

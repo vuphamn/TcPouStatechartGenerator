@@ -219,6 +219,23 @@ const sub = (x) => `${P}__readDiagnostics__${x}`;
   const m2 = await waitFor(nest, (x) => x.canvas >= 3);
   expect(m2.canvas >= 3, `expanded again (${m2.canvas})`);
 
+  // 12. Statistics and the Complexity Report: each sub-machine's section (Calibrate(), Measure() inside it)
+  const subStats = (sel) => p.evaluate((sel) => [...document.querySelectorAll(`${sel} [data-sub-machine]`)].map((c) => ({
+    id: c.getAttribute('data-sub-machine'),
+    states: c.querySelector('[data-stat="states"]')?.textContent ?? '',
+    transitions: c.querySelector('[data-stat="transitions"]')?.textContent ?? '',
+    max: c.querySelector('[data-stat="max"]')?.textContent ?? '',
+  })), sel);
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await p.click('#mermaid-canvas-area', { offset: { x: 30, y: 30 } }).catch(() => {});
+  if (!(await p.$('#stats-sub-machines'))) await p.keyboard.press('s');
+  const st = await waitFor(() => subStats('#stats-sub-machines'), (x) => x.length === 2, 8000);
+  expect(st.length === 2 && st[0].id === 'KTESTSTATION_CALIBRATING__Calibrate__' && st[0].states === '4 states' && /transitions/.test(st[0].transitions) && /M=\d/.test(st[0].max) && st[1].id === `${CM}__Measure__` && st[1].states === '3 states', `Statistics: Calibrate() and Measure() with their counts and complexity (${JSON.stringify(st)})`);
+  await p.click('#dock-tab-complexity').catch(() => {});
+  const rp = await waitFor(() => subStats('#report-sub-machines'), (x) => x.length === 2, 8000);
+  expect(rp.length === 2 && rp[1].states === '3 states', `the Complexity Report: the same sections (${rp.map((x) => x.id).join(', ')})`);
+  await p.click('#dock-tab-diagram').catch(() => {});
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

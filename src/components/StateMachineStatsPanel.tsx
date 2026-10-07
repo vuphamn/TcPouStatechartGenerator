@@ -28,6 +28,7 @@ import {
   Check,
 } from 'lucide-react';
 import { EdgeInfo, StateNodeInfo } from '../types.ts';
+import { SubMachineStats } from './SubMachineStats.tsx';
 import {
   StateMachineStatistics,
   calculateStateMachineStats,
@@ -710,6 +711,8 @@ export const StateMachineStatsPanel: React.FC<StateMachineStatsPanelProps> = ({
                 </div>
               </div>
             )}
+            {/* Sub-machines: each one's states, transitions, complexity */}
+            <SubMachineStats id="stats-sub-machines" pou={tcPouContent} availableStates={availableStates} availableEdges={availableEdges} onSelectState={onSelectState} />
           </div>
         )}
 
