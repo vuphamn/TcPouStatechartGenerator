@@ -102,6 +102,10 @@ fs.writeFileSync(cfgFile, JSON.stringify({
     expect(m2.inner.join() === 'Measure.MEAS_READ' && m2.boxes.includes(CM), `Measure() moves on: MEAS_READ marked (${JSON.stringify(m2)})`);
     const m3 = await waitFor((m) => m.inner.includes('Calibrate.CAL_CHECK'), 12000);
     expect(m3.inner.join() === 'Calibrate.CAL_CHECK' && !m3.boxes.includes(CM) && m3.boxes.includes(P), `Calibrate() leaves CAL_MEASURE: CAL_CHECK marked, Measure()'s gone (${JSON.stringify(m3)})`);
+    // (the Live tab's trail: each level's step, between the transitions, its method named)
+    await a.click('#dock-tab-live').catch(() => {});
+    const trail = await a.evaluate(() => [...document.querySelectorAll('#live-trail .live-trail-row[data-sub="true"]')].map((r) => r.textContent.replace(/^\d\d:\d\d:\d\d\.\d{3}/, '').replace(/\s+/g, ' ').trim()));
+    expect(trail.some((r) => /^Measure\(\): ?MEAS_SETTLE ?MEAS_READ/.test(r)) && trail.some((r) => /^Calibrate\(\): ?CAL_MEASURE ?CAL_CHECK/.test(r)), `the trail: both levels' steps (${trail.join(' | ')})`);
     const m4 = await waitFor((m) => !m.boxes.includes(P), 12000);
     expect(!m4.boxes.includes(P) && m4.inner.length === 0, `CALIBRATING left: no sub-machine marked (${JSON.stringify(m4)})`);
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

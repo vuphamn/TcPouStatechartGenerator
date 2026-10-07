@@ -26,7 +26,7 @@ export interface LiveRecording {
   values: { t: number; value: number }[];
   /** Guard values (PLC time), and where each variable was found */
   vars: { id: string; t: number; v: LiveValue | null }[];
-  watched: Record<string, { symbol?: string; type?: string; error?: string }>;
+  watched: Record<string, { symbol?: string; type?: string; error?: string; enumNames?: Record<string, string> }>;
   /** Samples were dropped at the limit */
   truncated?: boolean;
 }
@@ -67,8 +67,9 @@ export class LiveRecorder {
     }
   }
 
-  addWatched(vars: { id: string; symbol?: string; type?: string; error?: string }[]): void {
-    for (const v of vars) this.watched[v.id] = { symbol: v.symbol, type: v.type, error: v.error };
+  addWatched(vars: { id: string; symbol?: string; type?: string; error?: string; enumNames?: Record<string, string> }[]): void {
+    // (an enum's names, as the PLC gave them: a sub-machine's states named on replay too)
+    for (const v of vars) this.watched[v.id] = { symbol: v.symbol, type: v.type, error: v.error, ...(v.enumNames ? { enumNames: v.enumNames } : {}) };
   }
 
   get empty(): boolean {

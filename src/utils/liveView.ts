@@ -51,6 +51,17 @@ export interface LiveSession {
   unexpected: number;
   /** PC clock minus PLC clock (ms), from the latest sample: the time in state is shown on the PC clock */
   clockOffset?: number;
+  /** The sub-machines' steps (a state's own state machine, and one inside it, ...): their states' full ids */
+  subSteps?: LiveSubStep[];
+}
+
+/** A sub-machine's step while live: from / to its states' ids (<state>__<method>__<name>), at the PLC's time */
+export interface LiveSubStep {
+  t: number;
+  method: string;
+  from: string;
+  to: string;
+  dwellMs: number;
 }
 
 export const EMPTY_LIVE_SESSION: LiveSession = { current: null, transitions: [], unexpected: 0 };
@@ -87,7 +98,7 @@ export function applyLiveSamples(
   const clockOffset = samples.length ? Date.now() - samples[samples.length - 1].t : session.clockOffset;
   return current === session.current && !added && clockOffset === session.clockOffset
     ? session
-    : { current, transitions, unexpected, clockOffset };
+    : { ...session, current, transitions, unexpected, clockOffset };
 }
 
 /** "14:23:05.120" in local time */

@@ -446,7 +446,10 @@ export const LivePanel: React.FC<LivePanelProps> = ({
 
   const inState = session.current ? Math.max(0, now - (session.clockOffset ?? 0) - session.current.since) : 0;
   const stuck = status.state === 'connected' && !!limitMs && !!session.current && inState > limitMs;
-  const shown = session.transitions.slice(-MAX_SHOWN).reverse();
+  const shown: ((typeof session.transitions)[number] & { method?: string })[] = [...session.transitions, ...(session.subSteps ?? []).map((s) => ({ ...s, inModel: true }))]
+    .sort((a, b) => a.t - b.t)
+    .slice(-MAX_SHOWN)
+    .reverse();
   const statusColor =
     status.state === 'connected'
       ? 'text-emerald-300'
@@ -1486,18 +1489,20 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           shown.map((tr, i) => (
             <div
               key={`${tr.t}-${i}`}
+              data-sub={tr.method ? 'true' : undefined}
               className={`live-trail-row flex items-center gap-1.5 px-2.5 py-1 border-b border-slate-800/60 font-mono text-[11px] ${
                 tr.inModel ? '' : 'bg-rose-950/30'
-              }`}
-              title={tr.inModel ? undefined : 'This transition is not in the diagram'}
+              }${tr.method ? ' pl-6 text-[10px] bg-violet-950/20' : ''}`}
+              title={tr.inModel ? (tr.method ? `A step of ${tr.method}()` : undefined) : 'This transition is not in the diagram'}
             >
               <span className="text-slate-500 shrink-0">{formatClock(tr.t)}</span>
+              {tr.method && <span className="text-violet-300 shrink-0">{tr.method}():</span>}
               <button onClick={() => onSelectState(tr.from)} className="text-slate-400 hover:text-sky-300 truncate min-w-0" title={tr.from}>
-                {tr.from}
+                {tr.method ? tr.from.split('__').pop() : tr.from}
               </button>
               <ArrowRight className={`w-3 h-3 shrink-0 ${tr.inModel ? 'text-slate-500' : 'text-rose-400'}`} />
               <button onClick={() => onSelectState(tr.to)} className="text-slate-200 hover:text-sky-300 truncate min-w-0" title={tr.to}>
-                {tr.to}
+                {tr.method ? tr.to.split('__').pop() : tr.to}
               </button>
               <span className="ml-auto text-slate-500 shrink-0" title={`Time in ${tr.from}`}>
                 {formatDuration(tr.dwellMs)}

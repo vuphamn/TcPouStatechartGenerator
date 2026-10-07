@@ -237,7 +237,7 @@ import { ForkJoinDialog, ForkJoinRequest } from './components/ForkJoinDialog.tsx
 import { SimulationPanel, SimTransition } from './components/SimulationPanel.tsx';
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
-import { EMPTY_LIVE_SESSION, LiveSession, applyLiveSamples, enumValueMap, recheckInModel } from './utils/liveView.ts';
+import { EMPTY_LIVE_SESSION, LiveSession, MAX_LIVE_TRANSITIONS, applyLiveSamples, enumValueMap, recheckInModel } from './utils/liveView.ts';
 import {
   buildEnumTables,
   buildGuardEdges,
@@ -7613,6 +7613,27 @@ export const App: React.FC = () => {
     return levels;
   }, [liveActive, liveSession.current?.state, subMachines, liveVarValues, liveWatched, liveEnums]);
   const liveSubWatchKey = liveSubLevels.map((L) => L.watchId).join('|');
+  // Each level's step, kept in the session (the trail, a recording): its state changed while it ran; at the PLC's time
+  const liveSubPrevRef = useRef<Record<string, { state: string; since: number }>>({});
+  useEffect(() => {
+    if (!liveActive) {
+      liveSubPrevRef.current = {};
+      return;
+    }
+    const now = Date.now() - (liveSession.clockOffset ?? 0);
+    const prev = liveSubPrevRef.current;
+    const next: Record<string, { state: string; since: number }> = {};
+    const steps: NonNullable<LiveSession['subSteps']> = [];
+    for (const L of liveSubLevels) {
+      if (!L.state) continue;
+      const was = prev[L.watchId];
+      if (was && was.state !== L.state) steps.push({ t: now, method: L.m.method, from: L.id(was.state), to: L.id(L.state), dwellMs: Math.max(0, now - was.since) });
+      next[L.watchId] = was && was.state === L.state ? was : { state: L.state, since: now };
+    }
+    liveSubPrevRef.current = next;
+    if (steps.length) setLiveSession((s) => ({ ...s, subSteps: [...(s.subSteps ?? []), ...steps].slice(-MAX_LIVE_TRANSITIONS) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveActive, liveSubLevels]);
   const liveRegionStates = useMemo(
     () => [
       ...liveRegions
