@@ -168,6 +168,7 @@ import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTI
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
 import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
+import { checkExtractSubMachine, defaultSubMachineState, extractSubMachine } from './utils/extractSubMachine.ts';
 import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
@@ -3721,6 +3722,36 @@ export const App: React.FC = () => {
     },
     [knownStates, regionOf, pouContent, dutContent, compositeNames, handleReplaceSources, dropNodeOffset, showCopyToast]
   );
+  // Extract to sub-machine (the selection's menu): the states moved into a method of their own, called from a new state
+  const handleExtractSubMachine = useCallback(
+    (ids: string[]) => {
+      const states = ids.filter((x) => knownStates.has(x) && !regionOf.has(x) && !x.includes('__'));
+      if (states.length < 2 || !pouContent || !dutContent.trim()) return;
+      const sv = identifiedStatesResult.stateVarName || stateVarName;
+      setPromptRequest({
+        title: `Extract ${states.length} states to a sub-machine`,
+        label: `The method's name. ${states.join(', ')} become its states (its own CASE, an INT with a constant each), run while a new state, ${defaultSubMachineState(states, 'Name')}, is current; a transition leaving them is its exit, that state's transition. Ctrl+Z undoes.`,
+        initial: 'Sequence',
+        monospace: true,
+        submitLabel: 'Extract',
+        validate: (v) => checkExtractSubMachine(pouContent, dutContent, states, v, defaultSubMachineState(states, v), sv),
+        onSubmit: (method) => {
+          const r = extractSubMachine(pouContent, dutContent, states, method, sv);
+          if ('error' in r) return showCopyToast(`Could not extract them: ${r.error}`, 'error', 7000);
+          handleReplaceSources(r.pou, r.dut);
+          states.forEach(dropNodeOffset);
+          setMultiSelected([]);
+          const p = r.plan;
+          showCopyToast(
+            `${p.state}: ${states.length} states in ${p.method}(), starting in ${p.entry}${p.exits.length ? `; its exits: ${p.exits.map((e) => e.to).join(', ')}` : ''}${p.enteredAt.length ? `; the transitions into ${p.enteredAt.join(', ')} now enter at ${p.entry}` : ''} (Ctrl+Z undoes)`,
+            'success',
+            9000
+          );
+        },
+      });
+    },
+    [knownStates, regionOf, pouContent, dutContent, identifiedStatesResult.stateVarName, stateVarName, handleReplaceSources, dropNodeOffset, showCopyToast]
+  );
   // A state's node released over another {region} composite (or out of its own): it moves there
   const handleStateDropped = useCallback(
     // (Alt no longer needed: a state dropped in a composite's box is in it, dropped outside its box it is out of it)
@@ -4790,6 +4821,8 @@ export const App: React.FC = () => {
           title: 'Every transition in or out of the selected states laid out again, each straight or with as few turns as it can, clear of the other states; the states stay where they are (one Ctrl+Z puts them back)',
           onSelect: () => relayoutTransitionsOf(many, `the ${n} states`),
         });
+        if (pouContent && many.filter((x) => !x.includes('__')).length >= 2)
+          items.push({ id: 'multi-extract-sub-machine-btn', label: 'Extract to sub-machine…', icon: <Layers className="w-3.5 h-3.5" />, title: 'These states into a method of their own (a sub-machine), run from a new state in their place; their transitions out its exits (Ctrl+Z undoes)', onSelect: () => handleExtractSubMachine(many) });
         items.push({ id: 'multi-snap-each-btn', label: `${groupSnapEach ? '✓ ' : ''}Snap each to the grid when moved`, icon: <Grid3x3 className="w-3.5 h-3.5" />, title: 'With snapping on: each of the selected states on the grid when they are moved together (else they keep their places to the one dragged)', onSelect: () => setGroupSnapEach(!groupSnapEach) });
         if (pouContent) items.push({ id: 'multi-copy-btn', label: `Copy the ${n} states`, icon: <ClipboardPaste className="w-3.5 h-3.5" />, title: 'Ctrl+C; then Ctrl+V pastes copies of them, the transitions between them going to the copies', onSelect: () => handleCopyState(many) });
         items.push({ id: 'multi-clear-btn', label: 'Clear the selection', icon: <X className="w-3.5 h-3.5" />, title: 'Esc', onSelect: () => setMultiSelected([]) });
