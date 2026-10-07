@@ -136,6 +136,8 @@ async function devServer() {
         return i >= 0 ? args[i + 1] : null;
       })();
       if (summary) fs.appendFileSync(summary, md);
+      // (on CI: each flagged clip an annotation too, readable without signing in, unlike the summary)
+      if (process.env.GITHUB_ACTIONS) for (const f of flagged) console.log(`::error title=demo/${f.name}::${f.why.replace(/\r?\n/g, ' ').slice(0, 400)}`);
       process.exitCode = flagged.length ? 1 : 0;
     }
   } finally {
