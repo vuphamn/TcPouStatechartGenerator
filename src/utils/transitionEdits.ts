@@ -551,8 +551,8 @@ function conditionHead(s: Scope, line: number, col: number): ConditionHead | nul
 }
 
 /** A transition's own condition as written (its IF / ELSIF), for editing; '' when it has none */
-export function transitionCondition(pouXml: string, edge: EdgeRef, stateVar: string): { method: TransitionMethod; condition: string; line: number } | { error: string } {
-  const s = edgeScope(pouXml, edge, stateVar);
+export function transitionCondition(pouXml: string, edge: EdgeRef, stateVar: string, inMethod?: string): { method: TransitionMethod; condition: string; line: number } | { error: string } {
+  const s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   const index = pick(pouXml, s, edge);
   if (index < 0) return notFound(s.method, edge, stateVar);
@@ -574,10 +574,10 @@ function compositeCondition(cond: string, stateVar: string): { prefix: string; c
  * The edge's transition gets another condition: its IF / ELSIF head is rewritten on one line (a composite's
  * exception keeps its state range). Without an IF of its own, the assignment is put in one.
  */
-export function setTransitionCondition(pouXml: string, edge: EdgeRef, condition: string, stateVar: string): TransitionEditResult {
+export function setTransitionCondition(pouXml: string, edge: EdgeRef, condition: string, stateVar: string, inMethod?: string): TransitionEditResult {
   const cond = condition.trim();
   if (!cond) return { error: 'Enter a condition (TRUE for always)' };
-  const s = edgeScope(pouXml, edge, stateVar);
+  const s = edgeScope(pouXml, edge, stateVar, inMethod);
   if ('error' in s) return s;
   const index = pick(pouXml, s, edge);
   if (index < 0) return notFound(s.method, edge, stateVar);

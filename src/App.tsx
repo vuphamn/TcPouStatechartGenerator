@@ -3278,9 +3278,11 @@ export const App: React.FC = () => {
   const handleEditCondition = useCallback(
     (edge: EdgeInfo) => {
       if (!pouContent) return;
-      const e = currentEdge(edge);
-      const sv = varFor(e.from);
-      const c = transitionCondition(pouContent, e, sv);
+      // (a sub-machine's transition: its condition in its method, on its own variable)
+      const sub = subEdgeOf(currentEdge(edge));
+      const e = sub ? { ...currentEdge(edge), ...sub.ref } : currentEdge(edge);
+      const sv = sub ? sub.variable : varFor(e.from);
+      const c = transitionCondition(pouContent, e, sv, sub?.method);
       if ('error' in c) {
         showCopyToast(c.error, 'error', 6000);
         return;
@@ -3302,7 +3304,7 @@ export const App: React.FC = () => {
         validate: (v) => (v ? null : 'Enter a condition (TRUE for always)'),
         onSubmit: (condition, declarations) => {
           if (condition === c.condition && !declarations?.length) return;
-          const r = setTransitionCondition(pouContent, e, condition, sv);
+          const r = setTransitionCondition(pouContent, e, condition, sv, sub?.method);
           if ('error' in r) return showCopyToast(r.error, 'error', 6000);
           const u = updateMethodCodeInPou(pouContent, r.method, r.code);
           if (!u.success) return showCopyToast(u.error || 'Could not change the condition', 'error');
@@ -3314,7 +3316,7 @@ export const App: React.FC = () => {
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouContent, currentEdge, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult]
+    [pouContent, currentEdge, stateVarName, showCopyToast, handleReplaceSources, identifiedStatesResult, subEdgeOf]
   );
   // A state's whole code (its CASE branch), as written
   const handleEditStateCode = useCallback(

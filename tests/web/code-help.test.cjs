@@ -157,7 +157,8 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
   // 4. The Transition Guard window's Edit condition
   await p.mouse.click(ep.x, ep.y);
   await h.sleep(120);
-  await p.mouse.click(ep.x, ep.y);
+  // (the second as a real double-click: the browser counts it, whatever the first one took the page)
+  await p.mouse.click(ep.x, ep.y, { clickCount: 2 });
   await p.waitForSelector('#guard-inspector-edit-condition-btn', { timeout: 4000 }).catch(() => {});
   expect(!!(await p.$('#guard-inspector-edit-condition-btn')), 'the Guard window: Edit condition');
   await p.click('#guard-inspector-edit-condition-btn').catch(() => {});

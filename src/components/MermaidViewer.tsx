@@ -38,6 +38,7 @@ import {
   Lock,
   Unlock,
   Code2,
+  PencilLine,
   ListFilter,
   Workflow,
   Printer,
@@ -2258,13 +2259,15 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
    * Guard & Condition Inspector.
    */
   const lastEdgeClickRef = useRef<{ id: string; t: number } | null>(null);
-  const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, _wasSelected?: boolean) => {
+  // (at: the click's own time, its event's timeStamp: a busy canvas handling the first click late does not make the
+  // second one too slow for a double-click; clicks: the browser's own count, a double-click by Windows' own timing)
+  const activateEdgeClick = (edge: EdgeInfo, anchor: { x: number; y: number }, _wasSelected?: boolean, at?: number, clicks?: number) => {
     setSelectedEdge(edge);
-    const now = Date.now();
+    const now = at ?? performance.now();
     const last = lastEdgeClickRef.current;
     // (one click can be reported twice, by mouse-up and by click: that is not a second click)
     const repeat = !!last && last.id === edge.id && now - last.t <= 40;
-    const double = !!last && last.id === edge.id && now - last.t > 40 && now - last.t < 500;
+    const double = !!last && last.id === edge.id && ((clicks ?? 0) >= 2 ? !repeat : now - last.t > 40 && now - last.t < 500);
     if (!repeat) lastEdgeClickRef.current = { id: edge.id, t: double ? 0 : now };
     if (double) {
       toggleConditionOverlay(edge, anchor);
@@ -5962,7 +5965,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         const edge = resolveEdgeFromElement(el, svg, availableEdges);
         if (edge && edge.from && edge.to) {
           const rect = el.getBoundingClientRect();
-          activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id);
+          activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id, e.timeStamp, e.detail);
           edgeClickHandledRef.current = true;
           return;
         }
@@ -6160,7 +6163,9 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
         activateEdgeClick(
           clickedEdge,
           { x: rect.left + rect.width / 2, y: rect.top },
-          edgePressedRef.current ? edgeSelectedBeforePressRef.current : selectedEdge?.id === clickedEdge.id
+          edgePressedRef.current ? edgeSelectedBeforePressRef.current : selectedEdge?.id === clickedEdge.id,
+          e.timeStamp,
+          e.detail
         );
         edgeClickHandledRef.current = true;
 
@@ -7104,7 +7109,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       const edge = resolveEdgeFromElement(labelOrBadgeEl, svg, availableEdges);
       if (edge && edge.from && edge.to) {
         const rect = labelOrBadgeEl.getBoundingClientRect();
-        activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id);
+        activateEdgeClick(edge, { x: rect.left + rect.width / 2, y: rect.top }, selectedEdge?.id === edge.id, e.timeStamp, e.detail);
       }
     }
   };
@@ -8317,6 +8322,23 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
                     className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800"
                   >
                     <Code2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {onEditTransitionCondition && hoveredEdgeCondition.edge.from !== '[*]' && (
+                  <button
+                    id="guard-popup-edit-condition"
+                    type="button"
+                    title="Edit its condition here, on its label (in the code where it is: doState(), preProcess(), a sub-machine's method)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const edge = hoveredEdgeCondition.edge;
+                      setGuardPinned(false);
+                      setHoveredEdgeCondition(null);
+                      onEditTransitionCondition(edge);
+                    }}
+                    className="p-1 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800"
+                  >
+                    <PencilLine className="w-3.5 h-3.5" />
                   </button>
                 )}
                 <button
