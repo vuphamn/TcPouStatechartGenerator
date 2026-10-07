@@ -114,6 +114,8 @@ export interface StructuredTextCodeEditorProps {
   onContextMenu?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
   /** Bookmarked lines (1-based original line numbers): a mark in the gutter */
   bookmarkLines?: number[];
+  /** A line's own hover text (the Enum Editor: a member's CASE branch), when no problem or name says more */
+  lineTitle?: (line: number, text: string) => string | null;
   /** A click on the bookmark margin of a line (its mark, or the faint one a row shows on hover): toggle it */
   onBookmarkClick?: (line: number) => void;
   /** Completion (Ctrl+Space, and after a dot): the names the code sees */
@@ -150,6 +152,7 @@ export const StructuredTextCodeEditor = forwardRef<
       onContextMenu,
       bookmarkLines,
       onBookmarkClick,
+      lineTitle,
       completionScope,
       markers,
       inlineValues,
@@ -1066,7 +1069,7 @@ export const StructuredTextCodeEditor = forwardRef<
             }}
             onMouseUp={() => completionScope && requestAnimationFrame(refreshSignature)}
             onMouseMove={(e) => {
-              if (!markers?.length && !completionScope) return;
+              if (!markers?.length && !completionScope && !lineTitle) return;
               const ta = e.currentTarget;
               const r = ta.getBoundingClientRect();
               const viewIdx = Math.floor((e.clientY - r.top - 8 + ta.scrollTop) / lineH);
@@ -1075,7 +1078,8 @@ export const StructuredTextCodeEditor = forwardRef<
               const text = line ? value.split('\n')[line - 1] ?? '' : '';
               // A problem's message, else what the name under the pointer is (its type, block and comment)
               const hit = line && markers ? markers.find((m) => m.line === line && visualColumn(text, m.start) <= col && col <= visualColumn(text, m.end)) : undefined;
-              const title = hit ? hit.message : line && completionScope ? describeName(completionScope(), text, indexAtVisual(text, Math.floor(col))) ?? '' : '';
+              const named = !hit && line && completionScope ? describeName(completionScope(), text, indexAtVisual(text, Math.floor(col))) : null;
+              const title = hit ? hit.message : named ?? (line && lineTitle ? lineTitle(line, text) ?? '' : '');
               if (ta.title !== title) ta.title = title;
             }}
             onScroll={handleScroll}

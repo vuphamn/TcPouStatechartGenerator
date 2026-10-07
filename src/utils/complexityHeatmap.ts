@@ -241,7 +241,7 @@ export const HEATMAP_PALETTES: Record<HeatmapPalette, {
 /**
  * Extracts Structured Text code corresponding to a specific state from doState() in POU
  */
-function extractStateCodeFromPou(tcPouContent: string, stateId: string): string {
+export function extractStateCodeFromPou(tcPouContent: string, stateId: string): string {
   if (!tcPouContent) return '';
 
   // A sub-machine's state (<state>__<method>__<name>): its branch in that method's CASE

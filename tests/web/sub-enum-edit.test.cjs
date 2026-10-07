@@ -64,6 +64,17 @@ END_TYPE
   const e1 = await waitFor(enumNow, (x) => /E_KTestStation_CalStates/.test(x.text));
   expect(/E_KTestStation_CalStates/.test(e1.text) && !e1.note, `Calibrate()'s enum, from its .TcDUT: editable (note: "${e1.note}")`);
 
+  // Hovering a member's line: its CASE branch, in Calibrate()
+  const hoverTitle = await p.evaluate(() => {
+    const ta = document.getElementById('st-dut-editor');
+    const i = ta.value.split('\n').findIndex((l) => /^\s*CAL_CHECK\b/.test(l));
+    const lh = parseFloat(getComputedStyle(ta).lineHeight);
+    const r = ta.getBoundingClientRect();
+    ta.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: r.left + 30, clientY: r.top + 8 + (i + 0.5) * lh - ta.scrollTop }));
+    return ta.title;
+  });
+  expect(/CAL_CHECK: its CASE branch/.test(hoverTitle) && /rMeasured >= 0\.0/.test(hoverTitle), `hovering CAL_CHECK: its branch in Calibrate() (${hoverTitle.split('\n').slice(0, 3).join(' / ')})`);
+
   // An edit: a new member after CAL_DONE; kept with Ctrl+S; unsaved; Save writes that file
   await p.evaluate(() => {
     const ta = document.getElementById('st-dut-editor');

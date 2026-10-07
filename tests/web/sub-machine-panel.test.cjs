@@ -154,6 +154,26 @@ const sub = (x) => `${P}__readDiagnostics__${x}`;
   const e3 = await enumAt();
   expect(!!e3 && e3.machine && !e3.note && /^KANALOGMEASURE_READY\b/.test(e3.line), `KANALOGMEASURE_READY selected: the Enum Editor its enum again, editable (${JSON.stringify(e3)})`);
 
+  // 8b. A sub-machine state's card, right-clicked: Go to code (its CASE label in its method), Add bookmark (its node)
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await p.click(`#state-list-item-${sub('DIAG_READ_LOG_MESSAGE')}`, { button: 'right' });
+  await p.waitForSelector('#state-list-goto-code-btn', { timeout: 3000 }).catch(() => {});
+  await p.click('#state-list-goto-code-btn').catch(() => {});
+  await h.sleep(1500);
+  const went = await p.evaluate(() => {
+    const ta = document.getElementById('method-implementation-editor');
+    const box = document.getElementById('method-selector-combobox');
+    const n = Number(document.querySelector('[data-highlighted-line]')?.getAttribute('data-highlighted-line'));
+    return { method: (box?.value || '').trim(), line: n && ta ? ta.value.split('\n')[n - 1]?.trim() ?? '' : '' };
+  });
+  expect(/readDiagnostics/.test(went.method) && /DIAG_READ_LOG_MESSAGE\s*:/.test(went.line), `its card's Go to code: readDiagnostics() at its CASE label (${JSON.stringify(went)})`);
+  await p.click('#dock-tab-diagram').catch(() => {});
+  await p.click(`#state-list-item-${sub('DIAG_READ_LOG_MESSAGE')}`, { button: 'right' });
+  await p.waitForSelector('#state-list-bookmark-btn', { timeout: 3000 }).catch(() => {});
+  await p.click('#state-list-bookmark-btn').catch(() => {});
+  const ribbon2 = await waitFor(() => p.evaluate((id) => !!document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"] g.state-bookmark-marker`), sub('DIAG_READ_LOG_MESSAGE')), (x) => x);
+  expect(ribbon2, 'its card\'s Add bookmark: the ribbon on its node');
+
   // 9. Bookmarked, its sub-machine expanded (the state a box): its ribbon at the box's corner
   await p.click('#dock-tab-diagram').catch(() => {});
   await p.click(`#state-list-item-${P}`, { button: 'right' });

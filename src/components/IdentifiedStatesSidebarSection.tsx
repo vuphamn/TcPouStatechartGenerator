@@ -58,6 +58,8 @@ export interface IdentifiedStatesSidebarSectionProps {
    * state's card (ids <state>__<method>__<name>, as on the canvas), shown while expanded (the canvas' setting)
    */
   subMachines?: { parent: string; method: string; states: string[]; start: string | null; transitions: { from: string; to: string }[]; expanded: boolean }[];
+  /** A card's menu: its state's CASE label in the Method Editor */
+  onGoToCode?: (stateId: string) => void;
   /** Expand / collapse a sub-machine (the canvas too) */
   onToggleSubMachine?: (parent: string, method: string, expanded: boolean) => void;
   /** Live or simulated: the sub-machines' states current inside the current state (their full ids, outer first) */
@@ -89,6 +91,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   subMachines,
   onToggleSubMachine,
   liveSubStateIds,
+  onGoToCode,
 }) => {
   // (a sub-machine state's id: its state's card holds it)
   // (the outermost: its card is in the list; a nested one's inside its sub-machine's)
@@ -394,6 +397,15 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                     e.stopPropagation();
                     handleItemClick(id, name);
                   }}
+                  onContextMenu={
+                    onToggleBookmark || onGoToCode
+                      ? (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCardMenu({ x: e.clientX, y: e.clientY, id });
+                        }
+                      : undefined
+                  }
                   className={`relative flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                     isJustNavigated
                       ? 'bg-sky-950/80 border-sky-400 ring-2 ring-sky-400/80 text-white'
@@ -715,7 +727,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                     data-live={isLive ? 'true' : undefined}
                     onClick={() => handleItemClick(state.id, state.label)}
                     onContextMenu={
-                      onToggleBookmark
+                      onToggleBookmark || onGoToCode
                         ? (e) => {
                             e.preventDefault();
                             setCardMenu({ x: e.clientX, y: e.clientY, id: state.id });
@@ -967,20 +979,37 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
           )}
         </div>
       )}
-      {cardMenu && onToggleBookmark && (
+      {cardMenu && (onToggleBookmark || onGoToCode) && (
         <div
           id="state-list-menu"
           role="menu"
           style={{ left: Math.min(cardMenu.x, window.innerWidth - 230), top: Math.min(cardMenu.y, window.innerHeight - 90) }}
           className="fixed z-50 w-56 bg-slate-900/95 border border-slate-700/80 rounded-lg shadow-2xl p-1 text-xs"
         >
-          <div className="px-2.5 py-1 text-[10px] font-mono text-slate-400 truncate border-b border-slate-800 mb-1">{cardMenu.id}</div>
+          <div className="px-2.5 py-1 text-[10px] font-mono text-slate-400 truncate border-b border-slate-800 mb-1">{cardMenu.id.split('__').pop()}</div>
+          {onGoToCode && (
+            <button
+              id="state-list-goto-code-btn"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onGoToCode(cardMenu.id);
+                setCardMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
+              title="Its CASE label in the Method Editor (a sub-machine's state: in its method)"
+            >
+              <Code2 className="w-3.5 h-3.5 text-slate-400" />
+              Go to code
+            </button>
+          )}
+          {onToggleBookmark && (
           <button
             id="state-list-bookmark-btn"
             type="button"
             role="menuitem"
             onClick={() => {
-              onToggleBookmark(cardMenu.id);
+              onToggleBookmark?.(cardMenu.id);
               setCardMenu(null);
             }}
             className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
@@ -989,6 +1018,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
             <Bookmark className={`w-3.5 h-3.5 ${bookmarkSet.has(cardMenu.id) ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
             {bookmarkSet.has(cardMenu.id) ? 'Remove bookmark' : 'Add bookmark'}
           </button>
+          )}
           {onShowBookmarks && (
             <button
               id="state-list-bookmarks-btn"

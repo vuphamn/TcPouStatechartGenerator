@@ -3031,6 +3031,19 @@ export const App: React.FC = () => {
     },
     [pouContent, showCopyToast, handleOpenInspectorPanel]
   );
+  // Go to code for a state (Identified States' card menu): its CASE label, in doState() or its sub-machine's method
+  const handleGoToStateCode = useCallback(
+    (id: string) => {
+      const loc = locateState(pouContent, id);
+      if (!loc) {
+        showCopyToast(`${id.split('__').pop()} has no CASE branch${subMachineId(pouContent, id) ? ` in ${subMachineId(pouContent, id)!.method}()` : ' in doState()'}`, 'error');
+        return;
+      }
+      handleOpenInspectorPanel('method', { method: `${loc.method}()` });
+      setCodeJump({ method: loc.method, line: loc.line, nonce: Date.now() });
+    },
+    [pouContent, showCopyToast, handleOpenInspectorPanel]
+  );
   // Go to code (an edge's menu, its guard popup): its condition in doState() or preProcess(), in the Method Editor; an
   // edge from a composite's border: its transition's (the first of several: the others in its guard popup)
   const handleGoToEdgeCode = useCallback(
@@ -8995,6 +9008,7 @@ export const App: React.FC = () => {
               transitionCounts={edgeMembersAll.size ? stateTransitionCounts : undefined}
               subMachines={identifiedSubMachines}
               onToggleSubMachine={setSubMachineExpanded}
+              onGoToCode={pouContent ? handleGoToStateCode : undefined}
               liveSubStateIds={(liveActive ? liveRegionStates : simHighlight?.regionStates ?? []).filter((x) => x.includes('__'))}
               selectedStateId={selectedStateId}
               focusStateId={codeFocus?.state ?? null}

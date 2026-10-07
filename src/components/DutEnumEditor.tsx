@@ -7,6 +7,7 @@ import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from '
 import { enumMemberAt, publishCodeFocus, usePersistedFlag, type CodeFocus } from '../utils/codeFocus.ts';
 import { GitCompare } from 'lucide-react';
 import { editorServices } from '../utils/openType.ts';
+import { extractStateCodeFromPou } from '../utils/complexityHeatmap.ts';
 import { createPortal } from 'react-dom';
 import {
   FileCode,
@@ -284,6 +285,23 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
     }
     return parseDutContent(stCode);
   }, [viewMode, rawXmlCode, stCode]);
+
+  // A member's CASE branch (doState()'s; a sub-machine's enum: its method's), shown on hover over its line or row
+  const branchTitle = useCallback(
+    (member: string) => {
+      if (!pouContent || !member) return null;
+      const code = extractStateCodeFromPou(pouContent, `${memberIdPrefix ?? ''}${member}`).replace(/\s+$/, '');
+      if (!code.trim()) return `${member}: no CASE branch of its own`;
+      const lines = code.split('\n');
+      const shown = lines.length > 24 ? [...lines.slice(0, 24), `… (${lines.length - 24} more lines)`] : lines;
+      return `${member}: its CASE branch\n\n${shown.join('\n')}`;
+    },
+    [pouContent, memberIdPrefix]
+  );
+  const memberLineTitle = useCallback((_line: number, text: string) => {
+    const m = text.replace(/\/\/.*$/, '').match(/^\s*,?\s*([A-Za-z_]\w*)\s*(?::=|,|\)|$)/);
+    return m && !/^(TYPE|END_TYPE|STRUCT|END_STRUCT)$/i.test(m[1]) ? branchTitle(m[1]) : null;
+  }, [branchTitle]);
 
   // Extract set of states present in the .TcPOU logic (to show whether state is referenced in doState / POU)
   const referencedStatesInPou = useMemo(() => {
@@ -1211,6 +1229,7 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
             id="st-dut-editor"
             value={stCode}
             onChange={(val) => !readOnlyNote && setStCode(val)}
+            lineTitle={memberLineTitle}
             highlightedLine={flashLine?.view === 'st' ? flashLine.line : null}
             liveLine={liveStateId ? memberLine(liveStateId, 'st') || null : null}
             enableCodeFolding={true}
@@ -1325,8 +1344,8 @@ export const DutEnumEditor: React.FC<DutEnumEditorProps> = ({
                             {idx + 1}
                           </td>
 
-                          {/* State Name */}
-                          <td className="py-2 px-3 font-semibold text-sky-300">
+                          {/* State Name (its CASE branch on hover) */}
+                          <td className="py-2 px-3 font-semibold text-sky-300" title={branchTitle(item.name) ?? undefined}>
                             {item.name}
                           </td>
 
