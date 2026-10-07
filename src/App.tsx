@@ -10241,7 +10241,8 @@ export const App: React.FC = () => {
           unsavedCount={isXaeHost() ? hostDirtyFiles.length : localDirtyCount}
           changedInXae={!!hostConflict}
           statesCount={identifiedStatesResult.states.length}
-          transitionsCount={availableEdges.length}
+          // (a link into a choice is no transition of its own: the one out of it is)
+          transitionsCount={availableEdges.filter((e) => !/^choice_/.test(e.to)).length}
           errors={activeLintFindings.filter((f) => f.severity === 'error').length}
           warnings={activeLintFindings.filter((f) => f.severity === 'warning').length}
           onOpenProblems={() => showDockTab('problems')}

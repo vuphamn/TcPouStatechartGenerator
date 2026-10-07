@@ -126,6 +126,10 @@ export interface Transition {
   redirectedFrom?: string | null;
   /** In a state's top-level IF: which one and which arm (IF 0, ELSIF 1, …) */
   choice?: { id: number; arm: number };
+  /** The IF (or CASE) inside that arm: a choice of its own after the first one's arm (cond: the arm's condition) */
+  choice2?: { id: number; arm: number; cond: string | null };
+  /** (the first choice a CASE inside the state's branch: its arms can hold choices of their own) */
+  choiceCase?: boolean;
   /** A composite's edge collapsed from several (Collapse error-sink edges): the transitions of the code it stands for */
   collapsed?: Transition[];
   redirectedTo?: string | null;
@@ -588,6 +592,8 @@ function parseDoState(
           priority: currentPrio,
           // (its top-level IF and arm: a choice)
           choice: ifStack.length && ifStack[0].id ? { id: ifStack[0].id, arm: ifStack[0].negatedPriorConds.length } : undefined,
+          choiceCase: !!ifStack[0]?.caseSel,
+          choice2: ifStack.length > 1 && ifStack[1].id ? { id: ifStack[1].id, arm: ifStack[1].negatedPriorConds.length, cond: ifStack[0].currentCond } : undefined,
           source: 'doState',
           effectiveFrom: currentState,
           effectiveTo: target,
@@ -1808,6 +1814,7 @@ function buildMermaid(
 
   // Choices: per state, a top-level IF whose arms hold two or more of its (not redirected) transitions
   const choiceOf = new Map<Transition, string>();
+  const choiceOf2 = new Map<Transition, { id: string; parent: string; via: string | null }>();
   const choicesOf = new Map<string, string[]>();
   if (choiceNodes) {
     const arms = new Map<string, Set<number>>();
@@ -1821,8 +1828,36 @@ function buildMermaid(
       const list = choicesOf.get(t.from) ?? [];
       if (!list.includes(id)) choicesOf.set(t.from, [...list, id]);
     }
+    // (a nested CASE's arm holding an IF of two or more transitions: its own choice after the arm, the arm's condition
+    // on the way; an IF's arms do not: their guards say it)
+    const arms2 = new Map<string, Set<number>>();
+    const key2 = (t: Transition) => `${key(t)}#${t.choice!.arm}#${t.choice2!.id}`;
+    for (const t of uniq) if (choiceOf.has(t) && t.choice2 && t.choiceCase) arms2.set(key2(t), (arms2.get(key2(t)) ?? new Set()).add(t.choice2.arm));
+    for (const t of uniq) {
+      if (!choiceOf.has(t) || !t.choice2 || !t.choiceCase || (arms2.get(key2(t))?.size ?? 0) < 2) continue;
+      const id = `choice_${san(t.from)}_${t.choice2.id}`;
+      choiceOf2.set(t, { id, parent: choiceOf.get(t)!, via: t.choice2.cond });
+      const list = choicesOf.get(t.from) ?? [];
+      if (!list.includes(id)) choicesOf.set(t.from, [...list, id]);
+    }
   }
   const choiceLinked = new Set<string>();
+  // (a transition's choice to leave from: the second level's when it has one; the links to it drawn once)
+  const choiceLinks = (t: Transition, link: (from: string, to: string, label: string | null) => void): string | undefined => {
+    const first = choiceOf.get(t);
+    if (!first) return undefined;
+    if (!choiceLinked.has(first)) {
+      choiceLinked.add(first);
+      link(san(t.from), first, null);
+    }
+    const second = choiceOf2.get(t);
+    if (!second) return first;
+    if (!choiceLinked.has(second.id)) {
+      choiceLinked.add(second.id);
+      link(second.parent, second.id, second.via ?? 'else');
+    }
+    return second.id;
+  };
 
   if (flowchartOutput) {
     const lines: string[] = ['flowchart TD'];
@@ -1861,12 +1896,8 @@ function buildMermaid(
       if (t.effectiveFrom === t.effectiveTo) continue;
 
       const lbl = formatTransitionLabel(t);
-      const choice = choiceOf.get(t);
+      const choice = choiceLinks(t, (a, b, l) => lines.push(l ? `    ${a} -->|"${flowLabel(l)}"| ${b}` : `    ${a} --> ${b}`));
       if (choice) {
-        if (!choiceLinked.has(choice)) {
-          choiceLinked.add(choice);
-          lines.push(`    ${san(t.from)} --> ${choice}`);
-        }
         lines.push(lbl ? `    ${choice} -->|"${flowLabel(lbl)}"| ${san(t.effectiveTo)}` : `    ${choice} --> ${san(t.effectiveTo)}`);
         recordEdge(t, lbl ? flowLabel(lbl) : '', choice);
         continue;
@@ -1909,12 +1940,8 @@ function buildMermaid(
       if (t.effectiveFrom === t.effectiveTo) continue;
 
       const lbl = formatTransitionLabel(t);
-      const choice = choiceOf.get(t);
+      const choice = choiceLinks(t, (a, b, l) => lines.push(l ? `    ${a} --> ${b}: ${esc(l)}` : `    ${a} --> ${b}`));
       if (choice) {
-        if (!choiceLinked.has(choice)) {
-          choiceLinked.add(choice);
-          lines.push(`    ${san(t.from)} --> ${choice}`);
-        }
         lines.push(lbl ? `    ${choice} --> ${san(t.effectiveTo)}: ${esc(lbl)}` : `    ${choice} --> ${san(t.effectiveTo)}`);
         recordEdge(t, lbl ? esc(lbl) : '', choice);
         continue;

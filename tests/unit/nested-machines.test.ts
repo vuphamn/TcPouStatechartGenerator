@@ -135,12 +135,20 @@ expect(subMachinesOf(self).length === 2, `a method calling itself: not nested ag
 const ts = SAMPLES.find((s) => s.id === 'k-test-station')!;
 const tsSubs = subMachinesOf(ts.pouContent);
 expect(tsSubs.map((m) => `${m.parent}/${m.method}`).join(' ') === 'KTESTSTATION_CALIBRATING/Calibrate KTESTSTATION_CALIBRATING__Calibrate__CAL_MEASURE/Measure', `the sample: its sub-machine and the one inside it (${tsSubs.map((m) => `${m.parent}/${m.method}`).join(' ')})`);
-// (choice nodes: the nested CASE's arms as the choice's branches, its ELSE named)
-const choice = generateStatechartModel(ts.dutContent, ts.pouContent, { choiceNodes: true }).markdown.split('\n').filter((l) => /choice_KTESTSTATION_TESTING_\d+ -->/.test(l)).map((l) => l.replace(/^.*?: /, ''));
+// (choice nodes: the nested CASE's arms as the choice's branches, its ELSE named; the arm holding an IF of two
+// transitions: a choice of its own after the arm, the arm's condition on the way)
+const choiceLines = generateStatechartModel(ts.dutContent, ts.pouContent, { choiceNodes: true }).markdown.split('\n').filter((l) => /choice_KTESTSTATION_TESTING_\d+ -->/.test(l)).map((l) => l.trim().replace(/choice_KTESTSTATION_TESTING_(\d+)/g, 'c$1').replace(/KTESTSTATION_/g, ''));
+const choice = choiceLines.map((l) => l.replace(/^.*?: /, ''));
 expect(
-  choice.join(' | ') === '① (iTestStep = 1) AND else | ② (iTestStep = 2) AND (rMeasured > 10.0) | ③ (iTestStep = 2) AND (rMeasured < 0.0) | ④ NOT (iTestStep = 1 OR iTestStep = 2)',
-  `choice nodes: TESTING's branches its CASE's arms (${choice.join(' | ')})`
+  choiceLines.join(' | ') ===
+    'c5 --> IDLE: ① (iTestStep = 1) AND else | c5 --> c7: iTestStep = 2 | c7 --> DONE: ② (iTestStep = 2) AND (rMeasured > 10.0) | c7 --> ERROR: ③ (iTestStep = 2) AND (rMeasured < 0.0) | c5 --> ERROR: ④ NOT (iTestStep = 1 OR iTestStep = 2)',
+  `choice nodes: TESTING's branches its CASE's arms, arm 2 a choice of its own (${choiceLines.join(' | ')})`
 );
+// (an IF's arms: no second choice, their guards say it: the Table Manager's choices as before)
+const tm = SAMPLES.find((s) => s.id === 'table-manager-202')!;
+const tmMd = generateStatechartModel(tm.dutContent, tm.pouContent, { choiceNodes: true }).markdown;
+const chained = tmMd.match(/choice_\w+ --> choice_\w+/g) ?? [];
+expect(/<<choice>>/.test(tmMd) && chained.length === 0, `an IF's arms: no second choices (the Table Manager: ${chained.length} choice into a choice)`);
 // (the option "ELSE as condition": an IF's ELSE written out; off: "else")
 const spelled = generateStatechartModel(ts.dutContent, ts.pouContent, { choiceNodes: true, spellOutElse: true }).markdown.split('\n').find((l) => /choice_KTESTSTATION_TESTING_\d+ --> KTESTSTATION_IDLE/.test(l)) ?? '';
 expect(/\(iTestStep = 1\) AND NOT \(di_bPartPresent\)/.test(spelled) && choice[0].includes('AND else'), `ELSE as condition: an IF's ELSE written out (${spelled.replace(/^.*?: /, '')}); off: else`);
