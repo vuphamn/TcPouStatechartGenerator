@@ -56,7 +56,51 @@ namespace KvalMachineScope.Xae
             }
             catch (COMException) { }
             catch (ArgumentException) { }
-            return null;
+
+            // Right-clicking an item of Solution Explorer while another window is active (the editor, a MachineScope
+            // tab): the menu is asked before Solution Explorer becomes the active window, so the IDE's selection is
+            // still that other window's. Solution Explorer's own selection is already the right-clicked item.
+            return FromSolutionExplorer(services);
+        }
+
+        /// <summary>The .TcPOU selected in Solution Explorer (TwinCAT's PLC tree), whichever window is active</summary>
+        private static string FromSolutionExplorer(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!(services.GetService(typeof(SVsUIShell)) is IVsUIShell shell)) return null;
+            var solutionExplorer = VSConstants.StandardToolWindows.SolutionExplorer;
+            // (not created when it is not open)
+            if (ErrorHandler.Failed(shell.FindToolWindow((uint)__VSFINDTOOLWIN.FTW_fFindFirst, ref solutionExplorer, out var frame)) || frame == null)
+                return null;
+            if (ErrorHandler.Failed(frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out var view)) || !(view is IVsUIHierarchyWindow window))
+                return null;
+            var hierarchyPtr = IntPtr.Zero;
+            try
+            {
+                if (ErrorHandler.Failed(window.GetCurrentSelection(out hierarchyPtr, out uint itemId, out IVsMultiItemSelect multi)))
+                    return null;
+                if (hierarchyPtr == IntPtr.Zero || multi != null || itemId == VSConstants.VSITEMID_NIL) return null;
+                return Marshal.GetObjectForIUnknown(hierarchyPtr) is IVsHierarchy hierarchy ? FromHierarchyItem(hierarchy, itemId) : null;
+            }
+            catch (COMException) { return null; }
+            finally
+            {
+                if (hierarchyPtr != IntPtr.Zero) Marshal.Release(hierarchyPtr);
+            }
+        }
+
+        /// <summary>Diagnostics: what each source of the selection says (the log)</summary>
+        public static string Describe(IServiceProvider services)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var dte = services.GetService(typeof(DTE)) as DTE2;
+            string Try(Func<string> f) { try { return f() ?? "-"; } catch (Exception ex) { return ex.GetType().Name; } }
+            var window = Try(() => $"{dte?.ActiveWindow?.Type} '{dte?.ActiveWindow?.Caption}'");
+            var document = Try(() => Path.GetFileName(dte?.ActiveDocument?.FullName));
+            var hierarchy = Try(() => Path.GetFileName(FromHierarchySelection(services)));
+            var items = Try(() => string.Join(",", dte.SelectedItems.Cast<SelectedItem>().Select(i => i.Name)));
+            var tree = Try(() => Path.GetFileName(FromSolutionExplorer(services)));
+            return $"window {window}, document {document}, hierarchy {hierarchy}, selected items {items}, Solution Explorer {tree}";
         }
 
         /// <summary>The active document if it is a .TcPOU</summary>

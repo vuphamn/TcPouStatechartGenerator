@@ -42,7 +42,7 @@ namespace KvalMachineScope.Xae
             // Diagnostics: log changes, and at most every 10 s
             if (_lastVisible != visible || (DateTime.Now - _lastLog).TotalSeconds > 10)
             {
-                Log.Write($"context menu query: {(visible ? "shown" : "hidden")} ({SelectionHelper.GetSelectedPouPath(_package) ?? "no .TcPOU selected"})");
+                Log.Write($"context menu query: {(visible ? "shown (" + SelectionHelper.GetSelectedPouPath(_package) + ")" : "hidden (" + SelectionHelper.Describe(_package) + ")")}");
                 _lastVisible = visible;
                 _lastLog = DateTime.Now;
             }
@@ -55,6 +55,7 @@ namespace KvalMachineScope.Xae
             if (pguidCmdGroup != PackageGuids.CommandSet || nCmdID != CommandIds.OpenSelected)
                 return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
             var path = SelectionHelper.GetSelectedPouPath(_package);
+            Log.Write(path != null ? "open selected: " + path : $"open selected: no .TcPOU ({SelectionHelper.Describe(_package)})");
             if (path == null) return VSConstants.S_OK;
             _open(path);
             return VSConstants.S_OK;
