@@ -37,6 +37,11 @@ export interface SourceFilesHeaderItemProps {
     onDiffAll?: () => void; id?: string; label?: string; title?: string; menu?: DockMenuItem[] };
   /** TwinCAT XAE extension: a file with unsaved edits here was changed in XAE */
   hostConflict?: { name: string; onReload: () => void; onKeepMine: () => void };
+  /**
+   * A POU that EXTENDS another without a doState() of its own: the bases its state machine is read from (nearest
+   * first), or the one not found (onFind: look for it, asking for the project folder: the web edition)
+   */
+  inherited?: { bases: string[]; missing?: string; error?: string; onFind?: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -92,6 +97,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   onSelectDut,
   hostSave,
   hostConflict,
+  inherited,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [saveMenuAnchor, setSaveMenuAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -237,6 +243,27 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         {pouFileName || 'No file loaded'}
       </span>
       {(pouFileName || dutStatus !== 'sample') && enumChip}
+      {inherited && inherited.bases.length > 0 && (
+        <span
+          id="pou-inherited-chip"
+          className="px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/40 text-sky-200 text-[11px] whitespace-nowrap"
+          title={`Its doState() and state methods are read from ${inherited.bases.join(' → ')} (EXTENDS). Read only here: what is inherited is edited in its own POU`}
+        >
+          extends {inherited.bases[0]}
+        </span>
+      )}
+      {inherited && !inherited.bases.length && inherited.missing && (
+        <button
+          id="pou-find-base-btn"
+          type="button"
+          onClick={inherited.onFind}
+          disabled={!inherited.onFind}
+          className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap hover:bg-amber-500/25 disabled:opacity-70"
+          title={`This POU has no doState(): it EXTENDS ${inherited.missing}, whose state machine it inherits.${inherited.error ? ` ${inherited.error}.` : ''}${inherited.onFind ? ' Choose the PLC project folder to find it.' : ''}`}
+        >
+          {inherited.onFind ? `Find ${inherited.missing}…` : `${inherited.missing} not found`}
+        </button>
+      )}
       {hostConflict && (
         <div
           id="xae-conflict"

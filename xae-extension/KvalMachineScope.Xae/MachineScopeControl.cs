@@ -202,6 +202,24 @@ namespace KvalMachineScope.Xae
             }
         }
 
+        // (the IDE: TabMemory keeps each IDE's tabs apart)
+        private static readonly string Ide = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+
+        /// <summary>This tab's number among the MachineScope tabs (the IDE restores it by that number); -1 when unknown</summary>
+        private int TabNumber
+        {
+            get
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                try
+                {
+                    if (_pane.Frame is IVsWindowFrame frame && ErrorHandler.Succeeded(frame.GetProperty((int)__VSFPROPID.VSFPROPID_MultiInstanceToolNum, out var n)) && n is int number) return number;
+                }
+                catch (System.Runtime.InteropServices.COMException) { }
+                return -1;
+            }
+        }
+
         /// <summary>The .TcPOU this tab shows (or will show once the app is ready); null when none</summary>
         internal string PouPath => _pouPath ?? _pendingPou;
 
@@ -255,6 +273,8 @@ namespace KvalMachineScope.Xae
                 });
                 UpdateCaption();
                 Log.Write($"loaded {pouPath} with {duts.Count} .TcDUT candidate(s){(_instance != null ? ", following " + _instance : "")}");
+                // (the IDE restores this tab when it opens again: it shows this POU then)
+                TabMemory.Remember(Ide, TabNumber, pouPath);
                 _lastCaret = null;
                 StartCaretWatch();
             }
@@ -306,6 +326,16 @@ namespace KvalMachineScope.Xae
                             _pendingPou = null;
                             _pendingInstance = null;
                             LoadPou(p, pi, pc);
+                        }
+                        else if (_pouPath == null)
+                        {
+                            // A tab the IDE restored (it was open when the IDE closed): the POU it showed then
+                            var last = TabMemory.Recall(Ide, TabNumber);
+                            if (last != null)
+                            {
+                                Log.Write($"restored tab {TabNumber}: {last}");
+                                LoadPou(last);
+                            }
                         }
                         break;
                     case "browsePou":
@@ -368,6 +398,9 @@ namespace KvalMachineScope.Xae
                         break;
                     case "projectPous":
                         HandleProjectPous();
+                        break;
+                    case "findPou":
+                        HandleFindPou(msg);
                         break;
                     case "projectSymbols":
                         HandleProjectSymbols();
@@ -549,6 +582,46 @@ namespace KvalMachineScope.Xae
             }
             Log.Write($"open: {Path.GetFileName(target)} ({(typeName != null ? "referenced by " + Path.GetFileName(_pouPath) : "back")})");
             LoadPou(target);
+        }
+
+        /// <summary>
+        /// A POU of the loaded POU's PLC project by type name, read only (a base the loaded POU EXTENDS, whose doState()
+        /// and state methods it inherits): findPouResult { requestId, typeName, source { name, path, content,
+        /// dutCandidates (its folder's) } } or { error }
+        /// </summary>
+        private void HandleFindPou(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            if (string.IsNullOrEmpty(typeName) || !System.Text.RegularExpressions.Regex.IsMatch(typeName, @"^[A-Za-z_]\w*$"))
+            {
+                Post(new { type = "findPouResult", requestId, typeName, error = "No POU name" });
+                return;
+            }
+            try
+            {
+                var target = FindPouInProject(typeName);
+                if (target == null)
+                {
+                    Post(new { type = "findPouResult", requestId, typeName, error = $"{typeName}.TcPOU was not found in the PLC project" });
+                    return;
+                }
+                var content = HostFiles.CurrentContent(_pane, target);
+                var duts = HostFiles.FindDutFiles(Path.GetDirectoryName(target));
+                // (its enum can be edited and saved, as the POU's own folder's: known, and watched)
+                foreach (var d in duts)
+                {
+                    _lastSeen[d.path] = HostFiles.ContentKey(d.content);
+                    Watch(Path.GetDirectoryName(d.path));
+                }
+                Log.Write($"base POU: {target} ({duts.Count} .TcDUT candidate(s))");
+                Post(new { type = "findPouResult", requestId, typeName, source = new { name = Path.GetFileName(target), path = target, content, dutCandidates = duts } });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Post(new { type = "findPouResult", requestId, typeName, error = $"{typeName}.TcPOU could not be read: {ex.Message}" });
+            }
         }
 
         /// <summary>The .TcPOU of a POU type in the loaded POU's PLC project, or null</summary>

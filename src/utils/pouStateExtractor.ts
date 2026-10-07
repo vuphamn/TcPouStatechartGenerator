@@ -5,6 +5,7 @@
 
 import { parseTransitionsFromStateCode } from './pouStateEditor.ts';
 import { caseLabelLinePattern, splitStateLabels } from './stateNames.ts';
+import { expandStateCalls, readableInline, withInherited } from './pouInheritance.ts';
 
 export interface IdentifiedPouState {
   id: string; // Machine-readable state identifier (e.g. TABLEMANAGER_IDLE_FEED_OFF)
@@ -77,9 +78,11 @@ function mainCaseBody(st: string): { body: string; depthAt: (pos: number) => num
 }
 
 export function extractIdentifiedStatesFromPou(
-  pouXml: string,
+  ownPouXml: string,
   dutContent?: string
 ): PouStatesExtractionResult {
+  // (a POU that EXTENDS another: the bases found for it merged in)
+  const pouXml = withInherited(ownPouXml);
   const result: PouStatesExtractionResult = {
     states: [],
     stateVarName: 'machineState',
@@ -130,6 +133,11 @@ export function extractIdentifiedStatesFromPou(
       stateVar = caseVarMatch[1].trim();
       result.stateVarName = stateVar;
     }
+    // (a branch that only calls the state's method, "ST_IDLE: stIdle();": that method's code, its label on a line
+    // of its own)
+    doStateSt = readableInline(expandStateCalls(pouXml, doStateSt, stateVar, 'doState'));
+    // (a label with its code on the line, "HEAD_DISABLED: headDisabled();": the label on a line of its own)
+    doStateSt = doStateSt.replace(/^([ \t]*(?:[A-Za-z_][\w.]*[ \t]*,[ \t]*)*[A-Za-z_][\w.]*[ \t]*:)(?!=)[ \t]*(?=[^\s/(])/gm, '$1\n\t');
   }
 
   // 6. Map to collect all states by id

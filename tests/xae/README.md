@@ -10,6 +10,7 @@ $env:KSS_XAE_SOURCE = 'C:\path\to\TwinCAT project'       # copied to %TEMP%\kss 
 tests\xae\launch.ps1                                     # copy, install into Exp, open the solution and the POU
 tests\xae\multi-tab.test.ps1                             # one tab per POU
 tests\xae\instance-tab.test.ps1                          # one tab per PLC instance
+tests\xae\context-menu.test.ps1                          # the first right-click of a POU (unlocked screen; moves the mouse)
 tests\xae\close.ps1                                      # close that Exp instance, remove the copy
 ```
 

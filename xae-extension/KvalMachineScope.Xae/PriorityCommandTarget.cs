@@ -56,7 +56,11 @@ namespace KvalMachineScope.Xae
                 return (int)Microsoft.VisualStudio.OLE.Interop.Constants.OLECMDERR_E_NOTSUPPORTED;
             var path = SelectionHelper.GetSelectedPouPath(_package);
             Log.Write(path != null ? "open selected: " + path : $"open selected: no .TcPOU ({SelectionHelper.Describe(_package)})");
-            if (path == null) return VSConstants.S_OK;
+            if (path == null)
+            {
+                OpenInMachineScopeCommand.SayNoPou(_package);
+                return VSConstants.S_OK;
+            }
             _open(path);
             return VSConstants.S_OK;
         }

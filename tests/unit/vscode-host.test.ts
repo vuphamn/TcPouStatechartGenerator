@@ -56,12 +56,25 @@ fs.writeFileSync(path.join(dir, '_Boot', 'E_Skip.TcDUT'), 'x');
   await host.handle({ type: 'liveStart' });
   expect(posted.some((m) => m.type === 'liveStatus' && m.state === 'error' && /not available in VS Code/.test(String(m.message))), 'live: said not available');
 
+  // A base the POU EXTENDS (findPou): found in the PLC project (the folder with the .plcproj), with its folder's enum
+  fs.writeFileSync(path.join(dir, 'P.plcproj'), '<Project/>');
+  fs.mkdirSync(path.join(dir, 'Common', 'Base'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Common', 'Base', 'SM_Base.TcPOU'), '﻿<TcPlcObject>base</TcPlcObject>');
+  fs.writeFileSync(path.join(dir, 'Common', 'Base', 'E_Base.TcDUT'), '<TcPlcObject>base enum</TcPlcObject>');
+  posted.length = 0;
+  await host.handle({ type: 'findPou', requestId: 7, typeName: 'SM_Base' });
+  const base = posted.find((m) => m.type === 'findPouResult') as { requestId: number; source?: { path: string; content: string; dutCandidates: { name: string }[] } } | undefined;
+  expect(base?.requestId === 7 && base.source?.path === path.join(dir, 'Common', 'Base', 'SM_Base.TcPOU') && base.source.content === '<TcPlcObject>base</TcPlcObject>' && base.source.dutCandidates.map((d) => d.name).join() === 'E_Base.TcDUT', `findPou: the base, its BOM off, its folder's enum (${JSON.stringify(base?.source?.dutCandidates?.map((d) => d.name))})`);
+  posted.length = 0;
+  await host.handle({ type: 'findPou', requestId: 8, typeName: 'SM_Nowhere' });
+  expect(posted.some((m) => m.type === 'findPouResult' && m.requestId === 8 && /not found/.test(String(m.error))), 'findPou: one not in the project said so');
+
   // The webview page
   const html = webviewHtml('<!doctype html><html><head><title>x</title><script type="module" crossorigin src="./assets/index.js"></script></head><body></body></html>', { base: 'https://w/app', cspSource: 'https://w', nonce: 'N0' });
   const shimAt = html.indexOf('acquireVsCodeApi');
   const appAt = html.indexOf('./assets/index.js');
   expect(html.includes('<base href="https://w/app/">') && /script-src https:\/\/w 'nonce-N0'/.test(html) && shimAt > 0 && shimAt < appAt && (html.match(/<script nonce="N0"/g) ?? []).length === 2, 'the webview page: its base, its policy, the shim first, both scripts with the nonce');
-  expect(findDutFiles(dir).length === 1, 'findDutFiles: one (build output skipped)');
+  expect(findDutFiles(dir).length === 2, "findDutFiles: two (the base folder's too; build output skipped)");
 
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`${fails} failures`);

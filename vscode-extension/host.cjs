@@ -160,10 +160,16 @@ function createHost({ pouPath, post, ui }) {
       else post({ type: 'error', message: 'Open the other state machine from the Explorer (Open in Kval MachineScope)' });
     },
     openInXae: ({ typeName }) => {
-      const dir = path.dirname(pou);
-      const found = typeName && findFile(path.dirname(dir), new RegExp(`^${typeName}\\.(TcPOU|TcDUT|TcGVL|TcIO)$`, 'i'));
+      // (in the PLC project: the folder with its .plcproj)
+      const found = typeName && findFile(projectRoot(pou), new RegExp(`^${typeName}\\.(TcPOU|TcDUT|TcGVL|TcIO)$`, 'i'));
       if (found) ui.open(found);
       else post({ type: 'error', message: `${typeName ?? 'It'} was not found near ${path.basename(pou)}` });
+    },
+    // A base the POU EXTENDS (its doState() and state methods): read only, with its folder's .TcDUT files
+    findPou: ({ requestId, typeName }) => {
+      const found = /^[A-Za-z_]\w*$/.test(typeName ?? '') && findFile(projectRoot(pou), new RegExp(`^${typeName}\\.TcPOU$`, 'i'));
+      if (!found) return post({ type: 'findPouResult', requestId, typeName, error: `${typeName}.TcPOU was not found in the PLC project` });
+      post({ type: 'findPouResult', requestId, typeName, source: { name: path.basename(found), path: found, content: readText(found), dutCandidates: findDutFiles(path.dirname(found)) } });
     },
     saveDocument: async ({ name, content }) => {
       const p = (await ui.pick('save', name))?.[0];
@@ -210,6 +216,21 @@ function createHost({ pouPath, post, ui }) {
       return pou;
     },
   };
+}
+
+/** The PLC project's folder: the nearest one above the POU with a .plcproj (else the POU folder's parent) */
+function projectRoot(pouFile) {
+  for (let dir = path.dirname(pouFile), k = 0; k < 10; k++) {
+    try {
+      if (fs.readdirSync(dir).some((n) => /\.plcproj$/i.test(n))) return dir;
+    } catch {
+      break;
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return path.dirname(path.dirname(pouFile));
 }
 
 /** A file by name under a folder (the PLC project's), else null */

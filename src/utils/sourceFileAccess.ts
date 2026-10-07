@@ -67,7 +67,7 @@ const dutHandles = new Map<string, FsFileHandle>();
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
-async function readCandidates(dir: FsDirectoryHandle): Promise<DutCandidate[]> {
+async function readCandidates(dir: FsDirectoryHandle, at = ''): Promise<DutCandidate[]> {
   const found: DutCandidate[] = [];
   async function walk(d: FsDirectoryHandle, prefix: string, depth: number) {
     if (depth > MAX_DEPTH || found.length >= MAX_DUT_FILES) return;
@@ -89,7 +89,7 @@ async function readCandidates(dir: FsDirectoryHandle): Promise<DutCandidate[]> {
       await walk(sub, `${prefix}${sub.name}/`, depth + 1);
     }
   }
-  await walk(dir, '', 0);
+  await walk(dir, at, 0);
   return found;
 }
 
@@ -350,6 +350,48 @@ export async function webProjectUses(name: string): Promise<{ files?: { name: st
   }
   await walk(grantedFolder, '', 0);
   return { files };
+}
+
+/** Web: a project folder was granted (a base POU can be looked for without asking) */
+export const webHasProjectFolder = () => !!grantedFolder;
+
+/**
+ * Web: a POU of the project by type name (a base the loaded POU EXTENDS), read only, with the .TcDUT files of its
+ * folder; from the granted folder (asked for when ask, which needs a click: { error: 'needs-folder' } otherwise)
+ */
+export async function webFindPou(typeName: string, ask: boolean): Promise<PouSource | { error: string }> {
+  if (!grantedFolder) {
+    if (!ask) return { error: 'needs-folder' };
+    if (typeof w.showDirectoryPicker !== 'function') return { error: 'this browser cannot open a project folder (Chrome or Edge can)' };
+    try {
+      grantedFolder = await w.showDirectoryPicker({ id: 'tc-project', mode: 'readwrite', startIn: lastPouHandle ?? undefined });
+    } catch (e) {
+      return { error: isAbort(e) ? 'canceled' : String(e) };
+    }
+  }
+  const wanted = `${typeName}.tcpou`.toLowerCase();
+  async function find(d: FsDirectoryHandle, prefix: string, depth: number): Promise<{ file: FsFileHandle; dir: FsDirectoryHandle; prefix: string } | null> {
+    if (depth > MAX_DEPTH) return null;
+    const subDirs: FsDirectoryHandle[] = [];
+    for await (const entry of d.values()) {
+      if (entry.kind === 'directory') {
+        if (!entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name.toLowerCase())) subDirs.push(entry);
+      } else if (entry.name.toLowerCase() === wanted) return { file: entry, dir: d, prefix };
+    }
+    for (const sub of subDirs) {
+      const hit = await find(sub, `${prefix}${sub.name}/`, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const hit = await find(grantedFolder, '', 0);
+  if (!hit) return { error: `${typeName}.TcPOU was not found in the folder ${grantedFolder.name}` };
+  try {
+    const content = (await (await hit.file.getFile()).text()).replace(/^﻿/, '');
+    return { name: hit.file.name, content, dutCandidates: await readCandidates(hit.dir, hit.prefix) };
+  } catch (e) {
+    return { error: `${typeName}.TcPOU could not be read: ${String(e)}` };
+  }
 }
 
 /** Web: the other POUs written back (each only if it did not change since it was read); what went wrong, or null */

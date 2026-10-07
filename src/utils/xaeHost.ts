@@ -46,6 +46,8 @@ export type HostMessage =
   | { type: 'layoutResult'; requestId: number; text?: string | null; written?: boolean; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
   | { type: 'projectPous'; project?: string; pous?: { name: string; path?: string; content: string }[]; duts?: DutCandidate[]; error?: string }
+  // A POU of the project by type name (a base the loaded POU EXTENDS), read only
+  | { type: 'findPouResult'; requestId: number; typeName?: string; source?: PouSource; error?: string }
   /** A rename's other files: the project's POUs whose code has the name */
   | { type: 'projectUses'; requestId?: number; files?: { name: string; path: string; content: string }[]; error?: string }
   /** The other files written (saveOther) */
@@ -145,6 +147,7 @@ export type AppMessage =
   | { type: 'addRoute'; requestId: number; netId: string; ip: string; name: string; user: string; password: string }
   /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
   | { type: 'projectPous' }
+  | { type: 'findPou'; requestId: number; typeName: string }
   /** The PLC project's types (answered with projectSymbols) */
   | { type: 'projectSymbols' }
   /** The project's POUs whose code has a name (answered with projectUses) */

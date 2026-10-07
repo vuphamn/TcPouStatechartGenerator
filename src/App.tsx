@@ -322,6 +322,8 @@ import {
 import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
+import { extendsOf, hasOwnMethod, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
+import { resolveInheritance } from './utils/projectFiles.ts';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
@@ -782,10 +784,16 @@ export const App: React.FC = () => {
   const mermaidViewerRef = useRef<MermaidViewerHandle>(null);
   const [jumpRequest, setJumpRequest] = useState<{ stateId: string; timestamp: number } | null>(null);
 
+  // A POU that EXTENDS another without a doState() of its own (SM_Head EXTENDS SM_3AxisHead): the bases found for it
+  // (pouInheritance) merged in for what reads its state machine; pouContent stays the POU's own text (what is saved)
+  const [inheritVersion, setInheritVersion] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chartPou = useMemo(() => withInherited(pouContent), [pouContent, inheritVersion]);
+
   // Extract all identified states and their transitions from .TcPOU and optional .TcDUT
   const identifiedStatesResult = useMemo(() => {
-    return extractIdentifiedStatesFromPou(pouContent, dutContent);
-  }, [pouContent, dutContent]);
+    return extractIdentifiedStatesFromPou(chartPou, dutContent);
+  }, [chartPou, dutContent]);
 
   // Jump to state from sidebar list
   const handleJumpToState = useCallback((stateId: string, label?: string) => {
@@ -812,7 +820,7 @@ export const App: React.FC = () => {
 
   // Core generation logic
   const handleGenerate = useCallback(() => {
-    if (!dutContent.trim() && !pouContent.trim()) {
+    if (!dutContent.trim() && !chartPou.trim()) {
       setRawMarkdown('');
       setGenerationError('Please provide both .TcDUT and .TcPOU content.');
       setGenerationStats(null);
@@ -822,7 +830,7 @@ export const App: React.FC = () => {
     try {
       const startTime = performance.now();
       setGenerationError(null);
-      const result = generateStatechart(dutContent, pouContent, {
+      const result = generateStatechart(dutContent, chartPou, {
         flowchartOutput,
         collapseErrorSinkEdges, choiceNodes, spellOutElse,
         includeStateDescriptions, stateActions,
@@ -849,7 +857,7 @@ export const App: React.FC = () => {
     }
   }, [
     dutContent,
-    pouContent,
+    chartPou,
     flowchartOutput,
     collapseErrorSinkEdges, choiceNodes, spellOutElse,
     includeStateDescriptions, stateActions,
@@ -1397,6 +1405,10 @@ export const App: React.FC = () => {
         applyDut(candidates[0]);
         setDutStatus('found');
         showCopyToast(`${candidates[0].name} declares none of the doState() states`, 'error');
+      } else if (!hasOwnMethod(pou, 'doState') && extendsOf(pou) && !registeredBases(pouTypeNameOf(pou)).length) {
+        // (its doState() is in a base, still looked for: its enum is matched once it is found)
+        applyDut(null);
+        setDutStatus('pending');
       } else {
         applyDut(null);
         setDutStatus('none');
@@ -1840,6 +1852,51 @@ export const App: React.FC = () => {
     return files;
   }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent, dutFiles, subDutEdits]);
 
+  // ---- A POU that EXTENDS another without a doState() of its own (SM_Head EXTENDS SM_3AxisHead) ----
+  // Its bases are looked for in the PLC project (XAE, VS Code, the desktop app; the web edition: the granted folder,
+  // else Find base POU… asks for it) and merged in for what reads its state machine (chartPou); their folders'
+  // .TcDUT files join the enum candidates (the enum is often beside the base)
+  const inheritKey = useMemo(() => {
+    if (!pouContent || hasOwnMethod(pouContent, 'doState')) return '';
+    const base = extendsOf(pouContent);
+    return base ? `${pouTypeNameOf(pouContent)}|${base}|${pouPath ?? ''}` : '';
+  }, [pouContent, pouPath]);
+  const [inheritance, setInheritance] = useState<{ key: string; pou: string; bases: string[]; missing?: { name: string; error: string } } | null>(null);
+  const inheritRef = useRef({ key: inheritKey, pouContent, pouPath, dutStatus, dutFiles });
+  inheritRef.current = { key: inheritKey, pouContent, pouPath, dutStatus, dutFiles };
+  const resolveBases = useCallback(
+    async (askFolder: boolean) => {
+      const { key, pouContent: pou, pouPath: from } = inheritRef.current;
+      if (!key) return;
+      const r = await resolveInheritance(pou, from, askFolder);
+      if (!r || inheritRef.current.key !== key) return;
+      const name = pouTypeNameOf(pou);
+      setInheritedBases(name, r.bases);
+      setInheritVersion((v) => v + 1);
+      setInheritance({ key, pou: name, bases: r.bases.map((b) => b.name), missing: r.missing });
+      if (r.dutCandidates.length) {
+        // (XAE / VS Code: they can be saved, as the POU's own folder's)
+        if (isXaeHost()) setHostSavedContent((prev) => { const next = { ...prev }; for (const c of r.dutCandidates) if (c.path && next[c.path] === undefined) next[c.path] = c.content; return next; });
+        const st = inheritRef.current;
+        if (st.dutStatus !== 'found') {
+          const all = new Map(st.dutFiles.map((c) => [dutFileKey(c), c]));
+          for (const c of r.dutCandidates) if (!all.has(dutFileKey(c))) all.set(dutFileKey(c), c);
+          applyDutCandidates(withInherited(pou), [...all.values()]);
+        }
+      }
+      if (r.bases.length) showCopyToast(`${name} EXTENDS ${r.bases.map((b) => b.name).join(' → ')}: its doState() and state methods read from there (read only)`);
+      else if (r.missing && r.missing.error !== 'needs-folder' && r.missing.error !== 'canceled') showCopyToast(`${name} has no doState(): it EXTENDS ${r.missing.name}, which was not found (${r.missing.error})`, 'error');
+    },
+    [applyDutCandidates, showCopyToast]
+  );
+  useEffect(() => {
+    if (!inheritKey) {
+      setInheritance(null);
+      return;
+    }
+    void resolveBases(false);
+  }, [inheritKey, resolveBases]);
+
   // ---- Save (desktop, web): each source as read / last saved, what differs from it, writing it back ----
   const pouKey = `${pouPath ?? ''}|${pouFileName}`;
   const dutKey = `${dutPath ?? ''}|${dutRelativePath ?? ''}|${dutFileName}`;
@@ -2220,18 +2277,18 @@ export const App: React.FC = () => {
   // (a state's branch that calls a method with a state machine of its own: its sub-machine; see setSubMachineExpanded)
   const subMachines = useMemo(() => {
     try {
-      return pouContent ? subMachinesOf(pouContent) : [];
+      return chartPou ? subMachinesOf(chartPou) : [];
     } catch {
       return [];
     }
-  }, [pouContent]);
+  }, [chartPou]);
   // A state's tooltip on the canvas: its entry / do / exit actions in full (a few lines each)
   const stateTooltips = useMemo(() => {
     const out: Record<string, string> = {};
-    if (!pouContent) return out;
+    if (!chartPou) return out;
     // The state's whole CASE branch in doState(), as written (its first 60 lines), indentation kept relative
     const MAX = 60;
-    const doCode = getMethodCodeFromPou(pouContent, 'doState');
+    const doCode = getMethodCodeFromPou(chartPou, 'doState');
     const doLines = doCode.methodFound ? doCode.code.replace(/\r\n/g, '\n').split('\n') : [];
     const doBlank = blankComments(doLines.join('\n')).split('\n');
     for (const st of identifiedStatesResult.states) {
@@ -2249,7 +2306,7 @@ export const App: React.FC = () => {
     }
     // A sub-machine's states (drawn inside the state that calls its method): their branch in that method's CASE
     for (const m of subMachines) {
-      const code = getMethodCodeFromPou(pouContent, m.method);
+      const code = getMethodCodeFromPou(chartPou, m.method);
       if (!code.methodFound) continue;
       const mLines = code.code.replace(/\r\n/g, '\n').split('\n');
       const mBlank = blankComments(mLines.join('\n')).split('\n');
@@ -2268,7 +2325,7 @@ export const App: React.FC = () => {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pouContent, dutContent, identifiedStatesResult, subMachines]);
+  }, [chartPou, dutContent, identifiedStatesResult, subMachines]);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   // The watched variables, kept per POU
   const userWatchRef = useRef<string[]>([]);
@@ -2893,13 +2950,17 @@ export const App: React.FC = () => {
   // border stands for its states' (the only state in it, or several collapsed into one edge)
   // (all: each of them, a state's several transitions to the same target too, with their priorities: the list in a
   // collapsed edge's guard popup)
-  const { unique: edgeMembers, all: edgeMembersAll } = useMemo(() => {
+  // (written: the transitions written in a method their state calls, by "from->to": that method, and the base it is
+  // inherited from)
+  const { unique: edgeMembers, all: edgeMembersAll, written: edgeWritten } = useMemo(() => {
     const m = new Map<string, { from: string; to: string }[]>();
     const all = new Map<string, { from: string; to: string; priority?: number | null }[]>();
-    if (!pouContent) return { unique: m, all };
+    const written = new Map<string, { method: string; base?: string }>();
+    if (!chartPou) return { unique: m, all, written };
     try {
-      for (const e of generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse }).edges) {
+      for (const e of generateStatechartModel(dutContent, chartPou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse }).edges) {
         const k = `${e.from}->${e.to}`;
+        for (const x of e.members) if (x.inMethod && !written.has(`${x.from}->${x.to}`)) written.set(`${x.from}->${x.to}`, { method: x.inMethod, ...(x.inheritedFrom ? { base: x.inheritedFrom } : {}) });
         const each = [...(all.get(k) ?? []), ...e.members.map(({ from, to, priority }) => ({ from, to, priority }))];
         all.set(k, each);
         m.set(k, [...new Map(each.map((x) => [`${x.from}->${x.to}`, { from: x.from, to: x.to }])).values()]);
@@ -2907,8 +2968,19 @@ export const App: React.FC = () => {
     } catch {
       // (the chart is drawn without it: edits go by the drawn edge)
     }
-    return { unique: m, all };
-  }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse]);
+    return { unique: m, all, written };
+  }, [dutContent, chartPou, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse]);
+  /** A transition written in a method its state calls: why it is not edited here (null: it can be) */
+  const writtenElsewhere = useCallback(
+    (e: { from: string; to: string }) => {
+      const w = edgeWritten.get(`${e.from}->${e.to}`);
+      if (!w) return null;
+      return w.base
+        ? `${e.from} → ${e.to} is written in ${plainMethodName(w.method)}() of ${w.base}, which this POU EXTENDS: change it there (Go to code)`
+        : `${e.from} → ${e.to} is written in ${w.method}(), which ${e.from} calls: change it there (Go to code)`;
+    },
+    [edgeWritten]
+  );
   // Each state's transitions in and out, one per transition in the code (two to the same state are two): the
   // Identified States list's counts, as the chart draws them
   const stateTransitionCounts = useMemo(() => {
@@ -2954,21 +3026,25 @@ export const App: React.FC = () => {
     (edge: EdgeInfo, priority: number) => {
       const e = currentEdge(edge);
       const sub = subEdgeOf(e);
+      const elsewhere = !sub && writtenElsewhere(e);
+      if (elsewhere) return showCopyToast(elsewhere, 'error', 7000), false;
       return pouContent && applyTransitionEdit(sub ? setTransitionPriority(pouContent, sub.ref, priority, sub.variable, sub.method) : setTransitionPriority(pouContent, e, priority, varFor(e.from)));
     },
-    [pouContent, applyTransitionEdit, currentEdge, stateVarName, subEdgeOf]
+    [pouContent, applyTransitionEdit, currentEdge, stateVarName, subEdgeOf, writtenElsewhere, showCopyToast]
   );
   const handleTransitionPriorityStep = useCallback(
     (edge: EdgeInfo, delta: number) => {
       if (!pouContent) return;
       const e = currentEdge(edge);
       const sub = subEdgeOf(e);
+      const elsewhere = !sub && writtenElsewhere(e);
+      if (elsewhere) return showCopyToast(elsewhere, 'error', 7000);
       const order = sub ? transitionOrder(pouContent, sub.ref, sub.variable, sub.method) : transitionOrder(pouContent, e, varFor(e.from));
       if ('error' in order) showCopyToast(order.error, 'error', 6000);
       else if (order.count < 2) showCopyToast(`${e.from} has only this transition`, 'error');
       else handleTransitionPriority(edge, order.priority + delta);
     },
-    [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast, subEdgeOf]
+    [pouContent, currentEdge, stateVarName, handleTransitionPriority, showCopyToast, subEdgeOf, writtenElsewhere]
   );
   const knownStates = useMemo(() => new Set(identifiedStatesResult.states.map((st) => st.id)), [identifiedStatesResult]);
   // Move start to… / Move end to… (the transition's menu): a list of the states instead of dragging its end
@@ -3004,6 +3080,11 @@ export const App: React.FC = () => {
         return;
       }
       const e = currentEdge(edge);
+      const elsewhere = writtenElsewhere(e);
+      if (elsewhere) {
+        showCopyToast(elsewhere, 'error', 7000);
+        return;
+      }
       // (one edge for several transitions, from a composite's border: which one is not known)
       const members = edgeMembers.get(`${e.from}->${e.to}`) ?? [];
       if (!knownStates.has(e.from) && members.length > 1) {
@@ -3018,12 +3099,28 @@ export const App: React.FC = () => {
       const taken = seen[seenKey(e.from, e.to)];
       if (taken) showCopyToast(`⚠ The PLC took ${e.from} → ${e.to} ${seenText(taken)}: the running machine uses it (Undo: Ctrl+Z)`, 'error', 8000);
     },
-    [pouContent, knownStates, currentEdge, drawnEdge, edgeMembers, applyTransitionEdit, stateVarName, showCopyToast, seen]
+    [pouContent, knownStates, currentEdge, drawnEdge, edgeMembers, applyTransitionEdit, stateVarName, showCopyToast, seen, writtenElsewhere]
   );
   const edgeMembersOf = useCallback((from: string, to: string) => edgeMembersAll.get(`${from}->${to}`) ?? [], [edgeMembersAll]);
   // A transition of the code (one of a collapsed edge's, from its guard popup): its IF in the Method editor
   const handleOpenTransitionCode = useCallback(
     (from: string, to: string, label?: string) => {
+      // (written in a method its state calls: that method, at the assignment; a base's: in TwinCAT's editor)
+      const w = edgeWritten.get(`${from}->${to}`);
+      if (w?.base) {
+        const method = plainMethodName(w.method);
+        if (isXaeHost()) postToHost({ type: 'openInXae', typeName: w.base, method });
+        showCopyToast(`${from} → ${to} is written in ${method}() of ${w.base}${isXaeHost() ? ' (opened)' : ` (${w.base}.TcPOU)`}`, 'success', 6000);
+        return;
+      }
+      if (w) {
+        const lines = methodLines(pouContent, w.method) ?? [];
+        const target = to.split('__').pop()!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const at = lines.findIndex((l) => new RegExp(`:=\\s*(?:\\w+\\.)?${target}\\b`).test(l.replace(/\/\/.*$/, '')));
+        handleOpenInspectorPanel('method', { method: `${w.method}()` });
+        setCodeJump({ method: w.method, line: Math.max(1, at + 1), nonce: Date.now() });
+        return;
+      }
       const loc = locateTransition(pouContent, { from, to, label });
       if (!loc) {
         showCopyToast(`The code of ${from} → ${to} was not found`, 'error');
@@ -3032,7 +3129,7 @@ export const App: React.FC = () => {
       handleOpenInspectorPanel('method', { method: `${loc.method}()` });
       setCodeJump({ method: loc.method, line: loc.line, nonce: Date.now() });
     },
-    [pouContent, showCopyToast, handleOpenInspectorPanel]
+    [pouContent, showCopyToast, handleOpenInspectorPanel, edgeWritten]
   );
   // Go to code for a state (Identified States' card menu): its CASE label, in doState() or its sub-machine's method
   const handleGoToStateCode = useCallback(
@@ -3234,6 +3331,11 @@ export const App: React.FC = () => {
     (edge: EdgeInfo) => {
       if (!pouContent) return;
       const e = currentEdge(edge);
+      const elsewhere = writtenElsewhere(e);
+      if (elsewhere) {
+        showCopyToast(elsewhere, 'error', 7000);
+        return;
+      }
       const r = deleteTransition(pouContent, e, varFor(e.from));
       if ('error' in r) {
         showCopyToast(r.error, 'error', 6000);
@@ -3255,7 +3357,7 @@ export const App: React.FC = () => {
         },
       });
     },
-    [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast, seen]
+    [pouContent, currentEdge, stateVarName, applyTransitionEdit, showCopyToast, seen, writtenElsewhere]
   );
 
   // A transition's condition changed: from its menu, F2, or the Transition Guard window; the dialog by its label
@@ -3283,6 +3385,11 @@ export const App: React.FC = () => {
       const sub = subEdgeOf(currentEdge(edge));
       const e = sub ? { ...currentEdge(edge), ...sub.ref } : currentEdge(edge);
       const sv = sub ? sub.variable : varFor(e.from);
+      const elsewhere = !sub && writtenElsewhere(e);
+      if (elsewhere) {
+        showCopyToast(elsewhere, 'error', 7000);
+        return;
+      }
       const c = transitionCondition(pouContent, e, sv, sub?.method);
       if ('error' in c) {
         showCopyToast(c.error, 'error', 6000);
@@ -3377,11 +3484,11 @@ export const App: React.FC = () => {
   const composites = useMemo(() => (dutContent ? enumComposites(dutContent) : []), [dutContent]);
   const chartComposites = useMemo(() => {
     try {
-      return pouContent ? generateStatechartModel(dutContent, pouContent, {}).composites : {};
+      return chartPou ? generateStatechartModel(dutContent, chartPou, {}).composites : {};
     } catch {
       return {} as Record<string, string[]>;
     }
-  }, [pouContent, dutContent]);
+  }, [chartPou, dutContent]);
   const compositeOfState = useCallback((state: string) => Object.entries(chartComposites).find(([, members]) => members.includes(state))?.[0] ?? null, [chartComposites]);
   const isFinal = useCallback((state: string) => isFinalState(pouContent, state) || (!!dutContent.trim() && enumMarksOf(dutContent, state).final), [pouContent, dutContent]);
   const compositeNames = useMemo(() => new Set(composites.map((c) => c.name)), [composites]);
@@ -3617,14 +3724,14 @@ export const App: React.FC = () => {
   // Composites come only from the enum's {region} markers: the ones the chart used to find on its own (the state
   // names, TwinCAT's UML chart) and the enum does not mark yet, offered to be written (the canvas' menu)
   const pendingComposites = useMemo(() => {
-    if (!pouContent || !dutContent.trim()) return [] as string[];
+    if (!chartPou || !dutContent.trim()) return [] as string[];
     try {
       const have = new Set(composites.map((c) => c.name.toLowerCase()));
-      return inferredComposites(dutContent, pouContent).map((c) => c.name).filter((n) => !have.has(n.toLowerCase()));
+      return inferredComposites(dutContent, chartPou).map((c) => c.name).filter((n) => !have.has(n.toLowerCase()));
     } catch {
       return [] as string[];
     }
-  }, [pouContent, dutContent, composites]);
+  }, [chartPou, dutContent, composites]);
   // A composite collapsed (one box) or expanded again: kept per POU in this browser
   const storeCollapsed = useCallback(
     (name: string, on: boolean) =>
@@ -7696,7 +7803,7 @@ export const App: React.FC = () => {
   const liveGuardEdges = useMemo(() => {
     if (!liveActive || liveGuardScope === 'off') return null;
     try {
-      const model = generateStatechartModel(dutContent, pouContent, {
+      const model = generateStatechartModel(dutContent, chartPou, {
         flowchartOutput,
         collapseErrorSinkEdges, choiceNodes, spellOutElse,
         includeStateDescriptions, stateActions,
@@ -7708,7 +7815,7 @@ export const App: React.FC = () => {
     } catch {
       return null;
     }
-  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [liveActive, liveGuardScope, dutContent, chartPou, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const liveGuardInputs = useMemo<GuardInputs | null>(
     () =>
       liveGuardEdges
@@ -7774,7 +7881,7 @@ export const App: React.FC = () => {
     let edges = liveGuardEdges?.edges ?? null;
     if (!edges) {
       try {
-        const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+        const model = generateStatechartModel(dutContent, chartPou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
         edges = buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums);
       } catch {
         return null;
@@ -7788,7 +7895,7 @@ export const App: React.FC = () => {
       index.set(k, list);
     }
     return index;
-  }, [ioTree, liveGuardEdges, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [ioTree, liveGuardEdges, dutContent, chartPou, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const ioGuardsOf = useCallback(
     (variable: string): IoGuardUse[] => {
       if (!ioGuardIndex) return [];
@@ -7831,12 +7938,12 @@ export const App: React.FC = () => {
   const simGuardEdges = useMemo(() => {
     if (!simOn) return null;
     try {
-      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+      const model = generateStatechartModel(dutContent, chartPou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
       return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
     } catch {
       return null;
     }
-  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [simOn, dutContent, chartPou, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const simInputs = useMemo<GuardInputs | null>(
     () =>
       simGuardEdges && sim.current
@@ -7971,10 +8078,10 @@ export const App: React.FC = () => {
     [simOn, sim.current, sim.history, simLevels]
   );
   const simStartState = useMemo(() => {
-    const init = pouContent ? initialStateOf(pouContent, stateVarName) : null;
+    const init = chartPou ? initialStateOf(chartPou, stateVarName) : null;
     const first = dutContent.trim() ? enumMembers(dutContent)[0] : undefined;
     return (init && knownStates.has(init) ? init : first && knownStates.has(first) ? first : null) ?? [...knownStates].filter((s) => s !== '[*]')[0] ?? null;
-  }, [pouContent, dutContent, stateVarName, knownStates]);
+  }, [chartPou, dutContent, stateVarName, knownStates]);
 
   // The Live tab lists the active state's transitions with their results
   const liveActiveGuards = useMemo(() => {
@@ -8529,6 +8636,17 @@ export const App: React.FC = () => {
                 : undefined
             }
             hostConflict={hostConflictActions}
+            inherited={
+              inheritance && inheritance.key === inheritKey
+                ? {
+                    bases: inheritance.bases,
+                    missing: inheritance.missing?.name,
+                    error: inheritance.missing?.error === 'needs-folder' ? undefined : inheritance.missing?.error,
+                    // (the web edition: the project folder asked for; the hosts look on their own)
+                    onFind: inheritance.missing && !isXaeHost() && !isDesktopApp() ? () => void resolveBases(true) : undefined,
+                  }
+                : undefined
+            }
             onBrowsePou={handleBrowsePou}
             onDropPou={handleDropPou}
             onFindDut={handleFindDut}

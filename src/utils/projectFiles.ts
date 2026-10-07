@@ -6,6 +6,9 @@
 
 import type { ProjectFiles } from './projectDocumentation.ts';
 import { isXaeHost, onHostMessage, postToHost } from './xaeHost.ts';
+import { webFindPou, type PouSource } from './sourceFileAccess.ts';
+import type { DutCandidate } from './dutMatcher.ts';
+import { extendsOf, hasOwnMethod, pouNameOf, type InheritedSource } from './pouInheritance.ts';
 import { triggerDownload } from './diagramExport.ts';
 
 interface DesktopProjectApi {
@@ -80,4 +83,68 @@ export async function saveDocument(name: string, content: string, opts: { person
   if (d?.saveFile) return d.saveFile(name, content, opts);
   triggerDownload(new Blob([content], { type: /\.json$/i.test(name) ? 'application/json' : /\.csv$/i.test(name) ? 'text/csv;charset=utf-8' : 'text/html;charset=utf-8' }), name);
   return { path: name };
+}
+
+// ---- A POU of the project by type name (a base the loaded POU EXTENDS: its doState() and state methods) ----
+
+let findSeq = 0;
+
+/**
+ * A POU of the loaded POU's PLC project by type name, read only, with the .TcDUT files of its folder: from TwinCAT
+ * XAE / VS Code (findPou), the desktop app, or the web edition's granted folder (askFolder: the folder may be asked
+ * for, which needs a click; else { error: 'needs-folder' })
+ */
+export async function findProjectPou(typeName: string, fromPath: string | undefined, askFolder: boolean): Promise<PouSource | { error: string }> {
+  if (isXaeHost()) {
+    const requestId = ++findSeq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve({ error: 'No answer from the extension (an older version?)' });
+      }, 30000);
+      const off = onHostMessage((m) => {
+        if (m.type !== 'findPouResult' || m.requestId !== requestId) return;
+        const r = m;
+        window.clearTimeout(timer);
+        off();
+        resolve(r.source ?? { error: r.error ?? `${typeName}.TcPOU was not found` });
+      });
+      postToHost({ type: 'findPou', requestId, typeName });
+    });
+  }
+  const d = (window as unknown as { tcDesktop?: { openPouInProject?: (from: string, type: string) => Promise<PouSource | { error: string }> } }).tcDesktop;
+  if (d?.openPouInProject) return fromPath ? d.openPouInProject(fromPath, typeName) : { error: 'The POU was not opened from its folder' };
+  return webFindPou(typeName, askFolder);
+}
+
+export interface InheritanceResult {
+  /** The bases found, nearest first */
+  bases: InheritedSource[];
+  /** Their folders' .TcDUT files (the enum is often beside the base) */
+  dutCandidates: DutCandidate[];
+  /** The first base not found (and why), when the bases found have no doState() */
+  missing?: { name: string; error: string };
+}
+
+/**
+ * The bases of a POU that EXTENDS another and has no doState() of its own (SM_Head EXTENDS SM_3AxisHead): looked
+ * for in the PLC project, nearest first, up to the first one not found (a library's). null: not such a POU
+ */
+export async function resolveInheritance(pouXml: string, fromPath: string | undefined, askFolder: boolean): Promise<InheritanceResult | null> {
+  if (hasOwnMethod(pouXml, 'doState') || !extendsOf(pouXml)) return null;
+  const bases: InheritedSource[] = [];
+  const dutCandidates: DutCandidate[] = [];
+  const seen = new Set([pouNameOf(pouXml).toLowerCase()]);
+  for (let name = extendsOf(pouXml); name && !seen.has(name.toLowerCase()) && bases.length < 6; ) {
+    seen.add(name.toLowerCase());
+    const found = await findProjectPou(name, fromPath, askFolder && !bases.length);
+    if ('error' in found) {
+      const hasDoState = bases.some((b) => hasOwnMethod(b.content, 'doState'));
+      return { bases, dutCandidates, ...(hasDoState ? {} : { missing: { name, error: found.error } }) };
+    }
+    bases.push({ name, content: found.content, path: found.path });
+    dutCandidates.push(...(found.dutCandidates ?? []));
+    name = extendsOf(found.content);
+  }
+  return { bases, dutCandidates };
 }

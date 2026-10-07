@@ -4,6 +4,7 @@ import { findAllSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
 import { caseArmCondition, caseLabelOf, caseSelectorOf, splitStatements } from './utils/stStatements.ts';
+import { expandStateCalls, inlineMarker, pouNameOf, withInherited } from './utils/pouInheritance.ts';
 
 export type PriorityFormat = 'paren' | 'bracket' | 'circled';
 
@@ -102,7 +103,7 @@ export interface ModelEdge {
   label: string;
   source: string;
   /** The transitions in the code this edge stands for (several when edges were merged into a composite's) */
-  members: { from: string; to: string; frames: GuardFrame[]; priority?: number | null }[];
+  members: { from: string; to: string; frames: GuardFrame[]; priority?: number | null; inMethod?: string; inheritedFrom?: string }[];
 }
 
 export interface StatechartModel {
@@ -123,6 +124,10 @@ export interface Transition {
   frames?: GuardFrame[];
   priority?: number | null;
   source: string;
+  /** Written in a method the state calls (its code read as the state's: see pouInheritance.expandStateCalls) */
+  inMethod?: string;
+  /** ...a method of a base the POU EXTENDS (its name) */
+  inheritedFrom?: string;
   redirectedFrom?: string | null;
   /** In a state's top-level IF: which one and which arm (IF 0, ELSIF 1, …) */
   choice?: { id: number; arm: number };
@@ -203,6 +208,32 @@ function parseXmlDoc(xml: string): Document | null {
   return null;
 }
 
+/** A method's code with the calls of methods that set the state variable written out (see pouInheritance) */
+function getStateCodeSt(doc: Document | null, rawXml: string, name: string, stateVar: string): string | null {
+  const st = getMethodSt(doc, rawXml, name);
+  return st === null ? null : expandStateCalls(rawXml, st, stateVar, name);
+}
+
+/** doState()'s state variable (its CASE's), and its code with its states' methods written out */
+function doStateCode(doc: Document | null, rawXml: string): { st: string | null; stateVar: string } {
+  const raw = getMethodSt(doc, rawXml, 'doState');
+  const stateVar = /\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b/i.exec(raw ?? '')?.[1]?.trim() || 'machineState';
+  return { st: raw === null ? null : expandStateCalls(rawXml, raw, stateVar, 'doState'), stateVar };
+}
+
+/** "{kss-in ...}" / "{kss-out}" lines: the method (and base) the lines between are written in */
+function trackInline(line: string, stack: { method: string; owner: string }[]): boolean {
+  const m = inlineMarker(line);
+  if (!m) return false;
+  if (m === 'out') stack.pop();
+  else stack.push(m);
+  return true;
+}
+const whereWritten = (stack: { method: string; owner: string }[], self: string) => {
+  const top = stack[stack.length - 1];
+  return top ? { inMethod: top.method, ...(top.owner !== self ? { inheritedFrom: top.owner } : {}) } : {};
+};
+
 function getMethodSt(doc: Document | null, rawXml: string, name: string): string | null {
   if (doc) {
     const methods = Array.from(doc.getElementsByTagName('Method'));
@@ -255,10 +286,11 @@ export interface SubMachineInfo {
 }
 
 /** The states of a POU that call a method with a state machine of its own (its sub-machines; see subMachines.ts) */
-export function subMachinesOf(tcPouContent: string): SubMachineInfo[] {
+export function subMachinesOf(pouXml: string): SubMachineInfo[] {
+  const tcPouContent = withInherited(pouXml);
   const doc = parseXmlDoc(tcPouContent);
   const methods = methodsOf(doc, tcPouContent);
-  return findAllSubMachines(getMethodSt(doc, tcPouContent, 'doState'), methods, stripComments(tcPouContent)).map((m) => {
+  return findAllSubMachines(doStateCode(doc, tcPouContent).st, methods, stripComments(tcPouContent)).map((m) => {
     const decl = stripComments(methods.get(m.method)?.decl ?? '');
     const type = new RegExp(`(?:^|[\\s;])${m.variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:\\s*([A-Za-z_][\\w.]*)`, 'i').exec(decl)?.[1] ?? null;
     return { parent: m.parent, method: m.method, states: m.states, variable: m.variable, variableType: type, start: m.start, entry: m.entry, when: m.when, preempts: m.preempts, transitions: m.transitions };
@@ -312,6 +344,8 @@ function toLogicalLines(code: string): string[] {
   flat = flat.replace(/\bOF\b/gi, 'OF\n');
   flat = flat.replace(/\bEND_(CASE|FOR|WHILE|REPEAT)\b\s*;?/gi, (m) => `\n${m}\n`);
   flat = flat.replace(/\b(DO)\b/gi, 'DO\n');
+  // (where inlined code is written: a line of its own)
+  flat = flat.replace(/\{kss-(?:in [^}]*|out)\}/g, (m) => `\n${m}\n`);
   const label = /^\s*((?:[A-Za-z_][\w.]*|\d+)(?:\s*(?:,|\.\.)\s*(?:[A-Za-z_][\w.]*|\d+))*)\s*:(?!=)\s*(\S.*)$/;
   return flat.split('\n').flatMap((l) => {
     const m = l.match(label);
@@ -492,10 +526,12 @@ function parseDoState(
   stateVarName: string,
   transitions: Transition[],
   states: Set<string>,
-  members?: Set<string>
+  members?: Set<string>,
+  self = ''
 ) {
   const code = stripComments(st);
   const lines = preprocessDoStateLines(code).flatMap(splitStatements);
+  const inline: { method: string; owner: string }[] = [];
   let currentStates: string[] = [];
   const statePriorityCounters = new Map<string, number>();
   const ifStack: IfFrame[] = [];
@@ -511,6 +547,7 @@ function parseDoState(
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
+    if (trackInline(line, inline)) continue;
     if (/^CASE\b[\s\S]*\bOF\b/i.test(line)) {
       caseDepth++;
       // A CASE in a state's branch: its arms guard what is under them, as an IF's ("iStep = 1")
@@ -595,6 +632,7 @@ function parseDoState(
           choiceCase: !!ifStack[0]?.caseSel,
           choice2: ifStack.length > 1 && ifStack[1].id ? { id: ifStack[1].id, arm: ifStack[1].negatedPriorConds.length, cond: ifStack[0].currentCond } : undefined,
           source: 'doState',
+          ...whereWritten(inline, self),
           effectiveFrom: currentState,
           effectiveTo: target,
         });
@@ -607,10 +645,12 @@ function parsePreProcess(
   st: string,
   stateVarName: string,
   transitions: Transition[],
-  states: Set<string>
+  states: Set<string>,
+  self = ''
 ) {
   const code = stripComments(st);
   const lines = toLogicalLines(code);
+  const inline: { method: string; owner: string }[] = [];
   const ifStack: IfFrame[] = [];
   // (its transitions' priorities: their order in preProcess(), as its Earlier / Later moves them)
   let order = 0;
@@ -631,6 +671,7 @@ function parsePreProcess(
   for (const raw of lines) {
     const line = raw.trim();
     if (line.length === 0) continue;
+    if (trackInline(line, inline)) continue;
 
     const mIf = line.match(ifRx);
     if (mIf) {
@@ -680,6 +721,7 @@ function parsePreProcess(
         frames: snapshotFrames(ifStack),
         priority: ++order,
         source: 'preProcess',
+        ...whereWritten(inline, self),
         scopeLower: pendingLower,
         scopeUpper: pendingUpper,
         scopeLowerStrict: pendingLowerStrict,
@@ -1808,7 +1850,7 @@ function buildMermaid(
           (!showTransitionPriorities || (m.priority ?? '') === (t.priority ?? '')) &&
           (m.effectiveFrom === t.effectiveFrom || (redundant.has(m) && groups.stateToGroup.get(m.from) === t.effectiveFrom))
       ))
-      .map((m) => ({ from: m.from, to: m.to, frames: m.frames ?? [], priority: m.priority ?? null }));
+      .map((m) => ({ from: m.from, to: m.to, frames: m.frames ?? [], priority: m.priority ?? null, ...(m.inMethod ? { inMethod: m.inMethod } : {}), ...(m.inheritedFrom ? { inheritedFrom: m.inheritedFrom } : {}) }));
     emitted.push({ from: fromNode ?? san(t.effectiveFrom), to: san(t.effectiveTo), label: label.trim(), source: t.source, members });
   };
 
@@ -1994,16 +2036,16 @@ export function generateStatechart(
  * state most of a composite's states go to is left out of it (drawn apart, as it was). Offered as "Write these
  * composites as markers"; outer composites first, each one's states in enum order
  */
-export function inferredComposites(tcDutContent: string, tcPouContent: string): { name: string; members: string[]; parent: string | null; initial: string | null }[] {
+export function inferredComposites(tcDutContent: string, pouXml: string): { name: string; members: string[]; parent: string | null; initial: string | null }[] {
+  const tcPouContent = withInherited(pouXml);
   const doc = parseXmlDoc(tcPouContent);
   const decl = extractDeclaration(tcDutContent);
   const enumOrder = readEnumOrder(decl);
   const groups = tryLoadUmlGrouping(doc) ?? loadEnumGrouping(decl);
   if (!groups || !groups.groups.size) return [];
-  const doStateSt = getMethodSt(doc, tcPouContent, 'doState');
-  const stateVar = /\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b/i.exec(doStateSt ?? '')?.[1]?.trim() || 'machineState';
+  const { st: doStateSt, stateVar } = doStateCode(doc, tcPouContent);
   const transitions: Transition[] = [];
-  if (doStateSt) parseDoState(doStateSt, stateVar, transitions, new Set<string>(), new Set(enumOrder));
+  if (doStateSt) parseDoState(doStateSt, stateVar, transitions, new Set<string>(), new Set(enumOrder), pouNameOf(tcPouContent));
   // (an error state most of its composite's states go to, that leads nowhere back in: outside it)
   for (const [candidate, group] of [...groups.stateToGroup]) {
     if (!nameLooksLikeError(candidate)) continue;
@@ -2030,9 +2072,11 @@ export function inferredComposites(tcDutContent: string, tcPouContent: string): 
 /** The Mermaid code, the state variable, and the drawn edges with the code's transitions (and their IF context) */
 export function generateStatechartModel(
   tcDutContent: string,
-  tcPouContent: string,
+  pouXml: string,
   options: GeneratorOptions = {}
 ): StatechartModel {
+  // (a POU that EXTENDS another: the bases found for it merged in, see pouInheritance)
+  const tcPouContent = withInherited(pouXml);
   const collapseErrorSinkEdges = options.collapseErrorSinkEdges ?? DefaultCollapseErrorSinkEdges;
   const flowchartOutput = options.flowchartOutput ?? false;
   const includeStateDescriptions = options.includeStateDescriptions ?? false;
@@ -2043,8 +2087,9 @@ export function generateStatechartModel(
   // (the IF statements numbered from 1 for each chart: a choice keeps its id)
   ifSeq = 0;
   spellElse = options.spellOutElse ?? false;
-  const doStateSt = getMethodSt(doc, tcPouContent, 'doState');
-  const preProcessSt = getMethodSt(doc, tcPouContent, 'preProcess');
+  const { st: doStateSt, stateVar: doStateVar } = doStateCode(doc, tcPouContent);
+  const preProcessSt = getStateCodeSt(doc, tcPouContent, 'preProcess', doStateVar);
+  const self = pouNameOf(tcPouContent);
 
   let stateDescriptions: Map<string, string> | undefined;
   if (includeStateDescriptions) {
@@ -2087,8 +2132,8 @@ export function generateStatechartModel(
   const decl = extractDeclaration(tcDutContent);
   const enumOrder = readEnumOrder(decl);
 
-  if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder));
-  if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states);
+  if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder), self);
+  if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states, self);
 
   // Composites: only the enum's {region} markers (nothing inferred from names, TwinCAT's UML chart or preProcess())
   const groups: GroupingResult = {

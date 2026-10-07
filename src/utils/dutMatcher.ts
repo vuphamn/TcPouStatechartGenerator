@@ -1,5 +1,6 @@
 import { extractIdentifiedStatesFromPou } from './pouStateExtractor.ts';
 import { extractDeclaration, readEnumOrder } from '../generator.ts';
+import { withInherited } from './pouInheritance.ts';
 
 /** A .TcDUT file found next to (or below) the loaded .TcPOU */
 export interface DutCandidate {
@@ -27,7 +28,8 @@ export interface DutMatch extends DutCandidate {
 }
 
 /** State names used as CASE labels in doState(), plus the declared type of the state variable if the POU has it */
-export function getPouCaseStates(pouContent: string): { states: string[]; declaredType: string | null } {
+export function getPouCaseStates(pouXml: string): { states: string[]; declaredType: string | null } {
+  const pouContent = withInherited(pouXml);
   const result = extractIdentifiedStatesFromPou(pouContent);
   const states = result.states.filter((s) => s.hasCaseBranch).map((s) => s.id);
   const varName = result.stateVarName.split('.').pop() || result.stateVarName;

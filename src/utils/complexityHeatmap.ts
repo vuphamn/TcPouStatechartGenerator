@@ -14,6 +14,7 @@
 import { methodLines, subMachineId } from './sourceLocation.ts';
 import { caseBranchRange } from './stateEdits.ts';
 import { EdgeInfo, StateNodeInfo } from '../types.ts';
+import { expandStateCalls, readableInline, withInherited } from './pouInheritance.ts';
 
 export type ComplexityLevel = 'low' | 'moderate' | 'high' | 'critical';
 export type HeatmapPalette = 'traffic' | 'plasma' | 'neon';
@@ -241,8 +242,10 @@ export const HEATMAP_PALETTES: Record<HeatmapPalette, {
 /**
  * Extracts Structured Text code corresponding to a specific state from doState() in POU
  */
-export function extractStateCodeFromPou(tcPouContent: string, stateId: string): string {
-  if (!tcPouContent) return '';
+export function extractStateCodeFromPou(pouXml: string, stateId: string): string {
+  if (!pouXml) return '';
+  // (a POU that EXTENDS another: the bases found for it merged in)
+  const tcPouContent = withInherited(pouXml);
 
   // A sub-machine's state (<state>__<method>__<name>): its branch in that method's CASE
   const sub = subMachineId(tcPouContent, stateId);
@@ -267,7 +270,9 @@ export function extractStateCodeFromPou(tcPouContent: string, stateId: string): 
   
   const match = doStateBody.match(branchRegex);
   if (match) {
-    return match[1];
+    // (a branch that calls the state's method: its code written out, the method named)
+    const stateVar = /\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b/i.exec(doStateBody)?.[1]?.trim() || 'machineState';
+    return readableInline(expandStateCalls(tcPouContent, match[1], stateVar, 'doState'));
   }
   
   // Also check if there is an action or method named after state: e.g. M_StateId or A_StateId

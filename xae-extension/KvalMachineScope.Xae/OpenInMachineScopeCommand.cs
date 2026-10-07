@@ -85,12 +85,27 @@ namespace KvalMachineScope.Xae
             }
         }
 
+        /// <summary>The context menu's command found no .TcPOU behind the selection: said, instead of nothing happening</summary>
+        internal static void SayNoPou(KvalMachineScopePackage package)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            VsShellUtilities.ShowMessageBox(package,
+                "No .TcPOU was found behind the selection. Right-click a POU (a function block or program) in the PLC project tree or its editor tab, or open one with Tools > Kval MachineScope...",
+                "Kval MachineScope", OLEMSGICON.OLEMSGICON_INFO, OLEMSGBUTTON.OLEMSGBUTTON_OK, OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+
         private static void Run(KvalMachineScopePackage package, string pouPath, bool askIfNone)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (pouPath == null && askIfNone)
             {
                 pouPath = HostFiles.AskForPou(SelectionHelper.GetSolutionFolder(package));
+            }
+            else if (pouPath == null)
+            {
+                Log.Write($"open selected: no .TcPOU ({SelectionHelper.Describe(package)})");
+                SayNoPou(package);
+                return;
             }
             package.JoinableTaskFactory.RunAsync(async () =>
             {

@@ -63,6 +63,7 @@
     <Compile Include="LiveTargets.cs" />
     <Compile Include="PlcSearch.cs" />
     <Compile Include="XaeBuild.cs" />
+    <Compile Include="TabMemory.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">
