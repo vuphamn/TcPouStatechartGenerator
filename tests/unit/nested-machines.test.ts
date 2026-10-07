@@ -141,6 +141,9 @@ expect(
   choice.join(' | ') === '① (iTestStep = 1) AND else | ② (iTestStep = 2) AND (rMeasured > 10.0) | ③ (iTestStep = 2) AND (rMeasured < 0.0) | ④ NOT (iTestStep = 1 OR iTestStep = 2)',
   `choice nodes: TESTING's branches its CASE's arms (${choice.join(' | ')})`
 );
+// (the option "ELSE as condition": an IF's ELSE written out; off: "else")
+const spelled = generateStatechartModel(ts.dutContent, ts.pouContent, { choiceNodes: true, spellOutElse: true }).markdown.split('\n').find((l) => /choice_KTESTSTATION_TESTING_\d+ --> KTESTSTATION_IDLE/.test(l)) ?? '';
+expect(/\(iTestStep = 1\) AND NOT \(di_bPartPresent\)/.test(spelled) && choice[0].includes('AND else'), `ELSE as condition: an IF's ELSE written out (${spelled.replace(/^.*?: /, '')}); off: else`);
 // (Move start out of a CASE arm: kept under the arm's condition)
 const moved = moveTransitionStart(ts.pouContent, { from: 'KTESTSTATION_TESTING', to: 'KTESTSTATION_DONE', label: '(iTestStep = 2) AND (rMeasured > 10.0)' }, 'KTESTSTATION_IDLE', 'machineState');
 const movedCode = 'error' in moved ? moved.error : moved.code.replace(/\s+/g, ' ');

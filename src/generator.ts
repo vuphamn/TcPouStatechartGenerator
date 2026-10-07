@@ -11,6 +11,8 @@ export interface GeneratorOptions {
   collapseErrorSinkEdges?: boolean;
   /** A state's IF / ELSIF / ELSE of transitions drawn as a choice (a diamond) */
   choiceNodes?: boolean;
+  /** An IF's ELSE in a guard written as what it is ("NOT (a OR b)"), not "else" */
+  spellOutElse?: boolean;
   flowchartOutput?: boolean;
   includeStateDescriptions?: boolean;
   showTransitionPriorities?: boolean;
@@ -147,6 +149,8 @@ interface IfFrame {
   armed?: boolean;
 }
 let ifSeq = 0;
+/** (the option spellOutElse, for buildGuard: set at each generation) */
+let spellElse = false;
 
 interface UmlComposite {
   displayName: string;
@@ -372,14 +376,14 @@ const elseOf = (f: IfFrame) => {
 function buildGuard(s: IfFrame[]): string | null {
   if (s.length === 0) return null;
   if (s.length === 1) {
-    // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else")
-    return s[0].currentCond ?? (s[0].caseSel ? elseOf(s[0]) : 'else');
+    // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else", unless spelled out)
+    return s[0].currentCond ?? (s[0].caseSel || spellElse ? elseOf(s[0]) : 'else');
   }
   const parts: string[] = [];
   for (const f of s) {
     if (f.currentCond === null) {
-      // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else")
-      parts.push(f.caseSel ? elseOf(f) : 'else');
+      // (a nested CASE's ELSE: what it is, its arms named; an IF's: "else", unless spelled out)
+      parts.push(f.caseSel || spellElse ? elseOf(f) : 'else');
     } else {
       parts.push(parenthesizeCondition(f.currentCond));
     }
@@ -2011,6 +2015,7 @@ export function generateStatechartModel(
   const doc = parseXmlDoc(tcPouContent);
   // (the IF statements numbered from 1 for each chart: a choice keeps its id)
   ifSeq = 0;
+  spellElse = options.spellOutElse ?? false;
   const doStateSt = getMethodSt(doc, tcPouContent, 'doState');
   const preProcessSt = getMethodSt(doc, tcPouContent, 'preProcess');
 

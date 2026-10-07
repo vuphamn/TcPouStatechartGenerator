@@ -100,7 +100,7 @@ import { PlcTransitionLoggerTool } from './components/PlcTransitionLoggerTool.ts
 import { HelpButton } from './components/HelpButton.tsx';
 import { TransitionHistoryDataset, analyzeChronologicalEvents } from './utils/transitionHistoryAnalytics.ts';
 import { SourceFilesHeaderItem, DutSearchStatus } from './components/SourceFilesHeaderItem.tsx';
-import { rankDutCandidates, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
+import { rankDutCandidates, dutFileKey, DutCandidate, DutMatch } from './utils/dutMatcher.ts';
 import {
   browseForPou,
   readDrop,
@@ -400,6 +400,9 @@ export const App: React.FC = () => {
   const [dutMatches, setDutMatches] = useState<DutMatch[] | null>(null);
   // Every .TcDUT found with the POU (not only the state enum's candidates): enum literals for live guard values
   const [dutPool, setDutPool] = useState<string[]>([]);
+  const [dutFiles, setDutFiles] = useState<DutCandidate[]>([]);
+  const [subDutEdits, setSubDutEdits] = useState<Record<string, string>>({});
+  const [subDutSaved, setSubDutSaved] = useState<Record<string, string>>({});
   const [dutRelativePath, setDutRelativePath] = useState<string | undefined>(undefined);
   const [dutStatus, setDutStatus] = useState<DutSearchStatus>('sample');
   // Full path of the chosen .TcDUT (desktop / XAE extension)
@@ -432,6 +435,22 @@ export const App: React.FC = () => {
     setChoiceNodesState(on);
     try {
       localStorage.setItem('kss.choiceNodes', String(on));
+    } catch {
+      // (not remembered)
+    }
+  }, []);
+  // An IF's ELSE in a guard written as what it is ("NOT (a)"), not "else": per viewer
+  const [spellOutElse, setSpellOutElseState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kss.spellOutElse') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const setSpellOutElse = useCallback((on: boolean) => {
+    setSpellOutElseState(on);
+    try {
+      localStorage.setItem('kss.spellOutElse', String(on));
     } catch {
       // (not remembered)
     }
@@ -804,7 +823,7 @@ export const App: React.FC = () => {
       setGenerationError(null);
       const result = generateStatechart(dutContent, pouContent, {
         flowchartOutput,
-        collapseErrorSinkEdges, choiceNodes,
+        collapseErrorSinkEdges, choiceNodes, spellOutElse,
         includeStateDescriptions, stateActions,
         showTransitionPriorities,
         priorityFormat, collapsedComposites,
@@ -831,7 +850,7 @@ export const App: React.FC = () => {
     dutContent,
     pouContent,
     flowchartOutput,
-    collapseErrorSinkEdges, choiceNodes,
+    collapseErrorSinkEdges, choiceNodes, spellOutElse,
     includeStateDescriptions, stateActions,
     showTransitionPriorities,
     priorityFormat, collapsedComposites,
@@ -1034,7 +1053,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges, choiceNodes,
+            collapseErrorSinkEdges, choiceNodes, spellOutElse,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat, collapsedComposites,
@@ -1067,7 +1086,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges, choiceNodes,
+      collapseErrorSinkEdges, choiceNodes, spellOutElse,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat, collapsedComposites,
@@ -1102,7 +1121,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges, choiceNodes,
+            collapseErrorSinkEdges, choiceNodes, spellOutElse,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat, collapsedComposites,
@@ -1135,7 +1154,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges, choiceNodes,
+      collapseErrorSinkEdges, choiceNodes, spellOutElse,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat, collapsedComposites,
@@ -1152,14 +1171,14 @@ export const App: React.FC = () => {
       try {
         const startTime = performance.now();
         setGenerationError(null);
-        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+        const result = generateStatechart(dut, pou, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
         setRawMarkdown(result);
         setGenerationStats({ statesCount: (result.match(/-->/g) || []).length, linesCount: result.split('\n').length, timeMs: Math.round(performance.now() - startTime) });
       } catch (genErr: unknown) {
         setGenerationError(genErr instanceof Error ? genErr.message : String(genErr));
       }
     },
-    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites]
+    [pouContent, dutContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites]
   );
 
   const handleSavePreProcessCode = useCallback(
@@ -1179,7 +1198,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(dutContent, updatedPou, {
             flowchartOutput,
-            collapseErrorSinkEdges, choiceNodes,
+            collapseErrorSinkEdges, choiceNodes, spellOutElse,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat, collapsedComposites,
@@ -1212,7 +1231,7 @@ export const App: React.FC = () => {
       pouContent,
       dutContent,
       flowchartOutput,
-      collapseErrorSinkEdges, choiceNodes,
+      collapseErrorSinkEdges, choiceNodes, spellOutElse,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat, collapsedComposites,
@@ -1230,7 +1249,7 @@ export const App: React.FC = () => {
           setGenerationError(null);
           const result = generateStatechart(newDutContent, pouContent, {
             flowchartOutput,
-            collapseErrorSinkEdges, choiceNodes,
+            collapseErrorSinkEdges, choiceNodes, spellOutElse,
             includeStateDescriptions, stateActions,
             showTransitionPriorities,
             priorityFormat, collapsedComposites,
@@ -1262,7 +1281,7 @@ export const App: React.FC = () => {
     [
       pouContent,
       flowchartOutput,
-      collapseErrorSinkEdges, choiceNodes,
+      collapseErrorSinkEdges, choiceNodes, spellOutElse,
       includeStateDescriptions, stateActions,
       showTransitionPriorities,
       priorityFormat, collapsedComposites,
@@ -1362,6 +1381,9 @@ export const App: React.FC = () => {
       const ranked = rankDutCandidates(pou, candidates);
       setDutMatches(ranked);
       setDutPool(candidates.map((c) => c.content));
+      setDutFiles(candidates);
+      setSubDutEdits({});
+      setSubDutSaved({});
       if (ranked.length > 0) {
         applyDut(ranked[0]);
         setDutStatus('found');
@@ -1807,8 +1829,13 @@ export const App: React.FC = () => {
     if (dutPath && hostSavedContent[dutPath] !== undefined && hostSavedContent[dutPath] !== dutContent) {
       files.push({ path: dutPath, content: dutContent });
     }
+    // (sub-machines' enums, each in its own file)
+    for (const c of dutFiles) {
+      const text = subDutEdits[dutFileKey(c)];
+      if (c.path && text !== undefined && hostSavedContent[c.path] !== undefined && hostSavedContent[c.path] !== text) files.push({ path: c.path, content: text });
+    }
     return files;
-  }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent]);
+  }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent, dutFiles, subDutEdits]);
 
   // ---- Save (desktop, web): each source as read / last saved, what differs from it, writing it back ----
   const pouKey = `${pouPath ?? ''}|${pouFileName}`;
@@ -1828,7 +1855,18 @@ export const App: React.FC = () => {
   const dutDirty = localSave && !!dutContent && savedSources.dutKey === dutKey && dutContent !== savedSources.dut;
   // (the editors' Diff: enabled for their file's changes too)
   useEffect(() => setFilesChanged({ pou: !!pouDirty, enum: !!dutDirty }), [pouDirty, dutDirty]);
-  const localDirtyCount = Number(pouDirty) + Number(dutDirty);
+  // (a sub-machine's enum, in its own file: edited since it was read or saved)
+  const subDutDirty = useMemo(
+    () =>
+      localSave
+        ? dutFiles.filter((c) => {
+            const key = dutFileKey(c);
+            return subDutEdits[key] !== undefined && subDutEdits[key] !== (subDutSaved[key] ?? c.content);
+          })
+        : [],
+    [localSave, dutFiles, subDutEdits, subDutSaved]
+  );
+  const localDirtyCount = Number(pouDirty) + Number(dutDirty) + subDutDirty.length;
   const localDirtyRef = useRef(false);
   localDirtyRef.current = localDirtyCount > 0;
   const markSaved = (kind: 'pou' | 'dut', content: string) => setSavedSources((b) => (kind === 'pou' ? { ...b, pou: content } : { ...b, dut: content }));
@@ -1936,7 +1974,11 @@ export const App: React.FC = () => {
       const items = [
         pouDirty ? { kind: 'pou' as const, name: defaultName('pou'), path: pouPath, relativePath: undefined as string | undefined, content: pouContent, baseline: savedSources.pou } : null,
         dutDirty ? { kind: 'dut' as const, name: defaultName('dut'), path: dutPath, relativePath: dutRelativePath, content: dutContent, baseline: savedSources.dut } : null,
+        // (sub-machines' enums, each in its own file)
+        ...subDutDirty.map((c) => ({ kind: 'dut' as const, name: c.name, path: c.path, relativePath: c.relativePath, content: subDutEdits[dutFileKey(c)], baseline: subDutSaved[dutFileKey(c)] ?? c.content, sub: dutFileKey(c) })),
       ].filter((i): i is NonNullable<typeof i> => !!i);
+      // (saved: the main files' baseline, or a sub-machine enum's)
+      const markItem = (i: { kind: 'pou' | 'dut'; content: string; sub?: string }) => (i.sub ? setSubDutSaved((b) => ({ ...b, [i.sub!]: i.content })) : markSaved(i.kind, i.content));
       if (!items.length) {
         if (!opts.quiet) showCopyToast('No unsaved edits', 'success');
         return;
@@ -1953,7 +1995,7 @@ export const App: React.FC = () => {
           const r = await d.saveSources(withPath.map((i) => ({ path: i.path, content: i.content, baseline: i.baseline, force: !!opts.force })));
           for (const i of withPath) {
             if (r.saved.includes(i.path!)) {
-              markSaved(i.kind, i.content);
+              markItem(i);
               saved.push(i.name);
             } else if (r.conflicts.some((c) => c.path === i.path)) conflicts.push(i.name);
           }
@@ -1968,12 +2010,12 @@ export const App: React.FC = () => {
             showCopyToast(`Could not write ${i.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000);
           }
           if (res === 'saved') {
-            markSaved(i.kind, i.content);
+            markItem(i);
             saved.push(i.name);
           } else if (res === 'conflict') conflicts.push(i.name);
           else if (!opts.quiet) {
             downloadSource(i.name, i.content);
-            markSaved(i.kind, i.content);
+            markItem(i);
             downloaded.push(i.name);
           }
         }
@@ -1992,7 +2034,7 @@ export const App: React.FC = () => {
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast, confirmSeenRemovals]
+    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast, confirmSeenRemovals, subDutDirty, subDutEdits, subDutSaved]
   );
   const saveSourcesRef = useRef(handleSaveSources);
   saveSourcesRef.current = handleSaveSources;
@@ -2625,7 +2667,7 @@ export const App: React.FC = () => {
     } finally {
       setDocProgress(null);
     }
-  }, [pouPath, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
+  }, [pouPath, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
 
   // Edits from the diagram: rename a state, add a state, add a transition (connect mode)
   const [promptRequest, setPromptRequest] = useState<TextPromptRequest | null>(null);
@@ -2853,7 +2895,7 @@ export const App: React.FC = () => {
     const all = new Map<string, { from: string; to: string; priority?: number | null }[]>();
     if (!pouContent) return { unique: m, all };
     try {
-      for (const e of generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes }).edges) {
+      for (const e of generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse }).edges) {
         const k = `${e.from}->${e.to}`;
         const each = [...(all.get(k) ?? []), ...e.members.map(({ from, to, priority }) => ({ from, to, priority }))];
         all.set(k, each);
@@ -2863,7 +2905,7 @@ export const App: React.FC = () => {
       // (the chart is drawn without it: edits go by the drawn edge)
     }
     return { unique: m, all };
-  }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes]);
+  }, [dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse]);
   // Each state's transitions in and out, one per transition in the code (two to the same state are two): the
   // Identified States list's counts, as the chart draws them
   const stateTransitionCounts = useMemo(() => {
@@ -7510,17 +7552,24 @@ export const App: React.FC = () => {
     const m = id ? subMachines.filter((x) => id.startsWith(`${x.parent}__${x.method}__`)).sort((a, b) => b.parent.length - a.parent.length)[0] ?? null : null;
     if (!m) return null;
     const type = m.variableType ?? `${m.method}.${m.variable}`;
+    const prefix = `${m.parent}__${m.method}__`;
+    // (its .TcDUT among the files found with the POU: edited here, saved to that file)
+    const file = dutFiles.find((c) => !!c.content && parseDutContent(c.content).dutName.toLowerCase() === type.toLowerCase());
+    if (file) {
+      const key = dutFileKey(file);
+      return { content: subDutEdits[key] ?? file.content, fileName: file.name, prefix, note: undefined as string | undefined, key };
+    }
     const pool = [dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])];
     const found = pool.find((c) => !!c && parseDutContent(c).dutName.toLowerCase() === type.toLowerCase());
-    const prefix = `${m.parent}__${m.method}__`;
-    if (found) return { content: found, fileName: `${type}.TcDUT`, prefix, note: `${type}: the states of ${m.method}() (read-only here)` };
+    if (found) return { content: found, fileName: `${type}.TcDUT`, prefix, note: `${type}: the states of ${m.method}() (read-only here: its file is not among the ones found)` as string | undefined, key: undefined as string | undefined };
     return {
       content: `TYPE ${type} :\n(\n${m.states.map((x) => `\t${x}`).join(',\n')}\n);\nEND_TYPE\n`,
       fileName: `${type} (from ${m.method}())`,
       prefix,
-      note: `${type}: the states of ${m.method}(), from its CASE labels (its .TcDUT is not open; read-only)`,
+      note: `${type}: the states of ${m.method}(), from its CASE labels (its .TcDUT is not open; read-only)` as string | undefined,
+      key: undefined as string | undefined,
     };
-  }, [selectedStateId, subMachines, dutContent, dutPool, projectDuts, pouPath]);
+  }, [selectedStateId, subMachines, dutContent, dutPool, dutFiles, subDutEdits, projectDuts, pouPath]);
   const liveEnums = useMemo(
     () => buildEnumTables([dutContent, ...dutPool, ...(projectDuts && projectDuts.path === pouPath ? projectDuts.contents : [])]),
     [dutContent, dutPool, projectDuts, pouPath]
@@ -7578,7 +7627,7 @@ export const App: React.FC = () => {
     try {
       const model = generateStatechartModel(dutContent, pouContent, {
         flowchartOutput,
-        collapseErrorSinkEdges, choiceNodes,
+        collapseErrorSinkEdges, choiceNodes, spellOutElse,
         includeStateDescriptions, stateActions,
         showTransitionPriorities,
         priorityFormat, collapsedComposites,
@@ -7588,7 +7637,7 @@ export const App: React.FC = () => {
     } catch {
       return null;
     }
-  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [liveActive, liveGuardScope, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const liveGuardInputs = useMemo<GuardInputs | null>(
     () =>
       liveGuardEdges
@@ -7654,7 +7703,7 @@ export const App: React.FC = () => {
     let edges = liveGuardEdges?.edges ?? null;
     if (!edges) {
       try {
-        const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+        const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
         edges = buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums);
       } catch {
         return null;
@@ -7668,7 +7717,7 @@ export const App: React.FC = () => {
       index.set(k, list);
     }
     return index;
-  }, [ioTree, liveGuardEdges, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [ioTree, liveGuardEdges, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const ioGuardsOf = useCallback(
     (variable: string): IoGuardUse[] => {
       if (!ioGuardIndex) return [];
@@ -7711,12 +7760,12 @@ export const App: React.FC = () => {
   const simGuardEdges = useMemo(() => {
     if (!simOn) return null;
     try {
-      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
+      const model = generateStatechartModel(dutContent, pouContent, { flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites });
       return { stateVar: model.stateVar, edges: buildGuardEdges(model.edges, extractEdgesFromMermaid(model.markdown), model.stateVar, liveEnums) };
     } catch {
       return null;
     }
-  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
+  }, [simOn, dutContent, pouContent, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, stateActions, showTransitionPriorities, priorityFormat, collapsedComposites, liveEnums]);
   const simInputs = useMemo<GuardInputs | null>(
     () =>
       simGuardEdges && sim.current
@@ -9128,6 +9177,18 @@ export const App: React.FC = () => {
                 </select>
               )}
 
+              {/* An IF's ELSE in a guard: what it is */}
+              <label className="flex items-center gap-2 cursor-pointer select-none" title={'A transition under an IF\'s ELSE: its condition written out, "NOT (cmd_bStart)", not "else" (longer labels)'}>
+                <input
+                  id="spell-out-else-checkbox"
+                  type="checkbox"
+                  checked={spellOutElse}
+                  onChange={(e) => setSpellOutElse(e.target.checked)}
+                  className="rounded bg-slate-950 border-slate-700 text-sky-500 focus:ring-sky-500 focus:ring-offset-slate-900"
+                />
+                <span className="text-slate-300">ELSE as condition</span>
+              </label>
+
               {/* Include state description */}
               <label className="flex items-center gap-2 cursor-pointer select-none" title="Each state's description (from getStateDescription()) under its name">
                 <input
@@ -9481,7 +9542,18 @@ export const App: React.FC = () => {
               tcPouFileName={pouFileName || 'POU.TcPOU'}
               tcDutContent={enumSubView?.content ?? dutContent}
               tcDutFileName={enumSubView?.fileName ?? (dutFileName || 'EnumDeclaration.TcDUT')}
-              onSaveDutContent={enumSubView ? () => ({ success: false, error: enumSubView.note }) : handleSaveDutContent}
+              onSaveDutContent={
+                enumSubView
+                  ? enumSubView.key
+                    ? (text: string) => {
+                        // (a sub-machine's enum in its own file: kept, written by Save)
+                        const key = enumSubView.key!;
+                        setSubDutEdits((e) => ({ ...e, [key]: text }));
+                        return { success: true };
+                      }
+                    : () => ({ success: false, error: enumSubView.note })
+                  : handleSaveDutContent
+              }
               enumMemberPrefix={enumSubView?.prefix}
               enumReadOnlyNote={enumSubView?.note}
               onSaveMethodCode={handleSaveMethodCode}

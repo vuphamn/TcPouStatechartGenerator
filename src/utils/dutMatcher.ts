@@ -11,6 +11,9 @@ export interface DutCandidate {
   path?: string;
 }
 
+/** A found .TcDUT's identity: its full path, else where it was found (relative to the .TcPOU), else its name */
+export const dutFileKey = (c: DutCandidate) => c.path || c.relativePath || c.name;
+
 export interface DutMatch extends DutCandidate {
   /** doState() CASE states this enum declares */
   matched: number;
