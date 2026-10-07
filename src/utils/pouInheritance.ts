@@ -120,6 +120,13 @@ export function withInherited(pouXml: string): string {
   return out;
 }
 
+/** The merged methods inherited from a base: their name as merged (lower case) -> the base */
+export function inheritedMethodsOf(pouXml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of pouXml.matchAll(/<Method\b[^>]*\bName=["']([^"']+)["'][^>]*\bKvalInheritedFrom=["']([^"']+)["']/gi)) out.set(m[1].toLowerCase(), m[2]);
+  return out;
+}
+
 /** "SM_3AxisHead.headIdle" (an overridden base method, as merged) -> "headIdle" */
 export const plainMethodName = (name: string) => name.split('.').pop() ?? name;
 

@@ -322,8 +322,8 @@ import {
 import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
-import { extendsOf, hasOwnMethod, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { resolveInheritance } from './utils/projectFiles.ts';
+import { extendsOf, hasOwnMethod, inheritedMethodsOf, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
+import { findProjectPou, resolveInheritance } from './utils/projectFiles.ts';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
@@ -789,6 +789,12 @@ export const App: React.FC = () => {
   const [inheritVersion, setInheritVersion] = useState(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const chartPou = useMemo(() => withInherited(pouContent), [pouContent, inheritVersion]);
+  // The bases found (nearest first): each one's text as edited here (its inherited methods, in the Method Editor) and
+  // as saved (Save writes an edited one into its file)
+  const [baseSources, setBaseSources] = useState<{ name: string; path?: string; content: string; saved: string }[]>([]);
+  // (set below: an inherited method's edit goes to its base; a base's file changed on disk)
+  const inheritedSaveRef = useRef<((method: string, code: string, declaration?: string) => { success: boolean; error?: string } | null) | null>(null);
+  const baseChangedRef = useRef<((path: string, content: string) => boolean) | null>(null);
 
   // Extract all identified states and their transitions from .TcPOU and optional .TcDUT
   const identifiedStatesResult = useMemo(() => {
@@ -1117,6 +1123,9 @@ export const App: React.FC = () => {
 
   const handleSaveMethodCode = useCallback(
     (methodName: string, newCode: string, newDeclaration?: string) => {
+      // (a method inherited from a base: changed in the base, see below)
+      const routed = inheritedSaveRef.current?.(methodName, newCode, newDeclaration);
+      if (routed) return routed;
       try {
         const updateResult = updateMethodCodeInPou(pouContent, methodName, newCode, newDeclaration);
         if (!updateResult.success) {
@@ -1612,6 +1621,8 @@ export const App: React.FC = () => {
       const st = hostStateRef.current;
       const inUse = path === st.pouPath || path === st.dutPath;
       if (!inUse) {
+        // (a base the POU EXTENDS: its new text read)
+        if (baseChangedRef.current?.(path, content)) return;
         // Another .TcDUT candidate: just keep its saved version current
         setHostSavedContent((prev) => (prev[path] === undefined ? prev : { ...prev, [path]: content }));
         return;
@@ -1849,8 +1860,10 @@ export const App: React.FC = () => {
       const text = subDutEdits[dutFileKey(c)];
       if (c.path && text !== undefined && hostSavedContent[c.path] !== undefined && hostSavedContent[c.path] !== text) files.push({ path: c.path, content: text });
     }
+    // (a base the POU EXTENDS, its inherited methods edited here)
+    for (const b of baseSources) if (b.path && hostSavedContent[b.path] !== undefined && hostSavedContent[b.path] !== b.content) files.push({ path: b.path, content: b.content });
     return files;
-  }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent, dutFiles, subDutEdits]);
+  }, [hostSavedContent, pouPath, pouContent, dutPath, dutContent, dutFiles, subDutEdits, baseSources]);
 
   // ---- A POU that EXTENDS another without a doState() of its own (SM_Head EXTENDS SM_3AxisHead) ----
   // Its bases are looked for in the PLC project (XAE, VS Code, the desktop app; the web edition: the granted folder,
@@ -1872,10 +1885,12 @@ export const App: React.FC = () => {
       if (!r || inheritRef.current.key !== key) return;
       const name = pouTypeNameOf(pou);
       setInheritedBases(name, r.bases);
+      setBaseSources(r.bases.map((b) => ({ name: b.name, path: b.path, content: b.content, saved: b.content })));
       setInheritVersion((v) => v + 1);
       setInheritance({ key, pou: name, bases: r.bases.map((b) => b.name), missing: r.missing });
+      // (XAE / VS Code: the bases and their enums can be saved, as the POU's own folder's)
+      if (isXaeHost()) setHostSavedContent((prev) => { const next = { ...prev }; for (const b of r.bases) if (b.path) next[b.path] = b.content; return next; });
       if (r.dutCandidates.length) {
-        // (XAE / VS Code: they can be saved, as the POU's own folder's)
         if (isXaeHost()) setHostSavedContent((prev) => { const next = { ...prev }; for (const c of r.dutCandidates) if (c.path && next[c.path] === undefined) next[c.path] = c.content; return next; });
         const st = inheritRef.current;
         if (st.dutStatus !== 'found') {
@@ -1892,10 +1907,113 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (!inheritKey) {
       setInheritance(null);
+      setBaseSources([]);
       return;
     }
     void resolveBases(false);
   }, [inheritKey, resolveBases]);
+
+  /** New text of the bases: the chart reads them (registered under the POU's name) */
+  const registerBases = useCallback((list: { name: string; path?: string; content: string; saved: string }[]) => {
+    setInheritedBases(pouTypeNameOf(inheritRef.current.pouContent), list.map((b) => ({ name: b.name, path: b.path, content: b.content })));
+    setBaseSources(list);
+    setInheritVersion((v) => v + 1);
+  }, []);
+  // The Method Editor lists the inherited methods (chartPou); editing one changes its base, asked once per base (it is
+  // the base of other POUs too): Save writes it into the base's file
+  const inheritedMethods = useMemo(() => inheritedMethodsOf(chartPou), [chartPou]);
+  const inheritedMethodsRecord = useMemo(() => (inheritedMethods.size ? Object.fromEntries(inheritedMethods) : undefined), [inheritedMethods]);
+  const confirmedBasesRef = useRef(new Set<string>());
+  inheritedSaveRef.current = (methodName, code, declaration) => {
+    const base = inheritedMethods.get(methodName.replace(/\(\)$/, '').toLowerCase());
+    if (!base) return null;
+    const b = baseSources.find((x) => x.name === base);
+    if (!b) return { success: false, error: `${base} is not loaded` };
+    const plain = plainMethodName(methodName.replace(/\(\)$/, ''));
+    const apply = (): { success: boolean; error?: string } => {
+      const u = updateMethodCodeInPou(b.content, plain, code, declaration);
+      if (!u.success) return { success: false, error: u.error || `Could not change ${plain}() in ${base}` };
+      registerBases(baseSources.map((x) => (x.name === base ? { ...x, content: u.updatedPou } : x)));
+      showCopyToast(`${plain}() changed in ${base}: Save writes ${base}.TcPOU`, 'success', 5000);
+      return { success: true };
+    };
+    if (confirmedBasesRef.current.has(base)) return apply();
+    setPromptRequest({
+      title: `Change ${base}?`,
+      label: `${plain}() is inherited from ${base}: this changes ${base}.TcPOU itself${b.path ? ` (${b.path})` : ''}, the base of other POUs too: each POU that EXTENDS it gets the change. Save writes it to the file.`,
+      confirmOnly: true,
+      danger: true,
+      submitLabel: `Change ${base}`,
+      onSubmit: () => {
+        confirmedBasesRef.current.add(base);
+        const r = apply();
+        if (!r.success) showCopyToast(r.error ?? 'Could not change it', 'error', 6000);
+      },
+    });
+    return { success: false, error: `${base} is the base of other POUs too: confirm in the dialog to change it` };
+  };
+
+  // A base's file changed (TwinCAT, git, another editor): its new text read when it has no unsaved edits here; said
+  const adoptBaseText = useCallback(
+    (b: { name: string; path?: string; content: string; saved: string }, text: string) => {
+      if (text === b.saved) return;
+      if (b.content !== b.saved) {
+        showCopyToast(`${b.name}.TcPOU changed on disk while you have unsaved changes of it here: Save asks before overwriting`, 'error', 8000);
+        return;
+      }
+      registerBases(baseSources.map((x) => (x.name === b.name ? { ...x, content: text, saved: text } : x)));
+      if (isXaeHost() && b.path) setHostSavedContent((prev) => ({ ...prev, [b.path!]: text }));
+      showCopyToast(`${b.name}.TcPOU changed: the chart is updated`, 'success', 4000);
+    },
+    [baseSources, registerBases, showCopyToast]
+  );
+  // (XAE / VS Code: a base saved through the host is its saved version)
+  useEffect(() => {
+    if (!isXaeHost()) return;
+    setBaseSources((list) => {
+      let changed = false;
+      const next = list.map((b) => {
+        const s = b.path ? hostSavedContent[b.path] : undefined;
+        if (s === undefined || s === b.saved) return b;
+        changed = true;
+        return { ...b, saved: s };
+      });
+      return changed ? next : list;
+    });
+  }, [hostSavedContent]);
+  baseChangedRef.current = (path, content) => {
+    const b = baseSources.find((x) => x.path && x.path.toLowerCase() === path.toLowerCase());
+    if (!b) return false;
+    adoptBaseText(b, content);
+    return true;
+  };
+  // (every host: the bases read again when the app gets the focus back, e.g. after editing one in TwinCAT or git)
+  const baseCheckRef = useRef({ busy: false, at: 0 });
+  useEffect(() => {
+    if (!baseSources.length) return;
+    const check = () => {
+      const st = baseCheckRef.current;
+      if (st.busy || Date.now() - st.at < 1500 || document.visibilityState === 'hidden') return;
+      st.busy = true;
+      st.at = Date.now();
+      void (async () => {
+        try {
+          for (const b of baseSources) {
+            const r = await findProjectPou(b.name, inheritRef.current.pouPath, false);
+            if (!('error' in r)) adoptBaseText(b, r.content);
+          }
+        } finally {
+          st.busy = false;
+        }
+      })();
+    };
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    return () => {
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [baseSources, adoptBaseText]);
 
   // ---- Save (desktop, web): each source as read / last saved, what differs from it, writing it back ----
   const pouKey = `${pouPath ?? ''}|${pouFileName}`;
@@ -1926,7 +2044,9 @@ export const App: React.FC = () => {
         : [],
     [localSave, dutFiles, subDutEdits, subDutSaved]
   );
-  const localDirtyCount = Number(pouDirty) + Number(dutDirty) + subDutDirty.length;
+  // (a base the POU EXTENDS, its inherited methods edited here)
+  const baseDirty = useMemo(() => baseSources.filter((b) => b.content !== b.saved), [baseSources]);
+  const localDirtyCount = Number(pouDirty) + Number(dutDirty) + subDutDirty.length + baseDirty.length;
   const localDirtyRef = useRef(false);
   localDirtyRef.current = localDirtyCount > 0;
   const markSaved = (kind: 'pou' | 'dut', content: string) => setSavedSources((b) => (kind === 'pou' ? { ...b, pou: content } : { ...b, dut: content }));
@@ -2036,9 +2156,12 @@ export const App: React.FC = () => {
         dutDirty ? { kind: 'dut' as const, name: defaultName('dut'), path: dutPath, relativePath: dutRelativePath, content: dutContent, baseline: savedSources.dut } : null,
         // (sub-machines' enums, each in its own file)
         ...subDutDirty.map((c) => ({ kind: 'dut' as const, name: c.name, path: c.path, relativePath: c.relativePath, content: subDutEdits[dutFileKey(c)], baseline: subDutSaved[dutFileKey(c)] ?? c.content, sub: dutFileKey(c) })),
+        // (a base the POU EXTENDS, its inherited methods edited here)
+        ...baseDirty.map((b) => ({ kind: 'pou' as const, name: `${b.name}.TcPOU`, path: b.path, relativePath: undefined as string | undefined, content: b.content, baseline: b.saved, base: b.name })),
       ].filter((i): i is NonNullable<typeof i> => !!i);
-      // (saved: the main files' baseline, or a sub-machine enum's)
-      const markItem = (i: { kind: 'pou' | 'dut'; content: string; sub?: string }) => (i.sub ? setSubDutSaved((b) => ({ ...b, [i.sub!]: i.content })) : markSaved(i.kind, i.content));
+      // (saved: the main files' baseline, a sub-machine enum's, or a base's)
+      const markItem = (i: { kind: 'pou' | 'dut'; content: string; sub?: string; base?: string }) =>
+        i.base ? setBaseSources((list) => list.map((x) => (x.name === i.base ? { ...x, saved: i.content } : x))) : i.sub ? setSubDutSaved((b) => ({ ...b, [i.sub!]: i.content })) : markSaved(i.kind, i.content);
       if (!items.length) {
         if (!opts.quiet) showCopyToast('No unsaved edits', 'success');
         return;
@@ -2065,6 +2188,16 @@ export const App: React.FC = () => {
         for (const i of items) {
           let res: WebSaveResult = 'no-handle';
           try {
+            if ('base' in i && i.base && i.path) {
+              // (a base: written through the handle it was read with, from the granted folder; changed since it was
+              // read: not overwritten here, it is read again when the app gets the focus)
+              const problem = await writeWebOtherPous([{ path: i.path, content: i.content, baseline: i.baseline }]);
+              if (!problem) {
+                markItem(i);
+                saved.push(i.name);
+              } else showCopyToast(`Could not write ${i.name}: ${problem}`, 'error', 8000);
+              continue;
+            }
             res = await writeWebSource(i.kind, i.relativePath, i.content, i.baseline, !!opts.force);
           } catch (e) {
             showCopyToast(`Could not write ${i.name}: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000);
@@ -2094,7 +2227,7 @@ export const App: React.FC = () => {
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast, confirmSeenRemovals, subDutDirty, subDutEdits, subDutSaved]
+    [pouDirty, dutDirty, pouPath, dutPath, dutRelativePath, pouContent, dutContent, savedSources, handleSaveAs, showCopyToast, confirmSeenRemovals, subDutDirty, subDutEdits, subDutSaved, baseDirty]
   );
   const saveSourcesRef = useRef(handleSaveSources);
   saveSourcesRef.current = handleSaveSources;
@@ -3107,14 +3240,9 @@ export const App: React.FC = () => {
     (from: string, to: string, label?: string) => {
       // (written in a method its state calls: that method, at the assignment; a base's: in TwinCAT's editor)
       const w = edgeWritten.get(`${from}->${to}`);
-      if (w?.base) {
-        const method = plainMethodName(w.method);
-        if (isXaeHost()) postToHost({ type: 'openInXae', typeName: w.base, method });
-        showCopyToast(`${from} → ${to} is written in ${method}() of ${w.base}${isXaeHost() ? ' (opened)' : ` (${w.base}.TcPOU)`}`, 'success', 6000);
-        return;
-      }
       if (w) {
-        const lines = methodLines(pouContent, w.method) ?? [];
+        // (a base's method: listed in the Method Editor too, marked inherited)
+        const lines = methodLines(withInherited(pouContent), w.method) ?? [];
         const target = to.split('__').pop()!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const at = lines.findIndex((l) => new RegExp(`:=\\s*(?:\\w+\\.)?${target}\\b`).test(l.replace(/\/\/.*$/, '')));
         handleOpenInspectorPanel('method', { method: `${w.method}()` });
@@ -9729,6 +9857,8 @@ export const App: React.FC = () => {
               }}
               onClose={() => setDockLayout((l) => closeDockTab(l, mode))}
               tcPouContent={pouContent}
+              methodPouContent={inheritedMethodsRecord ? chartPou : undefined}
+              inheritedMethods={inheritedMethodsRecord}
               tcPouFileName={pouFileName || 'POU.TcPOU'}
               tcDutContent={enumSubView?.content ?? dutContent}
               tcDutFileName={enumSubView?.fileName ?? (dutFileName || 'EnumDeclaration.TcDUT')}

@@ -92,6 +92,8 @@ const VARIABLE_GROUPS: { source: SearchVariable['source']; label: string }[] = [
 
 export interface MethodStructuredTextEditorProps {
   tcPouContent?: string;
+  /** A POU that EXTENDS another: its inherited methods (name as listed, lower case -> the base): marked; saving one changes the base */
+  inheritedMethods?: Record<string, string>;
   tcPouFileName?: string;
   initialMethod?: string;
   /** Go to this line of the method's implementation (a new nonce each request): scroll, unfold, highlight */
@@ -113,6 +115,7 @@ export interface MethodStructuredTextEditorProps {
 
 export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProps> = ({
   tcPouContent = '',
+  inheritedMethods,
   tcPouFileName = 'POU.TcPOU',
   initialMethod,
   codeJump,
@@ -1524,17 +1527,29 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                 className="bg-slate-950 border border-slate-700 hover:border-slate-600 focus:border-sky-500 rounded-md px-2 py-1 text-xs font-mono text-sky-300 font-semibold outline-none cursor-pointer transition-colors max-w-[220px] sm:max-w-[280px]"
                 title="Select a method found in this .TcPOU file (sorted ascending)"
               >
-                {availableMethods.map((methodName) => (
-                  <option key={methodName} value={methodName}>
-                    {methodName}
-                  </option>
-                ))}
+                {availableMethods.map((methodName) => {
+                  const base = inheritedMethods?.[methodName.replace(/\(\)$/, '').toLowerCase()];
+                  return (
+                    <option key={methodName} value={methodName}>
+                      {base ? `${methodName}  · ${base}` : methodName}
+                    </option>
+                  );
+                })}
               </select>
               <span className="text-[10px] text-slate-400 font-mono hidden md:inline">
                 ({availableMethods.length} found)
               </span>
             </div>
 
+            {inheritedMethods?.[cleanMethodName.toLowerCase()] && (
+              <span
+                id="method-inherited-note"
+                className="text-[10px] px-1.5 py-0.5 rounded border border-sky-500/50 bg-sky-500/10 text-sky-200 font-mono shrink-0"
+                title={`Inherited from ${inheritedMethods[cleanMethodName.toLowerCase()]} (this POU EXTENDS it). Saving changes ${inheritedMethods[cleanMethodName.toLowerCase()]}.TcPOU itself, the base of other POUs too (asked once); Save writes it to its file`}
+              >
+                inherited · {inheritedMethods[cleanMethodName.toLowerCase()]}
+              </span>
+            )}
             {/* Only the exception is shown: a method that is not in the POU yet (saving adds it) */}
             {extractedInfo.methodFound ? null : (
               <span className="text-[10px] text-amber-400 flex items-center gap-1 font-mono shrink-0">

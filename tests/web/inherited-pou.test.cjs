@@ -2,7 +2,9 @@
 // host.cjs, as vscode-extension serves it): its base looked for in the PLC project (findPou: Common/, beside neither
 // the POU nor its folder), its enum found beside the base; the chart its states and the transitions of their methods
 // (its own override and the base's); the header says what it extends. A transition written in the base: its condition
-// not edited here (where it is written said); Go to code opens the base. Save writes the POU's own text only
+// not edited from the chart (where it is written said); Go to code opens its method in the Method Editor, which lists
+// the inherited methods with their base. The base changed on disk: the chart has it. An inherited method edited there:
+// asked once (the base of other POUs too), the chart has it, Save writes the base's file; the POU's own file untouched
 // (runner-timeout: 300)
 const h = require('../lib/harness.cjs');
 const fs = require('fs');
@@ -98,7 +100,7 @@ fs.writeFileSync(path.join(work, 'Common', 'Base', 'E_St.TcDUT'), '﻿' + dut);
     expect(/written in stEnabling\(\) of SM_Base/.test(toast), `editing its condition: refused, where it is said (${toast})`);
     expect(!(await p.$('#text-prompt-input')), 'no condition editor opened');
 
-    // Go to code on it: the base opened (VS Code: its .TcPOU)
+    // Go to code on it: the Method Editor at stEnabling(), marked inherited from SM_Base
     await p.keyboard.press('Escape');
     if (label) {
       await p.mouse.click(label.x, label.y, { button: 'right' });
@@ -106,11 +108,66 @@ fs.writeFileSync(path.join(work, 'Common', 'Base', 'E_St.TcDUT'), '﻿' + dut);
       const id = await p.evaluate(() => [...document.querySelectorAll('[id$="goto-code-btn"]')].find((b) => b.getBoundingClientRect().width > 0)?.id ?? '');
       if (id) await p.click(`#${id}`).catch(() => {});
     }
-    for (let t = 0; t < 4000 && !opened.length; t += 200) await h.sleep(200);
-    expect(opened.some((f) => /SM_Base\.TcPOU$/.test(f)), `Go to code: the base opened (${opened.map((f) => path.basename(f)).join(', ')})`);
+    await p.waitForSelector('#method-inherited-note', { timeout: 6000 }).catch(() => {});
+    const editor = await p.evaluate(() => ({
+      method: document.getElementById('method-selector-combobox')?.value ?? '',
+      note: document.getElementById('method-inherited-note')?.textContent?.trim() ?? '',
+      options: [...document.querySelectorAll('#method-selector-combobox option')].map((o) => o.textContent.trim()),
+    }));
+    expect(editor.method === 'stEnabling()' && /inherited · SM_Base/.test(editor.note), `Go to code: stEnabling() in the Method Editor, marked inherited (${editor.method}, ${editor.note})`);
+    expect(editor.options.includes('stIdle()') && editor.options.some((o) => /^SM_Base\.stIdle\(\)\s+· SM_Base$/.test(o)) && editor.options.some((o) => /^stRun\(\)\s+· SM_Base$/.test(o)), `the inherited methods listed with their base (${editor.options.join(' | ')})`);
+
+    // The base changed on disk (TwinCAT, git): the chart has it
+    const basePath = path.join(work, 'Common', 'Base', 'SM_Base.TcPOU');
+    fs.writeFileSync(basePath, fs.readFileSync(basePath, 'utf8').replace('IF bDone THEN', 'IF bDoneOnDisk THEN'));
+    host.changed(basePath);
+    const hasLabel = (rx) => p.evaluate((src) => [...document.querySelectorAll('#mermaid-canvas-area g.edgeLabel')].some((x) => new RegExp(src).test(x.textContent)), rx);
+    let onDisk = false;
+    for (let t = 0; t < 8000 && !onDisk; t += 250) {
+      await h.sleep(250);
+      onDisk = await hasLabel('bDoneOnDisk');
+    }
+    expect(onDisk, 'the base changed on disk: the chart shows it');
+
+    // An inherited method edited: asked once (the base of other POUs too), Save writes the base, not the POU
+    await p.evaluate(() => {
+      const sel = document.getElementById('method-selector-combobox');
+      const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+      set.call(sel, 'stError()');
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await h.sleep(600);
+    const typed = await p.evaluate(() => {
+      const ta = document.querySelector('textarea#method-implementation-editor');
+      if (!ta || !ta.value.includes('cmd_bReset')) return false;
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      set.call(ta, ta.value.replace('cmd_bReset', 'cmd_bResetEdited'));
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    });
+    expect(typed, 'stError() (inherited) edited in the Method Editor');
+    await h.sleep(300);
+    await p.click('#method-save-btn').catch(() => {});
+    await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+    const asked = await p.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+    expect(/Change SM_Base\?/.test(asked) && /base of other POUs too/.test(asked), `saving it: asked first (${asked.replace(/\s+/g, ' ').slice(0, 120)})`);
+    await p.click('#text-prompt-submit').catch(() => {});
+    let edited = false;
+    for (let t = 0; t < 6000 && !edited; t += 250) {
+      await h.sleep(250);
+      edited = await hasLabel('cmd_bResetEdited');
+    }
+    expect(edited, 'confirmed: the chart has the change');
+    await p.click('#header-save-btn').catch(() => {});
+    let written = '';
+    for (let t = 0; t < 8000 && !/cmd_bResetEdited/.test(written); t += 250) {
+      await h.sleep(250);
+      written = fs.readFileSync(basePath, 'utf8');
+    }
+    expect(/IF cmd_bResetEdited THEN/.test(written) && /bDoneOnDisk/.test(written) && written.charCodeAt(0) === 0xfeff && !/KvalInheritedFrom|kss-inherited/.test(written), 'Save: the base written (its own text, the change in it, its BOM kept)');
 
     // Save: the POU's own text only (the merged methods never in it)
-    expect(fs.readFileSync(pouPath, 'utf8') === '﻿' + derived, 'the file: untouched');
+    expect(fs.readFileSync(pouPath, 'utf8') === '\ufeff' + derived, 'the POU file: untouched');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
     await browser.close().catch(() => {});

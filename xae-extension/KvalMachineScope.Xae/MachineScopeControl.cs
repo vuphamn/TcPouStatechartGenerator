@@ -609,7 +609,9 @@ namespace KvalMachineScope.Xae
                 }
                 var content = HostFiles.CurrentContent(_pane, target);
                 var duts = HostFiles.FindDutFiles(Path.GetDirectoryName(target));
-                // (its enum can be edited and saved, as the POU's own folder's: known, and watched)
+                // (it and its enum can be edited and saved, as the POU's own folder's: known, and watched)
+                _lastSeen[target] = HostFiles.ContentKey(content);
+                Watch(Path.GetDirectoryName(target));
                 foreach (var d in duts)
                 {
                     _lastSeen[d.path] = HostFiles.ContentKey(d.content);

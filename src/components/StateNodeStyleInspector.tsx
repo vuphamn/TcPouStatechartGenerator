@@ -203,6 +203,10 @@ export interface StateNodeStyleInspectorProps {
   onSelectState: (stateId: string, label?: string) => void;
   onClose: () => void;
   tcPouContent?: string;
+  /** The Method Editor's POU text: a POU that EXTENDS another, its bases' methods merged in (else tcPouContent) */
+  methodPouContent?: string;
+  /** ...its inherited methods (name lower case -> the base) */
+  inheritedMethods?: Record<string, string>;
   tcPouFileName?: string;
   tcDutContent?: string;
   tcDutFileName?: string;
@@ -243,6 +247,8 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
   onSelectState,
   onClose,
   tcPouContent,
+  methodPouContent,
+  inheritedMethods,
   tcPouFileName,
   tcDutContent,
   tcDutFileName,
@@ -601,7 +607,8 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
           <div className="flex-1 min-h-0 flex flex-col">
             <MethodStructuredTextEditor
               liveStateId={liveStateId}
-              tcPouContent={tcPouContent}
+              tcPouContent={methodPouContent ?? tcPouContent}
+              inheritedMethods={inheritedMethods}
               tcPouFileName={tcPouFileName}
               initialMethod={initialMethod || 'doState()'}
               codeJump={codeJump}

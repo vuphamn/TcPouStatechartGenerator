@@ -169,7 +169,12 @@ function createHost({ pouPath, post, ui }) {
     findPou: ({ requestId, typeName }) => {
       const found = /^[A-Za-z_]\w*$/.test(typeName ?? '') && findFile(projectRoot(pou), new RegExp(`^${typeName}\\.TcPOU$`, 'i'));
       if (!found) return post({ type: 'findPouResult', requestId, typeName, error: `${typeName}.TcPOU was not found in the PLC project` });
-      post({ type: 'findPouResult', requestId, typeName, source: { name: path.basename(found), path: found, content: readText(found), dutCandidates: findDutFiles(path.dirname(found)) } });
+      const content = readText(found);
+      const duts = findDutFiles(path.dirname(found));
+      // (it and its enum can be edited and saved here: known, as the POU's own folder's)
+      lastSeen.set(found, contentKey(content));
+      for (const d of duts) lastSeen.set(d.path, contentKey(d.content));
+      post({ type: 'findPouResult', requestId, typeName, source: { name: path.basename(found), path: found, content, dutCandidates: duts } });
     },
     saveDocument: async ({ name, content }) => {
       const p = (await ui.pick('save', name))?.[0];

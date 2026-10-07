@@ -387,8 +387,10 @@ export async function webFindPou(typeName: string, ask: boolean): Promise<PouSou
   const hit = await find(grantedFolder, '', 0);
   if (!hit) return { error: `${typeName}.TcPOU was not found in the folder ${grantedFolder.name}` };
   try {
-    const content = (await (await hit.file.getFile()).text()).replace(/^﻿/, '');
-    return { name: hit.file.name, content, dutCandidates: await readCandidates(hit.dir, hit.prefix) };
+    const content = (await (await hit.file.getFile()).text()).replace(/^\ufeff/, '');
+    // (its edits written back as another POU's: writeWebOtherPous, by this path)
+    pouHandles.set(hit.prefix + hit.file.name, hit.file);
+    return { name: hit.file.name, path: hit.prefix + hit.file.name, content, dutCandidates: await readCandidates(hit.dir, hit.prefix) };
   } catch (e) {
     return { error: `${typeName}.TcPOU could not be read: ${String(e)}` };
   }
