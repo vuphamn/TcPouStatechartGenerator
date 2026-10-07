@@ -20,7 +20,8 @@
     "test:web": "node tests/run.cjs web",
     "test:live": "node tests/run.cjs live",
     "test:desktop": "node tests/run.cjs desktop",
-    "test:all": "node tests/run.cjs all"
+    "test:all": "node tests/run.cjs all",
+    "build:vscode": "npm run build && node vscode-extension/pack.cjs"
   },
   "build": {
     "appId": "com.kval.machinescope",

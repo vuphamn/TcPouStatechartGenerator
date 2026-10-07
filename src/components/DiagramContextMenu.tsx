@@ -30,6 +30,7 @@ export interface ContextMenuExtraItem {
   onSelect: () => void;
 }
 import { copyTextToClipboard } from '../utils/diagramExport.ts';
+import { hostEditorName } from '../utils/xaeHost.ts';
 
 interface DiagramContextMenuProps {
   x: number;
@@ -333,7 +334,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
                 title={target.type === 'node' ? "Open doState() at this state's CASE branch in TwinCAT's editor" : "Open the code of this transition in TwinCAT's editor"}
               >
                 <Code2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Show in TwinCAT editor</span>
+                <span>Show in {hostEditorName()}</span>
               </button>
             )}
 

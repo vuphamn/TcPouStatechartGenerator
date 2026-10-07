@@ -169,6 +169,10 @@ const bridge = (window as unknown as { chrome?: { webview?: WebViewBridge } }).c
 
 /** Running inside the TwinCAT XAE extension */
 export const isXaeHost = () => Boolean(bridge);
+/** Hosted in VS Code (its extension's webview: its shim sets window.__kssHost), not in TwinCAT XAE */
+export const isVsCodeHost = () => isXaeHost() && (window as unknown as { __kssHost?: string }).__kssHost === 'vscode';
+/** Where "Show in …" opens the code: VS Code's editor (the .TcPOU), else TwinCAT's */
+export const hostEditorName = () => (isVsCodeHost() ? 'the .TcPOU (VS Code)' : 'TwinCAT editor');
 
 export function postToHost(message: AppMessage): void {
   bridge?.postMessage(message);

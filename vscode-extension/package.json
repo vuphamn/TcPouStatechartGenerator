@@ -1,0 +1,57 @@
+{
+  "name": "kval-machinescope-vscode",
+  "displayName": "Kval MachineScope",
+  "description": "TwinCAT state machines (.TcPOU) as statecharts in VS Code: view, edit, simulate; the code saved back to the files",
+  "version": "1.0.0",
+  "publisher": "kval",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "kvalMachineScope.statechart",
+        "displayName": "Kval MachineScope Statechart",
+        "selector": [
+          {
+            "filenamePattern": "*.TcPOU"
+          },
+          {
+            "filenamePattern": "*.tcpou"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "kvalMachineScope.open",
+        "title": "Open in Kval MachineScope",
+        "category": "Kval MachineScope"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "kvalMachineScope.open",
+          "when": "resourceExtname =~ /^\\.tcpou$/i",
+          "group": "navigation@9"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "kvalMachineScope.open",
+          "when": "resourceExtname =~ /^\\.tcpou$/i",
+          "group": "navigation@9"
+        }
+      ]
+    }
+  }
+}

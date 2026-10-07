@@ -30,6 +30,7 @@ import {
   compactStyle,
 } from '../utils/edgeStyles.ts';
 import { parseConditionClauses } from '../utils/interactiveDiagram.ts';
+import { hostEditorName } from '../utils/xaeHost.ts';
 
 export interface TransitionGuardInspectorProps {
   edge: EdgeInfo;
@@ -459,7 +460,7 @@ export const TransitionGuardInspector: React.FC<TransitionGuardInspectorProps> =
             title="Open the code of this transition in TwinCAT's editor"
           >
             <Code2 className="w-3 h-3" />
-            Show in TwinCAT editor
+            Show in {hostEditorName()}
           </button>
         ) : (
           <span className="truncate">Click the selected transition again to close</span>

@@ -102,6 +102,10 @@ The state enum is found automatically. By convention the `.TcDUT` sits in the sa
 
 When more than one `.TcDUT` matches, the header shows the count; click the enum name to pick another one.
 
+### Inside VS Code
+
+`vscode-extension/` builds a VS Code extension (`npm run build:vscode` writes `release/kval-machinescope-vscode-<version>.vsix`; install it with **Extensions → … → Install from VSIX…**). Right-click a `.TcPOU` in the Explorer → **Open in Kval MachineScope** (or **Open With… → Kval MachineScope Statechart**): the app opens as an editor tab, with full file access, unlike VS Code's built-in browser. Its `.TcDUT` is found in the POU's folder and below, **Save** writes the files back (a file changed on disk since it was loaded is not overwritten unless you keep your edits), **Show in the .TcPOU (VS Code)** opens the file beside the chart at that line, the layout is kept in `<POU>.machinescope.json`, and a change on disk (TwinCAT, git) is picked up. Live view, building the PLC project and the project's other files are not available there. See [vscode-extension/README.md](vscode-extension/README.md).
+
 ### Inside TwinCAT XAE (prototype)
 
 `xae-extension/` builds a Visual Studio extension (VSIX) for TcXaeShell 64-bit and Visual Studio 2022 / 2026. It adds **Open in Kval MachineScope** to the right-click menu of `.TcPOU` files and shows the app as a document tab in XAE. Inside XAE you get **Save to project** for edits, **Show in TwinCAT editor**, and a **Live** tab. The Live tab follows the state machine in the running PLC over ADS: the active state lights up on the diagram, and a trail lists every transition with its dwell time. See [xae-extension/README.md](xae-extension/README.md). The desktop app has the same Live tab for a PLC on another computer, without XAE (see [Live view in the desktop app](#live-view-in-the-desktop-app)), and so does the web edition, through a small helper on the same computer or a shared gateway (see [Live view in the web edition](#live-view-in-the-web-edition)).
