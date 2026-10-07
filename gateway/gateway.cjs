@@ -141,6 +141,8 @@ class PlcConnection {
     this.stateTimer = null;
     this.idleTimer = null;
     this.plcState = null;
+    // (its symbol version: a change is another program; read again on each connection)
+    this.symbolVersion = null;
   }
 
   async connect() {
@@ -187,6 +189,18 @@ class PlcConnection {
     if (!this.client) return;
     try {
       const state = ads.ADS_STATES[(await this.client.readState()).adsState] ?? 'unknown';
+      // Another program (a download, an activation): its viewers connect again (the old handles are gone), the
+      // symbol browser's types read anew
+      const version = await ads.symbolVersion(this.client);
+      if (version !== null) {
+        const changed = this.symbolVersion != null && version !== this.symbolVersion;
+        this.symbolVersion = version;
+        if (changed) {
+          this.dtCache = null;
+          log(`ads: ${this.plc.id}: the program changed (symbol version ${version})`);
+          for (const v of this.viewers) v.send({ type: 'liveStatus', state: 'programChanged', plcState: state, message: "The PLC's program changed (a download or an activation)" });
+        }
+      }
       if (state !== this.plcState) {
         this.plcState = state;
         for (const v of this.viewers) v.send({ type: 'liveStatus', state: 'plcState', plcState: state });
@@ -273,6 +287,7 @@ class PlcConnection {
     const client = this.client;
     this.client = null;
     this.dtCache = null; // symbol browser: the next connection may have another program
+    this.symbolVersion = null;
     this.viewers.clear();
     for (const entry of this.symbols.values()) await this.unwatchEntry(entry);
     this.symbols.clear();
@@ -1041,9 +1056,12 @@ function start() {
         }, 50);
         log(`live: ${user} follows ${symbol} on ${plc.id} (${entry.viewers.size} viewer(s))`);
         audit.add(user, 'live', { plc: plc.id, symbol });
+        // (the instance's own type: the app says when it is not the loaded POU's)
+        const instanceType = (await ads.probe(conn.client, chosen).catch(() => null))?.type ?? null;
+        conn.symbolVersion ??= await ads.symbolVersion(conn.client);
         send({
           type: 'liveStatus', state: 'connected', message: `${symbol} on ${plc.name} (PLC ${conn.plcState})`,
-          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type,
+          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type, instanceType,
         });
       } catch (err) {
         if (seq !== startSeq) return;

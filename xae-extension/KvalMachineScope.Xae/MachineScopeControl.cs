@@ -1240,8 +1240,8 @@ namespace KvalMachineScope.Xae
             {
                 await TaskScheduler.Default;
                 var monitor = new LiveMonitor();
-                string chosen = null, plcState = null, type = null, error = null;
-                int? twinCatBuild = null;
+                string chosen = null, plcState = null, type = null, error = null, instanceType = null;
+                int? twinCatBuild = null, symbolVersion = null;
                 var found = new List<string>();
                 try
                 {
@@ -1265,6 +1265,10 @@ namespace KvalMachineScope.Xae
                             : $"The PLC ({plcState}) has none of {string.Join(", ", candidates.Take(3))}{(candidates.Count > 3 ? ", ..." : "")}: is the current program downloaded? Or enter the instance path", 0);
                     }
                     type = info.Type;
+                    // (the instance's own type: the app says when it is not the loaded POU's; the symbol version: a
+                    // new program downloaded later is noticed)
+                    instanceType = monitor.Probe(chosen)?.Type;
+                    symbolVersion = monitor.ReadSymbolVersion();
                     monitor.Subscribe(chosen + "." + stateVar, info.Size);
                 }
                 catch (Exception ex) when (ex is AdsException || ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is BadImageFormatException)
@@ -1284,6 +1288,7 @@ namespace KvalMachineScope.Xae
                 }
                 _live = monitor;
                 _liveTicks = 0;
+                _liveSymbolVersion = symbolVersion;
                 ApplyLiveWatch();
                 _liveTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
                 _liveTimer.Tick += OnLiveTick;
@@ -1302,8 +1307,10 @@ namespace KvalMachineScope.Xae
                     instance = chosen,
                     instances = found,
                     symbolType = type,
+                    instanceType,
                     twinCatBuild,
-                    xaeBuild = XaeBuild,
+                    xaeBuild = ActiveXaeBuild(out var xaeVersion),
+                    xaeVersion,
                 });
             });
         }
@@ -1334,6 +1341,38 @@ namespace KvalMachineScope.Xae
         }
 #endif
 
+        /// <summary>
+        /// The engineering build this XAE has loaded: its Remote Manager's version ("3.1.4024.59": 4024, version
+        /// "4024.59"); without one (no Remote Manager, an older TwinCAT), the build guessed above
+        /// </summary>
+        private static int ActiveXaeBuild(out string version)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            version = null;
+            try
+            {
+                if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)
+                {
+                    dynamic manager = dte.GetObject("TcRemoteManager");
+                    string text = manager?.Version;
+                    var m = System.Text.RegularExpressions.Regex.Match(text ?? "", @"^3\.1\.(\d{4})(?:\.(\d+))?");
+                    if (m.Success)
+                    {
+                        version = m.Groups[2].Success ? $"{m.Groups[1].Value}.{m.Groups[2].Value}" : m.Groups[1].Value;
+                        return int.Parse(m.Groups[1].Value);
+                    }
+                }
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                // (no Remote Manager here)
+            }
+            return XaeBuild;
+        }
+
+        // The PLC's symbol version when live connected (a change: another program was downloaded or activated)
+        private int? _liveSymbolVersion;
+
         private void OnLiveTick(object sender, EventArgs e)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -1350,13 +1389,26 @@ namespace KvalMachineScope.Xae
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 string state = null, error = null;
+                int? symbolVersion = null;
                 await TaskScheduler.Default;
-                try { state = monitor.ReadState(); }
+                try
+                {
+                    state = monitor.ReadState();
+                    symbolVersion = monitor.ReadSymbolVersion();
+                }
                 catch (AdsException ex) { error = ex.Message; }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 _liveStateCheck = false;
                 if (session != _liveSession) return;
                 if (error != null) Post(new { type = "liveStatus", state = "lost", message = "Connection lost: " + error });
+                else if (symbolVersion.HasValue && _liveSymbolVersion.HasValue && symbolVersion != _liveSymbolVersion)
+                {
+                    // Another program (a download, an activation): the app connects again (the instance, its type, the
+                    // symbols read anew; the old handles are gone)
+                    _liveSymbolVersion = symbolVersion;
+                    Log.Write($"live: the PLC's program changed (symbol version {symbolVersion})");
+                    Post(new { type = "liveStatus", state = "programChanged", plcState = state, message = "The PLC's program changed (a download or an activation)" });
+                }
                 else Post(new { type = "liveStatus", state = "plcState", plcState = state });
             });
         }

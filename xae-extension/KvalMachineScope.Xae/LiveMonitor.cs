@@ -110,6 +110,17 @@ namespace KvalMachineScope.Xae
             return version.Version == 3 && version.Revision == 1 && version.Build > 4000 ? version.Build : (int?)null;
         }
 
+        /// <summary>
+        /// The PLC's symbol version: it changes with each download or activation (another program, new symbols); null
+        /// when it cannot be read
+        /// </summary>
+        public int? ReadSymbolVersion()
+        {
+            if (_port == 0) return null;
+            var value = new byte[1];
+            return AdsNative.AdsSyncReadReqEx2(_port, ref _target, AdsNative.SymVersion, 0, 1, value, out _) == 0 ? value[0] : (int?)null;
+        }
+
         /// <summary>The PLC's ADS state now ("Run", "Stop", ...)</summary>
         public string ReadState()
         {
@@ -638,6 +649,7 @@ namespace KvalMachineScope.Xae
         public const uint SymHandleByName = 0xF003;
         public const uint SymValueByHandle = 0xF005;
         public const uint SymReleaseHandle = 0xF006;
+        public const uint SymVersion = 0xF008;
         public const uint SymInfoByNameEx = 0xF009;
         public const uint DtInfoByNameEx = 0xF011;
         public const int TransServerOnChange = 4;

@@ -111,6 +111,15 @@ async function releaseHandle(client, handle) {
   await client.writeRaw(SYM_RELEASE_HANDLE, 0, h);
 }
 
+/** The PLC's symbol version: it changes with each download or activation (another program); null when not readable */
+async function symbolVersion(client) {
+  try {
+    return (await client.readRaw(0xf008, 0, 1)).readUInt8(0);
+  } catch {
+    return null;
+  }
+}
+
 async function readByHandle(client, handle, size) {
   return decode(await client.readRaw(SYM_VALUE_BY_HANDLE, handle, size), size);
 }
@@ -402,6 +411,7 @@ module.exports = {
   adsErrorText,
   decode,
   probe,
+  symbolVersion,
   createHandle,
   releaseHandle,
   readByHandle,

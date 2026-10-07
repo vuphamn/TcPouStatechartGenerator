@@ -120,7 +120,7 @@ import {
   writeWebProjectFile,
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
-import { HostMessage, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
+import { HostMessage, isVsCodeHost, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
 import { setOpenTypeHandler, type OpenTypeWhere, type InlineRename } from './utils/openType.ts';
 import { declareInDeclaration, declareVariables, declarationVariables, guessType, removeFromDeclaration, type NewVariable } from './utils/pouVariables.ts';
 import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
@@ -1681,6 +1681,12 @@ export const App: React.FC = () => {
   const [instancePicker, setInstancePicker] = useState<{ instances: string[]; current: string | null; typeName?: string; onPick?: (instance: string) => void; onDismiss?: () => void } | null>(null);
   const instancePickedRef = useRef(false);
   const handleLiveStatus = useCallback((m: Extract<HostMessage, { type: 'liveStatus' }>) => {
+    // Another program downloaded or activated while connected: connected again (the instance, its type, the symbols
+    // read anew; the old handles are gone)
+    if (m.state === 'programChanged') {
+      programChangedRef.current?.(m.message ?? "The PLC's program changed");
+      return;
+    }
     if (m.state === 'plcState') {
       setLiveStatus((prev) =>
         prev.state === 'connected' && prev.plcState !== m.plcState
@@ -1704,7 +1710,8 @@ export const App: React.FC = () => {
       instances: m.instances && m.instances.length ? m.instances : prev.instances,
       route: m.route ?? prev.route,
       ports: state === 'error' ? m.ports : undefined,
-      versions: state === 'connected' ? (m.twinCatBuild || m.xaeBuild ? { plc: m.twinCatBuild ?? null, xae: m.xaeBuild ?? null } : undefined) : prev.versions,
+      versions: state === 'connected' ? (m.twinCatBuild || m.xaeBuild ? { plc: m.twinCatBuild ?? null, xae: m.xaeBuild ?? null, xaeVersion: m.xaeVersion ?? null } : undefined) : prev.versions,
+      instanceType: state === 'connected' ? m.instanceType ?? null : prev.instanceType,
       // (the gateway's user and PLCs: from its welcome, kept)
       user: prev.user,
       plcs: prev.plcs,
@@ -6193,6 +6200,8 @@ export const App: React.FC = () => {
   );
   // Another instance of this POU followed here instead: live again on it (stopped first when connected)
   const liveRestartRef = useRef<string | null>(null);
+  // A new program on the PLC (a download, an activation): Live connects again (set below)
+  const programChangedRef = useRef<((why: string) => void) | null>(null);
   const handleGoLiveHere = useCallback(
     (path: string) => {
       liveRestartRef.current = path;
@@ -6207,6 +6216,41 @@ export const App: React.FC = () => {
     liveRestartRef.current = null;
     handleLiveStartRef.current();
   }, [liveSettings.instance, liveStatus.state]);
+  // A new program on the PLC (a download, an activation) while connected: stopped, then live again (the instance
+  // found again, its type checked, the symbols read anew)
+  const restartAfterStopRef = useRef(false);
+  programChangedRef.current = (why) => {
+    if (liveStatus.state !== 'connected') return;
+    showCopyToast(`${why}: Live connects again`, 'success', 5000);
+    restartAfterStopRef.current = true;
+    handleLiveStopRef.current();
+  };
+  useEffect(() => {
+    if (!restartAfterStopRef.current || liveStatus.state === 'connected' || liveStatus.state === 'connecting') return;
+    restartAfterStopRef.current = false;
+    handleLiveStartRef.current();
+  }, [liveStatus.state]);
+  // The PLC's followed instance of another type than the loaded POU (another program runs there): said in the Live
+  // tab, its type offered. A type that EXTENDS the loaded POU is its state machine, extended: no warning
+  const liveTypeMismatch = useMemo(() => {
+    const plc = liveStatus.state === 'connected' ? liveStatus.instanceType : null;
+    if (!plc || !pouTypeName) return null;
+    const bare = plc.split('.').pop()!.trim();
+    const pou = pouTypeName.toLowerCase();
+    if (bare.toLowerCase() === pou) return null;
+    const types = getProjectSymbols()?.types;
+    for (let t = types?.get(bare.toLowerCase()), k = 0; t && k < 8; t = t.extends ? types?.get(t.extends.toLowerCase()) : undefined, k++) {
+      if (t.extends?.toLowerCase() === pou) return null;
+    }
+    return {
+      instance: liveStatus.instance ?? 'The followed instance',
+      plcType: bare,
+      pouType: pouTypeName,
+      // (XAE, the desktop app: that POU of the PLC project opened here)
+      onOpen: (isXaeHost() && !isVsCodeHost()) || isDesktopApp() ? () => void openPouInProject(bare) : undefined,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus.state, liveStatus.instanceType, liveStatus.instance, pouTypeName, symbolsVersion, openPouInProject]);
   // The PLC project's sources as the PLC keeps them: read once per connection (a few MB), through the live connection
   // (plcProject: another PLC project on the same target; each read once)
   const plcSourcesRef = useRef<Map<string, Promise<PlcSources>>>(new Map());
@@ -9987,6 +10031,7 @@ export const App: React.FC = () => {
       {isDockTabMounted('live') &&
         createPortal(
           <LivePanel
+            typeMismatch={liveTypeMismatch}
             watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()] }))}
             onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}

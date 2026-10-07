@@ -2,7 +2,8 @@
 // Usage: node fake-ams2.cjs <tcpPort> <config.json>
 //   config: { symbols: { name: { type, dataType, size, value } }, script: [{ hold: ms, set: { name: value } }],
 //     adsState (ReadState: 5 Run, 6 Stop), countOnRead: [names] (their value goes up by one after each read: an online
-//     change counter seen changing) }
+//     change counter seen changing), symbolVersion (ADS 0xF008: changes with each download; a script step
+//     { symbolVersion: n, retype: { name: type } } stands for a download of another program) }
 const net = require('net');
 const fs = require('fs');
 const [, , tcpPortArg, configFile] = process.argv;
@@ -15,6 +16,7 @@ const byHandle = new Map([...symbols.values()].map((s) => [s.handle, s]));
 const subs = new Map(); // notification id -> { sock, client, plc, sym }
 let nextNotification = 1;
 let scriptStarted = false;
+let symbolVersion = config.symbolVersion ?? 1;
 const handlesGiven = new Set();
 const released = [];
 // The boot folder's files opened (system service): handle -> { data, at }
@@ -76,6 +78,16 @@ async function runScript() {
   scriptStarted = true;
   for (const step of config.script || []) {
     await new Promise((r) => setTimeout(r, step.hold));
+    // (another program downloaded: the symbol version, a symbol's type)
+    if (step.symbolVersion !== undefined) {
+      symbolVersion = step.symbolVersion;
+      log('symbol version', symbolVersion);
+    }
+    for (const [name, type] of Object.entries(step.retype || {})) {
+      const t = symbols.get(name.toLowerCase());
+      if (t) t.type = type;
+      log('retype', name, type);
+    }
     for (const [name, v] of Object.entries(step.set || {})) {
       const s = symbols.get(name.toLowerCase());
       if (!s) continue;
@@ -284,6 +296,8 @@ function handle(sock, f) {
         info.writeUInt32LE(entries.length, 0); info.writeUInt32LE(table.length, 4);
         return result(0, withLength(info));
       }
+      // The symbol version (a download changes it)
+      if (ig === 0xf008) return result(0, withLength(Buffer.from([symbolVersion & 0xff])));
       if (ig !== 0xf005 || !byHandle.has(io)) return result(0x703);
       const read = byHandle.get(io);
       const value = withLength(encode(read));

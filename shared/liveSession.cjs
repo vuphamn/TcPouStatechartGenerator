@@ -377,11 +377,15 @@ function createLiveSession(hooks = {}) {
       s.handle = await ads.createHandle(client, symbol);
       s.queue.push({ t: Date.now(), value: await ads.readByHandle(client, s.handle, info.size) });
       s.subscription = await ads.subscribeHandle(client, s.handle, info.size, (sample) => s.queue.push(sample));
+      // (the instance's own type: the app says when it is not the loaded POU's; the symbol version: a new program
+      // downloaded later is noticed)
+      const instanceType = (await ads.probe(client, chosen).catch(() => null))?.type ?? null;
+      s.symbolVersion = await ads.symbolVersion(client);
       if (id !== sessionId) throw new Error('stopped');
       startTimers(s, send, status);
       s.connected = true;
       status('connected', `${symbol} on ${host} (${netId}:${adsPort}) (PLC ${plcState})`, {
-        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, route,
+        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, route,
       });
       return { symbol, netId, adsPort };
     } catch (err) {
@@ -405,7 +409,14 @@ function createLiveSession(hooks = {}) {
     s.stateTimer = setInterval(async () => {
       try {
         const st = ads.ADS_STATES[(await s.client.readState()).adsState] ?? 'unknown';
-        if (s.id === sessionId) send({ type: 'liveStatus', state: 'plcState', plcState: st });
+        const version = await ads.symbolVersion(s.client);
+        if (s.id !== sessionId) return;
+        if (version !== null && s.symbolVersion != null && version !== s.symbolVersion) {
+          // Another program (a download, an activation): the app connects again (the instance, its type, the symbols
+          // read anew; the old handles are gone)
+          s.symbolVersion = version;
+          send({ type: 'liveStatus', state: 'programChanged', plcState: st, message: "The PLC's program changed (a download or an activation)" });
+        } else send({ type: 'liveStatus', state: 'plcState', plcState: st });
       } catch (err) {
         status('lost', `Connection lost: ${ads.adsErrorText(err)}`);
       }

@@ -23,8 +23,10 @@ export interface LiveStatus {
   route?: { localNetId: string; localIp: string };
   /** Nothing on the chosen ADS port: the ports that have a PLC */
   ports?: { port: number; state: string }[];
-  /** XAE: the PLC's TwinCAT build and the XAE's (null: not known) */
-  versions?: { plc: number | null; xae: number | null };
+  /** XAE: the PLC's TwinCAT build and the XAE's (null: not known; xaeVersion: its Remote Manager's, "4024.59") */
+  versions?: { plc: number | null; xae: number | null; xaeVersion?: string | null };
+  /** The followed instance's own type in the PLC (compared with the loaded POU) */
+  instanceType?: string | null;
   /** Web edition: the PLCs the gateway offers, and who is signed in */
   plcs?: { id: string; name: string }[];
   user?: string;
@@ -49,6 +51,11 @@ export interface LiveSettings {
 }
 
 interface LivePanelProps {
+  /**
+   * The PLC's followed instance is of another type than the loaded POU (another program runs there): said, and its
+   * type offered (onOpen)
+   */
+  typeMismatch?: { instance: string; plcType: string; pouType: string; onOpen?: () => void } | null;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string }[];
   onUnwatch?: (name: string) => void;
@@ -264,6 +271,7 @@ const GUARD_BADGE = {
 const MAX_SHOWN = 200;
 
 export const LivePanel: React.FC<LivePanelProps> = ({
+  typeMismatch,
   watchList,
   onUnwatch,
   mode,
@@ -492,7 +500,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             const warn = versionWarning(status.versions.plc, status.versions.xae);
             return (
               <span id="live-versions" data-plc={status.versions.plc} data-xae={status.versions.xae ?? undefined} data-warn={warn ? 'true' : undefined} className={`shrink-0 px-1.5 rounded border text-[11px] ${warn ? 'border-amber-500/70 bg-amber-950/60 text-amber-200' : 'border-slate-700 text-slate-400'}`} title={warn ?? `The PLC runs TwinCAT 3.1.${status.versions.plc}${status.versions.xae ? `; this XAE is TwinCAT ${status.versions.xae}'s` : ''}`}>
-                {warn ? '⚠ ' : ''}TwinCAT 3.1.{status.versions.plc}{status.versions.xae ? ` · XAE ${status.versions.xae}` : ''}
+                {warn ? '⚠ ' : ''}TwinCAT 3.1.{status.versions.plc}{status.versions.xae ? ` · XAE ${status.versions.xaeVersion ?? status.versions.xae}` : ''}
               </span>
             );
           })()}
@@ -1242,6 +1250,22 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           </div>
         )}
       </div>
+
+      {/* The PLC runs another program than the loaded POU: the chart and the states shown are not what runs */}
+      {typeMismatch && status.state === 'connected' && (
+        <div id="live-type-mismatch" data-plc-type={typeMismatch.plcType} className="mx-2.5 mt-2 px-2 py-1.5 rounded border border-amber-500/70 bg-amber-950/60 text-amber-100 text-[11px] flex items-start gap-2">
+          <span className="shrink-0">⚠</span>
+          <span className="min-w-0">
+            <span className="font-mono">{typeMismatch.instance}</span> on this PLC is a <span className="font-mono font-semibold">{typeMismatch.plcType}</span>, not{' '}
+            <span className="font-mono">{typeMismatch.pouType}</span>: the PLC runs another program, so the chart and the state names shown here are not what runs (its value read with {typeMismatch.pouType}'s enum).
+          </span>
+          {typeMismatch.onOpen && (
+            <button type="button" id="live-type-mismatch-open" onClick={typeMismatch.onOpen} className="shrink-0 px-1.5 rounded bg-amber-600/40 hover:bg-amber-600/60 text-amber-50 font-semibold" title={`Open ${typeMismatch.plcType} of the PLC project in MachineScope`}>
+              Open {typeMismatch.plcType}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Current state */}
       <div className="p-2.5 border-b border-slate-800 shrink-0">

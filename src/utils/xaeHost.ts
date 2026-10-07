@@ -19,16 +19,20 @@ export type HostMessage =
   /** Live view: connection state (connected carries the followed instance and the instances found in the PLC) */
   | {
       type: 'liveStatus';
-      state: 'connecting' | 'connected' | 'error' | 'lost' | 'stopped' | 'plcState';
+      // (programChanged: another program was downloaded or activated while connected: the app connects again)
+      state: 'connecting' | 'connected' | 'error' | 'lost' | 'stopped' | 'plcState' | 'programChanged';
       message?: string;
       target?: string;
       plcState?: string;
       instance?: string;
       instances?: string[];
       symbolType?: string;
-      /** XAE: the PLC's TwinCAT build (3.1.4024: 4024; null: not known) and the XAE's */
+      /** The followed instance's own type in the PLC (MAIN.mainStateMachine: TransferTable): compared with the loaded POU */
+      instanceType?: string | null;
+      /** XAE: the PLC's TwinCAT build (3.1.4024: 4024; null: not known) and the XAE's (its Remote Manager's: "4024.59") */
       twinCatBuild?: number | null;
       xaeBuild?: number | null;
+      xaeVersion?: string | null;
       /** Desktop: the address this computer uses towards the PLC (the PLC needs a route for it) */
       route?: { localNetId: string; localIp: string };
       /** An error: nothing on the chosen ADS port, the PLC runtimes it has (port, state) */
