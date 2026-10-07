@@ -55,6 +55,25 @@ fs.mkdirSync(LOGS, { recursive: true });
   sweep(OUT, /^(electron-prof-|browser-)/);
   sweep(require('os').tmpdir(), /^kss-test-browser-/);
 }
+// A nearly full disk slows the browsers' big charts down enough for timing checks to fail (hovers, double-clicks,
+// fixed waits): said before the run, with what tests/.output holds (KSS_MIN_FREE_GB: the limit, 20 GB by default)
+try {
+  const free = fs.statfsSync(OUT).bavail * fs.statfsSync(OUT).bsize;
+  if (free < (Number(process.env.KSS_MIN_FREE_GB) || 20) * 1024 ** 3) {
+    let held = 0;
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else held += fs.statSync(p, { throwIfNoEntry: false })?.size ?? 0;
+      }
+    };
+    walk(OUT);
+    console.log(`\x1b[33m! Only ${(free / 1024 ** 3).toFixed(1)} GB free on this disk: tests on big charts may fail on timing (tests/.output holds ${(held / 1024 ** 3).toFixed(1)} GB)\x1b[0m\n`);
+  }
+} catch {
+  // (no statfs: Node 18.15+)
+}
 
 const argv = process.argv.slice(2);
 let filter = null;

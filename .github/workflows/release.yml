@@ -51,7 +51,17 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      # (a newer push on master already: its Tests run releases it, this one included; releasing this one as well would
+      # only be redone a few minutes later)
+      - id: newest
+        run: |
+          git fetch -q origin master
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ "$(git rev-parse origin/master)" != "${{ steps.sha.outputs.sha }}" ]; then
+            echo "newer=true" >> "$GITHUB_OUTPUT"
+            echo "A newer commit is on master ($(git rev-parse --short origin/master)): its own run releases it"
+          fi
       - id: plan
+        if: steps.newest.outputs.newer != 'true'
         run: node scripts/release-plan.cjs --force "${{ github.event.inputs.force }}"
 
   build:

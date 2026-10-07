@@ -103,7 +103,7 @@ const rescan = (s: Scope, lines: string[], stateVar: string, from: string | null
 
 /** The scope of an edge: its source state's branch in doState() (inMethod: in that method), or preProcess() */
 function edgeScope(pouXml: string, edge: EdgeRef, stateVar: string, inMethod?: string) {
-  if (edge.from === '[*]' || edge.to === '[*]') return { error: inMethod ? `Its entry is where ${inMethod}() sets its start, before its CASE: change it there (Go to code)` : 'The initial transition is the state variable’s initial value (in the declaration)' };
+  if (edge.from === '[*]' || edge.to === '[*]') return { error: inMethod ? `Its entry is where ${inMethod}() sets its start, before its CASE: change it there (Go to code)` : "The initial transition is the state variable's initial value (in the declaration)" };
   if (inMethod) return scopeOf(pouXml, inMethod, edge.from, stateVar);
   return isPreProcessEdge(edge) ? scopeOf(pouXml, 'preProcess', null, stateVar) : scopeOf(pouXml, 'doState', edge.from, stateVar);
 }
@@ -326,7 +326,7 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
       .trim();
   for (;;) {
     const st = parseList(s.code, s.lines, from, to).find((x) => inRange(t.line, x));
-    if (!st) return { error: `${name} is on the state’s label line: change it in the Method Editor` };
+    if (!st) return { error: `${name} is on the state's label line: change it in the Method Editor` };
     if (assignsIn(st) === 1) {
       const taken = lines.slice(st.start, st.end);
       return { lines: [...lines.slice(0, st.start), ...lines.slice(st.end)], taken: mode === 'move' ? wrap(taken) : taken, removed: taken, note: mode === 'move' ? aroundNote() : '' };
@@ -437,7 +437,7 @@ function takeTransition(s: Scope, t: Item, mode: 'move' | 'delete', edge: EdgeRe
 /** The edge's transition leaves another state: its code moves to the end of that state's branch (lowest priority) */
 export function moveTransitionStart(pouXml: string, edge: EdgeRef, newFrom: string, stateVar: string, inMethod?: string): TransitionEditResult {
   if (isPreProcessEdge(edge)) return { error: 'A preProcess() transition leaves any state: change its condition in preProcess()' };
-  if (newFrom === '[*]') return { error: 'The initial transition is the state variable’s initial value (in the declaration)' };
+  if (newFrom === '[*]') return { error: "The initial transition is the state variable's initial value (in the declaration)" };
   if (newFrom === edge.from) return { error: `It already leaves ${newFrom}` };
   if (newFrom === edge.to) return { error: `${newFrom} cannot go to itself: that is no transition` };
   const s = edgeScope(pouXml, edge, stateVar, inMethod);

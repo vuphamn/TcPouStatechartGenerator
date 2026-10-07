@@ -698,7 +698,7 @@ export function addForkJoinRegions(
   if (!dutContent.trim()) return { error: 'Load the .TcDUT enum first: the regions’ states are members of it' };
   if (target === from) return { error: `${from} cannot go to itself: that is no transition` };
   const enumType = declOf(dutContent).decl.match(/\bTYPE\s+([A-Za-z_]\w*)/i)?.[1];
-  if (!enumType) return { error: 'The enum’s TYPE was not found in the .TcDUT' };
+  if (!enumType) return { error: "The enum's TYPE was not found in the .TcDUT" };
   const doState = getMethodCodeFromPou(pouXml, 'doState');
   if (!doState.methodFound) return { error: 'The POU has no doState()' };
   if (!/\bbFirstPass\b/.test(blankComments(doState.code))) return { error: 'The regions start on entry: doState() needs bFirstPass (from the base FB)' };
@@ -816,7 +816,7 @@ export function addExceptionTransition(
     const span = compositeSpan(dutContent, source.composite);
     if (!span) return { error: `The composite ${source.composite} has no states` };
     const pre = getMethodCodeFromPou(pouXml, 'preProcess');
-    if (!pre.methodFound) return { error: 'The POU has no preProcess() for a composite’s exception transition' };
+    if (!pre.methodFound) return { error: "The POU has no preProcess() for a composite's exception transition" };
     const eol = pre.code.includes('\r\n') ? '\r\n' : '\n';
     const lines = pre.code.replace(/\s+$/, '').split(/\r?\n/);
     lines.push(

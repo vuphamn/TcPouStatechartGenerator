@@ -32,9 +32,9 @@ The **Simulation** tab steps through the state machine: a state's transitions in
 
 ### Sub-machines, running
 
-A state whose branch calls a method with a state machine of its own has that method's states drawn inside it. Simulated, or live, the state glows and so does its sub-machine's current state inside it, step by step.
+A state whose branch calls a method with a state machine of its own has that method's states drawn inside it, and a state of that one calling another has its own inside it in turn (the K-Test Station sample: Calibrate(), then Measure()). Simulated, or live, the state glows and so does each level's current state inside it, step by step, the innermost moving first.
 
-![A sub-machine simulated: the state glows, its sub-machine's state inside it moves with each Step](docs/demo/submachine.gif)
+![Nested sub-machines simulated: the state glows, each level's state inside it moves with each Step](docs/demo/submachine.gif)
 
 ### Follow the PLC live
 

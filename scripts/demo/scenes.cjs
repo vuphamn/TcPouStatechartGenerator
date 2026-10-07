@@ -314,30 +314,31 @@ module.exports = {
     async prepare(page, d, url) {
       await openSample(page, url);
       // (the samples' list: in the header, or its Hidden menu at this width)
-      if (await page.$('#sample-selector')) await page.select('#sample-selector', 'k-analog-measure');
+      if (await page.$('#sample-selector')) await page.select('#sample-selector', 'k-test-station');
       else {
         await page.click('#header-hidden-controls-btn');
-        await page.waitForSelector('#dock-menu-header-sample-k-analog-measure', { timeout: 5000 });
-        await page.click('#dock-menu-header-sample-k-analog-measure');
+        await page.waitForSelector('#dock-menu-header-sample-k-test-station', { timeout: 5000 });
+        await page.click('#dock-menu-header-sample-k-test-station');
       }
-      await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="KANALOGMEASURE_ENABLING__readDiagnostics__DIAG_READ_FINISH_ADR"]', { timeout: 90000 });
+      await page.waitForSelector('#mermaid-canvas-area g.node[data-state-id="KTESTSTATION_CALIBRATING__Calibrate__CAL_MEASURE__Measure__MEAS_READ"]', { timeout: 90000 });
       await sleep(2500);
       await page.evaluate(() => document.querySelector('#diagram-minimap-container button[title^="Close Minimap"]')?.click());
-      await focus(page, 'KANALOGMEASURE_ENABLING__readDiagnostics__DIAG_READ_FINISH_ADR', { notches: 4 });
+      await focus(page, 'KTESTSTATION_CALIBRATING__Calibrate__CAL_MEASURE__Measure__MEAS_READ', { notches: 3 });
     },
     async play(page, d) {
-      await d.caption('A state that calls a method with its own state machine: <b>readDiagnostics()</b>, drawn inside it', 2600);
+      await d.caption('A state that calls a method with its own state machine, <b>Calibrate()</b>, whose state CAL_MEASURE calls another one, <b>Measure()</b>: boxes in boxes', 3000);
       await tab(page, d, 'simulate');
-      await page.select('#sim-start-state', 'KANALOGMEASURE_ENABLING');
+      await page.select('#sim-start-state', 'KTESTSTATION_CALIBRATING');
       await sleep(400);
       await d.clickOn('#sim-start', { after: 1200 });
-      await d.caption('It runs while its call\'s condition holds: <b>status_bDiagnostics</b> = TRUE', 300);
-      await d.clickOn('#sim-var-status_bDiagnostics-true', { after: 1800 });
-      await d.caption('The state glows, and its sub-machine\'s state inside it', 1600);
-      await d.caption('<b>Step</b> through its states (fbEcCoESdoRead.bBusy = FALSE)', 300);
-      await d.clickOn('[id="sim-var-fbEcCoESdoRead.bBusy-false"]', { after: 900 }).catch(() => {});
-      for (let i = 0; i < 4; i++) await d.clickOn('#sim-step', { after: 1300 });
-      await d.caption('Live, the PLC\'s sub-machine state is marked the same way', 2200);
+      await d.caption("Calibrate() runs while its call's condition holds: <b>cmd_bCalibrate</b> = TRUE", 300);
+      await d.clickOn('#sim-var-cmd_bCalibrate-true', { after: 1800 });
+      await d.caption('<b>Step</b>: Calibrate() to CAL_MEASURE, which runs Measure() inside it', 300);
+      await d.clickOn('#sim-step', { after: 1600 });
+      await d.caption("The state glows, and each level's state inside it; the innermost moves first", 300);
+      await d.clickOn('[id="sim-var-tonSettle.Q-true"]', { after: 900 }).catch(() => {});
+      for (let i = 0; i < 3; i++) await d.clickOn('#sim-step', { after: 1400 });
+      await d.caption("Live, the PLC's sub-machines' states are marked the same way, at every level", 2400);
     },
   },
 

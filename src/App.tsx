@@ -1980,7 +1980,7 @@ export const App: React.FC = () => {
       }
       if (saved.length) showCopyToast(`Saved ${saved.join(' and ')}`, 'success');
       if (downloaded.length)
-        showCopyToast(`Downloaded ${downloaded.join(' and ')}: ${canWriteBack() ? 'open it with Browse to save in place next time' : isEmbeddedBrowser ? 'a browser inside another app (VS Code’s) cannot write files back: open the page in Chrome or Edge to save in place' : 'this browser cannot write files back'}; replace the original with it`, 'success', 9000);
+        showCopyToast(`Downloaded ${downloaded.join(' and ')}: ${canWriteBack() ? 'open it with Browse to save in place next time' : isEmbeddedBrowser ? "a browser inside another app (VS Code's) cannot write files back: open the page in Chrome or Edge to save in place" : 'this browser cannot write files back'}; replace the original with it`, 'success', 9000);
       if (conflicts.length)
         setPromptRequest({
           title: 'Changed on disk',
