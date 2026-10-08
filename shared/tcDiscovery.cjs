@@ -3,6 +3,9 @@
 // its AMS NetId, host name, TwinCAT version and OS. Read-only: nothing is changed on the devices.
 const dgram = require('dgram');
 const os = require('os');
+const fsys = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
 
 const MAGIC = 0x71146603;
 const SERVICE_SEARCH = 1;
@@ -83,7 +86,53 @@ function localNetworks() {
  * Searches for TwinCAT devices: broadcast on each local network (unless broadcast is false) and a request to each of
  * `addresses`. Resolves after `timeoutMs` with the devices found, one per AMS NetId.
  */
-async function discover({ localNetId, addresses = [], broadcast = true, timeoutMs = 2000, port = 48899 } = {}) {
+/**
+ * This computer's TwinCAT routes (StaticRoutes.xml where each TwinCAT keeps it: 4026's ProgramData, an install by
+ * the Package Manager under TwinCAT3's TwinCATDir, 4024's C:\\TwinCAT): [{ name, address, netId }], [] without TwinCAT
+ */
+function localRoutes() {
+  if (process.platform !== 'win32') return [];
+  const dirs = [path.join(process.env.ProgramData || 'C:\\ProgramData', 'Beckhoff', 'TwinCAT', '3.1', 'Target')];
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Beckhoff\\TwinCAT3', '/v', 'TwinCATDir'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    const dir = /TwinCATDir\s+REG_\w+\s+(.+)$/m.exec(out)?.[1]?.trim();
+    if (dir) dirs.push(path.join(dir, '3.1', 'Target'));
+  } catch {
+    // (no TwinCAT here)
+  }
+  dirs.push(path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Beckhoff', 'TwinCAT', '3.1', 'Target'), 'C:\\TwinCAT\\3.1\\Target');
+  const routes = [];
+  for (const d of [...new Set(dirs.map((x) => x.toLowerCase()))]) {
+    let xml;
+    try {
+      xml = fsys.readFileSync(path.join(d, 'StaticRoutes.xml'), 'utf8');
+    } catch {
+      continue;
+    }
+    // (a route's tags may carry attributes: <Route Unidirectional="true">)
+    for (const r of xml.matchAll(/<Route(?:\s[^>]*)?>([\s\S]*?)<\/Route>/gi)) {
+      const field = (n) => new RegExp(`<${n}(?:\\s[^>]*)?>([^<]*)</${n}>`, 'i').exec(r[1])?.[1]?.trim() ?? '';
+      const netId = field('NetId');
+      if (/^\d+(\.\d+){5}$/.test(netId) && !routes.some((x) => x.netId === netId)) routes.push({ name: field('Name'), address: field('Address'), netId });
+    }
+    if (routes.length) break;
+  }
+  return routes;
+}
+
+/**
+ * The TwinCAT devices that answer the search: broadcast on each network here, and asked one by one at addresses (and,
+ * with routes (default: when broadcasting), at this computer's TwinCAT routes' addresses: a PLC on another subnet,
+ * which a broadcast does not reach)
+ */
+async function discover({ localNetId, addresses = [], broadcast = true, routes = broadcast, timeoutMs = 2000, port = 48899 } = {}) {
+  if (routes) {
+    const known = new Set(addresses.map((a) => String(a).toLowerCase()));
+    for (const r of localRoutes()) if (r.address && /^[A-Za-z0-9.-]{1,253}$/.test(r.address) && !known.has(r.address.toLowerCase())) {
+      known.add(r.address.toLowerCase());
+      addresses = [...addresses, r.address];
+    }
+  }
   const found = new Map();
   const request = searchRequest(localNetId);
   const targets = [];
@@ -250,4 +299,4 @@ async function probeAll(targets, timeoutMs = 1500) {
   return out;
 }
 
-module.exports = { probeAll, discover, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };
+module.exports = { probeAll, discover, localRoutes, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };

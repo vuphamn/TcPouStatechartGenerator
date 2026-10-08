@@ -12,6 +12,8 @@
     <Compile Include="..\KvalMachineScope.Xae\ProjectScan.cs" Link="ProjectScan.cs" />
     <Compile Include="..\KvalMachineScope.Xae\SaveAllRelay.cs" Link="SaveAllRelay.cs" />
     <Compile Include="..\KvalMachineScope.Xae\TabMemory.cs" Link="TabMemory.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\PlcSearch.cs" Link="PlcSearch.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\LiveMonitor.cs" Link="LiveMonitor.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

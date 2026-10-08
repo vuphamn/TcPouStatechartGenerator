@@ -57,7 +57,11 @@ namespace KvalMachineScope.Xae
             return list;
         }
 
-        private static IEnumerable<string> RouteFiles()
+        private static IEnumerable<string> RouteFiles() =>
+            RouteDirs().Select(d => Path.Combine(d, "StaticRoutes.xml")).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Where TwinCAT keeps StaticRoutes.xml: each install's place (the existing ones are read)</summary>
+        internal static List<string> RouteDirs()
         {
             var dirs = new List<string>
             {
@@ -72,9 +76,18 @@ namespace KvalMachineScope.Xae
                 {
                     if (key?.GetValue("TcBootDir") is string boot && !string.IsNullOrEmpty(boot)) dirs.Insert(0, Path.Combine(Path.GetDirectoryName(boot.TrimEnd('\\')) ?? boot, "Target"));
                 }
+                // TwinCAT installed by its Package Manager (4026): under its installation folder (TwinCAT3's TwinCATDir:
+                // C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Target)
+                using (var key = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry32)
+                    .OpenSubKey(@"SOFTWARE\Beckhoff\TwinCAT3"))
+                {
+                    if (key?.GetValue("TwinCATDir") is string tc && !string.IsNullOrEmpty(tc)) dirs.Add(Path.Combine(tc, @"3.1\Target"));
+                }
             }
             catch (Exception ex) when (ex is System.Security.SecurityException || ex is IOException || ex is UnauthorizedAccessException) { }
-            return dirs.Select(d => Path.Combine(d, "StaticRoutes.xml")).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase);
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            if (!string.IsNullOrEmpty(programFiles)) dirs.Add(Path.Combine(programFiles, @"Beckhoff\TwinCAT\3.1\Target"));
+            return dirs;
         }
 
         private static bool IsNetId(string s)
