@@ -1,7 +1,9 @@
 // XAE stand-in: live on a PLC whose followed instance is of another type than the loaded POU (MAIN.mainStateMachine
 // a TransferTable, SM_TableManager loaded): the Live tab says so, Open TransferTable asks XAE to open it; the XAE's
 // build shown as its Remote Manager's ("XAE 4024.59"). Another program downloaded while connected (programChanged):
-// Live stops and connects again; the instance now of the loaded POU's type: no warning
+// Live stops and connects again; the instance now of the loaded POU's type: no warning. The project the PLC's
+// configuration was activated from shown ("Active: TransferTable"); the PLC's enum of the state variable with a name
+// the .TcDUT does not have for that value: said, with the difference
 const h = require('../lib/harness.cjs');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
@@ -18,17 +20,21 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const sample = await page.evaluate(async () => {
     const mod = await import('/src/samples/samplesData.ts');
     const s = mod.SAMPLES[0];
-    return { pou: s.pouContent, dut: s.dutContent };
+    const live = await import('/src/utils/liveView.ts');
+    // (the sample's enum as the PLC would have it: value -> name)
+    const names = Object.fromEntries([...live.enumValueMap(s.dutContent)].map(([v, n]) => [String(v), n]));
+    return { pou: s.pouContent, dut: s.dutContent, names };
   });
   const sent = [];
   // (the PLC's program: TransferTable, then SM_TableManager once "downloaded")
   let plcType = 'TransferTable';
+  let plcNames = sample.names;
   await page.exposeFunction('__hostPost', async (m) => {
     sent.push(m);
     if (m.type === 'ready') {
       await toApp({ type: 'loadPou', source: { name: 'SM_TableManager.TcPOU', path: 'C:\\proj\\SM_TableManager.TcPOU', content: sample.pou, dutCandidates: [{ name: 'E_TableManager_States.TcDUT', relativePath: 'E_TableManager_States.TcDUT', path: 'C:\\proj\\E_TableManager_States.TcDUT', content: sample.dut }] } });
     } else if (m.type === 'liveStart') {
-      await toApp({ type: 'liveStatus', state: 'connected', message: `${I}.machineState on 5.1.2.3.1.1:851 (PLC Run)`, target: '5.1.2.3.1.1:851', plcState: 'Run', instance: I, instances: [I], instanceType: plcType, twinCatBuild: 4024, xaeBuild: 4024, xaeVersion: '4024.59' });
+      await toApp({ type: 'liveStatus', state: 'connected', message: `${I}.machineState on 5.1.2.3.1.1:851 (PLC Run)`, target: '5.1.2.3.1.1:851', plcState: 'Run', instance: I, instances: [I], instanceType: plcType, symbolType: 'E_TableManager_States', stateNames: plcNames, activeProject: { name: 'TransferTable', created: '2026-10-07T11:03:36', plcProjects: ['TransferTable'] }, twinCatBuild: 4024, xaeBuild: 4024, xaeVersion: '4024.59' });
       await toApp({ type: 'liveValues', events: [{ t: Date.now(), value: 2 }] });
     } else if (m.type === 'liveStop') {
       await toApp({ type: 'liveStatus', state: 'stopped', message: 'Stopped' });
@@ -67,6 +73,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 
   // Another program downloaded: stopped, connected again; the instance now the loaded POU's type
   plcType = 'SM_TableManager';
+  // (its enum: value 2 named otherwise than in the .TcDUT)
+  plcNames = { ...sample.names, 2: 'TABLEMANAGER_RENAMED' };
   const starts = () => sent.filter((m) => m.type === 'liveStart').length;
   const before = starts();
   await toApp({ type: 'liveStatus', state: 'programChanged', plcState: 'Run', message: "The PLC's program changed (a download or an activation)" });
@@ -74,6 +82,11 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(sent.some((m) => m.type === 'liveStop') && starts() === before + 1, `another program: Live stopped and connected again (${before} -> ${starts()} starts)`);
   await sleep(800);
   expect(!(await page.$('#live-type-mismatch')), 'connected again on the loaded POU\'s type: no warning');
+  const active = await page.evaluate(() => document.getElementById('live-active-project')?.textContent.trim() ?? '');
+  expect(active === 'Active: TransferTable', `the project the PLC's configuration came from (${active})`);
+  await page.waitForSelector('#live-enum-mismatch', { timeout: 4000 }).catch(() => {});
+  const enumWarn = await page.evaluate(() => document.getElementById('live-enum-mismatch')?.textContent.replace(/\s+/g, ' ').trim() ?? '');
+  expect(new RegExp(`2: TABLEMANAGER_RENAMED on the PLC, ${sample.names['2']} in the \\.TcDUT`).test(enumWarn) && /1 difference/.test(enumWarn), `the PLC's enum against the .TcDUT: said, with the difference (${enumWarn.slice(0, 160)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

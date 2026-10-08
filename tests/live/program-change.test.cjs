@@ -1,7 +1,9 @@
 const h = require('../lib/harness.cjs');
 // Gateway and Link (the desktop app's session code) against fake-ams2.cjs, at the protocol level: connected, the
 // followed instance's own type is said (instanceType: the app compares it with the loaded POU); another program
-// downloaded while connected (the PLC's symbol version changes): programChanged is said (the app connects again)
+// downloaded while connected (the PLC's symbol version changes): programChanged is said (the app connects again).
+// Also said when connected: the state variable's enum as the PLC has it (stateNames), the project its configuration
+// was activated from (Boot/CurrentProjectInfo.json), the PLC's TwinCAT build
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -16,8 +18,10 @@ const config = {
   symbolVersion: 7,
   symbols: {
     [I]: { type: 'TransferTable', dataType: 65, size: 1024, value: 0 },
-    [`${I}.mainState`]: { type: 'INT', dataType: 2, size: 2, value: 0 },
+    [`${I}.mainState`]: { type: 'E_St', dataType: 2, size: 2, value: 0 },
   },
+  types: { E_St: { size: 2, dataType: 2, type: 'INT', enumValues: { 0: 'ST_IDLE', 1: 'ST_RUN' } } },
+  bootFiles: { 'CurrentProjectInfo.json': Buffer.from(JSON.stringify({ project: { name: 'TransferTable', created: '2026-10-07T11:03:36' }, sub_projects: [{ name: 'TransferTable', file: 'Plc/Port_851.json' }] })).toString('base64') },
   // (once followed: another program downloaded 2.5 s later)
   script: [{ hold: 2500, symbolVersion: 8, retype: { [I]: 'EFX' } }],
 };
@@ -45,6 +49,9 @@ async function session(url, hello, start, label) {
   console.log(`   ${label}: status ${statuses.map((m) => m.state).join(' > ')}`);
   const connected = statuses.find((m) => m.state === 'connected');
   expect(connected?.instance === I && connected.instanceType === 'TransferTable', `${label}: connected, the instance's own type said (${connected?.instanceType})`);
+  expect(connected?.stateNames?.['1'] === 'ST_RUN' && connected?.symbolType === 'E_St', `${label}: the state variable's enum as the PLC has it (${JSON.stringify(connected?.stateNames)})`);
+  expect(connected?.activeProject?.name === 'TransferTable' && connected.activeProject.plcProjects?.[0] === 'TransferTable', `${label}: the project the configuration was activated from (${JSON.stringify(connected?.activeProject)})`);
+  expect(connected?.twinCatBuild === 4026, `${label}: the PLC's TwinCAT build (${connected?.twinCatBuild})`);
   const change = statuses.find((m) => m.state === 'programChanged');
   expect(!!change && /program changed/i.test(change.message ?? ''), `${label}: another program downloaded: said (${change?.message})`);
   ws.send(JSON.stringify({ type: 'liveStop' }));

@@ -189,6 +189,21 @@ async function projectInfoOf(read, zip = null) {
   return { project: { name: tsproj ? tsproj.path.replace(/\.tsproj$/i, '') : subs[0]?.name ?? '' }, sub_projects: subs, derived: true };
 }
 
+/**
+ * The TwinCAT project the target's configuration was activated from (its boot folder): { name, created, plcProjects },
+ * or null when it does not say (the Live tab shows it: another project than the POU's runs there)
+ */
+async function activeProjectOf(client) {
+  try {
+    const info = await projectInfoOf((p) => readBootFile(client, p));
+    const name = String(info?.project?.name ?? '');
+    if (!name) return null;
+    return { name, created: info.project.created ?? null, plcProjects: plcProjectsOf(info).map((s) => s.name) };
+  } catch {
+    return null;
+  }
+}
+
 /** The PLC projects the boot folder names: [{ name, port }] */
 function plcProjectsOf(info) {
   return (Array.isArray(info?.sub_projects) ? info.sub_projects : [])
@@ -233,4 +248,4 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
   return { project: info?.project?.name ?? name, plcProject: name, projects, files, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };
+module.exports = { activeProjectOf, readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };

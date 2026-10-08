@@ -1242,6 +1242,8 @@ namespace KvalMachineScope.Xae
                 var monitor = new LiveMonitor();
                 string chosen = null, plcState = null, type = null, error = null, instanceType = null;
                 int? twinCatBuild = null, symbolVersion = null;
+                Dictionary<string, string> stateNames = null;
+                object activeProject = null;
                 var found = new List<string>();
                 try
                 {
@@ -1269,6 +1271,10 @@ namespace KvalMachineScope.Xae
                     // new program downloaded later is noticed)
                     instanceType = monitor.Probe(chosen)?.Type;
                     symbolVersion = monitor.ReadSymbolVersion();
+                    // (the state variable's enum as the PLC has it: the app compares it with the loaded .TcDUT; the
+                    // project the PLC's configuration was activated from: the Live tab shows it)
+                    try { stateNames = monitor.EnumNames(info.Type); } catch (AdsException) { }
+                    activeProject = ActiveProjectOf(monitor);
                     monitor.Subscribe(chosen + "." + stateVar, info.Size);
                 }
                 catch (Exception ex) when (ex is AdsException || ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is BadImageFormatException)
@@ -1308,6 +1314,8 @@ namespace KvalMachineScope.Xae
                     instances = found,
                     symbolType = type,
                     instanceType,
+                    stateNames,
+                    activeProject,
                     twinCatBuild,
                     xaeBuild = ActiveXaeBuild(out var xaeVersion),
                     xaeVersion,
@@ -1368,6 +1376,31 @@ namespace KvalMachineScope.Xae
                 // (no Remote Manager here)
             }
             return XaeBuild;
+        }
+
+        /// <summary>
+        /// The TwinCAT project the PLC's configuration was activated from (Boot\CurrentProjectInfo.json: its name, when,
+        /// its PLC projects), or null (not there: TwinCAT 4024 may keep none)
+        /// </summary>
+        private static object ActiveProjectOf(LiveMonitor monitor)
+        {
+            try
+            {
+                var bytes = monitor.ReadBootFile("CurrentProjectInfo.json");
+                if (bytes == null) return null;
+                var text = System.Text.Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF');
+                var info = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(text);
+                var project = info != null && info.TryGetValue("project", out var p) ? p as Dictionary<string, object> : null;
+                var name = project != null && project.TryGetValue("name", out var n) ? n as string : null;
+                if (string.IsNullOrEmpty(name)) return null;
+                var created = project.TryGetValue("created", out var c) ? c as string : null;
+                var plcs = new List<string>();
+                if (info.TryGetValue("sub_projects", out var subs) && subs is System.Collections.ArrayList list)
+                    foreach (var s in list.OfType<Dictionary<string, object>>())
+                        if (s.TryGetValue("name", out var sn) && sn is string plc) plcs.Add(plc);
+                return new { name, created, plcProjects = plcs };
+            }
+            catch (Exception ex) when (ex is AdsException || ex is ArgumentException || ex is InvalidOperationException) { return null; }
         }
 
         // The PLC's symbol version when live connected (a change: another program was downloaded or activated)

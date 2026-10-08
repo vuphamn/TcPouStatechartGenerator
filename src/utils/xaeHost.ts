@@ -29,6 +29,10 @@ export type HostMessage =
       symbolType?: string;
       /** The followed instance's own type in the PLC (MAIN.mainStateMachine: TransferTable): compared with the loaded POU */
       instanceType?: string | null;
+      /** The state variable's enum as the PLC has it (value -> name; null: not an enum, or not known) */
+      stateNames?: Record<string, string> | null;
+      /** The TwinCAT project the PLC's configuration was activated from (its boot folder's CurrentProjectInfo.json) */
+      activeProject?: { name: string; created?: string | null; plcProjects?: string[] } | null;
       /** XAE: the PLC's TwinCAT build (3.1.4024: 4024; null: not known) and the XAE's (its Remote Manager's: "4024.59") */
       twinCatBuild?: number | null;
       xaeBuild?: number | null;

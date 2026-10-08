@@ -121,6 +121,43 @@ namespace KvalMachineScope.Xae
             return AdsNative.AdsSyncReadReqEx2(_port, ref _target, AdsNative.SymVersion, 0, 1, value, out _) == 0 ? value[0] : (int?)null;
         }
 
+        /// <summary>An enum type's names by value, as the PLC describes it; null when it is not an enum (or not known)</summary>
+        public Dictionary<string, string> EnumNames(string type) => string.IsNullOrEmpty(type) ? null : DataTypeInfo(type)?.EnumValues;
+
+        /// <summary>
+        /// A file of the target's boot folder, read in full through its system service (ADS port 10000; opened for
+        /// reading only): Boot\CurrentProjectInfo.json names the TwinCAT project the configuration was activated from.
+        /// null when it is not there (or the target does not allow it)
+        /// </summary>
+        public byte[] ReadBootFile(string relativePath, int maxBytes = 1024 * 1024)
+        {
+            if (_port == 0) return null;
+            var system = new AdsNative.AmsAddr { NetId = _target.NetId, Port = 10000 };
+            var name = Encoding.Default.GetBytes(relativePath.Replace('\\', '/') + "\0");
+            var handle = new byte[4];
+            // (FOPEN: the boot folder (path 4), read, binary)
+            if (AdsNative.AdsSyncReadWriteReqEx2(_port, ref system, 120, (4u << 16) | 0x1 | 0x10, 4, handle, (uint)name.Length, name, out _) != 0) return null;
+            var h = BitConverter.ToUInt32(handle, 0);
+            try
+            {
+                var data = new List<byte>();
+                var chunk = new byte[16384];
+                for (;;)
+                {
+                    if (AdsNative.AdsSyncReadWriteReqEx2(_port, ref system, 122, h, (uint)chunk.Length, chunk, 0, new byte[0], out var read) != 0) return null;
+                    if (read == 0) break;
+                    data.AddRange(chunk.Take((int)read));
+                    if (data.Count > maxBytes) return null;
+                    if (read < chunk.Length) break;
+                }
+                return data.ToArray();
+            }
+            finally
+            {
+                AdsNative.AdsSyncReadWriteReqEx2(_port, ref system, 121, h, 0, new byte[0], 0, new byte[0], out _);
+            }
+        }
+
         /// <summary>The PLC's ADS state now ("Run", "Stop", ...)</summary>
         public string ReadState()
         {

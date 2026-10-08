@@ -1712,6 +1712,9 @@ export const App: React.FC = () => {
       ports: state === 'error' ? m.ports : undefined,
       versions: state === 'connected' ? (m.twinCatBuild || m.xaeBuild ? { plc: m.twinCatBuild ?? null, xae: m.xaeBuild ?? null, xaeVersion: m.xaeVersion ?? null } : undefined) : prev.versions,
       instanceType: state === 'connected' ? m.instanceType ?? null : prev.instanceType,
+      stateType: state === 'connected' ? m.symbolType ?? null : prev.stateType,
+      plcStateNames: state === 'connected' ? m.stateNames ?? null : prev.plcStateNames,
+      activeProject: state === 'connected' ? m.activeProject ?? null : prev.activeProject,
       // (the gateway's user and PLCs: from its welcome, kept)
       user: prev.user,
       plcs: prev.plcs,
@@ -6251,6 +6254,26 @@ export const App: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStatus.state, liveStatus.instanceType, liveStatus.instance, pouTypeName, symbolsVersion, openPouInProject]);
+  // The PLC's enum of the state variable (when it describes one) against the loaded .TcDUT: another type, or other
+  // names by value (the state names shown would not be the PLC's)
+  const liveEnumMismatch = useMemo(() => {
+    const plc = liveStatus.state === 'connected' ? liveStatus.plcStateNames : null;
+    if (!plc || !Object.keys(plc).length || !dutContent.trim()) return null;
+    const bare = (n: string) => n.split('.').pop()!.trim();
+    const plcType = bare(liveStatus.stateType ?? '');
+    const dutType = dutContent.match(/<DUT\b[^>]*\bName="([^"]+)"/)?.[1] ?? dutContent.match(/\bTYPE\s+([A-Za-z_]\w*)\s*:/i)?.[1] ?? '';
+    if (!dutType) return null;
+    if (plcType && plcType.toLowerCase() !== dutType.toLowerCase()) return { plcType, dutType, typeDiffers: true, diffs: [] };
+    const mine = enumValueMap(dutContent);
+    const diffs: string[] = [];
+    for (const [v, name] of Object.entries(plc)) {
+      const d = mine.get(Number(v));
+      if (d === undefined) diffs.push(`${v}: ${bare(name)} on the PLC, none in the .TcDUT`);
+      else if (d.toLowerCase() !== bare(name).toLowerCase()) diffs.push(`${v}: ${bare(name)} on the PLC, ${d} in the .TcDUT`);
+    }
+    for (const [v, d] of mine) if (!(String(v) in plc)) diffs.push(`${v}: ${d} in the .TcDUT, not on the PLC`);
+    return diffs.length ? { plcType: plcType || dutType, dutType, typeDiffers: false, diffs } : null;
+  }, [liveStatus.state, liveStatus.plcStateNames, liveStatus.stateType, dutContent]);
   // The PLC project's sources as the PLC keeps them: read once per connection (a few MB), through the live connection
   // (plcProject: another PLC project on the same target; each read once)
   const plcSourcesRef = useRef<Map<string, Promise<PlcSources>>>(new Map());
@@ -10032,6 +10055,7 @@ export const App: React.FC = () => {
         createPortal(
           <LivePanel
             typeMismatch={liveTypeMismatch}
+            enumMismatch={liveEnumMismatch}
             watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()] }))}
             onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}

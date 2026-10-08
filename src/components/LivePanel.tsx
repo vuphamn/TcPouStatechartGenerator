@@ -27,6 +27,11 @@ export interface LiveStatus {
   versions?: { plc: number | null; xae: number | null; xaeVersion?: string | null };
   /** The followed instance's own type in the PLC (compared with the loaded POU) */
   instanceType?: string | null;
+  /** The state variable's type and, for an enum the PLC describes, its names by value (compared with the .TcDUT) */
+  stateType?: string | null;
+  plcStateNames?: Record<string, string> | null;
+  /** The TwinCAT project the PLC's configuration was activated from */
+  activeProject?: { name: string; created?: string | null; plcProjects?: string[] } | null;
   /** Web edition: the PLCs the gateway offers, and who is signed in */
   plcs?: { id: string; name: string }[];
   user?: string;
@@ -56,6 +61,8 @@ interface LivePanelProps {
    * type offered (onOpen)
    */
   typeMismatch?: { instance: string; plcType: string; pouType: string; onOpen?: () => void } | null;
+  /** The PLC's enum of the state variable is not the loaded .TcDUT's (another type, or other names by value) */
+  enumMismatch?: { plcType: string; dutType: string; typeDiffers: boolean; diffs: string[] } | null;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string }[];
   onUnwatch?: (name: string) => void;
@@ -272,6 +279,7 @@ const MAX_SHOWN = 200;
 
 export const LivePanel: React.FC<LivePanelProps> = ({
   typeMismatch,
+  enumMismatch,
   watchList,
   onUnwatch,
   mode,
@@ -504,6 +512,17 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               </span>
             );
           })()}
+          {/* The TwinCAT project the PLC's configuration was activated from */}
+          {status.state === 'connected' && status.activeProject && (
+            <span
+              id="live-active-project"
+              data-project={status.activeProject.name}
+              className="shrink-0 px-1.5 rounded border border-slate-700 text-slate-400 text-[11px] truncate max-w-[14rem]"
+              title={`The PLC's configuration was activated from the TwinCAT project ${status.activeProject.name}${status.activeProject.created ? ` (${status.activeProject.created.replace('T', ' ')})` : ''}${status.activeProject.plcProjects?.length ? `; its PLC project${status.activeProject.plcProjects.length > 1 ? 's' : ''}: ${status.activeProject.plcProjects.join(', ')}` : ''}`}
+            >
+              Active: {status.activeProject.name}
+            </span>
+          )}
           {status.state === 'connected' && status.plcState === 'Stop' && onStartPlc && !startPlc && (
             <button type="button" id="live-start-plc" onClick={() => setStartPlc({ phase: 'ask', safe: false })} className="shrink-0 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[11px]" title="The PLC application is in Stop: start it (asks first)">
               Start PLC…
@@ -1264,6 +1283,26 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               Open {typeMismatch.plcType}
             </button>
           )}
+        </div>
+      )}
+
+      {/* The PLC's enum of the state variable is not the loaded .TcDUT's: the state names shown may be wrong */}
+      {enumMismatch && status.state === 'connected' && !typeMismatch && (
+        <div id="live-enum-mismatch" data-plc-type={enumMismatch.plcType} className="mx-2.5 mt-2 px-2 py-1.5 rounded border border-amber-500/70 bg-amber-950/60 text-amber-100 text-[11px] flex items-start gap-2">
+          <span className="shrink-0">⚠</span>
+          <span className="min-w-0">
+            {enumMismatch.typeDiffers ? (
+              <>
+                The PLC's state variable is a <span className="font-mono font-semibold">{enumMismatch.plcType}</span>, the loaded enum is{' '}
+                <span className="font-mono">{enumMismatch.dutType}</span>: the state names shown may not be the PLC's.
+              </>
+            ) : (
+              <>
+                The PLC's <span className="font-mono">{enumMismatch.plcType}</span> is not the loaded .TcDUT's ({enumMismatch.diffs.length} difference{enumMismatch.diffs.length === 1 ? '' : 's'}): the state names shown may not be the PLC's.
+                <span className="block mt-0.5 font-mono text-amber-200/90">{enumMismatch.diffs.slice(0, 4).join('; ')}{enumMismatch.diffs.length > 4 ? `; … ${enumMismatch.diffs.length - 4} more` : ''}</span>
+              </>
+            )}
+          </span>
         </div>
       )}
 

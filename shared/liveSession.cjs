@@ -7,11 +7,11 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
-const { readPlcSources, readBootFile, unzip } = require('./tcSources.cjs');
+const { readPlcSources, readBootFile, unzip, activeProjectOf } = require('./tcSources.cjs');
 const { readIoTree } = require('./tcIoTree.cjs');
 const { readMasters } = require('./tcEcat.cjs');
 const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
-const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require('./tcBuild.cjs');
+const { buildFromPlc, buildFromProject, checkEdits, closeXae, targetBuildOf, xaeForTarget, installedXaes } = require('./tcBuild.cjs');
 const { readTrialLicense, licenseState } = require('./tcLicense.cjs');
 const { plcAppInfo, startPlc, stopPlc, restartPlc } = require('./tcAppInfo.cjs');
 const { VarWatcher, parseWatchRequest } = require('./liveVars.cjs');
@@ -381,11 +381,22 @@ function createLiveSession(hooks = {}) {
       // downloaded later is noticed)
       const instanceType = (await ads.probe(client, chosen).catch(() => null))?.type ?? null;
       s.symbolVersion = await ads.symbolVersion(client);
+      // (the state variable's enum as the PLC has it: compared with the loaded .TcDUT; the project the configuration
+      // was activated from; the PLC's TwinCAT build beside the XAE that builds for it here)
+      const stateNames = (await ads.dataTypeInfo(client, info.type, new Map()).catch(() => null))?.enumValues ?? null;
+      const activeProject = await activeProjectOf(client);
+      const twinCatBuild = await targetBuildOf(client);
+      let xaeBuild = null;
+      try {
+        xaeBuild = installedXaes().length ? xaeForTarget(twinCatBuild).xaeBuild ?? null : null;
+      } catch {
+        // (no XAE here)
+      }
       if (id !== sessionId) throw new Error('stopped');
       startTimers(s, send, status);
       s.connected = true;
       status('connected', `${symbol} on ${host} (${netId}:${adsPort}) (PLC ${plcState})`, {
-        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, route,
+        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, twinCatBuild, xaeBuild, route,
       });
       return { symbol, netId, adsPort };
     } catch (err) {

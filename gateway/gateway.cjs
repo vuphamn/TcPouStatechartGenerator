@@ -18,7 +18,7 @@ const { Client } = require('ads-client');
 // shared/ sits next to the gateway when installed, one level up in the repository
 const sharedDir = fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
 const ads = require(`${sharedDir}/tcAds.cjs`);
-const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
+const { readPlcSources, activeProjectOf } = require(`${sharedDir}/tcSources.cjs`);
 const { buildFromPlc, buildFromProject, checkEdits, closeXae } = require(`${sharedDir}/tcBuild.cjs`);
 const { ProjectMirror } = require(`${sharedDir}/projectMirror.cjs`);
 const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
@@ -1059,9 +1059,15 @@ function start() {
         // (the instance's own type: the app says when it is not the loaded POU's)
         const instanceType = (await ads.probe(conn.client, chosen).catch(() => null))?.type ?? null;
         conn.symbolVersion ??= await ads.symbolVersion(conn.client);
+        // (the state variable's enum as the PLC has it; the project the configuration was activated from; the PLC's
+        // TwinCAT build: the server has no XAE of the viewer's)
+        conn.dtCache ??= new Map();
+        const stateNames = (await ads.dataTypeInfo(conn.client, info.type, conn.dtCache).catch(() => null))?.enumValues ?? null;
+        const activeProject = await activeProjectOf(conn.client);
+        const twinCatBuild = await conn.client.readDeviceInfo({ adsPort: 10000 }).then((i) => (i && i.majorVersion === 3 && i.minorVersion === 1 && i.versionBuild > 4000 ? i.versionBuild : null)).catch(() => null);
         send({
           type: 'liveStatus', state: 'connected', message: `${symbol} on ${plc.name} (PLC ${conn.plcState})`,
-          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type, instanceType,
+          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, twinCatBuild,
         });
       } catch (err) {
         if (seq !== startSeq) return;
