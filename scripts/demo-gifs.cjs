@@ -31,7 +31,8 @@ const COMMITTED = path.join(REPO, 'docs', 'demo');
 async function devServer() {
   const port = await freePort();
   const log = fs.openSync(path.join(require('os').tmpdir(), 'kms-demo-vite.log'), 'w');
-  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log] });
+  // (a cache of its own: a developer's dev server (npm run dev) keeps its pre-bundled dependencies)
+  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log], env: { ...process.env, KSS_VITE_CACHE_DIR: path.join(REPO, 'node_modules', '.vite-demo') } });
   const url = `http://localhost:${port}/`;
   for (let i = 0; i < 120; i++) {
     const ok = await fetch(url).then((r) => r.ok).catch(() => false);

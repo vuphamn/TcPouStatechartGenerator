@@ -171,7 +171,8 @@ async function startApp({ dev = false } = {}) {
   const url = `http://localhost:${port}/`;
   const log = fs.openSync(path.join(LOGS, dev ? 'vite-dev.log' : 'vite.log'), 'w');
   if (built && !fs.existsSync(path.join(REPO, 'dist', 'index.html'))) throw new Error('--preview: dist/ is missing (npm run build first)');
-  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), ...(built ? ['preview'] : []), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log] });
+  // (a cache of their own: the developer's dev server (npm run dev) keeps its pre-bundled dependencies)
+  const vite = spawn(process.execPath, [path.join(REPO, 'node_modules', 'vite', 'bin', 'vite.js'), ...(built ? ['preview'] : []), '--port', String(port), '--strictPort'], { cwd: REPO, stdio: ['ignore', log, log], env: { ...process.env, KSS_VITE_CACHE_DIR: path.join(REPO, 'node_modules', '.vite-tests') } });
   for (let i = 0; i < 120; i++) {
     if ((await get(url)) === 200) {
       await warmUp(url);

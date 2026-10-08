@@ -28,6 +28,9 @@ function releaseNotes(): Plugin {
 // https://vitejs.dev/config/
 export default defineConfig({
   base: './',
+  // (the tests' dev servers keep their pre-bundled dependencies apart (tests/run.cjs: KSS_VITE_CACHE_DIR): one of
+  // theirs re-bundling them would leave a dev server already running here asking for files no longer there)
+  cacheDir: process.env.KSS_VITE_CACHE_DIR || 'node_modules/.vite',
   plugins: [react(), tailwindcss(), releaseNotes()],
   define: {
     __KSS_VERSIONS__: JSON.stringify(require('./scripts/release-plan.cjs').versions()),
