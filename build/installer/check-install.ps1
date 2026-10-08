@@ -151,6 +151,46 @@ if ($gwDir -and (Test-Path (Join-Path $gwDir 'gateway.cjs'))) {
 } elseif (& $chosen 'Gateway') { Add 'Gateway' '!!' "Chosen, but its files are not there ($gwDir)" }
 else { Add 'Gateway' '--' 'Not chosen' }
 
+# 8. TwinCAT on this computer (read only): its build, its drivers (a package installed whose driver is not there: a
+#    configuration with NC fails to activate with "Error starting TcNc server ... 1060"), its routes, the Remote
+#    Manager's builds
+$tcSystem = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Beckhoff\TwinCAT3\System' -ErrorAction SilentlyContinue
+if ($tcSystem.TcVersion) {
+  Add 'TwinCAT' 'OK' "$($tcSystem.TcVersion)"
+  $products = @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty $_.PSPath).DisplayName } | Where-Object { $_ -like 'Beckhoff TwinCAT*' })
+  $services = @{}
+  Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -cmatch '^Tc[A-Z]' -or $_.PSChildName -eq 'tcvirtualmpbus' } | ForEach-Object { $services[$_.PSChildName] = Get-ItemProperty $_.PSPath }
+  $driverProblems = 0
+  foreach ($name in ($services.Keys | Sort-Object)) {
+    $image = $services[$name].ImagePath
+    if (-not $image) { Add "TwinCAT driver $name" '!!' 'Registered but empty (no driver): repair its TwinCAT package (Package Manager > Installed > Repair), then restart'; $driverProblems++; continue }
+    $file = ($image -replace '^\\\?\?\\', '' -replace '^"([^"]+)".*$', '$1' -replace '^System32\\', "$env:SystemRoot\System32\" -replace '^\\SystemRoot\\', "$env:SystemRoot\")
+    if (-not (Test-Path $file)) { Add "TwinCAT driver $name" '!!' "Its file is missing: $file"; $driverProblems++ }
+  }
+  # (a package installed, its driver not registered)
+  foreach ($need in @(@{ product = '*XAR NCPTP KM*'; driver = 'TcNc'; what = 'NC PTP' }, @{ product = '*XAR NCI Classic*'; driver = 'TcNcI'; what = 'NC I' })) {
+    if (($products | Where-Object { $_ -like $need.product }) -and -not $services[$need.driver].ImagePath) {
+      Add "TwinCAT driver $($need.driver)" '!!' "$($need.what) is installed, its driver is not: a configuration using it does not activate (1060). Repair its package, then restart"
+      $driverProblems++
+    }
+  }
+  if (-not $driverProblems) { Add 'TwinCAT drivers' 'OK' "$(@($services.Keys).Count) registered" }
+  # Routes: where this TwinCAT keeps them (4026: ProgramData; installed by the Package Manager: its installation folder)
+  $tcDir = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Beckhoff\TwinCAT3' -ErrorAction SilentlyContinue).TwinCATDir
+  $routeFile = @("$env:ProgramData\Beckhoff\TwinCAT\3.1\Target", $(if ($tcDir) { Join-Path $tcDir '3.1\Target' }), 'C:\TwinCAT\3.1\Target') | Where-Object { $_ } | ForEach-Object { Join-Path $_ 'StaticRoutes.xml' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($routeFile) {
+    $names = @(([xml](Get-Content $routeFile -Raw)).SelectNodes('//Route') | ForEach-Object { $_.Name })
+    Add 'TwinCAT routes' 'OK' "$($names.Count) in $routeFile$(if ($names.Count) { ': ' + ($names -join ', ') })"
+  } else { Add 'TwinCAT routes' '--' 'No StaticRoutes.xml (no routes yet)' }
+  # Remote Manager: the engineering builds installed beside this TwinCAT
+  $builds = @(Get-ChildItem 'C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Components\Base' -Directory -Filter 'Build_*' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name -replace '^Build_', '' })
+  if ($builds.Count) {
+    $older = @($builds | Where-Object { $_ -like '4024.*' })
+    $note = if ($older.Count -and "$($tcSystem.TcVersion)" -like '3.1.4026*') { " (4024 builds on a 4026 TwinCAT: only in 4024's 32-bit TcXaeShell, and their PLC may build with 4026's compiler: build 4024 projects on a 4024 computer)" } else { '' }
+    Add 'Remote Manager builds' '--' "$($builds -join ', ')$note"
+  }
+} else { Add 'TwinCAT' '--' 'Not installed on this computer' }
+
 $bad = @($items | Where-Object { $_.status -eq '!!' }).Count
 if ($Json) {
   [pscustomobject]@{ computer = $env:COMPUTERNAME; user = $env:USERNAME; at = (Get-Date).ToString('s'); choices = $choices; items = $items; problems = $bad } | ConvertTo-Json -Depth 4

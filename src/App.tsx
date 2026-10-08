@@ -120,7 +120,7 @@ import {
   writeWebProjectFile,
 } from './utils/sourceFileAccess.ts';
 import type { WebSaveResult } from './utils/sourceFileAccess.ts';
-import { HostMessage, isVsCodeHost, isXaeHost, onHostMessage, postToHost } from './utils/xaeHost.ts';
+import { HostMessage, isVsCodeHost, isXaeHost, onHostMessage, postToHost, type ProjectFileVersion } from './utils/xaeHost.ts';
 import { setOpenTypeHandler, type OpenTypeWhere, type InlineRename } from './utils/openType.ts';
 import { declareInDeclaration, declareVariables, declarationVariables, guessType, removeFromDeclaration, type NewVariable } from './utils/pouVariables.ts';
 import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
@@ -322,8 +322,11 @@ import {
 import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenControls.tsx';
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
-import { extendsOf, hasOwnMethod, inheritedMethodsOf, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { findProjectPou, resolveInheritance } from './utils/projectFiles.ts';
+import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
+import { fetchProjectVersions, findProjectPou, resolveInheritance } from './utils/projectFiles.ts';
+import { applyPlcEnum } from './utils/plcEnumSync.ts';
+import { coverageCsv, transitionCoverage } from './utils/transitionCoverage.ts';
+import { InheritanceDialog } from './components/InheritanceDialog.tsx';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
 import { SAMPLES, SampleItem } from './samples/samplesData.ts';
@@ -793,6 +796,9 @@ export const App: React.FC = () => {
   // as saved (Save writes an edited one into its file)
   const [baseSources, setBaseSources] = useState<{ name: string; path?: string; content: string; saved: string }[]>([]);
   // (set below: an inherited method's edit goes to its base; a base's file changed on disk)
+  // (the project files converted to another TwinCAT version than committed, set below; Save asks once per session)
+  const versionGuardRef = useRef<{ text: string; title: string; changed: ProjectFileVersion[] } | null>(null);
+  const versionAckRef = useRef<string | null>(null);
   const inheritedSaveRef = useRef<((method: string, code: string, declaration?: string) => { success: boolean; error?: string } | null) | null>(null);
   const baseChangedRef = useRef<((path: string, content: string) => boolean) | null>(null);
 
@@ -1715,6 +1721,8 @@ export const App: React.FC = () => {
       stateType: state === 'connected' ? m.symbolType ?? null : prev.stateType,
       plcStateNames: state === 'connected' ? m.stateNames ?? null : prev.plcStateNames,
       activeProject: state === 'connected' ? m.activeProject ?? null : prev.activeProject,
+      compileInfo: state === 'connected' ? m.compileInfo ?? null : prev.compileInfo,
+      loadedProject: state === 'connected' ? m.loadedProject ?? null : prev.loadedProject,
       // (the gateway's user and PLCs: from its welcome, kept)
       user: prev.user,
       plcs: prev.plcs,
@@ -1968,7 +1976,17 @@ export const App: React.FC = () => {
     (b: { name: string; path?: string; content: string; saved: string }, text: string) => {
       if (text === b.saved) return;
       if (b.content !== b.saved) {
-        showCopyToast(`${b.name}.TcPOU changed on disk while you have unsaved changes of it here: Save asks before overwriting`, 'error', 8000);
+        // (edited here too: merged by method; its disk version is the new saved one)
+        const m = mergeBaseEdits(b.saved, b.content, text);
+        registerBases(baseSources.map((x) => (x.name === b.name ? { ...x, content: m.text, saved: text } : x)));
+        if (isXaeHost() && b.path) setHostSavedContent((prev) => ({ ...prev, [b.path!]: text }));
+        showCopyToast(
+          m.conflicts.length
+            ? `${b.name}.TcPOU changed on disk, and ${m.conflicts.map((n) => `${n}()`).join(', ')} also here: yours kept (Save writes them over the disk's); its other changes taken`
+            : `${b.name}.TcPOU changed on disk: its changes taken, your edits${m.kept.length ? ` of ${m.kept.map((n) => `${n}()`).join(', ')}` : ''} kept (unsaved)`,
+          m.conflicts.length ? 'error' : 'success',
+          9000
+        );
         return;
       }
       registerBases(baseSources.map((x) => (x.name === b.name ? { ...x, content: text, saved: text } : x)));
@@ -2295,7 +2313,23 @@ export const App: React.FC = () => {
   const dirtyFilesRef = useRef(0);
   dirtyFilesRef.current = isXaeHost() ? hostDirtyFiles.length : localDirtyCount;
   const saveAllChannelRef = useRef<BroadcastChannel | null>(null);
-  const handleHeaderSave = useCallback((which: 'active' | 'all', fromOtherWindow = false) => {
+  const handleHeaderSave = useCallback((which: 'active' | 'all', fromOtherWindow = false): number => {
+    // (the project files converted to another TwinCAT version than committed: asked once per session)
+    const guard = versionGuardRef.current;
+    if (guard && !fromOtherWindow && versionAckRef.current !== guard.title) {
+      setPromptRequest({
+        title: 'Project saved in another TwinCAT version',
+        label: `${guard.title} MachineScope saves the POU and enum as they are; the project files were converted by XAE.`,
+        details: guard.changed.map((f) => `${f.path}: ${f.head} in git, ${f.working} here`),
+        confirmOnly: true,
+        submitLabel: 'Save anyway',
+        onSubmit: () => {
+          versionAckRef.current = guard.title;
+          handleHeaderSave(which, fromOtherWindow);
+        },
+      });
+      return 0;
+    }
     const had = pendingEditors().length + dirtyFilesRef.current;
     const n = savePendingEditors(which);
     window.setTimeout(() => {
@@ -6114,21 +6148,24 @@ export const App: React.FC = () => {
   // Live: another window / tab on this POU that follows another of its PLC instances (XAE: a tab, desktop: a window,
   // web: a browser tab). The POU goes along: XAE and the desktop app load it from its file, else it is handed over.
   const handleOpenInstance = useCallback(
-    (instance: string) => {
+    // (compare: another PLC's (its Live settings), the same instance: always a new tab / window, the desktop app's
+    // beside this one)
+    (instance: string, opts: { settings?: Partial<typeof liveSettings>; compare?: boolean } = {}) => {
+      const settings = opts.settings ? { ...liveSettings, ...opts.settings } : liveSettings;
       if (isXaeHost()) {
-        if (pouPath) postToHost({ type: 'openInstance', path: pouPath, instance, connection: connectionOf(liveSettings) });
+        if (pouPath) postToHost({ type: 'openInstance', path: pouPath, instance, connection: connectionOf(settings), ...(opts.compare ? { newTab: true } : {}) });
         return;
       }
-      const newWindow = (window as unknown as { tcDesktop?: { newWindow?: (p: string | null, launch?: InstanceLaunch & { handoff?: string }) => Promise<void> } }).tcDesktop?.newWindow;
+      const newWindow = (window as unknown as { tcDesktop?: { newWindow?: (p: string | null, launch?: InstanceLaunch & { handoff?: string; compare?: boolean }) => Promise<void> } }).tcDesktop?.newWindow;
       if (newWindow && pouPath) {
-        void newWindow(pouPath, { instance, live: true, connection: connectionOf(liveSettings) });
+        void newWindow(pouPath, { instance, live: true, connection: connectionOf(settings), ...(opts.compare ? { compare: true } : {}) });
         return;
       }
       const sample = selectedSampleId ? SAMPLES.find((s) => s.id === selectedSampleId && s.pouContent === pouContent && s.dutContent === dutContent) : undefined;
       const id = putHandoff({
         instance,
         live: true,
-        connection: connectionOf(liveSettings),
+        connection: connectionOf(settings),
         sampleId: sample?.id,
         pou: sample ? undefined : { name: pouFileName, content: pouContent, path: pouPath },
         dut: !sample && dutContent ? { name: dutFileName, content: dutContent, path: dutPath } : undefined,
@@ -6254,6 +6291,88 @@ export const App: React.FC = () => {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveStatus.state, liveStatus.instanceType, liveStatus.instance, pouTypeName, symbolsVersion, openPouInProject]);
+  // The Live tab's Activate (XAE): the loaded POU's TwinCAT project activated on its PLC, asked first (the PLC's
+  // program changes: Live connects again by itself)
+  const handleActivateProject = useCallback(() => {
+    const name = liveStatus.loadedProject ?? 'the project';
+    setPromptRequest({
+      title: `Activate ${name}?`,
+      label: `The PLC runs ${liveStatus.activeProject?.name ?? 'another project'}'s configuration. Activating ${name} replaces it on ${liveStatus.target ?? 'the PLC'} (as XAE's Activate Configuration): TwinCAT restarts in Run mode and the machine's program changes.`,
+      confirmOnly: true,
+      danger: true,
+      submitLabel: `Activate ${name}`,
+      onSubmit: () => {
+        const requestId = Date.now() % 1e9;
+        showCopyToast(`Activating ${name}…`, 'success', 4000);
+        const off = onHostMessage((m) => {
+          if (m.type !== 'activateResult' || m.requestId !== requestId) return;
+          off();
+          showCopyToast(m.message, m.ok ? 'success' : 'error', 8000);
+        });
+        postToHost({ type: 'activateProject', requestId });
+      },
+    });
+  }, [liveStatus.loadedProject, liveStatus.activeProject, liveStatus.target, showCopyToast]);
+  // The inheritance view (the header's extends chip): the POU and its bases, each one's own methods
+  const [inheritanceOpen, setInheritanceOpen] = useState(false);
+  const inheritanceLevels = useMemo(
+    () => (inheritanceOpen ? [{ name: pouTypeNameOf(pouContent), methods: ownMethodNames(pouContent) }, ...baseSources.map((b) => ({ name: b.name, methods: ownMethodNames(b.content) }))] : []),
+    [inheritanceOpen, pouContent, baseSources]
+  );
+  // The project files saved in another TwinCAT version than committed (XAE of another build converted them): a chip;
+  // the first Save of the session asks (what MachineScope saves is the POU, but the project goes to git with it)
+  const [projectVersions, setProjectVersions] = useState<{ path: string; files: ProjectFileVersion[]; converted: boolean } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setProjectVersions(null);
+    if (!pouPath) return;
+    void fetchProjectVersions(pouPath).then((r) => alive && r && setProjectVersions({ path: pouPath, ...r }));
+    return () => {
+      alive = false;
+    };
+  }, [pouPath]);
+  const versionGuard = useMemo(() => {
+    if (!projectVersions?.converted || projectVersions.path !== pouPath) return null;
+    const changed = projectVersions.files.filter((f) => f.working && f.head && f.working !== f.head);
+    const label = (k: string) => (k === 'tsproj' ? '.tsproj' : k === 'plcproj' ? '.plcproj' : '.TcPOU');
+    const v = (s: string) => s.replace(/^3\.1\./, '');
+    return {
+      text: `${v(changed[0].head!)} → ${v(changed[0].working!)} (not committed)`,
+      title: `Saved in another TwinCAT version than committed (XAE of another build converted them when it saved): ${changed.map((f) => `${label(f.kind)} ${f.head} in git, ${f.working} here`).join('; ')}. Colleagues on the committed build may not open them: check the diff before committing.`,
+      changed,
+    };
+  }, [projectVersions, pouPath]);
+  versionGuardRef.current = versionGuard;
+  // Transition coverage (the Live tab): the chart's transitions against the ones the PLC took (seen, per POU type)
+  const liveCoverage = useMemo(() => {
+    const list = [...edgeMembersAll.values()].flat();
+    return list.length ? transitionCoverage(list, seen) : null;
+  }, [edgeMembersAll, seen]);
+  // The enum warning's Update .TcDUT: the .TcDUT brought to the PLC's names (renames reach the POU's code), asked first
+  // with what changes; Ctrl+Z undoes, Save writes the files
+  const handleUpdateEnumFromPlc = useCallback(() => {
+    const plc = liveStatus.plcStateNames;
+    if (!plc || !dutContent) return;
+    const r = applyPlcEnum(pouContent, dutContent, plc);
+    if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+    const { renames, adds, extra } = r.changes;
+    if (!renames.length && !adds.length) return showCopyToast('The .TcDUT already has the PLC\'s names', 'success');
+    setPromptRequest({
+      title: 'Update the .TcDUT from the PLC?',
+      label: `The enum is brought to the PLC's names: ${renames.length} renamed (the POU's code follows), ${adds.length} added${extra.length ? `; ${extra.length} only in the .TcDUT, left as they are` : ''}. Save writes the files.`,
+      details: [
+        ...renames.map((x) => `${x.value}: ${x.from} → ${x.to}`),
+        ...adds.map((x) => `${x.value}: + ${x.name}`),
+        ...extra.map((x) => `${x.value}: ${x.name} (only in the .TcDUT, kept)`),
+      ].slice(0, 30),
+      confirmOnly: true,
+      submitLabel: 'Update .TcDUT',
+      onSubmit: () => {
+        handleReplaceSources(r.pou, r.dut);
+        showCopyToast(`.TcDUT updated from the PLC: ${renames.length} renamed, ${adds.length} added (Save writes it; Ctrl+Z undoes)`, 'success', 6000);
+      },
+    });
+  }, [liveStatus.plcStateNames, pouContent, dutContent, handleReplaceSources, showCopyToast]);
   // The PLC's enum of the state variable (when it describes one) against the loaded .TcDUT: another type, or other
   // names by value (the state names shown would not be the PLC's)
   const liveEnumMismatch = useMemo(() => {
@@ -8831,6 +8950,7 @@ export const App: React.FC = () => {
                 : undefined
             }
             hostConflict={hostConflictActions}
+            versionGuard={versionGuard ?? undefined}
             inherited={
               inheritance && inheritance.key === inheritKey
                 ? {
@@ -8839,6 +8959,7 @@ export const App: React.FC = () => {
                     error: inheritance.missing?.error === 'needs-folder' ? undefined : inheritance.missing?.error,
                     // (the web edition: the project folder asked for; the hosts look on their own)
                     onFind: inheritance.missing && !isXaeHost() && !isDesktopApp() ? () => void resolveBases(true) : undefined,
+                    onShow: () => setInheritanceOpen(true),
                   }
                 : undefined
             }
@@ -10056,6 +10177,16 @@ export const App: React.FC = () => {
           <LivePanel
             typeMismatch={liveTypeMismatch}
             enumMismatch={liveEnumMismatch}
+            onActivateProject={isXaeHost() && !isVsCodeHost() ? handleActivateProject : undefined}
+            onUpdateEnum={liveStatus.plcStateNames && dutContent ? handleUpdateEnumFromPlc : undefined}
+            coverage={liveCoverage}
+            onComparePlc={(plc) => {
+              const instance = liveStatus.instance ?? liveSettings.instance;
+              if (!instance) return showCopyToast('Go live first: the instance to compare is the one followed here', 'error');
+              handleOpenInstance(instance, { settings: { netId: plc.netId, ip: plc.ip ?? '' }, compare: true });
+              showCopyToast(`${instance} live on ${plc.name || plc.netId} too: in a new ${isXaeHost() ? 'tab' : 'window'}`, 'success', 5000);
+            }}
+            onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
             watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()] }))}
             onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}
@@ -10364,6 +10495,16 @@ export const App: React.FC = () => {
           dockRegistry.nodes.logger
         )}
 
+      {inheritanceOpen && inheritanceLevels.length > 1 && (
+        <InheritanceDialog
+          levels={inheritanceLevels}
+          onClose={() => setInheritanceOpen(false)}
+          onOpenMethod={(m) => {
+            setInheritanceOpen(false);
+            handleOpenInspectorPanel('method', { method: `${m}()` });
+          }}
+        />
+      )}
       {promptRequest && (
         <TextPromptDialog
           request={promptRequest}

@@ -402,6 +402,12 @@ namespace KvalMachineScope.Xae
                     case "findPou":
                         HandleFindPou(msg);
                         break;
+                    case "activateProject":
+                        HandleActivateProject(msg);
+                        break;
+                    case "projectVersions":
+                        HandleProjectVersions(msg);
+                        break;
                     case "projectSymbols":
                         HandleProjectSymbols();
                         break;
@@ -685,6 +691,8 @@ namespace KvalMachineScope.Xae
             var path = msg.TryGetValue("path", out var p) ? p as string : null;
             var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
             var instance = msg.TryGetValue("instance", out var i) ? (i as string)?.Trim() : null;
+            // (Compare: another PLC, the same instance: a tab of its own, not the one already following it)
+            var newTab = msg.TryGetValue("newTab", out var nt) && nt is bool ntb && ntb;
             // The opener's PLC connection: short strings only (the app keeps the keys it knows)
             var connection = msg.TryGetValue("connection", out var c) && c is Dictionary<string, object> cd
                 ? cd.Where(kv => kv.Key.Length <= 20 && kv.Value is string sv && sv.Length <= 200).Take(16).ToDictionary(kv => kv.Key, kv => (string)kv.Value)
@@ -709,7 +717,7 @@ namespace KvalMachineScope.Xae
             {
                 try
                 {
-                    await package.ShowMachineScopeAsync(path, instance, connection);
+                    await package.ShowMachineScopeAsync(path, instance, connection, newTab);
                 }
                 catch (Exception ex)
                 {
@@ -1244,6 +1252,7 @@ namespace KvalMachineScope.Xae
                 int? twinCatBuild = null, symbolVersion = null;
                 Dictionary<string, string> stateNames = null;
                 object activeProject = null;
+                string plcBuildId = null;
                 var found = new List<string>();
                 try
                 {
@@ -1275,6 +1284,9 @@ namespace KvalMachineScope.Xae
                     // project the PLC's configuration was activated from: the Live tab shows it)
                     try { stateNames = monitor.EnumNames(info.Type); } catch (AdsException) { }
                     activeProject = ActiveProjectOf(monitor);
+                    // (the build the PLC runs: Boot\Plc\Port_<port>.cid, the GUID its .compileinfo is named by)
+                    var cid = monitor.ReadBootFile($"Plc/Port_{amsPort}.cid");
+                    if (cid != null && cid.Length >= 16) plcBuildId = new Guid(cid.Take(16).ToArray()).ToString().ToUpperInvariant();
                     monitor.Subscribe(chosen + "." + stateVar, info.Size);
                 }
                 catch (Exception ex) when (ex is AdsException || ex is DllNotFoundException || ex is EntryPointNotFoundException || ex is BadImageFormatException)
@@ -1316,6 +1328,8 @@ namespace KvalMachineScope.Xae
                     instanceType,
                     stateNames,
                     activeProject,
+                    compileInfo = CompareBuilds(plcBuildId, ProjectBuilds(_pouPath)),
+                    loadedProject = LoadedProjectOf(_pouPath)?.name,
                     twinCatBuild,
                     xaeBuild = ActiveXaeBuild(out var xaeVersion),
                     xaeVersion,
@@ -1401,6 +1415,160 @@ namespace KvalMachineScope.Xae
                 return new { name, created, plcProjects = plcs };
             }
             catch (Exception ex) when (ex is AdsException || ex is ArgumentException || ex is InvalidOperationException) { return null; }
+        }
+
+        /// <summary>The nearest folder above the file that holds a file of that extension, or null</summary>
+        private static string FolderWith(string file, string extension)
+        {
+            try
+            {
+                for (var dir = Path.GetDirectoryName(file); !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+                    if (Directory.EnumerateFiles(dir, "*" + extension).Any()) return dir;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException) { }
+            return null;
+        }
+
+        /// <summary>The builds of the POU's PLC project here (its _CompileInfo: GUID-named .compileinfo files), newest first</summary>
+        private static List<KeyValuePair<string, DateTime>> ProjectBuilds(string pouPath)
+        {
+            var list = new List<KeyValuePair<string, DateTime>>();
+            var dir = string.IsNullOrEmpty(pouPath) ? null : FolderWith(pouPath, ".plcproj");
+            if (dir == null) return list;
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(Path.Combine(dir, "_CompileInfo"), "*.compileinfo"))
+                {
+                    var name = Path.GetFileNameWithoutExtension(f);
+                    if (Guid.TryParse(name, out _)) list.Add(new KeyValuePair<string, DateTime>(name.ToUpperInvariant(), File.GetLastWriteTimeUtc(f)));
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+            return list.OrderByDescending(b => b.Value).ToList();
+        }
+
+        /// <summary>The PLC's build against the project's: newest, older (of this copy) or other (not built here)</summary>
+        private static object CompareBuilds(string plcId, List<KeyValuePair<string, DateTime>> builds)
+        {
+            if (string.IsNullOrEmpty(plcId)) return null;
+            var newest = builds.Count > 0 ? (object)new { id = builds[0].Key, at = builds[0].Value.ToString("o") } : null;
+            var match = builds.FindIndex(b => b.Key == plcId);
+            return new { plc = plcId, newest, state = match < 0 ? "other" : match == 0 ? "newest" : "older", builtAt = match < 0 ? null : builds[match].Value.ToString("o") };
+        }
+
+        /// <summary>The TwinCAT project (.tsproj) the POU belongs to: its name and file, or null</summary>
+        private static (string name, string path)? LoadedProjectOf(string pouPath)
+        {
+            var dir = string.IsNullOrEmpty(pouPath) ? null : FolderWith(pouPath, ".tsproj");
+            if (dir == null) return null;
+            try
+            {
+                var ts = Directory.EnumerateFiles(dir, "*.tsproj").FirstOrDefault();
+                return ts == null ? ((string, string)?)null : (Path.GetFileNameWithoutExtension(ts), ts);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return null; }
+        }
+
+        /// <summary>
+        /// The Live tab's Activate (asked there first): the TwinCAT project of the loaded POU activated on its target, as
+        /// XAE's Activate Configuration (TwinCAT restarted in Run mode). activateResult { requestId, ok, message }
+        /// </summary>
+        private void HandleActivateProject(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var project = LoadedProjectOf(_pouPath);
+            if (project == null)
+            {
+                Post(new { type = "activateResult", requestId, ok = false, message = "The POU is not in a TwinCAT project folder" });
+                return;
+            }
+            try
+            {
+                if (!(Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)) throw new InvalidOperationException("XAE's automation is not available");
+                EnvDTE.Project found = null;
+                foreach (EnvDTE.Project p in dte.Solution.Projects)
+                {
+                    string file = null;
+                    try { file = p.FullName; } catch (System.Runtime.InteropServices.COMException) { }
+                    if (string.Equals(file, project.Value.path, StringComparison.OrdinalIgnoreCase)) { found = p; break; }
+                }
+                if (found == null) throw new InvalidOperationException($"{project.Value.name}.tsproj is not open in XAE: open its solution, then activate");
+                dynamic sysManager = found.Object;
+                Log.Write($"activate: {project.Value.path}");
+                sysManager.ActivateConfiguration();
+                sysManager.StartRestartTwinCAT();
+                Post(new { type = "activateResult", requestId, ok = true, message = $"{project.Value.name} activated: TwinCAT restarts in Run mode" });
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Log.Write("activate: " + ex.Message);
+                Post(new { type = "activateResult", requestId, ok = false, message = $"{project.Value.name} was not activated: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// The loaded POU's project files' TwinCAT version here and in git (HEAD): the .tsproj (TcVersion), the .plcproj
+        /// (ProgramVersion), the .TcPOU (ProductVersion). projectVersionsResult { requestId, files, converted }
+        /// </summary>
+        private void HandleProjectVersions(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var files = new List<object>();
+                var converted = false;
+                if (!string.IsNullOrEmpty(pou))
+                {
+                    var targets = new List<(string kind, string file, string pattern)>();
+                    var tsDir = FolderWith(pou, ".tsproj");
+                    var plcDir = FolderWith(pou, ".plcproj");
+                    var ts = tsDir == null ? null : Directory.EnumerateFiles(tsDir, "*.tsproj").FirstOrDefault();
+                    var plc = plcDir == null ? null : Directory.EnumerateFiles(plcDir, "*.plcproj").FirstOrDefault();
+                    if (ts != null) targets.Add(("tsproj", ts, "<TcSmProject\\b[^>]*\\bTcVersion=\"([^\"]+)\""));
+                    if (plc != null) targets.Add(("plcproj", plc, "<ProgramVersion>([^<]+)<"));
+                    targets.Add(("pou", pou, "<TcPlcObject\\b[^>]*\\bProductVersion=\"([^\"]+)\""));
+                    foreach (var t in targets)
+                    {
+                        string working = null, head = null;
+                        try { working = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(t.file), t.pattern).Groups[1].Value; } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+                        var committed = GitHeadText(t.file);
+                        if (committed != null) head = System.Text.RegularExpressions.Regex.Match(committed, t.pattern).Groups[1].Value;
+                        if (string.IsNullOrEmpty(working)) working = null;
+                        if (string.IsNullOrEmpty(head)) head = null;
+                        if (working != null && head != null && working != head) converted = true;
+                        files.Add(new { kind = t.kind, path = t.file, working, head });
+                    }
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "projectVersionsResult", requestId, files, converted });
+            });
+        }
+
+        /// <summary>A file's committed (git HEAD) text, or null (not in git, not committed)</summary>
+        private static string GitHeadText(string file)
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("git", $"-C \"{Path.GetDirectoryName(file)}\" show \"HEAD:./{Path.GetFileName(file)}\"")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                };
+                using (var proc = System.Diagnostics.Process.Start(psi))
+                {
+                    var text = proc.StandardOutput.ReadToEndAsync();
+                    if (!proc.WaitForExit(15000)) { try { proc.Kill(); } catch (InvalidOperationException) { } return null; }
+                    return proc.ExitCode == 0 ? text.Result : null;
+                }
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is IOException) { return null; }
         }
 
         // The PLC's symbol version when live connected (a change: another program was downloaded or activated)

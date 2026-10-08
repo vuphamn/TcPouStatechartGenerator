@@ -103,6 +103,24 @@ ipcMain.handle('tc:new-window', (_event, filePath, launch) => {
   const connection = launch?.connection && typeof launch.connection === 'object'
     ? Object.fromEntries(Object.entries(launch.connection).filter(([k, v]) => /^[a-zA-Z]{1,20}$/.test(k) && typeof v === 'string' && v.length <= 200).slice(0, 16))
     : undefined;
+  // Compare (another PLC, the same instance): always a new window, the two side by side on this screen
+  if (launch?.compare === true && file && instance) {
+    const opener = BrowserWindow.getFocusedWindow();
+    const win = createWindow(file, { instance, live: launch.live === true, connection });
+    try {
+      const { screen } = require('electron');
+      const area = screen.getDisplayMatching(opener ? opener.getBounds() : win.getBounds()).workArea;
+      const half = Math.floor(area.width / 2);
+      if (opener && !opener.isDestroyed()) {
+        if (opener.isMaximized()) opener.unmaximize();
+        opener.setBounds({ x: area.x, y: area.y, width: half, height: area.height });
+      }
+      win.setBounds({ x: area.x + half, y: area.y, width: area.width - half, height: area.height });
+    } catch {
+      // (placed as a new window is)
+    }
+    return;
+  }
   openPouWindow(file, instance ? { instance, live: launch.live === true, connection } : null);
 });
 
@@ -174,6 +192,7 @@ function createWindow(startupPou = null, launch = null, query = null) {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), query ? { query } : undefined);
   }
+  return mainWindow;
 }
 
 // Browse for a .TcPOU; its folder and subfolders are searched for the .TcDUT holding its state enum
@@ -292,6 +311,9 @@ ipcMain.handle('tc:layout-write', (_event, pouPath, text) => {
     return { error: err.message };
   }
 });
+
+// The loaded POU's project files' TwinCAT version here and in git (XAE of another build converts them when it saves)
+ipcMain.handle('tc:project-versions', (_event, pouPath) => require('../shared/projectVersions.cjs').projectVersions(pouPath));
 
 ipcMain.handle('tc:git-show', async (_event, filePath) => {
   const { execFile } = require('child_process');
@@ -449,7 +471,12 @@ ipcMain.handle('tc:discover-plcs', (_event, options) => {
   const localNetId = /^\d+(\.\d+){5}$/.test(options?.localNetId ?? '') ? options.localNetId : defaultLocalNetId(localIpTowards(addresses[0] ?? ''));
   // (each found PLC described as going live would see it: TwinCAT's state, its PLC's, its project)
   return discover({ localNetId, addresses, broadcast: process.env.KSS_DISCOVERY_BROADCAST !== '0', port: Number(process.env.KSS_DISCOVERY_PORT) || 48899 })
-    .then(async (r) => ({ ...r, devices: await require('../shared/tcPlcState.cjs').describePlcs(r.devices), localTwinCat: require('../shared/liveSession.cjs').localTwinCatNetId() }));
+    .then(async (r) => ({
+      ...r,
+      // (this computer's routes that did not answer: listed too, marked)
+      devices: [...(await require('../shared/tcPlcState.cjs').describePlcs(r.devices)), ...(process.env.KSS_DISCOVERY_BROADCAST !== '0' ? require('../shared/tcDiscovery.cjs').routesNotAnswering(r.devices) : [])],
+      localTwinCat: require('../shared/liveSession.cjs').localTwinCatNetId(),
+    }));
 });
 // The Live tab's Check: why a PLC does not answer (all read-only)
 ipcMain.handle('tc:check-connection', (_event, req) => {

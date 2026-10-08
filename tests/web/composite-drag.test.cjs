@@ -60,7 +60,9 @@ const MIME = 'application/x-kss-statechart-element';
   await p.evaluate(() => document.getElementById('text-prompt-input').select());
   await p.keyboard.type('Clamp');
   await p.keyboard.press('Enter');
-  await h.sleep(1500);
+  // (drawn anew: a busy machine takes longer)
+  for (let t = 0; t < 8000 && !(await cluster('Clamp')); t += 250) await h.sleep(250);
+  await h.sleep(500);
   expect(!!(await cluster('Clamp')), 'the composite Clamp');
   // Its box: sand, dashed, tinted, apart from the grey edges and the states (in the SVG itself: the exports keep it);
   // the light themes: a darker sand

@@ -41,7 +41,9 @@ export interface SourceFilesHeaderItemProps {
    * A POU that EXTENDS another without a doState() of its own: the bases its state machine is read from (nearest
    * first), or the one not found (onFind: look for it, asking for the project folder: the web edition)
    */
-  inherited?: { bases: string[]; missing?: string; error?: string; onFind?: () => void };
+  inherited?: { bases: string[]; missing?: string; error?: string; onFind?: () => void; onShow?: () => void };
+  /** The project files saved in another TwinCAT version than committed (XAE of another build converted them) */
+  versionGuard?: { text: string; title: string };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -98,6 +100,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
   hostSave,
   hostConflict,
   inherited,
+  versionGuard,
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [saveMenuAnchor, setSaveMenuAnchor] = useState<{ x: number; y: number } | null>(null);
@@ -243,14 +246,21 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         {pouFileName || 'No file loaded'}
       </span>
       {(pouFileName || dutStatus !== 'sample') && enumChip}
+      {versionGuard && (
+        <span id="pou-version-guard" className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap" title={versionGuard.title}>
+          ⚠ {versionGuard.text}
+        </span>
+      )}
       {inherited && inherited.bases.length > 0 && (
-        <span
+        <button
+          type="button"
           id="pou-inherited-chip"
-          className="px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/40 text-sky-200 text-[11px] whitespace-nowrap"
-          title={`Its doState() and state methods are read from ${inherited.bases.join(' → ')} (EXTENDS). Read only here: what is inherited is edited in its own POU`}
+          onClick={inherited.onShow}
+          className="px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/40 text-sky-200 text-[11px] whitespace-nowrap hover:bg-sky-500/20"
+          title={`Its doState() and state methods are read from ${inherited.bases.join(' → ')} (EXTENDS). Click: the chain and which methods each level overrides`}
         >
           extends {inherited.bases[0]}
-        </span>
+        </button>
       )}
       {inherited && !inherited.bases.length && inherited.missing && (
         <button

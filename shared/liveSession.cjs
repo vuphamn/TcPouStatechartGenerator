@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 const { Client } = require('ads-client');
 const ads = require('./tcAds.cjs');
 const { readPlcSources, readBootFile, unzip, activeProjectOf } = require('./tcSources.cjs');
+const { plcCompileId, projectBuilds, loadedProjectOf, compareBuilds } = require('./tcCompileInfo.cjs');
 const { readIoTree } = require('./tcIoTree.cjs');
 const { readMasters } = require('./tcEcat.cjs');
 const { syncPlcProject, readCopyPou, baseDirOf } = require('./plcProjectCopy.cjs');
@@ -385,6 +386,9 @@ function createLiveSession(hooks = {}) {
       // was activated from; the PLC's TwinCAT build beside the XAE that builds for it here)
       const stateNames = (await ads.dataTypeInfo(client, info.type, new Map()).catch(() => null))?.enumValues ?? null;
       const activeProject = await activeProjectOf(client);
+      // (the build the PLC runs against this project copy's builds; the TwinCAT project the POU belongs to)
+      const compileInfo = compareBuilds(await plcCompileId(client, adsPort), projectBuilds(options.path));
+      const loadedProject = loadedProjectOf(options.path)?.name ?? null;
       const twinCatBuild = await targetBuildOf(client);
       let xaeBuild = null;
       try {
@@ -396,7 +400,7 @@ function createLiveSession(hooks = {}) {
       startTimers(s, send, status);
       s.connected = true;
       status('connected', `${symbol} on ${host} (${netId}:${adsPort}) (PLC ${plcState})`, {
-        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, twinCatBuild, xaeBuild, route,
+        target: `${netId}:${adsPort}`, plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, compileInfo, loadedProject, twinCatBuild, xaeBuild, route,
       });
       return { symbol, netId, adsPort };
     } catch (err) {

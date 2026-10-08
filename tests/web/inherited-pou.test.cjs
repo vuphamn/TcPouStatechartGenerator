@@ -5,6 +5,8 @@
 // not edited from the chart (where it is written said); Go to code opens its method in the Method Editor, which lists
 // the inherited methods with their base. The base changed on disk: the chart has it. An inherited method edited there:
 // asked once (the base of other POUs too), the chart has it, Save writes the base's file; the POU's own file untouched
+// The extends chip: the inheritance view (each level's methods, which are overridden and by whom). The project in git
+// (its .tsproj committed in 4024.59, saved here in 4026.27): the header says so, the first Save asks once
 // (runner-timeout: 300)
 const h = require('../lib/harness.cjs');
 const fs = require('fs');
@@ -24,12 +26,21 @@ if (!fs.existsSync(path.join(dist, 'index.html'))) {
 const work = path.join(h.OUT, 'inherited-project');
 fs.rmSync(work, { recursive: true, force: true });
 for (const d of ['POUs/Machine', 'Common/Base']) fs.mkdirSync(path.join(work, d), { recursive: true });
-fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project/>');
+fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><ProgramVersion>3.1.4024.0</ProgramVersion></PropertyGroup></Project>');
+fs.writeFileSync(path.join(work, 'Machine.tsproj'), '<?xml version="1.0"?>\n<TcSmProject TcSmVersion="1.0" TcVersion="3.1.4024.59"></TcSmProject>\n');
 const pouPath = path.join(work, 'POUs', 'Machine', 'SM_Derived.TcPOU');
 fs.writeFileSync(pouPath, '﻿' + derived);
 fs.writeFileSync(path.join(work, 'Common', 'Base', 'SM_Base.TcPOU'), '﻿' + base);
 fs.writeFileSync(path.join(work, 'Common', 'SM_Root.TcPOU'), '﻿' + root);
 fs.writeFileSync(path.join(work, 'Common', 'Base', 'E_St.TcDUT'), '﻿' + dut);
+
+// (committed; then XAE of another build "converts" the .tsproj)
+const { execFileSync } = require('child_process');
+const git = (...a) => execFileSync('git', ['-C', work, ...a], { stdio: 'ignore' });
+git('init', '-q');
+git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'add', '-A');
+git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'base');
+fs.writeFileSync(path.join(work, 'Machine.tsproj'), '<?xml version="1.0"?>\n<TcSmProject TcSmVersion="1.0" TcVersion="3.1.4026.27"></TcSmProject>\n');
 
 (async () => {
   const nonce = crypto.randomBytes(12).toString('base64');
@@ -78,6 +89,21 @@ fs.writeFileSync(path.join(work, 'Common', 'Base', 'E_St.TcDUT'), '﻿' + dut);
     expect(['ST_ENABLING', 'ST_IDLE', 'ST_RUN', 'ST_ERROR'].every((s) => chart.states.includes(s)), `the base's states drawn (${chart.states.join(', ')})`);
     expect(['ST_IDLE->ST_ERROR', 'ST_IDLE->ST_RUN', 'ST_RUN->ST_IDLE', 'ST_ENABLING->ST_IDLE'].every((k) => chart.edges.includes(k)), `the methods' transitions drawn (${chart.edges.join(', ')})`);
     expect(chart.chip === 'extends SM_Base', `the header: what it extends (${chart.chip})`);
+    // The project saved in another TwinCAT version than committed: said
+    await p.waitForSelector('#pou-version-guard', { timeout: 8000 }).catch(() => {});
+    const guard = await p.evaluate(() => { const e = document.getElementById('pou-version-guard'); return e ? { text: e.textContent.trim(), title: e.getAttribute('title') } : null; });
+    expect(/4024\.59 → 4026\.27 \(not committed\)/.test(guard?.text ?? '') && /\.tsproj 3\.1\.4024\.59 in git, 3\.1\.4026\.27 here/.test(guard?.title ?? ''), `converted since committed: said (${guard?.text})`);
+    // The inheritance view: the levels, an overridden method and its override marked
+    await p.click('#pou-inherited-chip').catch(() => {});
+    await p.waitForSelector('#inheritance-dialog', { timeout: 4000 }).catch(() => {});
+    const view = await p.evaluate(() => ({
+      levels: [...document.querySelectorAll('.inheritance-level')].map((l) => l.getAttribute('data-level')),
+      baseIdle: document.querySelector('.inheritance-level[data-level="SM_Base"] .inheritance-method[data-method="stIdle"]')?.getAttribute('data-overridden-by'),
+      ownIdle: document.querySelector('.inheritance-level[data-level="SM_Derived"] .inheritance-method[data-method="stIdle"]')?.getAttribute('data-overrides'),
+    }));
+    expect(view.levels.join() === 'SM_Derived,SM_Base,SM_Root' && view.baseIdle === 'SM_Derived' && view.ownIdle === 'SM_Base', `the inheritance view: ${JSON.stringify(view)}`);
+    await p.keyboard.press('Escape');
+    await h.sleep(300);
     expect(chart.enumName === 'E_St.TcDUT', 'its enum: found beside the base');
 
     // A transition written in the base: its condition not edited here
@@ -159,6 +185,11 @@ fs.writeFileSync(path.join(work, 'Common', 'Base', 'E_St.TcDUT'), '﻿' + dut);
     }
     expect(edited, 'confirmed: the chart has the change');
     await p.click('#header-save-btn').catch(() => {});
+    // (the project converted since committed: the first Save asks once)
+    await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+    const askedSave = await p.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+    expect(/Project saved in another TwinCAT version/.test(askedSave), 'the first Save: asked about the converted project');
+    await p.click('#text-prompt-submit').catch(() => {});
     let written = '';
     for (let t = 0; t < 8000 && !/cmd_bResetEdited/.test(written); t += 250) {
       await h.sleep(250);

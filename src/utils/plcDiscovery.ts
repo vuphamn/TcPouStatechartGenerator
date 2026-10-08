@@ -13,6 +13,8 @@ export interface FoundPlc {
   os?: string;
   /** XAE: this computer's TwinCAT router has a route to it (XAE goes live through that router) */
   route?: boolean;
+  /** A route of this computer's that did not answer the search (off, or unreachable from here) */
+  notAnswering?: boolean;
   /** XAE: "route" for a route not found on the network, "project" for the TwinCAT project's target */
   source?: 'network' | 'route' | 'project';
   /**

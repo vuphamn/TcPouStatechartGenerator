@@ -1064,10 +1064,13 @@ function start() {
         conn.dtCache ??= new Map();
         const stateNames = (await ads.dataTypeInfo(conn.client, info.type, conn.dtCache).catch(() => null))?.enumValues ?? null;
         const activeProject = await activeProjectOf(conn.client);
+        // (the build the PLC runs: no project copy here to compare it with)
+        const plcBuildId = await require(`${sharedDir}/tcCompileInfo.cjs`).plcCompileId(conn.client, plc.port ?? 851);
+        const compileInfo = plcBuildId ? { plc: plcBuildId, newest: null, state: null, builtAt: null } : null;
         const twinCatBuild = await conn.client.readDeviceInfo({ adsPort: 10000 }).then((i) => (i && i.majorVersion === 3 && i.minorVersion === 1 && i.versionBuild > 4000 ? i.versionBuild : null)).catch(() => null);
         send({
           type: 'liveStatus', state: 'connected', message: `${symbol} on ${plc.name} (PLC ${conn.plcState})`,
-          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, twinCatBuild,
+          target: plc.name, plcState: conn.plcState, instance: chosen, instances: found, symbolType: info.type, instanceType, stateNames, activeProject, compileInfo, twinCatBuild,
         });
       } catch (err) {
         if (seq !== startSeq) return;

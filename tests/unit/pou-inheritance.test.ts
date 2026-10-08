@@ -6,7 +6,7 @@
 // preProcess()'s SUPER^ call too. Each transition says where it is written (its method, its base). The bases
 // registered by name: the chart, the enum match and the Identified States read them
 import { generateStatechartModel } from '../../src/generator.ts';
-import { expandStateCalls, extendsOf, hasOwnMethod, inheritedBases, mergeInherited, readableInline, setInheritedBases, stripInherited, withInherited } from '../../src/utils/pouInheritance.ts';
+import { expandStateCalls, extendsOf, hasOwnMethod, inheritedBases, mergeBaseEdits, mergeInherited, readableInline, setInheritedBases, stripInherited, withInherited } from '../../src/utils/pouInheritance.ts';
 import { rankDutCandidates } from '../../src/utils/dutMatcher.ts';
 import { extractIdentifiedStatesFromPou } from '../../src/utils/pouStateExtractor.ts';
 import { extractStateCodeFromPou } from '../../src/utils/complexityHeatmap.ts';
@@ -66,6 +66,14 @@ expect(withInherited(derived) === derived, 'forgotten: its own again');
 // 5. A POU whose doState() calls its own state methods (the base itself, opened): their transitions drawn
 const own = generateStatechartModel(dut, base, { showTransitionPriorities: false }).edges.filter((e) => e.source === 'doState');
 expect(own.length >= 5 && own.every((e) => e.members[0].inMethod && !e.members[0].inheritedFrom), `the base opened: its state methods' transitions (${own.length})`);
+
+// 6. The base changed on disk while its methods were edited here: merged by method
+const edited = base.replace('IF cmd_bReset THEN', 'IF cmd_bResetHere THEN');
+const disk = base.replace('IF bReady THEN', 'IF bReadyOnDisk THEN');
+const mergedEdits = mergeBaseEdits(base, edited, disk);
+expect(mergedEdits.text.includes('cmd_bResetHere') && mergedEdits.text.includes('bReadyOnDisk') && mergedEdits.kept.join() === 'stError' && !mergedEdits.conflicts.length, `edited here and changed on disk, other methods: both kept (${mergedEdits.kept})`);
+const both = mergeBaseEdits(base, edited, base.replace('IF cmd_bReset THEN', 'IF cmd_bResetOnDisk THEN'));
+expect(both.text.includes('cmd_bResetHere') && !both.text.includes('cmd_bResetOnDisk') && both.conflicts.join() === 'stError', `the same method changed in both: this edit kept, a conflict (${both.conflicts})`);
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

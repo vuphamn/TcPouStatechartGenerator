@@ -366,6 +366,8 @@ wss.on('connection', (ws, req) => {
       if (Number(process.env.KSS_DISCOVERY_ADS_PORT) > 0) for (const d of result.devices) d.ip = `${d.ip}:${Number(process.env.KSS_DISCOVERY_ADS_PORT)}`;
       // (each described as going live would see it: TwinCAT's state, its PLC's, its project)
       result.devices = await require('../shared/tcPlcState.cjs').describePlcs(result.devices);
+      // (this computer's routes that did not answer: listed too, marked)
+      if (process.env.KSS_DISCOVERY_BROADCAST !== '0') result.devices.push(...discovery.routesNotAnswering(result.devices));
       log(`browse: ${origin} searched the network, ${result.devices.length} device(s)`);
       return send({ type: 'discoverResult', requestId, ...result, localTwinCat: localTwinCatNetId() });
     }

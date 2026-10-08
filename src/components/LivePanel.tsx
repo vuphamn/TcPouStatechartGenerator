@@ -32,6 +32,10 @@ export interface LiveStatus {
   plcStateNames?: Record<string, string> | null;
   /** The TwinCAT project the PLC's configuration was activated from */
   activeProject?: { name: string; created?: string | null; plcProjects?: string[] } | null;
+  /** The build the PLC runs against this project copy's builds */
+  compileInfo?: { plc: string; newest: { id: string; at: string } | null; state: 'newest' | 'older' | 'other' | null; builtAt: string | null } | null;
+  /** The TwinCAT project the loaded POU belongs to */
+  loadedProject?: string | null;
   /** Web edition: the PLCs the gateway offers, and who is signed in */
   plcs?: { id: string; name: string }[];
   user?: string;
@@ -63,6 +67,15 @@ interface LivePanelProps {
   typeMismatch?: { instance: string; plcType: string; pouType: string; onOpen?: () => void } | null;
   /** The PLC's enum of the state variable is not the loaded .TcDUT's (another type, or other names by value) */
   enumMismatch?: { plcType: string; dutType: string; typeDiffers: boolean; diffs: string[] } | null;
+  /** XAE: the loaded POU's TwinCAT project activated on the PLC (asks first) */
+  onActivateProject?: () => void;
+  /** The .TcDUT brought to the PLC's enum (asks first) */
+  onUpdateEnum?: () => void;
+  /** Transition coverage: the chart's transitions the PLC has taken (kept per POU across sessions); its CSV */
+  coverage?: import('../utils/transitionCoverage.ts').Coverage | null;
+  onExportCoverage?: () => void;
+  /** While live: the same POU and instance live on another PLC (Browse's Compare) */
+  onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string }[];
   onUnwatch?: (name: string) => void;
@@ -277,9 +290,54 @@ const GUARD_BADGE = {
 
 const MAX_SHOWN = 200;
 
+/** Transition coverage: taken / total with a bar; the never-taken ones on demand; CSV */
+const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void }> = ({ coverage, onExport }) => {
+  const [open, setOpen] = useState(false);
+  const pct = Math.round((coverage.taken / coverage.total) * 100);
+  const never = coverage.rows.filter((r) => r.n === 0);
+  return (
+    <div id="live-coverage" data-taken={coverage.taken} data-total={coverage.total} className="px-2.5 py-1.5 border-b border-slate-800 shrink-0 text-[11px]">
+      <div className="flex items-center gap-2">
+        <button type="button" id="live-coverage-toggle" onClick={() => setOpen((v) => !v)} className="text-slate-300 font-semibold hover:text-sky-300" title="The chart's transitions the PLC has taken (kept for this POU across sessions): show the ones never taken">
+          {open ? '▾' : '▸'} Coverage
+        </button>
+        <span className="text-slate-400">
+          {coverage.taken} / {coverage.total} transitions taken ({pct}%)
+        </span>
+        <span className="flex-1 h-1.5 rounded bg-slate-800 overflow-hidden min-w-[3rem]">
+          <span className="block h-full bg-emerald-600" style={{ width: `${pct}%` }} />
+        </span>
+        {onExport && (
+          <button type="button" id="live-coverage-export" onClick={onExport} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Every transition with how often and when the PLC last took it (CSV)">
+            CSV
+          </button>
+        )}
+      </div>
+      {open && (
+        <div id="live-coverage-never" className="mt-1 max-h-32 overflow-y-auto font-mono text-slate-400">
+          {never.length === 0 ? (
+            <div className="text-emerald-300">Every transition has been taken.</div>
+          ) : (
+            never.map((r) => (
+              <div key={`${r.from}->${r.to}`} className="live-coverage-row truncate" title="Never taken by the PLC (since this POU's transitions were first recorded here)">
+                {r.from} → {r.to}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const LivePanel: React.FC<LivePanelProps> = ({
   typeMismatch,
   enumMismatch,
+  onActivateProject,
+  onUpdateEnum,
+  coverage,
+  onExportCoverage,
+  onComparePlc,
   watchList,
   onUnwatch,
   mode,
@@ -391,6 +449,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   const [timesOpen, setTimesOpen] = useState(true);
   // Browse: the list of PLCs, and the name of the one picked from it (for Remember)
   const [browsing, setBrowsing] = useState(false);
+  // (while live: the PLC list to compare on another PLC)
+  const [comparing, setComparing] = useState(false);
   // Check all (Browse), kept here: its timer runs while Browse is closed; the PLCs that stopped answering
   const checker = useRememberedChecks(rememberedPlcs, onCheckPlc);
   const lostPlcs = rememberedPlcs.filter((p) => p.netId in checker.lost);
@@ -513,16 +573,45 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             );
           })()}
           {/* The TwinCAT project the PLC's configuration was activated from */}
-          {status.state === 'connected' && status.activeProject && (
+          {status.state === 'connected' && status.activeProject && (() => {
+            // (another project than the loaded POU's is active there)
+            const other = !!status.loadedProject && status.loadedProject.toLowerCase() !== status.activeProject.name.toLowerCase();
+            return (
+              <>
             <span
               id="live-active-project"
               data-project={status.activeProject.name}
-              className="shrink-0 px-1.5 rounded border border-slate-700 text-slate-400 text-[11px] truncate max-w-[14rem]"
+              data-other={other ? 'true' : undefined}
+              className={`shrink-0 px-1.5 rounded border text-[11px] truncate max-w-[14rem] ${other ? 'border-amber-500/70 bg-amber-950/60 text-amber-200' : 'border-slate-700 text-slate-400'}`}
               title={`The PLC's configuration was activated from the TwinCAT project ${status.activeProject.name}${status.activeProject.created ? ` (${status.activeProject.created.replace('T', ' ')})` : ''}${status.activeProject.plcProjects?.length ? `; its PLC project${status.activeProject.plcProjects.length > 1 ? 's' : ''}: ${status.activeProject.plcProjects.join(', ')}` : ''}`}
             >
-              Active: {status.activeProject.name}
+              {other ? '⚠ ' : ''}Active: {status.activeProject.name}
             </span>
-          )}
+            {other && onActivateProject && (
+              <button type="button" id="live-activate-project" onClick={onActivateProject} className="shrink-0 px-1.5 rounded bg-amber-700/60 hover:bg-amber-600/70 text-amber-50 text-[11px] font-semibold" title={`Activate ${status.loadedProject}'s configuration on this PLC (as XAE's Activate Configuration: TwinCAT restarts in Run mode; asks first)`}>
+                Activate {status.loadedProject}…
+              </button>
+            )}
+              </>
+            );
+          })()}
+          {/* The build the PLC runs against this project copy's builds */}
+          {status.state === 'connected' && status.compileInfo?.state && (() => {
+            const c = status.compileInfo;
+            const when = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : '?');
+            const text = c.state === 'newest' ? 'latest build' : c.state === 'older' ? 'older build' : "not this copy's build";
+            const title =
+              c.state === 'newest'
+                ? `The PLC runs this project copy's newest build (${when(c.builtAt)})`
+                : c.state === 'older'
+                  ? `The PLC runs an older build of this project copy (${when(c.builtAt)}); the newest here is from ${when(c.newest?.at)}: download or activate it to run it`
+                  : `The PLC runs a build that is not in this project copy's _CompileInfo (another copy of the project, another computer, or cleaned here)${c.newest ? `; the newest build here is from ${when(c.newest.at)}` : ''}`;
+            return (
+              <span id="live-build-state" data-state={c.state} className={`shrink-0 px-1.5 rounded border text-[11px] ${c.state === 'newest' ? 'border-emerald-700/70 text-emerald-300' : 'border-amber-500/70 bg-amber-950/60 text-amber-200'}`} title={title}>
+                {c.state === 'newest' ? '✓ ' : '⚠ '}{text}
+              </span>
+            );
+          })()}
           {status.state === 'connected' && status.plcState === 'Stop' && onStartPlc && !startPlc && (
             <button type="button" id="live-start-plc" onClick={() => setStartPlc({ phase: 'ask', safe: false })} className="shrink-0 px-1.5 rounded bg-emerald-800 hover:bg-emerald-700 text-white text-[11px]" title="The PLC application is in Stop: start it (asks first)">
               Start PLC…
@@ -594,6 +683,18 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 </option>
               ))}
             </select>
+          )}
+          {status.state === 'connected' && onComparePlc && canBrowse && (
+            <button
+              type="button"
+              id="live-compare-btn"
+              onClick={() => setComparing((v) => !v)}
+              aria-expanded={comparing}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] ${comparing ? 'bg-sky-900/60 border-sky-600 text-sky-200' : 'border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800'}`}
+              title="Compare: the same POU and instance live on another PLC too, in a new tab (the desktop app: a window beside this one)"
+            >
+              <Search className="w-3 h-3" /> Compare…
+            </button>
           )}
           {onOpenOverview && status.state === 'connected' && (
             <button
@@ -1179,22 +1280,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             )}
           </div>
         )}
-        {browsing && !running && canBrowse && (
+        {((browsing && !running) || (comparing && status.state === 'connected')) && canBrowse && (
           <PlcBrowser
             mode={mode}
             remembered={rememberedPlcs}
             currentNetId={netIdNow}
-            onPick={pickPlc}
+            onPick={comparing && status.state === 'connected' && onComparePlc ? (p) => { onComparePlc(p); setComparing(false); } : pickPlc}
             onFound={onPlcsFound}
             checkPlc={onCheckPlc}
             checker={checker}
             onForget={(netId) => onForgetPlc?.(netId)}
-            onClose={() => setBrowsing(false)}
+            onClose={() => { setBrowsing(false); setComparing(false); }}
             scan={onScanPlcs}
             addRoute={onAddRoute}
             startPlc={onPlcStartAt}
             controlModes={plcControlModes}
             onGoLive={running ? undefined : (p) => { pickPlc(p); setGoLiveFor(p.netId); }}
+            onCompare={status.state === 'connected' ? onComparePlc : undefined}
             refreshStates={onRefreshPlcStates}
             openXae={onOpenXae}
             onRename={onRenamePlc}
@@ -1303,6 +1405,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               </>
             )}
           </span>
+          {!enumMismatch.typeDiffers && onUpdateEnum && (
+            <button type="button" id="live-enum-update" onClick={onUpdateEnum} className="shrink-0 px-1.5 rounded bg-amber-600/40 hover:bg-amber-600/60 text-amber-50 font-semibold" title="Rename and add the .TcDUT's members as the PLC has them (the POU's code follows the renames); asks first, Save writes the files">
+              Update .TcDUT…
+            </button>
+          )}
         </div>
       )}
 
@@ -1512,6 +1619,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             </div>
           )}
         </div>
+      )}
+
+      {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
+      {coverage && coverage.total > 0 && (
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} />
       )}
 
       {/* Trail */}

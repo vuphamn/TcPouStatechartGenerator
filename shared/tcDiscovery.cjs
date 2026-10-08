@@ -299,4 +299,15 @@ async function probeAll(targets, timeoutMs = 1500) {
   return out;
 }
 
-module.exports = { probeAll, discover, localRoutes, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };
+/**
+ * This computer's routes that did not answer the search (devices: what answered): listed anyway, marked, so a PLC that
+ * is off or unreachable is seen with why ({ netId, ip, name, route, source: 'route', notAnswering })
+ */
+function routesNotAnswering(devices) {
+  const seen = new Set((devices ?? []).map((d) => String(d.netId)));
+  return localRoutes()
+    .filter((r) => !seen.has(r.netId))
+    .map((r) => ({ netId: r.netId, ip: r.address, name: r.name, route: true, source: 'route', notAnswering: true }));
+}
+
+module.exports = { probeAll, discover, localRoutes, routesNotAnswering, localNetworks, searchRequest, parseReply, addRoute, addRouteRequest, parseAddRouteReply, MAGIC };

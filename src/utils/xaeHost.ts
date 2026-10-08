@@ -33,6 +33,10 @@ export type HostMessage =
       stateNames?: Record<string, string> | null;
       /** The TwinCAT project the PLC's configuration was activated from (its boot folder's CurrentProjectInfo.json) */
       activeProject?: { name: string; created?: string | null; plcProjects?: string[] } | null;
+      /** The build the PLC runs (its compile ID) against this project copy's builds (its _CompileInfo) */
+      compileInfo?: { plc: string; newest: { id: string; at: string } | null; state: 'newest' | 'older' | 'other' | null; builtAt: string | null } | null;
+      /** The TwinCAT project the loaded POU belongs to (its .tsproj's name) */
+      loadedProject?: string | null;
       /** XAE: the PLC's TwinCAT build (3.1.4024: 4024; null: not known) and the XAE's (its Remote Manager's: "4024.59") */
       twinCatBuild?: number | null;
       xaeBuild?: number | null;
@@ -56,6 +60,10 @@ export type HostMessage =
   | { type: 'projectPous'; project?: string; pous?: { name: string; path?: string; content: string }[]; duts?: DutCandidate[]; error?: string }
   // A POU of the project by type name (a base the loaded POU EXTENDS), read only
   | { type: 'findPouResult'; requestId: number; typeName?: string; source?: PouSource; error?: string }
+  // The Live tab's Activate: the loaded POU's TwinCAT project activated on its target
+  | { type: 'activateResult'; requestId: number; ok: boolean; message: string }
+  // The loaded POU's project files' TwinCAT version here and in git
+  | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
   /** A rename's other files: the project's POUs whose code has the name */
   | { type: 'projectUses'; requestId?: number; files?: { name: string; path: string; content: string }[]; error?: string }
   /** The other files written (saveOther) */
@@ -88,6 +96,14 @@ export type HostMessage =
 
 /** A member of a browsed PLC symbol. value: a number / boolean / string shown with its value; struct / array: has
  * members; other: pointers, references, ... stateMachine: holds the state variable (a POU the app can follow) */
+/** A project file's TwinCAT version here (working) and committed (head; null: not in git) */
+export interface ProjectFileVersion {
+  kind: 'tsproj' | 'plcproj' | 'pou';
+  path: string;
+  working: string | null;
+  head: string | null;
+}
+
 export interface SymbolChild {
   name: string;
   path: string;
@@ -146,7 +162,7 @@ export type AppMessage =
   /** Open a POU (or DUT, interface) of the loaded POU's PLC project in TwinCAT's editor */
   | { type: 'openInXae'; typeName: string; method?: string; line?: number; text?: string }
   /** Another tab on this POU, following another PLC instance of it (a tab already following it comes forward) */
-  | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string> }
+  | { type: 'openInstance'; path?: string; instance: string; typeName?: string; connection?: Record<string, string>; newTab?: boolean }
   /** Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult) */
   | { type: 'liveBrowse'; requestId: number; path: string; stateVar: string }
   /** The Live tab's Browse: search for PLCs (answered with plcList) */
@@ -156,6 +172,8 @@ export type AppMessage =
   /** Project documentation: the loaded POU's PLC project files (answered with projectPous) */
   | { type: 'projectPous' }
   | { type: 'findPou'; requestId: number; typeName: string }
+  | { type: 'activateProject'; requestId: number }
+  | { type: 'projectVersions'; requestId: number }
   /** The PLC project's types (answered with projectSymbols) */
   | { type: 'projectSymbols' }
   /** The project's POUs whose code has a name (answered with projectUses) */

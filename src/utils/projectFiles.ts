@@ -5,7 +5,7 @@
  */
 
 import type { ProjectFiles } from './projectDocumentation.ts';
-import { isXaeHost, onHostMessage, postToHost } from './xaeHost.ts';
+import { isXaeHost, onHostMessage, postToHost, type ProjectFileVersion } from './xaeHost.ts';
 import { webFindPou, type PouSource } from './sourceFileAccess.ts';
 import type { DutCandidate } from './dutMatcher.ts';
 import { extendsOf, hasOwnMethod, pouNameOf, type InheritedSource } from './pouInheritance.ts';
@@ -115,6 +115,32 @@ export async function findProjectPou(typeName: string, fromPath: string | undefi
   const d = (window as unknown as { tcDesktop?: { openPouInProject?: (from: string, type: string) => Promise<PouSource | { error: string }> } }).tcDesktop;
   if (d?.openPouInProject) return fromPath ? d.openPouInProject(fromPath, typeName) : { error: 'The POU was not opened from its folder' };
   return webFindPou(typeName, askFolder);
+}
+
+/**
+ * The loaded POU's project files' TwinCAT version here and in git (XAE of another build converts them when it saves):
+ * XAE, VS Code, the desktop app; null where it is not known (the web edition)
+ */
+export async function fetchProjectVersions(pouPath: string | undefined): Promise<{ files: ProjectFileVersion[]; converted: boolean } | null> {
+  if (!pouPath) return null;
+  if (isXaeHost()) {
+    const requestId = ++findSeq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve(null);
+      }, 30000);
+      const off = onHostMessage((m) => {
+        if (m.type !== 'projectVersionsResult' || m.requestId !== requestId) return;
+        window.clearTimeout(timer);
+        off();
+        resolve({ files: m.files ?? [], converted: !!m.converted });
+      });
+      postToHost({ type: 'projectVersions', requestId });
+    });
+  }
+  const d = (window as unknown as { tcDesktop?: { projectVersions?: (p: string) => Promise<{ files: ProjectFileVersion[]; converted: boolean }> } }).tcDesktop;
+  return d?.projectVersions ? d.projectVersions(pouPath).catch(() => null) : null;
 }
 
 export interface InheritanceResult {

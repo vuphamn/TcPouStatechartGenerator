@@ -28,6 +28,8 @@ namespace KvalMachineScope.Xae
             public string os { get; set; } = "";
             /// <summary>The TwinCAT router here has a route to it (XAE can go live on it)</summary>
             public bool route { get; set; }
+            /// <summary>A route of this computer's that did not answer the search (off, or unreachable from here)</summary>
+            public bool notAnswering { get; set; }
             /// <summary>"route" (from the routes, not found on the network) or "network"</summary>
             public string source { get; set; }
         }
@@ -238,6 +240,7 @@ namespace KvalMachineScope.Xae
                 if (string.IsNullOrEmpty(d.name)) d.name = r.name;
                 routes.Remove(r);
             }
+            foreach (var r in routes) r.notAnswering = true;
             return network.Concat(routes).ToList();
         }
     }

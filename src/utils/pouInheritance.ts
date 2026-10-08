@@ -253,3 +253,37 @@ export function readableInline(code: string): string {
     })
     .join('\n');
 }
+
+/** A .TcPOU's methods by name (lower case): each one's whole <Method>…</Method> text */
+function methodBlocks(pouXml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of stripInherited(pouXml).matchAll(/<Method\b[^>]*\bName=["']([^"']+)["'][^>]*>[\s\S]*?<\/Method>/gi)) {
+    if (!out.has(m[1].toLowerCase())) out.set(m[1].toLowerCase(), m[0]);
+  }
+  return out;
+}
+
+/**
+ * A base changed on disk (theirs) while its methods were edited here (mine; both from saved): merged by method. A
+ * method changed only here keeps its edit, one changed only on disk takes the disk's, one changed in both keeps the
+ * edit here (a conflict: Save writes it over the disk's). { text, kept, conflicts } (method names)
+ */
+export function mergeBaseEdits(saved: string, mine: string, theirs: string): { text: string; kept: string[]; conflicts: string[] } {
+  const s = methodBlocks(saved);
+  const m = methodBlocks(mine);
+  const t = methodBlocks(theirs);
+  let text = theirs;
+  const kept: string[] = [];
+  const conflicts: string[] = [];
+  for (const [name, block] of m) {
+    const before = s.get(name);
+    if (before === undefined || block === before) continue;
+    const disk = t.get(name);
+    if (disk === undefined) continue;
+    const display = block.match(/\bName=["']([^"']+)["']/)?.[1] ?? name;
+    if (disk !== before) conflicts.push(display);
+    else kept.push(display);
+    text = text.split(disk).join(block);
+  }
+  return { text, kept, conflicts };
+}

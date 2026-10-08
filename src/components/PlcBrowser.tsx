@@ -116,6 +116,8 @@ interface PlcBrowserProps {
   controlModes?: PlcControlMode[];
   /** A found PLC used and gone live on at once (absent: not offered) */
   onGoLive?: (plc: PickedPlc) => void;
+  /** While live: the same POU and instance live on this PLC too, in a new tab / window (side by side) */
+  onCompare?: (plc: PickedPlc) => void;
   /** The found PLCs' states again, every few seconds while open (absent: as the search found them) */
   refreshStates?: (devices: FoundPlc[]) => Promise<FoundPlc[]>;
   /** TwinCAT XAE opened on this computer (a PLC that runs no program: its project activated, its program downloaded) */
@@ -131,7 +133,7 @@ const rowClass = (current: boolean) =>
   `w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-slate-800 ${current ? 'bg-sky-950/60' : ''}`;
 
 /** The Live tab's Browse: the remembered PLCs and the TwinCAT devices found on the network; a click picks one */
-export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc, checker, startPlc, refreshStates, openXae, controlModes = ALL_PLC_CONTROLS, onGoLive }) => {
+export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, currentNetId, onPick, onFound, onForget, onClose, scan, addRoute, onRename, checkPlc, checker, startPlc, refreshStates, openXae, controlModes = ALL_PLC_CONTROLS, onGoLive, onCompare }) => {
   // Check all: each remembered PLC in turn (the Live tab's, else this list's own)
   const own = useRememberedChecks(remembered, checker ? undefined : checkPlc);
   const { checks, checkingAll, checkAll, every, setEvery, lost } = checker ?? own;
@@ -390,7 +392,7 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
               // where XAE has none yet)
               const canRoute = !!addRoute && !!d.ip && d.source !== 'project' && (mode !== 'xae' || !d.route);
               return (
-                <div key={d.netId} className="live-plc-found-row">
+                <div key={d.netId} className={`live-plc-found-row${d.notAnswering ? ' opacity-60' : ''}`} data-not-answering={d.notAnswering ? 'true' : undefined}>
                   <div className="flex items-center">
                     <button className={`live-plc-found ${rowClass(d.netId === currentNetId)}`} data-netid={d.netId} onClick={() => onPick({ name: d.name || d.ip || d.netId, netId: d.netId, ip: d.ip, twincat: d.twincat, os: d.os })} title={[d.os, d.twincat && `TwinCAT ${d.twincat}`].filter(Boolean).join(', ') || 'Use this PLC'}>
                       <span className="truncate text-slate-200">{d.name || '(no name)'}</span>
@@ -398,7 +400,16 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                       {d.ip && <span className="shrink-0 font-mono text-slate-500">{d.ip}</span>}
                       {d.twincat && <span className="shrink-0 text-slate-500">{d.twincat}</span>}
                       <PlcStateBadge state={d.state} changed={changed[d.netId]} />
-                      {routeBadge(d)}
+                      {d.notAnswering ? (
+                        <span
+                          className="live-plc-not-answering shrink-0 px-1 rounded bg-slate-800 text-slate-400 text-[10px]"
+                          title="This computer's TwinCAT has a route to it, but it did not answer the search: it is off, TwinCAT there is not running, or a firewall blocks UDP 48899"
+                        >
+                          route only: not answering
+                        </span>
+                      ) : (
+                        routeBadge(d)
+                      )}
                     </button>
                     {canRoute && (
                       <button
@@ -434,6 +445,16 @@ export const PlcBrowser: React.FC<PlcBrowserProps> = ({ mode, remembered, curren
                         title="Its PLC runs no program: in XAE, open its project, activate the configuration and download the program (Login), or renew its license"
                       >
                         Open in XAE
+                      </button>
+                    )}
+                    {onCompare && !d.notAnswering && d.source !== 'project' && d.netId !== currentNetId && (
+                      <button
+                        className="live-plc-compare shrink-0 ml-1 px-1.5 rounded border border-sky-700 text-[10px] text-sky-300 hover:bg-slate-800"
+                        data-netid={d.netId}
+                        onClick={() => onCompare({ name: d.name || d.ip || d.netId, netId: d.netId, ip: d.ip, twincat: d.twincat, os: d.os })}
+                        title="The same POU and instance live on this PLC too, in a new tab (the desktop app: a window beside this one), to compare the two machines"
+                      >
+                        Compare
                       </button>
                     )}
                     {onGoLive && d.state && !d.state.error && d.source !== 'project' && (

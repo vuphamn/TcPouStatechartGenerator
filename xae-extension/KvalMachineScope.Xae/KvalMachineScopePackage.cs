@@ -41,7 +41,7 @@ namespace KvalMachineScope.Xae
         /// (null: show a tab, the first one if there is any). With an instance (a POU can be declared several times),
         /// the tab that follows that PLC instance of it, else a new tab that goes live on it.
         /// </summary>
-        public async Task ShowMachineScopeAsync(string pouPath, string instance = null, System.Collections.Generic.Dictionary<string, string> connection = null)
+        public async Task ShowMachineScopeAsync(string pouPath, string instance = null, System.Collections.Generic.Dictionary<string, string> connection = null, bool newTab = false)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
             int? showing = null, empty = null, any = null, free = null;
@@ -58,7 +58,7 @@ namespace KvalMachineScope.Xae
                 {
                     if (empty == null) empty = id;
                 }
-                else if (!string.IsNullOrEmpty(pouPath) && string.Equals(shown, pouPath, StringComparison.OrdinalIgnoreCase)
+                else if (!newTab && !string.IsNullOrEmpty(pouPath) && string.Equals(shown, pouPath, StringComparison.OrdinalIgnoreCase)
                     && (string.IsNullOrEmpty(instance) || string.Equals(tab.Control.Instance, instance, StringComparison.OrdinalIgnoreCase)))
                 {
                     showing = id;

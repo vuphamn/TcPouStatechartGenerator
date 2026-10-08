@@ -1,6 +1,6 @@
 const h = require('../lib/harness.cjs');
 // The Live tab's Browse inside XAE, with a stand-in bridge answering discoverPlcs as the extension does (plcList: the
-// project's target, routes, devices found; route / no route); a pick fills in the target; Remember keeps it, but a POU
+// project's target, routes, devices found; route / no route; a route that did not answer greyed); a pick fills in the target; Remember keeps it, but a POU
 // without a target keeps XAE's project target (empty) instead of the remembered one
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -31,7 +31,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
         devices: [
           { netId: '5.9.9.9.1.1', ip: '192.168.1.20', name: 'CX-Line202', twincat: '3.1.4026', os: 'Windows 10.0.17763', route: true, source: 'network' },
           { netId: '5.8.8.8.1.1', ip: '192.168.1.21', name: 'CX-<i>New</i>', twincat: '3.1.4024', os: '', route: false, source: 'network' },
-          { netId: '5.7.7.7.1.1', ip: '10.0.0.7', name: 'Remote-Line', route: true, source: 'route' },
+          { netId: '5.7.7.7.1.1', ip: '10.0.0.7', name: 'Remote-Line', route: true, source: 'route', notAnswering: true },
         ],
       }).catch(() => {}), 300);
     }
@@ -56,6 +56,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const rows = await page.$$eval('.live-plc-found', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim()));
   expect(rows.length === 4 && /The project's target 5\.1\.2\.3\.1\.1 route/.test(rows[0]) && /CX-Line202 .* route$/.test(rows[1]) && /CX-<i>New<\/i> .* no route$/.test(rows[2]) && /Remote-Line 5\.7\.7\.7\.1\.1 10\.0\.0\.7 route/.test(rows[3]), `listed, route / no route marked: ${rows.join(' | ')}`);
   expect(!(await page.$('#live-plc-browser i')), 'a device name with markup: shown as text');
+  const quiet = await page.evaluate(() => { const r = document.querySelector('.live-plc-found-row[data-not-answering="true"]'); return r ? { netId: r.querySelector('.live-plc-found')?.getAttribute('data-netid'), badge: r.querySelector('.live-plc-not-answering')?.textContent.trim() } : null; });
+  expect(quiet?.netId === '5.7.7.7.1.1' && quiet.badge === 'route only: not answering', `a route that did not answer: listed, greyed, said (${JSON.stringify(quiet)})`);
   // Add Route: offered only where XAE has none; sent to XAE with the credentials; then searched again
   const routeButtons = await page.$$eval('.live-plc-add-route', (b) => b.map((x) => x.getAttribute('data-netid')));
   expect(routeButtons.join() === '5.8.8.8.1.1', `Add route only for the device without a route: ${routeButtons.join()}`);
