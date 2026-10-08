@@ -7,15 +7,50 @@
   and in each TcXaeShell (TwinCAT 4026's 64-bit, 4024's 32-bit), the WebView2 Runtime the extension needs, Link and
   its shortcuts, the gateway. Each one OK, -- (not on this computer, or not chosen) or !! (chosen but missing or
   broken), with where it is. The choices are the installer's (Software\Kval\MachineScope). Exit code 1 when a part is
-  !!, else 0.
+  !!, else 0. TwinCAT on this computer too: its drivers, routes and engineering builds; a driver missing names the
+  TwinCAT package that installs it (its Windows Installer product).
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File check-install.ps1
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File check-install.ps1 -Json   (the same, as JSON)
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File check-install.ps1 -Repair   (then, for each TwinCAT driver missing, asks to
+  repair the package that installs it: msiexec /fa, as administrator; restart the computer afterwards)
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File check-install.ps1 -PackageOf TcNcI.sys   (which TwinCAT package installs it)
 #>
-param([switch]$Json)
+param([switch]$Json, [switch]$Repair, [string]$PackageOf)
 $ErrorActionPreference = 'SilentlyContinue'
+
+# The TwinCAT package (Windows Installer product: "Beckhoff TwinCAT XAR NCI Classic") whose files include this one
+# (TcNcI.sys): each XAR product's cached .msi read (its File table), nothing changed
+function Find-TwinCATPackage([string]$fileName) {
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $call = { param($o, $name, $kind, [object[]]$a) $o.GetType().InvokeMember($name, $kind, $null, $o, $a) }
+  $products = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+    Where-Object { $_.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$' -and $_.DisplayName -like 'Beckhoff TwinCAT XAR*' }
+  foreach ($p in $products) {
+    try {
+      $msi = & $call $installer 'ProductInfo' 'GetProperty' @($p.PSChildName, 'LocalPackage')
+      if (-not $msi -or -not (Test-Path $msi)) { continue }
+      $db = & $call $installer 'OpenDatabase' 'InvokeMethod' @($msi, 0)
+      $view = & $call $db 'OpenView' 'InvokeMethod' @('SELECT `FileName` FROM `File`')
+      [void](& $call $view 'Execute' 'InvokeMethod' @())
+      while ($rec = & $call $view 'Fetch' 'InvokeMethod' @()) {
+        $long = (& $call $rec 'StringData' 'GetProperty' @(1)) -replace '^[^|]*\|', ''
+        if ($long -ieq $fileName) { [void](& $call $view 'Close' 'InvokeMethod' @()); return [pscustomobject]@{ name = $p.DisplayName; code = $p.PSChildName; version = $p.DisplayVersion } }
+      }
+      [void](& $call $view 'Close' 'InvokeMethod' @())
+    } catch { }
+  }
+  return $null
+}
+if ($PackageOf) {
+  $found = Find-TwinCATPackage $PackageOf
+  if ($found) { Write-Output "$PackageOf is installed by $($found.name) $($found.version) $($found.code)"; exit 0 }
+  Write-Output "$PackageOf is not in any TwinCAT XAR package installed here"; exit 1
+}
 
 $vsixId = 'KvalMachineScope.Xae.e0718790-a072-4c96-ba71-67161c7fdaa6'
 $items = New-Object System.Collections.Generic.List[object]
@@ -157,20 +192,33 @@ else { Add 'Gateway' '--' 'Not chosen' }
 $tcSystem = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Beckhoff\TwinCAT3\System' -ErrorAction SilentlyContinue
 if ($tcSystem.TcVersion) {
   Add 'TwinCAT' 'OK' "$($tcSystem.TcVersion)"
-  $products = @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | ForEach-Object { (Get-ItemProperty $_.PSPath).DisplayName } | Where-Object { $_ -like 'Beckhoff TwinCAT*' })
+  $products = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Beckhoff TwinCAT*' })
   $services = @{}
   Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -cmatch '^Tc[A-Z]' -or $_.PSChildName -eq 'tcvirtualmpbus' } | ForEach-Object { $services[$_.PSChildName] = Get-ItemProperty $_.PSPath }
   $driverProblems = 0
+  # (each one missing: the package that repairs it, when found; -Repair offers it below)
+  $repairs = New-Object System.Collections.Generic.List[object]
+  $repairHint = {
+    param($package, $driver)
+    if (-not $package) { return 'repair its TwinCAT package (Package Manager > Installed), then restart' }
+    if (-not ($repairs | Where-Object { $_.code -eq $package.code })) { $repairs.Add([pscustomobject]@{ name = $package.name; code = $package.code; driver = $driver }) }
+    "repair $($package.name) (msiexec /fa $($package.code) /qb as administrator, or run this check with -Repair), then restart"
+  }
   foreach ($name in ($services.Keys | Sort-Object)) {
     $image = $services[$name].ImagePath
-    if (-not $image) { Add "TwinCAT driver $name" '!!' 'Registered but empty (no driver): repair its TwinCAT package (Package Manager > Installed > Repair), then restart'; $driverProblems++; continue }
+    if (-not $image) {
+      $package = Find-TwinCATPackage "$name.sys"
+      if (-not $package) { $package = Find-TwinCATPackage "$name.exe" }
+      Add "TwinCAT driver $name" '!!' "Registered but empty (no driver): $(& $repairHint $package $name)"; $driverProblems++; continue
+    }
     $file = ($image -replace '^\\\?\?\\', '' -replace '^"([^"]+)".*$', '$1' -replace '^System32\\', "$env:SystemRoot\System32\" -replace '^\\SystemRoot\\', "$env:SystemRoot\")
-    if (-not (Test-Path $file)) { Add "TwinCAT driver $name" '!!' "Its file is missing: $file"; $driverProblems++ }
+    if (-not (Test-Path $file)) { Add "TwinCAT driver $name" '!!' "Its file is missing: $file; $(& $repairHint (Find-TwinCATPackage (Split-Path $file -Leaf)) $name)"; $driverProblems++ }
   }
   # (a package installed, its driver not registered)
   foreach ($need in @(@{ product = '*XAR NCPTP KM*'; driver = 'TcNc'; what = 'NC PTP' }, @{ product = '*XAR NCI Classic*'; driver = 'TcNcI'; what = 'NC I' })) {
-    if (($products | Where-Object { $_ -like $need.product }) -and -not $services[$need.driver].ImagePath) {
-      Add "TwinCAT driver $($need.driver)" '!!' "$($need.what) is installed, its driver is not: a configuration using it does not activate (1060). Repair its package, then restart"
+    $p = $products | Where-Object { $_.DisplayName -like $need.product -and $_.PSChildName -match '^\{' } | Select-Object -First 1
+    if ($p -and -not $services[$need.driver].ImagePath) {
+      Add "TwinCAT driver $($need.driver)" '!!' "$($need.what) is installed, its driver is not: a configuration using it does not activate (1060); $(& $repairHint ([pscustomobject]@{ name = $p.DisplayName; code = $p.PSChildName }) $need.driver)"
       $driverProblems++
     }
   }
@@ -193,11 +241,28 @@ if ($tcSystem.TcVersion) {
 
 $bad = @($items | Where-Object { $_.status -eq '!!' }).Count
 if ($Json) {
-  [pscustomobject]@{ computer = $env:COMPUTERNAME; user = $env:USERNAME; at = (Get-Date).ToString('s'); choices = $choices; items = $items; problems = $bad } | ConvertTo-Json -Depth 4
+  [pscustomobject]@{ computer = $env:COMPUTERNAME; user = $env:USERNAME; at = (Get-Date).ToString('s'); choices = $choices; items = $items; problems = $bad; repairs = $(if ($repairs) { ,$repairs.ToArray() } else { ,@() }) } | ConvertTo-Json -Depth 4
 } else {
   Write-Output "Kval MachineScope on $env:COMPUTERNAME ($env:USERNAME), $((Get-Date).ToString('yyyy-MM-dd HH:mm'))"
   $w = ($items | ForEach-Object { $_.part.Length } | Measure-Object -Maximum).Maximum
   foreach ($i in $items) { Write-Output ("  [{0}] {1}  {2}" -f $i.status, $i.part.PadRight($w), $i.detail) }
   Write-Output $(if ($bad) { "$bad problem(s): see the lines marked !!" } else { 'No problems found.' })
+  # -Repair: each TwinCAT package with a driver missing, repaired when you say so (Windows asks for administrator
+  # rights; its files and registrations put back as installed). TcXaeShell should be closed; restart afterwards
+  if ($Repair -and $repairs.Count) {
+    Write-Output ''
+    Write-Output 'Repair: close TcXaeShell / Visual Studio first; restart the computer afterwards (TwinCAT loads its drivers at start).'
+    $done = 0
+    foreach ($r in $repairs) {
+      $answer = Read-Host "Repair $($r.name) (for $($r.driver))? [y/N]"
+      if ($answer -notmatch '^(y|yes)$') { Write-Output "  skipped"; continue }
+      $proc = Start-Process msiexec.exe -ArgumentList '/fa', $r.code, '/qb' -Verb RunAs -Wait -PassThru
+      if (-not $proc) { Write-Output '  not started (administrator rights refused)'; continue }
+      $code = $proc.ExitCode
+      Write-Output $(if ($code -eq 0) { '  repaired' } elseif ($code -eq 3010) { '  repaired: restart the computer to finish' } else { "  msiexec ended with $code (1602: cancelled; see Windows' Application log, MsiInstaller)" })
+      if ($code -eq 0 -or $code -eq 3010) { $done++ }
+    }
+    if ($done) { Write-Output "Restart the computer, then run this check again." }
+  } elseif ($Repair) { Write-Output 'Nothing to repair: no TwinCAT package found for a driver missing.' }
 }
 exit $(if ($bad) { 1 } else { 0 })

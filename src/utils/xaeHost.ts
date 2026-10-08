@@ -64,6 +64,8 @@ export type HostMessage =
   | { type: 'activateResult'; requestId: number; ok: boolean; message: string }
   // The loaded POU's project files' TwinCAT version here and in git
   | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
+  /** The project files restored from git (revertProjectFiles) */
+  | { type: 'revertProjectFilesResult'; requestId: number; reverted: string[]; errors: { path: string; error: string }[] }
   /** A rename's other files: the project's POUs whose code has the name */
   | { type: 'projectUses'; requestId?: number; files?: { name: string; path: string; content: string }[]; error?: string }
   /** The other files written (saveOther) */
@@ -102,6 +104,8 @@ export interface ProjectFileVersion {
   path: string;
   working: string | null;
   head: string | null;
+  /** Converted: the lines changed in it since HEAD (git diff --numstat; null: not known) */
+  changed?: { added: number; removed: number } | null;
 }
 
 export interface SymbolChild {
@@ -174,6 +178,8 @@ export type AppMessage =
   | { type: 'findPou'; requestId: number; typeName: string }
   | { type: 'activateProject'; requestId: number }
   | { type: 'projectVersions'; requestId: number }
+  /** The project's .tsproj / .plcproj back to git's HEAD (asked first in the app) */
+  | { type: 'revertProjectFiles'; requestId: number; paths: string[] }
   /** The PLC project's types (answered with projectSymbols) */
   | { type: 'projectSymbols' }
   /** The project's POUs whose code has a name (answered with projectUses) */

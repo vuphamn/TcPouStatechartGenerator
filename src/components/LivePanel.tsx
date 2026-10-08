@@ -74,6 +74,12 @@ interface LivePanelProps {
   /** Transition coverage: the chart's transitions the PLC has taken (kept per POU across sessions); its CSV */
   coverage?: import('../utils/transitionCoverage.ts').Coverage | null;
   onExportCoverage?: () => void;
+  /** Other windows live on this POU on another PLC (Compare…): their PLC and current state; their differences */
+  peers?: import('../utils/livePeers.ts').LivePeer[];
+  onPeerDiff?: (id: string) => void;
+  /** The never-taken transitions shown on the chart (dashed, dimmed) */
+  coverageOnChart?: boolean;
+  onCoverageOnChart?: (on: boolean) => void;
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
@@ -290,8 +296,41 @@ const GUARD_BADGE = {
 
 const MAX_SHOWN = 200;
 
+/** Live on other PLCs too (Compare…): each one's current state and for how long; Differences… */
+const PeersStrip: React.FC<{ peers: import('../utils/livePeers.ts').LivePeer[]; own: { state: string | null; since: number | null }; onDiff?: (id: string) => void }> = ({ peers, own, onDiff }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const since = (ms: number | null) => (ms ? formatDuration(Math.max(0, now - ms)) : '');
+  return (
+    <div id="live-peers" className="px-2.5 py-1.5 border-b border-slate-800 shrink-0 text-[11px] space-y-0.5">
+      {peers.map((p) => {
+        const same = !!p.state && p.state === own.state;
+        return (
+          <div key={p.id} className="live-peer flex items-center gap-2 min-w-0" data-plc={p.plc} data-state={p.state ?? ''}>
+            <span className="text-slate-500 shrink-0" title="Live on this POU in another tab / window (Compare…)">⇄</span>
+            <span className="font-semibold text-amber-200 truncate" title={p.instance ? `${p.plc}: ${p.instance}` : p.plc}>{p.plc}</span>
+            <span className={`font-mono truncate ${same ? 'text-emerald-300' : 'text-slate-200'}`} title={same ? 'The same state as this PLC' : 'Another state than this PLC'}>
+              {p.state ?? '—'}
+            </span>
+            <span className="text-slate-500 shrink-0">{since(p.since)}</span>
+            <span className="text-slate-500 shrink-0">· {p.transitions.length} transitions</span>
+            {onDiff && (
+              <button type="button" className="live-peer-diff ml-auto shrink-0 px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" onClick={() => onDiff(p.id)} title="This PLC's session against that one's: time per state, the transitions only one of them took (kept current)">
+                Differences…
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 /** Transition coverage: taken / total with a bar; the never-taken ones on demand; CSV */
-const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void }> = ({ coverage, onExport }) => {
+const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void; onChart?: boolean; onToggleChart?: (on: boolean) => void }> = ({ coverage, onExport, onChart, onToggleChart }) => {
   const [open, setOpen] = useState(false);
   const pct = Math.round((coverage.taken / coverage.total) * 100);
   const never = coverage.rows.filter((r) => r.n === 0);
@@ -307,6 +346,18 @@ const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts
         <span className="flex-1 h-1.5 rounded bg-slate-800 overflow-hidden min-w-[3rem]">
           <span className="block h-full bg-emerald-600" style={{ width: `${pct}%` }} />
         </span>
+        {onToggleChart && (
+          <button
+            type="button"
+            id="live-coverage-on-chart"
+            aria-pressed={!!onChart}
+            onClick={() => onToggleChart(!onChart)}
+            className={`px-1.5 rounded border ${onChart ? 'border-sky-600 bg-sky-900/60 text-sky-200' : 'border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800'}`}
+            title="On the chart: the transitions never taken dashed and dimmed"
+          >
+            On the chart
+          </button>
+        )}
         {onExport && (
           <button type="button" id="live-coverage-export" onClick={onExport} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Every transition with how often and when the PLC last took it (CSV)">
             CSV
@@ -337,6 +388,10 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onUpdateEnum,
   coverage,
   onExportCoverage,
+  coverageOnChart,
+  onCoverageOnChart,
+  peers,
+  onPeerDiff,
   onComparePlc,
   watchList,
   onUnwatch,
@@ -599,13 +654,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           {status.state === 'connected' && status.compileInfo?.state && (() => {
             const c = status.compileInfo;
             const when = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : '?');
-            const text = c.state === 'newest' ? 'latest build' : c.state === 'older' ? 'older build' : "not this copy's build";
+            // (XAE keeps only the latest build's compile info: another ID is an older build of this copy or another copy's)
+            const text = c.state === 'newest' ? 'latest build' : c.state === 'older' ? 'older build' : 'not the latest build';
             const title =
               c.state === 'newest'
                 ? `The PLC runs this project copy's newest build (${when(c.builtAt)})`
                 : c.state === 'older'
                   ? `The PLC runs an older build of this project copy (${when(c.builtAt)}); the newest here is from ${when(c.newest?.at)}: download or activate it to run it`
-                  : `The PLC runs a build that is not in this project copy's _CompileInfo (another copy of the project, another computer, or cleaned here)${c.newest ? `; the newest build here is from ${when(c.newest.at)}` : ''}`;
+                  : `The PLC runs another build than this project copy's latest${c.newest ? ` (built ${when(c.newest.at)})` : ''}: an older build of this copy, or another copy's (another computer). XAE keeps only the latest build's compile info, so which one is not known. Download or activate the latest to run it`;
             return (
               <span id="live-build-state" data-state={c.state} className={`shrink-0 px-1.5 rounded border text-[11px] ${c.state === 'newest' ? 'border-emerald-700/70 text-emerald-300' : 'border-amber-500/70 bg-amber-950/60 text-amber-200'}`} title={title}>
                 {c.state === 'newest' ? '✓ ' : '⚠ '}{text}
@@ -1622,8 +1678,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       )}
 
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
+      {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
-        <CoverageStrip coverage={coverage} onExport={onExportCoverage} />
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} />
       )}
 
       {/* Trail */}

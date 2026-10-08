@@ -495,6 +495,8 @@ export interface MermaidViewerProps {
   stateTimes?: Record<string, { level: number; label: string; title: string }> | null;
   /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
   diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
+  /** Live coverage on the chart: the transitions the PLC never took (dashed, dimmed; their labels too) */
+  coverageHighlight?: { never: { from: string; to: string }[] } | null;
   /** Live view: each transition's guard result (TRUE / FALSE / unknown) and its variables' values, by edge id */
   liveGuards?: Record<string, EdgeGuardView> | null;
   /** Paths tab: the states and transitions of the shown path(s); everything else is dimmed */
@@ -1999,6 +2001,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     stateTimes,
     pathHighlight,
     diffHighlight,
+    coverageHighlight,
     liveGuards,
     contextMenuItems,
     connectFrom = null,
@@ -4138,6 +4141,19 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     diffHighlight.edgesAdded.forEach((e) => findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges)?.classList.add('diff-added'));
     diffHighlight.edgesChanged.forEach((e) => findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges)?.classList.add('diff-changed'));
   }, [renderedSvg, diffHighlight, availableEdges]);
+
+  // Live coverage: the transitions never taken dashed and dimmed, with their labels
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.coverage-never').forEach((el) => el.classList.remove('coverage-never'));
+    if (!coverageHighlight) return;
+    for (const e of coverageHighlight.never) {
+      const path = findEdgePathElement(svg, `${e.from}->${e.to}`, availableEdges);
+      path?.classList.add('coverage-never');
+      svg.querySelectorAll(`g.edgeLabel[data-from="${CSS.escape(e.from)}"][data-to="${CSS.escape(e.to)}"]`).forEach((l) => l.classList.add('coverage-never'));
+    }
+  }, [renderedSvg, coverageHighlight, availableEdges]);
 
   // Paths tab: the path(s) between two states stand out, the rest of the diagram is dimmed
   useEffect(() => {

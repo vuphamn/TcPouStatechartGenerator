@@ -408,6 +408,9 @@ namespace KvalMachineScope.Xae
                     case "projectVersions":
                         HandleProjectVersions(msg);
                         break;
+                    case "revertProjectFiles":
+                        HandleRevertProjectFiles(msg);
+                        break;
                     case "projectSymbols":
                         HandleProjectSymbols();
                         break;
@@ -1539,8 +1542,19 @@ namespace KvalMachineScope.Xae
                         if (committed != null) head = System.Text.RegularExpressions.Regex.Match(committed, t.pattern).Groups[1].Value;
                         if (string.IsNullOrEmpty(working)) working = null;
                         if (string.IsNullOrEmpty(head)) head = null;
-                        if (working != null && head != null && working != head) converted = true;
-                        files.Add(new { kind = t.kind, path = t.file, working, head });
+                        object changed = null;
+                        if (working != null && head != null && working != head)
+                        {
+                            converted = true;
+                            // (the lines changed in it since HEAD: what a revert would lose besides the version)
+                            var numstat = RunGit(t.file, $"diff --numstat HEAD -- \"{Path.GetFileName(t.file)}\"");
+                            if (numstat != null)
+                            {
+                                var m = System.Text.RegularExpressions.Regex.Match(numstat, @"^(\d+)\t(\d+)\t");
+                                changed = m.Success ? new { added = int.Parse(m.Groups[1].Value), removed = int.Parse(m.Groups[2].Value) } : new { added = 0, removed = 0 };
+                            }
+                        }
+                        files.Add(new { kind = t.kind, path = t.file, working, head, changed });
                     }
                 }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -1548,12 +1562,58 @@ namespace KvalMachineScope.Xae
             });
         }
 
+        /// <summary>
+        /// The loaded POU's project's .tsproj / .plcproj back to git's HEAD (git checkout HEAD -- file; the app asked first,
+        /// saying what else changed in them). Only those two files of this POU's project. revertProjectFilesResult
+        /// { requestId, reverted, errors }; XAE then asks to reload the project (changed outside)
+        /// </summary>
+        private void HandleRevertProjectFiles(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var paths = msg.TryGetValue("paths", out var p) && p is System.Collections.IEnumerable list && !(p is string) ? list.Cast<object>().Select(o => o as string).Where(s => !string.IsNullOrEmpty(s)).ToList() : new List<string>();
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var reverted = new List<string>();
+                var errors = new List<object>();
+                var allowed = new List<string>();
+                if (!string.IsNullOrEmpty(pou))
+                {
+                    foreach (var ext in new[] { ".tsproj", ".plcproj" })
+                    {
+                        var dir = FolderWith(pou, ext);
+                        var f = dir == null ? null : Directory.EnumerateFiles(dir, "*" + ext).FirstOrDefault();
+                        if (f != null) allowed.Add(Path.GetFullPath(f));
+                    }
+                }
+                foreach (var path in paths)
+                {
+                    string full;
+                    try { full = Path.GetFullPath(path); } catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException) { full = null; }
+                    if (full == null || !allowed.Any(a => string.Equals(a, full, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        errors.Add(new { path, error = "Not this POU's project file" });
+                        continue;
+                    }
+                    if (RunGit(full, $"checkout HEAD -- \"{Path.GetFileName(full)}\"") != null) reverted.Add(full);
+                    else errors.Add(new { path = full, error = "git checkout failed" });
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "revertProjectFilesResult", requestId, reverted, errors });
+            });
+        }
+
         /// <summary>A file's committed (git HEAD) text, or null (not in git, not committed)</summary>
-        private static string GitHeadText(string file)
+        private static string GitHeadText(string file) => RunGit(file, $"show \"HEAD:./{Path.GetFileName(file)}\"");
+
+        /// <summary>git in the file's folder: its output, or null (failed, not in git, no git)</summary>
+        private static string RunGit(string file, string args)
         {
             try
             {
-                var psi = new System.Diagnostics.ProcessStartInfo("git", $"-C \"{Path.GetDirectoryName(file)}\" show \"HEAD:./{Path.GetFileName(file)}\"")
+                var psi = new System.Diagnostics.ProcessStartInfo("git", $"-C \"{Path.GetDirectoryName(file)}\" {args}")
                 {
                     UseShellExecute = false,
                     RedirectStandardOutput = true,

@@ -143,6 +143,32 @@ export async function fetchProjectVersions(pouPath: string | undefined): Promise
   return d?.projectVersions ? d.projectVersions(pouPath).catch(() => null) : null;
 }
 
+/**
+ * The project's .tsproj / .plcproj restored from git (HEAD): XAE, VS Code, the desktop app; null where it cannot be
+ * done (the web edition)
+ */
+export async function revertProjectFiles(pouPath: string | undefined, paths: string[]): Promise<{ reverted: string[]; errors: { path: string; error: string }[] } | null> {
+  if (!pouPath || !paths.length) return null;
+  if (isXaeHost()) {
+    const requestId = ++findSeq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve(null);
+      }, 30000);
+      const off = onHostMessage((m) => {
+        if (m.type !== 'revertProjectFilesResult' || m.requestId !== requestId) return;
+        window.clearTimeout(timer);
+        off();
+        resolve({ reverted: m.reverted ?? [], errors: m.errors ?? [] });
+      });
+      postToHost({ type: 'revertProjectFiles', requestId, paths });
+    });
+  }
+  const d = (window as unknown as { tcDesktop?: { revertProjectFiles?: (p: string, paths: string[]) => Promise<{ reverted: string[]; errors: { path: string; error: string }[] }> } }).tcDesktop;
+  return d?.revertProjectFiles ? d.revertProjectFiles(pouPath, paths).catch(() => null) : null;
+}
+
 export interface InheritanceResult {
   /** The bases found, nearest first */
   bases: InheritedSource[];

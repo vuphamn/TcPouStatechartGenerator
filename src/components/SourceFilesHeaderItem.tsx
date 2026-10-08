@@ -43,7 +43,7 @@ export interface SourceFilesHeaderItemProps {
    */
   inherited?: { bases: string[]; missing?: string; error?: string; onFind?: () => void; onShow?: () => void };
   /** The project files saved in another TwinCAT version than committed (XAE of another build converted them) */
-  versionGuard?: { text: string; title: string };
+  versionGuard?: { text: string; title: string; onRevert?: () => void };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -250,6 +250,17 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         <span id="pou-version-guard" className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap" title={versionGuard.title}>
           ⚠ {versionGuard.text}
         </span>
+      )}
+      {versionGuard?.onRevert && (
+        <button
+          type="button"
+          id="pou-version-revert"
+          onClick={versionGuard.onRevert}
+          className="px-1.5 py-0.5 rounded-md border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap hover:bg-amber-500/20"
+          title="Put the project files back to the TwinCAT version committed (asks first, with what else changed in them)"
+        >
+          Revert…
+        </button>
       )}
       {inherited && inherited.bases.length > 0 && (
         <button

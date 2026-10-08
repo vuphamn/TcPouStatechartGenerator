@@ -274,6 +274,7 @@ import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
 import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.tsx';
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
+import { useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
 import { loadPathChecks, pathCheckFindings, pathCheckFrom, runPathChecks, savePathChecks, type PathCheck } from './utils/pathChecks.ts';
 import { downloadCsv, toCsv } from './utils/csv.ts';
@@ -323,7 +324,7 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchProjectVersions, findProjectPou, resolveInheritance } from './utils/projectFiles.ts';
+import { fetchProjectVersions, findProjectPou, resolveInheritance, revertProjectFiles } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
 import { coverageCsv, transitionCoverage } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
@@ -6322,6 +6323,7 @@ export const App: React.FC = () => {
   // The project files saved in another TwinCAT version than committed (XAE of another build converted them): a chip;
   // the first Save of the session asks (what MachineScope saves is the POU, but the project goes to git with it)
   const [projectVersions, setProjectVersions] = useState<{ path: string; files: ProjectFileVersion[]; converted: boolean } | null>(null);
+  const [projectVersionsSeq, setProjectVersionsSeq] = useState(0);
   useEffect(() => {
     let alive = true;
     setProjectVersions(null);
@@ -6330,7 +6332,7 @@ export const App: React.FC = () => {
     return () => {
       alive = false;
     };
-  }, [pouPath]);
+  }, [pouPath, projectVersionsSeq]);
   const versionGuard = useMemo(() => {
     if (!projectVersions?.converted || projectVersions.path !== pouPath) return null;
     const changed = projectVersions.files.filter((f) => f.working && f.head && f.working !== f.head);
@@ -6343,11 +6345,85 @@ export const App: React.FC = () => {
     };
   }, [projectVersions, pouPath]);
   versionGuardRef.current = versionGuard;
+  // Revert…: the .tsproj / .plcproj restored from git (whatever else changed in them since is lost: said), the POU's
+  // ProductVersion set back to git's (an edit here; Save writes it). Asked first
+  const handleRevertConversion = useCallback(() => {
+    const guard = versionGuardRef.current;
+    if (!guard || !pouPath) return;
+    const name = (p: string) => p.split(/[\\/]/).pop() ?? p;
+    const files = guard.changed.filter((f) => f.kind !== 'pou');
+    const pou = guard.changed.find((f) => f.kind === 'pou');
+    const other = (f: ProjectFileVersion) => {
+      const c = f.changed;
+      if (!c) return 'what else changed in it is not known';
+      const rest = Math.max(0, c.added - 1) + Math.max(0, c.removed - 1);
+      return rest === 0 ? 'only its version changed' : `also ${c.added} line${c.added === 1 ? '' : 's'} added, ${c.removed} removed besides its version: lost (git has only the committed ones)`;
+    };
+    setPromptRequest({
+      title: 'Revert the TwinCAT version?',
+      label: `Back to the version committed: the project files restored from git (git checkout HEAD), ${pou ? 'the POU\'s version set back here (Save writes it). ' : ''}XAE then asks to reload the project: Reload, and do not save it from XAE of the other build before committing.`,
+      details: [
+        ...files.map((f) => `${name(f.path)}: ${f.working} → ${f.head} (${other(f)})`),
+        ...(pou ? [`${name(pou.path)}: ProductVersion ${pou.working} → ${pou.head} (an edit here, its code kept)`] : []),
+      ],
+      confirmOnly: true,
+      danger: files.some((f) => !f.changed || f.changed.added > 1 || f.changed.removed > 1),
+      submitLabel: 'Revert',
+      onSubmit: () => {
+        void (async () => {
+          const r = files.length ? await revertProjectFiles(pouPath, files.map((f) => f.path)) : { reverted: [], errors: [] };
+          if (!r) return showCopyToast('The project files cannot be restored from git here', 'error', 6000);
+          if (pou?.working && pou.head) {
+            const tag = /<TcPlcObject\b[^>]*>/.exec(pouContent);
+            if (tag && tag[0].includes(`ProductVersion="${pou.working}"`)) {
+              const fixed = tag[0].replace(`ProductVersion="${pou.working}"`, `ProductVersion="${pou.head}"`);
+              handleReplaceSources(pouContent.slice(0, tag.index) + fixed + pouContent.slice(tag.index + tag[0].length), null);
+            }
+          }
+          setProjectVersionsSeq((n) => n + 1);
+          showCopyToast(
+            r.errors.length
+              ? `Not restored: ${r.errors.map((e) => `${name(e.path)} (${e.error})`).join(', ')}${r.reverted.length ? `; restored: ${r.reverted.map(name).join(', ')}` : ''}`
+              : `Back to the committed version${r.reverted.length ? `: ${r.reverted.map(name).join(', ')} restored from git` : ''}${pou ? `${r.reverted.length ? ';' : ':'} the POU's version set back (Save writes it)` : ''}`,
+            r.errors.length ? 'error' : 'success',
+            9000
+          );
+        })();
+      },
+    });
+  }, [pouPath, pouContent, handleReplaceSources, showCopyToast]);
   // Transition coverage (the Live tab): the chart's transitions against the ones the PLC took (seen, per POU type)
   const liveCoverage = useMemo(() => {
     const list = [...edgeMembersAll.values()].flat();
     return list.length ? transitionCoverage(list, seen) : null;
   }, [edgeMembersAll, seen]);
+  // Live on two PLCs (Compare…): this window's PLC, state and transitions said to the others live on the same POU type;
+  // theirs shown in the Live tab, Differences… compares the two sessions as they go
+  const livePlcLabel = useMemo(() => {
+    const netId = liveSettings.netId.trim();
+    return rememberedPlcs.find((r) => r.netId === netId)?.name || (liveStatus.state === 'connected' ? liveStatus.target : undefined) || netId || 'this PLC';
+  }, [liveSettings.netId, rememberedPlcs, liveStatus]);
+  const liveShare = useMemo<LiveShare | null>(() => {
+    if (liveStatus.state !== 'connected' || !pouTypeName) return null;
+    const c = liveSession.current;
+    return {
+      pou: pouTypeName,
+      plc: livePlcLabel,
+      instance: liveStatus.instance ?? (liveSettings.instance.trim() || undefined),
+      state: c?.state ?? null,
+      since: c ? c.since + (liveSession.clockOffset ?? 0) : null,
+      transitions: liveSession.transitions,
+    };
+  }, [liveStatus, pouTypeName, livePlcLabel, liveSession, liveSettings.instance]);
+  const livePeers = useLivePeers(liveShare);
+  const [peerDiffId, setPeerDiffId] = useState<string | null>(null);
+  const peerDiff = peerDiffId ? livePeers.find((x) => x.id === peerDiffId) ?? null : null;
+  // (on the chart: the never-taken ones dashed and dimmed, while the Coverage strip's toggle is on)
+  const [coverageOnChart, setCoverageOnChart] = useState(false);
+  const coverageHighlight = useMemo(
+    () => (coverageOnChart && liveCoverage ? { never: liveCoverage.rows.filter((r) => r.n === 0).map((r) => ({ from: r.from, to: r.to })) } : null),
+    [coverageOnChart, liveCoverage]
+  );
   // The enum warning's Update .TcDUT: the .TcDUT brought to the PLC's names (renames reach the POU's code), asked first
   // with what changes; Ctrl+Z undoes, Save writes the files
   const handleUpdateEnumFromPlc = useCallback(() => {
@@ -8950,7 +9026,7 @@ export const App: React.FC = () => {
                 : undefined
             }
             hostConflict={hostConflictActions}
-            versionGuard={versionGuard ?? undefined}
+            versionGuard={versionGuard ? { ...versionGuard, onRevert: handleRevertConversion } : undefined}
             inherited={
               inheritance && inheritance.key === inheritKey
                 ? {
@@ -9963,6 +10039,7 @@ export const App: React.FC = () => {
                   stateTimes={showStateTimes && measuredStateTimes.length ? stateTimeBadges : null}
                   pathHighlight={pathHighlight}
                   diffHighlight={diffHighlight}
+                  coverageHighlight={coverageHighlight}
                   liveGuards={liveGuardViews ?? simViews}
                   contextMenuItems={diagramContextMenuItems}
                   connectFrom={connectFrom}
@@ -10180,6 +10257,10 @@ export const App: React.FC = () => {
             onActivateProject={isXaeHost() && !isVsCodeHost() ? handleActivateProject : undefined}
             onUpdateEnum={liveStatus.plcStateNames && dutContent ? handleUpdateEnumFromPlc : undefined}
             coverage={liveCoverage}
+            coverageOnChart={coverageOnChart}
+            onCoverageOnChart={setCoverageOnChart}
+            peers={livePeers}
+            onPeerDiff={setPeerDiffId}
             onComparePlc={(plc) => {
               const instance = liveStatus.instance ?? liveSettings.instance;
               if (!instance) return showCopyToast('Go live first: the instance to compare is the one followed here', 'error');
@@ -10727,6 +10808,15 @@ export const App: React.FC = () => {
         <CompareRecordingsDialog
           onClose={() => setCompareOpen(false)}
           current={liveSession.transitions.length ? { label: replay ? replay.file : 'this session', transitions: liveSession.transitions } : null}
+          names={liveEnumNames}
+          edges={availableEdges}
+        />
+      )}
+      {peerDiff && (
+        <CompareRecordingsDialog
+          onClose={() => setPeerDiffId(null)}
+          current={{ label: livePlcLabel, transitions: liveSession.transitions }}
+          other={{ label: peerDiff.plc, transitions: peerDiff.transitions }}
           names={liveEnumNames}
           edges={availableEdges}
         />

@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   saveSourceAs: (name, content, defaultDir) => ipcRenderer.invoke('tc:save-source-as', name, content, defaultDir || null),
   /** The loaded POU's project files' TwinCAT version here and in git: { files: [{ kind, path, working, head }], converted } */
   projectVersions: (pouPath) => ipcRenderer.invoke('tc:project-versions', pouPath),
+  revertProjectFiles: (pouPath, paths) => ipcRenderer.invoke('tc:revert-project-files', pouPath, paths),
   /** The committed (git HEAD) version of a file: { content } or { error } */
   gitShow: (path) => ipcRenderer.invoke('tc:git-show', path),
   /** A POU's layout file beside it (<POU>.machinescope.json): read { text | null } / written { written } or { error } */

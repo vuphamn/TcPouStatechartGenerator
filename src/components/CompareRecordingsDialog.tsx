@@ -7,7 +7,8 @@ import type { EdgeInfo } from '../types.ts';
 
 /**
  * Compare two recordings (e.g. a good cycle and a bad one): per state the stays and the average time in A and in B,
- * and the transitions only one of them took. A: this session or a file; B: a file (saved recordings).
+ * and the transitions only one of them took. A: this session or a file; B: a file (saved recordings), or another PLC
+ * live on the same POU (Compare…: its session as it goes)
  */
 
 interface Side {
@@ -19,13 +20,18 @@ interface Props {
   onClose: () => void;
   /** This session (live or replayed), when it has transitions */
   current: Side | null;
+  /** Another PLC live on the same POU: B, kept current */
+  other?: Side | null;
   names: Map<number, string>;
   edges: EdgeInfo[];
 }
 
-export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, names, edges }) => {
-  const [a, setA] = useState<Side | null>(current);
-  const [b, setB] = useState<Side | null>(null);
+export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges }) => {
+  // (a file chosen, else this session / the other PLC as they go)
+  const [aFile, setA] = useState<Side | null>(null);
+  const [bFile, setB] = useState<Side | null>(null);
+  const a = aFile ?? current;
+  const b = bFile ?? other ?? null;
   const [error, setError] = useState('');
 
   const load = async (file: File, set: (s: Side) => void) => {
@@ -79,7 +85,7 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, nam
       <div id="compare-dialog" className="w-[46rem] max-w-[95vw] rounded-lg border border-slate-700 bg-slate-900 shadow-xl text-xs text-slate-200">
         <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800">
           <GitCompare className="w-4 h-4 text-sky-300" />
-          <span className="font-semibold">Compare recordings</span>
+          <span className="font-semibold">{other ? 'Compare PLCs' : 'Compare recordings'}</span>
           <button className="ml-auto p-1 rounded hover:bg-slate-800" onClick={onClose} title="Close">
             <X className="w-3.5 h-3.5" />
           </button>
@@ -89,8 +95,8 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, nam
             <span className="text-slate-400">A</span>
             <div className="flex items-center gap-2 min-w-0">
               <span id="compare-a" className="truncate font-mono text-sky-300">{a ? `${a.label} (${a.transitions.length} transitions)` : '—'}</span>
-              {current && a !== current && (
-                <button className="px-1.5 rounded border border-slate-700 hover:bg-slate-800" onClick={() => setA(current)}>
+              {current && aFile && (
+                <button className="px-1.5 rounded border border-slate-700 hover:bg-slate-800" onClick={() => setA(null)}>
                   this session
                 </button>
               )}
@@ -99,6 +105,11 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, nam
             <span className="text-slate-400">B</span>
             <div className="flex items-center gap-2 min-w-0">
               <span id="compare-b" className="truncate font-mono text-amber-300">{b ? `${b.label} (${b.transitions.length} transitions)` : 'choose a recording'}</span>
+              {other && bFile && (
+                <button className="px-1.5 rounded border border-slate-700 hover:bg-slate-800" onClick={() => setB(null)}>
+                  {other.label}
+                </button>
+              )}
               {picker('compare-file-b', setB)}
             </div>
           </div>

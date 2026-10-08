@@ -167,6 +167,7 @@ function createHost({ pouPath, post, ui }) {
     },
     // The POU's project files' TwinCAT version here and in git
     projectVersions: async ({ requestId }) => post({ type: 'projectVersionsResult', requestId, ...(await require('../shared/projectVersions.cjs').projectVersions(pou)) }),
+    revertProjectFiles: async ({ requestId, paths }) => post({ type: 'revertProjectFilesResult', requestId, ...(await require('../shared/projectVersions.cjs').revertProjectFiles(pou, paths)) }),
     // A base the POU EXTENDS (its doState() and state methods): read only, with its folder's .TcDUT files
     findPou: ({ requestId, typeName }) => {
       const found = /^[A-Za-z_]\w*$/.test(typeName ?? '') && findFile(projectRoot(pou), new RegExp(`^${typeName}\\.TcPOU$`, 'i'));

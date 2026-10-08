@@ -41,6 +41,9 @@ git('init', '-q');
 git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'add', '-A');
 git('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'base');
 fs.writeFileSync(path.join(work, 'Machine.tsproj'), '<?xml version="1.0"?>\n<TcSmProject TcSmVersion="1.0" TcVersion="3.1.4026.27"></TcSmProject>\n');
+// (the .plcproj converted too, with a line of its own besides: Revert says it is lost)
+const committedPlcproj = fs.readFileSync(path.join(work, 'P.plcproj'), 'utf8');
+fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><ProgramVersion>3.1.4026.27</ProgramVersion></PropertyGroup>\n<ItemGroup><Compile Include="POUs\\New.TcPOU" /></ItemGroup></Project>');
 
 (async () => {
   const nonce = crypto.randomBytes(12).toString('base64');
@@ -199,6 +202,22 @@ fs.writeFileSync(path.join(work, 'Machine.tsproj'), '<?xml version="1.0"?>\n<TcS
 
     // Save: the POU's own text only (the merged methods never in it)
     expect(fs.readFileSync(pouPath, 'utf8') === '\ufeff' + derived, 'the POU file: untouched');
+
+    // Revert\u2026: asked with each file's versions and what else changed in it (lost); the project files back to git's
+    await p.click('#pou-version-revert').catch(() => {});
+    await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+    const askedRevert = await p.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+    expect(
+      /Revert the TwinCAT version\?/.test(askedRevert) &&
+        /Machine\.tsproj: 3\.1\.4026\.27 \u2192 3\.1\.4024\.59 \(only its version changed\)/.test(askedRevert) &&
+        /P\.plcproj: 3\.1\.4026\.27 \u2192 3\.1\.4024\.0 \(also 2 lines added, 1 removed besides its version: lost/.test(askedRevert),
+      `Revert: asked, each file with what else changed (${askedRevert.replace(/\s+/g, ' ').slice(0, 260)})`
+    );
+    await p.click('#text-prompt-submit').catch(() => {});
+    for (let t = 0; t < 8000 && (await p.$('#pou-version-guard')); t += 250) await h.sleep(250);
+    const tsproj = fs.readFileSync(path.join(work, 'Machine.tsproj'), 'utf8');
+    expect(/TcVersion="3\.1\.4024\.59"/.test(tsproj) && fs.readFileSync(path.join(work, 'P.plcproj'), 'utf8') === committedPlcproj, 'reverted: the .tsproj and .plcproj as committed');
+    expect(!(await p.$('#pou-version-guard')) && !(await p.$('#pou-version-revert')), 'the header: no conversion said any more');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
     await browser.close().catch(() => {});

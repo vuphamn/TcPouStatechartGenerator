@@ -30,6 +30,21 @@ function nearest(from, ext, levels = 8) {
   return null;
 }
 
+/** git in the file's folder: { code, out } */
+function git(file, args) {
+  return new Promise((resolve) => {
+    execFile('git', ['-C', path.dirname(file), ...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, timeout: 15000 }, (err, out) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(out ?? '') }));
+  });
+}
+
+/** The lines changed in a file since HEAD: { added, removed }, or null (not known, binary) */
+async function changedLines(file) {
+  const r = await git(file, ['diff', '--numstat', 'HEAD', '--', path.basename(file)]);
+  if (r.code !== 0) return null;
+  const m = /^(\d+)\t(\d+)\t/.exec(r.out);
+  return m ? { added: Number(m[1]), removed: Number(m[2]) } : { added: 0, removed: 0 };
+}
+
 /** The committed (git HEAD) text of a file, or null (not in git, not committed) */
 function gitHead(file) {
   return new Promise((resolve) => {
@@ -58,9 +73,31 @@ async function projectVersions(pouPath) {
     }
     const committed = await gitHead(t.file);
     const head = committed === null ? null : VERSION[t.kind].exec(committed)?.[1] ?? null;
-    files.push({ kind: t.kind, path: t.file, working, head });
+    const changed = working && head && working !== head ? await changedLines(t.file) : null;
+    files.push({ kind: t.kind, path: t.file, working, head, changed });
   }
   return { files, converted: files.some((f) => f.working && f.head && f.working !== f.head) };
 }
 
-module.exports = { projectVersions };
+/**
+ * The project's .tsproj / .plcproj (only those of this POU's project) back to git's HEAD (git checkout HEAD -- file):
+ * { reverted: [path], errors: [{ path, error }] }. The POU itself is not written here (the app edits its version)
+ */
+async function revertProjectFiles(pouPath, paths) {
+  const reverted = [];
+  const errors = [];
+  if (typeof pouPath !== 'string' || !path.isAbsolute(pouPath) || !Array.isArray(paths)) return { reverted, errors: [{ path: '', error: 'No POU' }] };
+  const allowed = [nearest(pouPath, '.tsproj'), nearest(pouPath, '.plcproj')].filter(Boolean).map((f) => path.resolve(f).toLowerCase());
+  for (const p of paths) {
+    if (typeof p !== 'string' || !allowed.includes(path.resolve(p).toLowerCase())) {
+      errors.push({ path: String(p), error: 'Not this POU\'s project file' });
+      continue;
+    }
+    const r = await git(p, ['checkout', 'HEAD', '--', path.basename(p)]);
+    if (r.code === 0) reverted.push(p);
+    else errors.push({ path: p, error: 'git checkout failed' });
+  }
+  return { reverted, errors };
+}
+
+module.exports = { projectVersions, revertProjectFiles };
