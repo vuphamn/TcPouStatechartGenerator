@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
 using Task = System.Threading.Tasks.Task;
 
 namespace KvalMachineScope.Xae
@@ -44,6 +45,11 @@ namespace KvalMachineScope.Xae
         public async Task ShowMachineScopeAsync(string pouPath, string instance = null, System.Collections.Generic.Dictionary<string, string> connection = null, bool newTab = false)
         {
             await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            // (the context menu's command runs while the menu is still closing: TcXaeShell 2017 left a tool window
+            // shown then hidden, so the first right-click did nothing and the second showed it. Yielded first: the
+            // window is made once the menu is gone)
+            await Task.Yield();
+            await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
             int? showing = null, empty = null, any = null, free = null;
             for (var id = 0; id < MaxTabs; id++)
             {
@@ -69,6 +75,17 @@ namespace KvalMachineScope.Xae
                 ?? throw new NotSupportedException($"At most {MaxTabs} Kval MachineScope tabs can be open");
             var window = await ShowToolWindowAsync(typeof(MachineScopeToolWindow), target, true, DisposalToken) as MachineScopeToolWindow;
             if (window?.Control == null) throw new NotSupportedException("Cannot create the Kval MachineScope window");
+            // (shown, made sure: a frame that is not visible after Show is shown again a moment later, up to three times)
+            if (window.Frame is IVsWindowFrame frame)
+            {
+                for (var attempt = 1; attempt <= 3 && frame.IsVisible() != VSConstants.S_OK; attempt++)
+                {
+                    Log.Write($"window frame not visible after Show: shown again ({attempt})");
+                    await Task.Delay(250 * attempt, DisposalToken);
+                    await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+                    frame.Show();
+                }
+            }
             // Already shown in that tab: just bring it forward
             if (!string.IsNullOrEmpty(pouPath) && showing == null) window.Control.LoadPou(pouPath, instance, connection);
         }

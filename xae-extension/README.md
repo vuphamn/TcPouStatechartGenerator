@@ -42,7 +42,7 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
 
 ## Use
 
-- **Right-click** a `.TcPOU` and choose **Open in Kval MachineScope**. The command only appears when the selection is a `.TcPOU`. It is there on the first right-click, even while another window (the editor, a MachineScope tab) is active. When the selection has no `.TcPOU` behind it, a message says so. It is on:
+- **Right-click** a `.TcPOU` and choose **Open in Kval MachineScope**. The command only appears when the selection is a `.TcPOU`. It is there on the first right-click, even while another window (the editor, a MachineScope tab) is active. The tab opens on the first click too: the window is made once the menu has closed, and shown again if it is not visible (TcXaeShell 2017 left a window shown while its menu closed hidden, so it took a second right-click; the log, `%LocalAppData%\KvalMachineScope\log.txt`, says "window frame not visible after Show" when that retry was needed). When the selection has no `.TcPOU` behind it, a message says so. It is on:
   - the project-item context menu;
   - the context menu of an open document's tab.
 - **Tools > Kval MachineScope...** opens the selected or active `.TcPOU`. Without one, it asks for a file.
