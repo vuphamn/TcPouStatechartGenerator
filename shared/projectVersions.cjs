@@ -100,4 +100,25 @@ async function revertProjectFiles(pouPath, paths) {
   return { reverted, errors };
 }
 
-module.exports = { projectVersions, revertProjectFiles };
+/**
+ * The POU's project opened in the XAE of its committed TwinCAT version (version: '3.1.4024.59'): its solution (the
+ * .sln above the .tsproj) or the .tsproj; whether XAE's Remote Manager has that build here (without it, XAE converts
+ * the project to one it has). → { ok, message, file, build, remoteManager }
+ */
+async function openXaeForProject(pouPath, version) {
+  const tb = require('./tcBuild.cjs');
+  const ts = typeof pouPath === 'string' && path.isAbsolute(pouPath) ? nearest(pouPath, '.tsproj') : null;
+  if (!ts) return { ok: false, message: 'The POU is not in a TwinCAT project (no .tsproj above it)' };
+  const sln = nearest(ts, '.sln', 3);
+  const file = sln ?? ts;
+  const m = /^(?:3\.1\.)?(\d{4})\.(\d+)/.exec(String(version ?? ''));
+  const build = m ? Number(m[1]) : null;
+  const rm = m ? `${m[1]}.${m[2]}` : null;
+  const rmBuilds = tb.remoteManagerBuilds();
+  const remoteManager = rm ? rmBuilds.includes(rm) : null;
+  const r = await tb.openXae({ build, file });
+  const rmNote = rm && remoteManager === false ? ` Its Remote Manager has no ${rm} here (${rmBuilds.join(', ') || 'none'}): pick it in XAE's version selector after installing it, or XAE converts the project.` : rm ? ` Choose ${rm} in its Remote Manager (the version selector) before saving.` : '';
+  return { ...r, message: `${r.message}.${rmNote}`, file, build, remoteManager };
+}
+
+module.exports = { projectVersions, revertProjectFiles, openXaeForProject };

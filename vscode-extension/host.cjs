@@ -167,6 +167,9 @@ function createHost({ pouPath, post, ui }) {
     },
     // The POU's project files' TwinCAT version here and in git
     projectVersions: async ({ requestId }) => post({ type: 'projectVersionsResult', requestId, ...(await require('../shared/projectVersions.cjs').projectVersions(pou)) }),
+    coverageFile: ({ requestId }) => post({ type: 'coverageFileResult', requestId, ...require('../shared/coverageFile.cjs').readCoverageFile(pou) }),
+    coverageFileSave: ({ requestId, pouType, counts }) => post({ type: 'coverageFileSaveResult', requestId, ...require('../shared/coverageFile.cjs').mergeCoverageFile(pou, pouType, counts) }),
+    openXaeFor: async ({ requestId, version }) => post({ type: 'openXaeForResult', requestId, ...(await require('../shared/projectVersions.cjs').openXaeForProject(pou, version)) }),
     projectBuilds: async ({ requestId }) => post({ type: 'projectBuildsResult', requestId, builds: require('../shared/tcCompileInfo.cjs').recordProjectBuilds(pou) }),
     revertProjectFiles: async ({ requestId, paths }) => post({ type: 'revertProjectFilesResult', requestId, ...(await require('../shared/projectVersions.cjs').revertProjectFiles(pou, paths)) }),
     // A base the POU EXTENDS (its doState() and state methods): read only, with its folder's .TcDUT files

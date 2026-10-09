@@ -787,17 +787,38 @@ function xaeExecutable(progId = xaeProgId()) {
 
 /**
  * TwinCAT XAE opened for the user (a window of its own, as from the Start menu: theirs to use and close; its
- * license page renews a trial license). KSS_BUILD_DRYRUN: not started, said which. → { ok, message, dry? }
+ * license page renews a trial license). build: the XAE of that TwinCAT family (4024: 4024's shell); file: a solution
+ * or project opened in it. KSS_BUILD_DRYRUN: not started, said which. → { ok, message, xaeBuild, dry?, args? }
  */
-async function openXae() {
-  const exe = dry() ? 'C:\\TwinCAT\\3.1\\Components\\TcXaeShell\\Common7\\IDE\\TcXaeShell.exe' : await xaeExecutable();
+async function openXae({ build = null, file = null } = {}) {
+  const pick = build ? xaeForTarget(build) : null;
+  const progId = pick?.progId ?? xaeProgId();
+  const xaeBuild = xaeBuildOf(progId);
+  const exe = dry() ? `C:\\TwinCAT\\3.1\\Components\\TcXaeShell\\Common7\\IDE\\TcXaeShell.exe` : await xaeExecutable(progId);
   if (!exe) return { ok: false, message: 'TwinCAT XAE is not installed on this computer' };
-  if (dry()) return { ok: true, dry: exe, message: 'TwinCAT XAE is starting' };
+  const args = file ? [file] : [];
+  // (the XAE's build said when one was asked for: the project's version)
+  const what = `TwinCAT XAE${build && xaeBuild ? ` ${xaeBuild}` : ''}`;
+  // (its family not here: the other one opens it, and says so)
+  const other = build && xaeBuild && (build >= 4026) !== (xaeBuild >= 4026) ? ` (no TwinCAT ${build >= 4026 ? 4026 : 4024} XAE on this computer: this one may convert the project)` : '';
+  const message = `${what} is starting${file ? ` with ${require('path').basename(file)}` : ''}${other}`;
+  if (dry()) return { ok: true, dry: exe, progId, args, xaeBuild, message };
   try {
-    require('child_process').spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
-    return { ok: true, message: 'TwinCAT XAE is starting' };
+    require('child_process').spawn(exe, args, { detached: true, stdio: 'ignore' }).unref();
+    return { ok: true, xaeBuild, message };
   } catch (err) {
     return { ok: false, message: `Could not start TwinCAT XAE: ${err.message}` };
+  }
+}
+
+/** The engineering builds of XAE's Remote Manager on this computer (Components\Base\Build_4026.27 → '4026.27') */
+function remoteManagerBuilds() {
+  if (dry()) return (process.env.KSS_RM_BUILDS || '4026.27').split(',').map((s) => s.trim()).filter(Boolean);
+  const base = 'C:\\Program Files (x86)\\Beckhoff\\TwinCAT\\3.1\\Components\\Base';
+  try {
+    return fs.readdirSync(base).filter((n) => /^Build_\d+\.\d+/.test(n)).map((n) => n.slice(6));
+  } catch {
+    return [];
   }
 }
 
@@ -1160,4 +1181,4 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   return result;
 }
 
-module.exports = { xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, remoteManagerBuilds, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

@@ -19,6 +19,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 
   // An XAE stand-in live on that PLC: its state values sent on liveStart
   const saved = [];
+  const coverageSaves = [];
   const open = async (target, values, opts = {}) => {
     const page = await browser.newPage();
     page.on('pageerror', (e) => errors.push(`${target}: ${e.message}`));
@@ -59,6 +60,11 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       } else if (m.type === 'saveDocument') {
         saved.push(m);
         await toApp({ type: 'saveDocumentResult', path: `C:\\Users\\me\\Documents\\${m.name}` });
+      } else if (m.type === 'coverageFile') {
+        await toApp({ type: 'coverageFileResult', requestId: m.requestId, pous: opts.coverageFile ?? {} });
+      } else if (m.type === 'coverageFileSave') {
+        coverageSaves.push({ target, ...m });
+        await toApp({ type: 'coverageFileSaveResult', requestId: m.requestId, counts: m.counts });
       }
     });
     await page.evaluateOnNewDocument(() => {
@@ -77,8 +83,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return { page, toApp, sample };
   };
 
-  // (A: its PLC's trial license runs out in 30 h)
-  const a = await open('5.1.2.3.1.1', [1, 2], { trial: { expires: new Date(Date.now() + 30 * 3600000).toISOString() } });
+  // (A: its PLC's trial license runs out in 30 h; the project's coverage file: a colleague saw another transition)
+  const SEEN_ELSEWHERE = 'TABLEMANAGER_HOMMING_READY_TO_START->TABLEMANAGER_HOMMING';
+  const a = await open('5.1.2.3.1.1', [1, 2], {
+    trial: { expires: new Date(Date.now() + 30 * 3600000).toISOString() },
+    coverageFile: { SM_TableManager: { [SEEN_ELSEWHERE]: { n: 2, last: Date.parse('2026-10-08T09:00:00Z') } } },
+  });
   await a.page.evaluate(() => localStorage.clear());
   const names = a.sample.values;
   const nameOf = (v) => names.find((x) => x.v === v)?.n;
@@ -124,6 +134,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     rows: document.querySelectorAll('#compare-table tbody tr').length,
   }));
   expect(dlg.title === 'Compare PLCs' && /^5\.1\.2\.3\.1\.1:851 \(1 transitions\)/.test(dlg.a) && /^5\.9\.9\.9\.1\.1:851 \(3 transitions\)/.test(dlg.b) && dlg.rows > 0, `Differences…: the two sessions compared (${JSON.stringify(dlg)})`);
+  // From where they part: each one's path side by side (A: its one transition; B: its three)
+  const paths = await a.page.evaluate(() => ({
+    a: [...document.querySelectorAll('.compare-path-a .compare-path-step')].map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+    b: [...document.querySelectorAll('.compare-path-b .compare-path-step')].map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+  }));
+  expect(paths.a.length === 1 && paths.b.length === 3 && paths.a[0].startsWith(`${nameOf(1)} → ${nameOf(2)}`) && paths.b[0].startsWith(`${nameOf(1)} → ${nameOf(3)}`) && paths.b[1].startsWith(`${nameOf(3)} → ${nameOf(1)}`), `the paths from there, side by side (${JSON.stringify(paths)})`);
   // Where they part: both left the first state, A to the second, B to the third
   const first = await a.page.evaluate(() => { const e = document.getElementById('compare-first-diff'); return e ? { state: e.getAttribute('data-state'), same: e.getAttribute('data-same'), text: e.innerText.replace(/\s+/g, ' ') } : null; });
   expect(first?.state === nameOf(1) && first.same === '0' && new RegExp(`A: → ${nameOf(2)} after`).test(first.text) && new RegExp(`B: → ${nameOf(3)} after`).test(first.text) && !!(await a.page.$('#compare-first-diff-show')), `the first difference: in ${nameOf(1)}, what each did next (${first?.text.slice(0, 160)})`);
@@ -233,6 +249,17 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     title: document.querySelector('#project-coverage-dialog .font-semibold')?.textContent ?? '',
   }));
   expect(proj.rows.length === 1 && proj.rows[0].pou === 'SM_TableManager' && proj.rows[0].taken === liveNow.taken && proj.rows[0].total === cov.total && /Line202/.test(proj.title), `the project's coverage: as in the Live tab (${JSON.stringify(proj)})`);
+  // The sign-off report: the whole, the never-taken, lines to sign (saved through XAE)
+  const before = saved.length;
+  await a.page.click('#project-coverage-report').catch(() => {});
+  for (let t = 0; t < 4000 && saved.length === before; t += 200) await sleep(200);
+  const report = saved[before];
+  expect(/^Line202-coverage-signoff\.html$/.test(report?.name ?? '') && /Line202: transition coverage/.test(report?.content ?? '') && /Never taken/.test(report.content) && /Commissioned by/.test(report.content) && new RegExp(`<b>${proj.rows[0].taken} of ${proj.rows[0].total}</b>`).test(report.content), `the sign-off report (${report?.name})`);
+
+  // The project's coverage file: the colleague's transition counted here; this window's written back (with it)
+  expect(liveNow.taken >= 2, `the coverage file: what was seen elsewhere counted (${liveNow.taken} taken)`);
+  const written = coverageSaves.filter((s) => s.target === '5.1.2.3.1.1' && s.pouType === 'SM_TableManager').pop();
+  expect(!!written && written.counts[SEEN_ELSEWHERE]?.n === 2 && Object.keys(written.counts).some((k) => k.startsWith(`${nameOf(1)}->`)), `this window's counts written to it (${Object.keys(written?.counts ?? {}).length} transitions)`);
   await a.page.keyboard.press('Escape');
   await sleep(300);
   expect(!(await a.page.$('#project-coverage-dialog')), 'Esc: closed');

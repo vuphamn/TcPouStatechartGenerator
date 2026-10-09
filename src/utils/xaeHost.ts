@@ -64,6 +64,12 @@ export type HostMessage =
   | { type: 'activateResult'; requestId: number; ok: boolean; message: string }
   // The loaded POU's project files' TwinCAT version here and in git
   | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
+  /** The coverage counts beside the project (MachineScope.coverage.json): every POU type's */
+  | { type: 'coverageFileResult'; requestId: number; pous: Record<string, Record<string, { n: number; last: number }>> }
+  /** This POU type's counts merged into it: the type's counts there now */
+  | { type: 'coverageFileSaveResult'; requestId: number; counts?: Record<string, { n: number; last: number }>; error?: string }
+  /** The project opened in the XAE of its committed version (openXaeFor) */
+  | { type: 'openXaeForResult'; requestId: number; ok: boolean; message: string }
   /** The PLC project's builds here (its _CompileInfo), newest first */
   | { type: 'projectBuildsResult'; requestId: number; builds: { id: string; at: string }[] }
   /** The connected PLC's trial license (null: none, a full license) */
@@ -183,6 +189,9 @@ export type AppMessage =
   | { type: 'activateProject'; requestId: number }
   | { type: 'projectVersions'; requestId: number }
   | { type: 'projectBuilds'; requestId: number }
+  | { type: 'openXaeFor'; requestId: number; version: string }
+  | { type: 'coverageFile'; requestId: number }
+  | { type: 'coverageFileSave'; requestId: number; pouType: string; counts: Record<string, { n: number; last: number }> }
   | { type: 'plcLicense'; requestId: number }
   /** The project's .tsproj / .plcproj back to git's HEAD (asked first in the app) */
   | { type: 'revertProjectFiles'; requestId: number; paths: string[] }

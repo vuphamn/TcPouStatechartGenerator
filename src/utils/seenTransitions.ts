@@ -55,6 +55,26 @@ export function addSeen(seen: SeenMap, transitions: { from: string; to: string; 
   return next;
 }
 
+/** Each transition's count and last time (what the project's coverage file keeps) */
+export function seenCounts(seen: SeenMap): Record<string, { n: number; last: number }> {
+  return Object.fromEntries(Object.entries(seen).map(([k, v]) => [k, { n: v.n, last: v.last }]));
+}
+
+/**
+ * seen with counts merged in (the project's file: what others saw): the highest count and the latest time; what was
+ * learned here kept. The same object when nothing changes
+ */
+export function mergeSeenCounts(seen: SeenMap, counts: Record<string, { n: number; last: number }> | null | undefined): SeenMap {
+  let next: SeenMap | null = null;
+  for (const [k, c] of Object.entries(counts ?? {})) {
+    const was = seen[k];
+    if (was && was.n >= c.n && was.last >= c.last) continue;
+    next ??= { ...seen };
+    next[k] = { ...(was ?? {}), n: Math.max(was?.n ?? 0, c.n), last: Math.max(was?.last ?? 0, c.last) };
+  }
+  return next ?? seen;
+}
+
 /** seen without a transition (seen by mistake: a test, a manual jump) */
 export function forgetSeen(seen: SeenMap, from: string, to: string): SeenMap {
   const k = seenKey(from, to);

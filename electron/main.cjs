@@ -435,6 +435,9 @@ ipcMain.handle('tc:live-app-info', (event, req) => new Promise((resolve) => live
 ipcMain.handle('tc:live-plc-start', (event, req) => new Promise((resolve) => liveFor(event.sender).startPlc(resolve, req)));
 // TwinCAT XAE opened for the user (its license page renews a trial license)
 ipcMain.handle('tc:open-xae', () => require('../shared/tcBuild.cjs').openXae());
+ipcMain.handle('tc:coverage-file', (_event, pouPath) => require('../shared/coverageFile.cjs').readCoverageFile(pouPath));
+ipcMain.handle('tc:coverage-file-save', (_event, pouPath, pouType, counts) => require('../shared/coverageFile.cjs').mergeCoverageFile(pouPath, pouType, counts));
+ipcMain.handle('tc:open-xae-for', (_event, pouPath, version) => require('../shared/projectVersions.cjs').openXaeForProject(pouPath, version));
 // The engineering project for a POU from the PLC (Online change in XAE): its folder chosen (the one with the .tsproj;
 // KSS_PICK_PROJECT: the tests' folder, no dialog), then the POU as edited saved into it (only a file already there)
 ipcMain.handle('tc:pick-project-folder', async (event) => {

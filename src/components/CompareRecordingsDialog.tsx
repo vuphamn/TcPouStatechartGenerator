@@ -31,6 +31,9 @@ interface Props {
   onShowState?: (state: string) => void;
 }
 
+/** The transitions shown of each path from where they part */
+const NEXT_SHOWN = 6;
+
 export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName, onShowState }) => {
   // (a file chosen, else this session / the other PLC as they go)
   const [aFile, setA] = useState<Side | null>(null);
@@ -167,6 +170,23 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
                       </div>
                       <div className="font-mono text-sky-300 truncate">A: {firstDiff.a ? `→ ${firstDiff.a.to} after ${formatDuration(firstDiff.a.dwellMs)} (${new Date(firstDiff.a.t).toLocaleTimeString()})` : 'ends there'}</div>
                       <div className="font-mono text-amber-300 truncate">B: {firstDiff.b ? `→ ${firstDiff.b.to} after ${formatDuration(firstDiff.b.dwellMs)} (${new Date(firstDiff.b.t).toLocaleTimeString()})` : 'ends there'}</div>
+                      {/* (from there, each one's path side by side: the next few transitions) */}
+                      <div id="compare-paths" className="grid grid-cols-2 gap-2 pt-1">
+                        {(['a', 'b'] as const).map((side) => {
+                          const list = (side === 'a' ? a.transitions : b.transitions).slice((side === 'a' ? firstDiff.startA : firstDiff.startB) + firstDiff.same, (side === 'a' ? firstDiff.startA : firstDiff.startB) + firstDiff.same + NEXT_SHOWN);
+                          return (
+                            <div key={side} className={`compare-path-${side} min-w-0 font-mono text-[11px]`} data-count={list.length}>
+                              <div className={side === 'a' ? 'text-sky-400' : 'text-amber-400'}>{side === 'a' ? 'A' : 'B'} from there</div>
+                              {list.length === 0 && <div className="text-slate-500">ends there</div>}
+                              {list.map((t, k) => (
+                                <div key={k} className={`compare-path-step truncate ${k === 0 ? 'text-slate-100' : 'text-slate-400'}`} title={`${t.from} → ${t.to} after ${formatDuration(t.dwellMs)} (${new Date(t.t).toLocaleTimeString()})`}>
+                                  {t.from} → {t.to} <span className="text-slate-500">{formatDuration(t.dwellMs)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                     {onShowState && (
                       <button

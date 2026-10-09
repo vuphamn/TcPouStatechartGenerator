@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   /** The loaded POU's project files' TwinCAT version here and in git: { files: [{ kind, path, working, head }], converted } */
   projectVersions: (pouPath) => ipcRenderer.invoke('tc:project-versions', pouPath),
   projectBuilds: (pouPath) => ipcRenderer.invoke('tc:project-builds', pouPath),
+  openXaeFor: (pouPath, version) => ipcRenderer.invoke('tc:open-xae-for', pouPath, version),
+  coverageFile: (pouPath) => ipcRenderer.invoke('tc:coverage-file', pouPath),
+  coverageFileSave: (pouPath, pouType, counts) => ipcRenderer.invoke('tc:coverage-file-save', pouPath, pouType, counts),
   revertProjectFiles: (pouPath, paths) => ipcRenderer.invoke('tc:revert-project-files', pouPath, paths),
   /** The committed (git HEAD) version of a file: { content } or { error } */
   gitShow: (path) => ipcRenderer.invoke('tc:git-show', path),

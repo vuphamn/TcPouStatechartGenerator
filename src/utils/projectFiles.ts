@@ -143,6 +143,68 @@ export async function fetchProjectVersions(pouPath: string | undefined): Promise
   return d?.projectVersions ? d.projectVersions(pouPath).catch(() => null) : null;
 }
 
+export type CoverageCounts = Record<string, { n: number; last: number }>;
+
+/** A host request answered by its type and requestId (null: no answer in time) */
+function hostAsk<T>(message: Record<string, unknown> & { type: string }, replyType: string, timeoutMs = 15000): Promise<T | null> {
+  const requestId = ++findSeq;
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      off();
+      resolve(null);
+    }, timeoutMs);
+    const off = onHostMessage((m) => {
+      if (m.type !== replyType || (m as { requestId?: number }).requestId !== requestId) return;
+      window.clearTimeout(timer);
+      off();
+      resolve(m as unknown as T);
+    });
+    postToHost({ ...message, requestId } as Parameters<typeof postToHost>[0]);
+  });
+}
+
+/**
+ * The coverage counts beside the PLC project (MachineScope.coverage.json): every POU type's (XAE, VS Code, the desktop
+ * app); null where there is no file access (the web edition)
+ */
+export async function fetchCoverageFile(pouPath: string | undefined): Promise<Record<string, CoverageCounts> | null> {
+  if (isXaeHost()) return (await hostAsk<{ pous: Record<string, CoverageCounts> }>({ type: 'coverageFile' }, 'coverageFileResult'))?.pous ?? null;
+  const d = (window as unknown as { tcDesktop?: { coverageFile?: (p: string) => Promise<{ pous: Record<string, CoverageCounts> }> } }).tcDesktop;
+  return d?.coverageFile && pouPath ? d.coverageFile(pouPath).then((r) => r.pous).catch(() => null) : null;
+}
+
+/** This POU type's counts merged into the project's file (the highest count wins): the type's counts there now */
+export async function saveCoverageFile(pouPath: string | undefined, pouType: string, counts: CoverageCounts): Promise<CoverageCounts | null> {
+  if (isXaeHost()) return (await hostAsk<{ counts?: CoverageCounts }>({ type: 'coverageFileSave', pouType, counts }, 'coverageFileSaveResult'))?.counts ?? null;
+  const d = (window as unknown as { tcDesktop?: { coverageFileSave?: (p: string, t: string, c: CoverageCounts) => Promise<{ counts?: CoverageCounts }> } }).tcDesktop;
+  return d?.coverageFileSave && pouPath ? d.coverageFileSave(pouPath, pouType, counts).then((r) => r.counts ?? null).catch(() => null) : null;
+}
+
+/**
+ * The POU's project opened in the XAE of that TwinCAT version (its committed one: "3.1.4024.59"): XAE, VS Code, the
+ * desktop app; null where it cannot be (the web edition)
+ */
+export async function openXaeFor(pouPath: string | undefined, version: string): Promise<{ ok: boolean; message: string } | null> {
+  if (isXaeHost()) {
+    const requestId = ++findSeq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve(null);
+      }, 30000);
+      const off = onHostMessage((m) => {
+        if (m.type !== 'openXaeForResult' || m.requestId !== requestId) return;
+        window.clearTimeout(timer);
+        off();
+        resolve({ ok: m.ok, message: m.message });
+      });
+      postToHost({ type: 'openXaeFor', requestId, version });
+    });
+  }
+  const d = (window as unknown as { tcDesktop?: { openXaeFor?: (p: string, v: string) => Promise<{ ok: boolean; message: string }> } }).tcDesktop;
+  return d?.openXaeFor && pouPath ? d.openXaeFor(pouPath, version).catch(() => null) : null;
+}
+
 /** The PLC project's builds here (its _CompileInfo), newest first: XAE, VS Code, the desktop app; null elsewhere */
 export async function fetchProjectBuilds(pouPath: string | undefined): Promise<{ id: string; at: string }[] | null> {
   if (!pouPath) return null;

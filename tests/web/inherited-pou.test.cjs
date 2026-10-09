@@ -95,7 +95,7 @@ fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><Program
     // The project saved in another TwinCAT version than committed: said
     await p.waitForSelector('#pou-version-guard', { timeout: 8000 }).catch(() => {});
     const guard = await p.evaluate(() => { const e = document.getElementById('pou-version-guard'); return e ? { text: e.textContent.trim(), title: e.getAttribute('title') } : null; });
-    expect(/4024\.59 → 4026\.27 \(not committed\)/.test(guard?.text ?? '') && /\.tsproj 3\.1\.4024\.59 in git, 3\.1\.4026\.27 here/.test(guard?.title ?? ''), `converted since committed: said (${guard?.text})`);
+    expect(/^⚠ 4024\.59 → 4026\.27 \(not committed\) ▾$/.test(guard?.text ?? '') && /\.tsproj 3\.1\.4024\.59 in git, 3\.1\.4026\.27 here/.test(guard?.title ?? ''), `converted since committed: said (${guard?.text})`);
     // The inheritance view: the levels, an overridden method and its override marked
     await p.click('#pou-inherited-chip').catch(() => {});
     await p.waitForSelector('#inheritance-dialog', { timeout: 4000 }).catch(() => {});
@@ -203,8 +203,27 @@ fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><Program
     // Save: the POU's own text only (the merged methods never in it)
     expect(fs.readFileSync(pouPath, 'utf8') === '\ufeff' + derived, 'the POU file: untouched');
 
+    // Open in XAE 4024\u2026: the project in the XAE of its committed version (KSS_BUILD_DRYRUN: not started, said which);
+    // the Remote Manager here without 4024.59: said
+    process.env.KSS_BUILD_DRYRUN = '1';
+    process.env.KSS_RM_BUILDS = '4026.27';
+    await p.click('#pou-version-guard').catch(() => {});
+    await p.waitForSelector('#dock-menu-pou-version-open-xae', { timeout: 3000 }).catch(() => {});
+    const openLabel = await p.evaluate(() => document.getElementById('dock-menu-pou-version-open-xae')?.textContent?.trim() ?? '');
+    await p.click('#dock-menu-pou-version-open-xae').catch(() => {});
+    let xaeStarted = '';
+    for (let t = 0; t < 6000 && !xaeStarted; t += 200) {
+      await h.sleep(200);
+      xaeStarted = await p.evaluate(() => document.body.innerText.match(/TwinCAT XAE[^\n]*is starting with[^\n]*/)?.[0] ?? '');
+    }
+    expect(openLabel === 'Open in XAE 4024\u2026' && /is starting with Machine\.tsproj/.test(xaeStarted) && /Its Remote Manager has no 4024\.59 here \(4026\.27\)/.test(xaeStarted), `Open in XAE 4024: the project in it, the Remote Manager said (${openLabel}: ${xaeStarted.slice(0, 200)})`);
+    delete process.env.KSS_BUILD_DRYRUN;
+    delete process.env.KSS_RM_BUILDS;
+
     // Revert\u2026: asked with each file's versions and what else changed in it (lost); the project files back to git's
-    await p.click('#pou-version-revert').catch(() => {});
+    await p.click('#pou-version-guard').catch(() => {});
+    await p.waitForSelector('#dock-menu-pou-version-revert', { timeout: 3000 }).catch(() => {});
+    await p.click('#dock-menu-pou-version-revert').catch(() => {});
     await p.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
     const askedRevert = await p.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
     expect(
@@ -217,7 +236,7 @@ fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><Program
     for (let t = 0; t < 8000 && (await p.$('#pou-version-guard')); t += 250) await h.sleep(250);
     const tsproj = fs.readFileSync(path.join(work, 'Machine.tsproj'), 'utf8');
     expect(/TcVersion="3\.1\.4024\.59"/.test(tsproj) && fs.readFileSync(path.join(work, 'P.plcproj'), 'utf8') === committedPlcproj, 'reverted: the .tsproj and .plcproj as committed');
-    expect(!(await p.$('#pou-version-guard')) && !(await p.$('#pou-version-revert')), 'the header: no conversion said any more');
+    expect(!(await p.$('#pou-version-guard')), 'the header: no conversion said any more');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
     await browser.close().catch(() => {});

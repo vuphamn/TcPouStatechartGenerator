@@ -43,7 +43,7 @@ export interface SourceFilesHeaderItemProps {
    */
   inherited?: { bases: string[]; missing?: string; error?: string; onFind?: () => void; onShow?: () => void };
   /** The project files saved in another TwinCAT version than committed (XAE of another build converted them) */
-  versionGuard?: { text: string; title: string; onRevert?: () => void };
+  versionGuard?: { text: string; title: string; onRevert?: () => void; openXae?: { label: string; title: string; onOpen: () => void } };
 }
 
 /** Header toolbar entry for the TwinCAT source: the function block file and the state enum found for it */
@@ -104,6 +104,12 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
 }) => {
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const [saveMenuAnchor, setSaveMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  // (the version chip's menu: Open in XAE …, Revert…)
+  const [versionMenuAnchor, setVersionMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+  const versionMenu: DockMenuItem[] = [
+    ...(versionGuard?.openXae ? [{ id: 'pou-version-open-xae', label: versionGuard.openXae.label, title: versionGuard.openXae.title, onSelect: versionGuard.openXae.onOpen } as DockMenuItem] : []),
+    ...(versionGuard?.onRevert ? [{ id: 'pou-version-revert', label: 'Revert…', title: 'Put the project files back to the TwinCAT version committed (asks first, with what else changed in them)', onSelect: versionGuard.onRevert } as DockMenuItem] : []),
+  ];
   // The Save ▾ menu: the host's (Save As, Download, …) and All changes (every editor's edits and the files' since saved)
   const saveMenu: DockMenuItem[] = [
     ...(hostSave?.menu ?? []),
@@ -247,20 +253,24 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
       </span>
       {(pouFileName || dutStatus !== 'sample') && enumChip}
       {versionGuard && (
-        <span id="pou-version-guard" className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap" title={versionGuard.title}>
-          ⚠ {versionGuard.text}
-        </span>
-      )}
-      {versionGuard?.onRevert && (
         <button
           type="button"
-          id="pou-version-revert"
-          onClick={versionGuard.onRevert}
-          className="px-1.5 py-0.5 rounded-md border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap hover:bg-amber-500/20"
-          title="Put the project files back to the TwinCAT version committed (asks first, with what else changed in them)"
+          id="pou-version-guard"
+          className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap hover:bg-amber-500/25"
+          title={`${versionGuard.title}${versionMenu.length ? ' Click: open it in the XAE of the committed version, or revert it' : ''}`}
+          aria-haspopup={versionMenu.length ? 'menu' : undefined}
+          onClick={(e) => {
+            if (!versionMenu.length) return;
+            const r = e.currentTarget.getBoundingClientRect();
+            setVersionMenuAnchor({ x: r.left, y: r.bottom + 4 });
+          }}
         >
-          Revert…
+          ⚠ {versionGuard.text}
+          {versionMenu.length > 0 && ' ▾'}
         </button>
+      )}
+      {versionMenuAnchor && versionMenu.length > 0 && (
+        <DockMenu id="pou-version-menu" x={versionMenuAnchor.x} y={versionMenuAnchor.y} items={versionMenu} onClose={() => setVersionMenuAnchor(null)} />
       )}
       {inherited && inherited.bases.length > 0 && (
         <button

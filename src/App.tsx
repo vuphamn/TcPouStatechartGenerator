@@ -263,7 +263,7 @@ const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB
 const stableEdges = (e: EdgeOffsetsMap) => Object.fromEntries(Object.entries(e).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
 const emptyLook: PouLayout['look'] = { states: {}, transitions: {}, collapsed: [] };
 import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
-import { addSeen, loadSeen, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen, setSeenCondition, candidatesOf } from './utils/seenTransitions.ts';
+import { addSeen, loadSeen, mergeSeenCounts, seenCounts, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen, setSeenCondition, candidatesOf } from './utils/seenTransitions.ts';
 import { probePlcs, refreshRemembered, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
 import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl, type HelperBuild } from './utils/liveGateway.ts';
 import { useStoredSecret } from './hooks/useStoredSecret.ts';
@@ -275,7 +275,7 @@ import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.ts
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
-import { projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
+import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
 import { trialLicenseState } from './utils/plcLicense.ts';
@@ -328,7 +328,7 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchProjectBuilds, fetchProjectVersions, findProjectPou, resolveInheritance, revertProjectFiles } from './utils/projectFiles.ts';
+import { fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
 import { addCoverageReset, coverageCsv, coverageSessions, coverageStartNow, loadCoverageResets, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
@@ -1665,6 +1665,38 @@ export const App: React.FC = () => {
   const varLastRef = useRef(new Map<string, string>());
   const varChangedRef = useRef(new Map<string, number>());
   useEffect(() => setSeen(loadSeen(seenPouType)), [seenPouType]);
+  // The project's coverage file (MachineScope.coverage.json): what anyone saw live, merged in when the POU opens;
+  // this browser's counts written to it a few seconds after they change (the highest count wins there)
+  const coverageFileRef = useRef<{ key: string; written: string } | null>(null);
+  useEffect(() => {
+    coverageFileRef.current = null;
+    if (!seenPouType || !pouPath) return;
+    let alive = true;
+    void fetchCoverageFile(pouPath).then((pous) => {
+      if (!alive || !pous) return;
+      coverageFileRef.current = { key: `${pouPath}|${seenPouType}`, written: JSON.stringify(pous[seenPouType] ?? {}) };
+      setSeen((prev) => {
+        const next = mergeSeenCounts(prev, pous[seenPouType]);
+        if (next !== prev) saveSeen(seenPouType, next);
+        return next;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [pouPath, seenPouType]);
+  useEffect(() => {
+    const file = coverageFileRef.current;
+    if (!seenPouType || !pouPath || !file || file.key !== `${pouPath}|${seenPouType}`) return;
+    const counts = seenCounts(seen);
+    const text = JSON.stringify(counts);
+    if (text === file.written || !Object.keys(counts).length) return;
+    const timer = window.setTimeout(() => {
+      file.written = text;
+      void saveCoverageFile(pouPath, seenPouType, counts);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [seen, seenPouType, pouPath]);
   const seenUpToRef = useRef(0);
   useEffect(() => {
     const fresh = liveSession.transitions.filter((t) => t.t > seenUpToRef.current);
@@ -2924,10 +2956,13 @@ export const App: React.FC = () => {
         return;
       }
       const project = files as Exclude<typeof files, { error: string }>;
+      // (what anyone saw: the project's coverage file, merged with this browser's)
+      const shared = await fetchCoverageFile(pouPath);
       const data = await projectCoverage(
         { project: project.project ?? 'PLC project', pous: project.pous ?? [], duts: project.duts ?? [] },
         (done, total) => setDocProgress({ done, total, name: 'Coverage' }),
-        () => docCancelRef.current
+        () => docCancelRef.current,
+        shared
       );
       if (!data) return showCopyToast('Coverage canceled', 'error');
       if (!data.pous.length) return showCopyToast('No state machines (POUs with a doState() CASE) were found in the project', 'error');
@@ -9150,7 +9185,31 @@ export const App: React.FC = () => {
                 : undefined
             }
             hostConflict={hostConflictActions}
-            versionGuard={versionGuard ? { ...versionGuard, onRevert: handleRevertConversion } : undefined}
+            versionGuard={
+              versionGuard
+                ? {
+                    ...versionGuard,
+                    onRevert: handleRevertConversion,
+                    ...(versionGuard.changed[0]?.head && (isXaeHost() || pouPath)
+                      ? (() => {
+                          const committed = versionGuard.changed[0].head!;
+                          const short = committed.replace(/^3\.1\./, '');
+                          const family = short.slice(0, 4);
+                          return {
+                            openXae: {
+                              label: `Open in XAE ${family}…`,
+                              title: `Open the project in TwinCAT ${family}'s XAE, the version it is committed in (${short}): saved there, it stays in that version. Its Remote Manager must have ${short}, else XAE converts it again`,
+                              onOpen: () =>
+                                void openXaeFor(pouPath, committed).then((r) =>
+                                  showCopyToast(r ? r.message : 'TwinCAT XAE cannot be started from here', r?.ok ? 'success' : 'error', 12000)
+                                ),
+                            },
+                          };
+                        })()
+                      : {}),
+                  }
+                : undefined
+            }
             inherited={
               inheritance && inheritance.key === inheritKey
                 ? {
@@ -10972,6 +11031,11 @@ export const App: React.FC = () => {
           onClose={() => setProjectCoverageData(null)}
           onExportSummary={() => void downloadCsv(`${projectCoverageData.project}-coverage.csv`, projectCoverageCsv(projectCoverageData))}
           onExportTransitions={() => void downloadCsv(`${projectCoverageData.project}-coverage-transitions.csv`, projectTransitionsCsv(projectCoverageData))}
+          onReport={() =>
+            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, coverageReportHtml(projectCoverageData)).then((r) =>
+              r.error ? showCopyToast(`Could not save the report: ${r.error}`, 'error') : !r.canceled && showCopyToast(`Sign-off report saved${r.path ? `: ${r.path}` : ''}`, 'success', 8000)
+            )
+          }
           onOpenPou={
             isXaeHost() || pouPath
               ? (name) => {

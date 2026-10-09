@@ -414,6 +414,15 @@ namespace KvalMachineScope.Xae
                     case "projectBuilds":
                         HandleProjectBuilds(msg);
                         break;
+                    case "openXaeFor":
+                        HandleOpenXaeFor(msg);
+                        break;
+                    case "coverageFile":
+                        HandleCoverageFile(msg);
+                        break;
+                    case "coverageFileSave":
+                        HandleCoverageFileSave(msg);
+                        break;
                     case "plcLicense":
                         HandlePlcLicense(msg);
                         break;
@@ -1708,6 +1717,185 @@ namespace KvalMachineScope.Xae
                 }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "revertProjectFilesResult", requestId, reverted, errors });
+            });
+        }
+
+        /// <summary>
+        /// The POU's project opened in the XAE of its committed TwinCAT version (version: "3.1.4024.59"): 4024's shell
+        /// (32-bit, TcXaeShell.DTE.15.0) or 4026's (TcXaeShell.DTE.17.0), started with the solution (the .sln above the
+        /// .tsproj, else the .tsproj); this XAE when it is already of that family (said, nothing started). Whether its
+        /// Remote Manager has that build (Components\Base\Build_4024.59). openXaeForResult { requestId, ok, message }
+        /// </summary>
+        private void HandleOpenXaeFor(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var version = msg.TryGetValue("version", out var v) ? v as string : null;
+            var m = System.Text.RegularExpressions.Regex.Match(version ?? "", @"^(?:3\.1\.)?(\d{4})\.(\d+)");
+            var build = m.Success ? int.Parse(m.Groups[1].Value) : 0;
+            var rm = m.Success ? $"{m.Groups[1].Value}.{m.Groups[2].Value}" : null;
+            var tsDir = string.IsNullOrEmpty(_pouPath) ? null : FolderWith(_pouPath, ".tsproj");
+            var ts = tsDir == null ? null : Directory.EnumerateFiles(tsDir, "*.tsproj").FirstOrDefault();
+            if (ts == null || build == 0)
+            {
+                Post(new { type = "openXaeForResult", requestId, ok = false, message = ts == null ? "The POU is not in a TwinCAT project (no .tsproj above it)" : "The committed TwinCAT version is not known" });
+                return;
+            }
+            var slnDir = FolderWith(ts, ".sln");
+            var file = (slnDir == null ? null : Directory.EnumerateFiles(slnDir, "*.sln").FirstOrDefault()) ?? ts;
+            var rmBuilds = new List<string>();
+            try { rmBuilds = Directory.EnumerateDirectories(@"C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Components\Base", "Build_*").Select(d => Path.GetFileName(d).Substring(6)).ToList(); } catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+            var rmNote = rm != null && !rmBuilds.Contains(rm) ? $" Its Remote Manager has no {rm} here ({(rmBuilds.Count > 0 ? string.Join(", ", rmBuilds) : "none")}): pick it in XAE's version selector after installing it, or XAE converts the project." : rm != null ? $" Choose {rm} in its Remote Manager (the version selector) before saving." : "";
+            var family = build >= 4026 ? 4026 : 4024;
+            if ((XaeBuild >= 4026 ? 4026 : 4024) == family)
+            {
+                Post(new { type = "openXaeForResult", requestId, ok = true, message = $"This XAE is TwinCAT {family}'s already: the project is open here.{rmNote}" });
+                return;
+            }
+            string exe = null;
+            foreach (var progId in family >= 4026 ? new[] { "TcXaeShell.DTE.17.0" } : new[] { "TcXaeShell.DTE.15.0", "TcXaeShell.DTE.17.0" })
+            {
+                exe = XaeExecutable(progId);
+                if (exe != null) break;
+            }
+            if (exe == null)
+            {
+                Post(new { type = "openXaeForResult", requestId, ok = false, message = $"No TwinCAT {family} XAE on this computer" });
+                return;
+            }
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe, $"\"{file}\"") { UseShellExecute = false });
+                Post(new { type = "openXaeForResult", requestId, ok = true, message = $"TwinCAT {family}'s XAE is starting with {Path.GetFileName(file)} (close the project here first: two XAEs on one project overwrite each other's saves).{rmNote}" });
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is IOException)
+            {
+                Post(new { type = "openXaeForResult", requestId, ok = false, message = $"Could not start TwinCAT {family}'s XAE: {ex.Message}" });
+            }
+        }
+
+        /// <summary>An XAE's TcXaeShell.exe from its registered automation server (HKCR\ProgId\CLSID → LocalServer32), or null</summary>
+        private static string XaeExecutable(string progId)
+        {
+            try
+            {
+                using (var p = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(progId + @"\CLSID"))
+                {
+                    var clsid = p?.GetValue(null) as string;
+                    if (string.IsNullOrEmpty(clsid)) return null;
+                    using (var s = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey($@"CLSID\{clsid}\LocalServer32"))
+                    {
+                        var server = (s?.GetValue(null) as string)?.Trim();
+                        if (string.IsNullOrEmpty(server)) return null;
+                        var exe = server.StartsWith("\"") ? server.Substring(1, server.IndexOf('"', 1) - 1) : server.Substring(0, server.IndexOf(".exe", StringComparison.OrdinalIgnoreCase) + 4);
+                        return File.Exists(exe) ? exe : null;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is System.Security.SecurityException || ex is UnauthorizedAccessException || ex is IOException || ex is ArgumentException) { return null; }
+        }
+
+        // The transitions each state machine's PLC took, kept beside the PLC project (as shared/coverageFile.cjs: the same
+        // file for every edition): per POU type, each transition's count and last time; merged by the highest
+        private const string CoverageFile = "MachineScope.coverage.json";
+
+        private static SortedDictionary<string, SortedDictionary<string, KeyValuePair<long, double>>> ReadCoverageFile(string pouPath)
+        {
+            var pous = new SortedDictionary<string, SortedDictionary<string, KeyValuePair<long, double>>>(StringComparer.Ordinal);
+            var dir = string.IsNullOrEmpty(pouPath) ? null : FolderWith(pouPath, ".plcproj");
+            var file = dir == null ? null : Path.Combine(dir, CoverageFile);
+            if (file == null || !File.Exists(file)) return pous;
+            try
+            {
+                if (new JavaScriptSerializer { MaxJsonLength = int.MaxValue }.DeserializeObject(File.ReadAllText(file)) is Dictionary<string, object> root && root.TryGetValue("pous", out var p) && p is Dictionary<string, object> types)
+                {
+                    foreach (var t in types)
+                    {
+                        if (!System.Text.RegularExpressions.Regex.IsMatch(t.Key, @"^\w+$") || !(t.Value is Dictionary<string, object> counts)) continue;
+                        var list = new SortedDictionary<string, KeyValuePair<long, double>>(StringComparer.Ordinal);
+                        foreach (var c in counts) if (TryCount(c.Key, c.Value, out var v)) list[c.Key] = v;
+                        pous[t.Key] = list;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is InvalidOperationException) { }
+            return pous;
+        }
+
+        /// <summary>A transition's count from JSON ({ n, last }): only "FROM->TO" with n &gt; 0</summary>
+        private static bool TryCount(string key, object value, out KeyValuePair<long, double> count)
+        {
+            count = default;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(key ?? "", "^[^>]+->[^>]+$") || !(value is Dictionary<string, object> o)) return false;
+            if (!o.TryGetValue("n", out var n) || !double.TryParse(Convert.ToString(n, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var nv) || nv <= 0) return false;
+            double last = 0;
+            if (o.TryGetValue("last", out var l)) double.TryParse(Convert.ToString(l, System.Globalization.CultureInfo.InvariantCulture), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out last);
+            count = new KeyValuePair<long, double>((long)Math.Floor(nv), last);
+            return true;
+        }
+
+        private static string CoverageText(SortedDictionary<string, SortedDictionary<string, KeyValuePair<long, double>>> pous)
+        {
+            var json = new JavaScriptSerializer();
+            var types = pous.Select(t => $"    {json.Serialize(t.Key)}: {{\n" + string.Join(",\n", t.Value.Select(c => $"      {json.Serialize(c.Key)}: {{ \"n\": {c.Value.Key}, \"last\": {c.Value.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture)} }}")) + "\n    }");
+            return "{\n  \"note\": \"The transitions each state machine's PLC took, seen live with Kval MachineScope (count, last time in ms): the coverage counts what anyone saw. Commit it with the project.\",\n  \"pous\": {\n" + string.Join(",\n", types) + "\n  }\n}\n";
+        }
+
+        private static object CountsOf(SortedDictionary<string, KeyValuePair<long, double>> counts) => counts.ToDictionary(c => c.Key, c => (object)new { n = c.Value.Key, last = c.Value.Value });
+
+        /// <summary>coverageFile → coverageFileResult { requestId, pous: { type: { 'FROM->TO': { n, last } } } }</summary>
+        private void HandleCoverageFile(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var pous = ReadCoverageFile(pou).ToDictionary(t => t.Key, t => CountsOf(t.Value));
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "coverageFileResult", requestId, pous });
+            });
+        }
+
+        /// <summary>
+        /// coverageFileSave { pouType, counts }: merged into the file (the highest count, the latest time; written only
+        /// when that adds something) → coverageFileSaveResult { requestId, counts, error? }
+        /// </summary>
+        private void HandleCoverageFileSave(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var type = msg.TryGetValue("pouType", out var t) ? t as string : null;
+            var given = msg.TryGetValue("counts", out var c) ? c as Dictionary<string, object> : null;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                object counts = null;
+                string error = null;
+                var dir = string.IsNullOrEmpty(pou) ? null : FolderWith(pou, ".plcproj");
+                if (dir == null || type == null || !System.Text.RegularExpressions.Regex.IsMatch(type, @"^\w+$")) error = "No PLC project (.plcproj) above the POU, or no POU type";
+                else
+                {
+                    var pous = ReadCoverageFile(pou);
+                    var before = CoverageText(new SortedDictionary<string, SortedDictionary<string, KeyValuePair<long, double>>> { [type] = pous.TryGetValue(type, out var b) ? b : new SortedDictionary<string, KeyValuePair<long, double>>(StringComparer.Ordinal) });
+                    if (!pous.TryGetValue(type, out var mine)) pous[type] = mine = new SortedDictionary<string, KeyValuePair<long, double>>(StringComparer.Ordinal);
+                    foreach (var g in given ?? new Dictionary<string, object>())
+                    {
+                        if (!TryCount(g.Key, g.Value, out var v)) continue;
+                        mine[g.Key] = mine.TryGetValue(g.Key, out var w) ? new KeyValuePair<long, double>(Math.Max(w.Key, v.Key), Math.Max(w.Value, v.Value)) : v;
+                    }
+                    var after = CoverageText(new SortedDictionary<string, SortedDictionary<string, KeyValuePair<long, double>>> { [type] = mine });
+                    if (after != before)
+                    {
+                        try { File.WriteAllText(Path.Combine(dir, CoverageFile), CoverageText(pous)); }
+                        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { error = "Not written: " + ex.Message; }
+                    }
+                    counts = CountsOf(mine);
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "coverageFileSaveResult", requestId, counts, error });
             });
         }
 
