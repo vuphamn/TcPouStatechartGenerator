@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { GitCompare, X } from 'lucide-react';
 import { parseRecording } from '../utils/liveRecording.ts';
-import { comparisonFileName, comparisonText, parseComparison } from '../utils/liveComparison.ts';
+import { comparisonFileName, comparisonText, firstDifference, parseComparison } from '../utils/liveComparison.ts';
 import { EMPTY_LIVE_SESSION, applyLiveSamples, formatDuration, type LiveTransition } from '../utils/liveView.ts';
 import { stateTimes } from '../utils/stateTimes.ts';
 import type { EdgeInfo } from '../types.ts';
@@ -27,9 +27,11 @@ interface Props {
   edges: EdgeInfo[];
   /** The POU (the saved comparison's name and contents) */
   pouName?: string;
+  /** The chart at a state (the first difference's): the dialog closes */
+  onShowState?: (state: string) => void;
 }
 
-export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName }) => {
+export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName, onShowState }) => {
   // (a file chosen, else this session / the other PLC as they go)
   const [aFile, setA] = useState<Side | null>(null);
   const [bFile, setB] = useState<Side | null>(null);
@@ -68,6 +70,7 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
       })
       .sort((p, q) => Math.abs(q.change ?? (q.a && q.b ? 0 : 9)) - Math.abs(p.change ?? (p.a && p.b ? 0 : 9)));
   }, [a, b]);
+  const firstDiff = useMemo(() => (a && b ? firstDifference(a.transitions, b.transitions) : null), [a, b]);
   const transitionDiff = useMemo(() => {
     if (!a || !b) return { onlyA: [], onlyB: [] };
     const count = (s: Side) => {
@@ -151,6 +154,36 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
           {error && <div className="text-rose-300">{error}</div>}
           {a && b && (
             <>
+              <div id="compare-first-diff" className="rounded border border-slate-800 p-2 flex items-start gap-2" data-state={firstDiff?.state ?? ''} data-same={firstDiff?.same ?? ''}>
+                {!firstDiff ? (
+                  <span className="text-emerald-300">The same transitions in the same order ({a.transitions.length}).</span>
+                ) : !firstDiff.state ? (
+                  <span className="text-slate-300">They share no state to start from: the first difference is their start.</span>
+                ) : (
+                  <>
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="text-slate-300">
+                        First difference{firstDiff.same ? `, after ${firstDiff.same} transition${firstDiff.same === 1 ? '' : 's'} the same` : ''}: in <span className="font-mono text-slate-100">{firstDiff.state}</span>
+                      </div>
+                      <div className="font-mono text-sky-300 truncate">A: {firstDiff.a ? `→ ${firstDiff.a.to} after ${formatDuration(firstDiff.a.dwellMs)} (${new Date(firstDiff.a.t).toLocaleTimeString()})` : 'ends there'}</div>
+                      <div className="font-mono text-amber-300 truncate">B: {firstDiff.b ? `→ ${firstDiff.b.to} after ${formatDuration(firstDiff.b.dwellMs)} (${new Date(firstDiff.b.t).toLocaleTimeString()})` : 'ends there'}</div>
+                    </div>
+                    {onShowState && (
+                      <button
+                        id="compare-first-diff-show"
+                        className="ml-auto shrink-0 px-2 py-0.5 rounded border border-slate-700 text-slate-200 hover:bg-slate-800"
+                        title="The chart at that state (this closes)"
+                        onClick={() => {
+                          onClose();
+                          onShowState(firstDiff.state!);
+                        }}
+                      >
+                        Show on chart
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
               <div className="max-h-72 overflow-y-auto rounded border border-slate-800">
                 <table id="compare-table" className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-slate-900">

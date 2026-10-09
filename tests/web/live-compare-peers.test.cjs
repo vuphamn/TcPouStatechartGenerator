@@ -42,7 +42,16 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       } else if (m.type === 'liveWatch') {
         await toApp({ type: 'liveWatchResult', vars: [] });
       } else if (m.type === 'projectPous') {
-        await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
+        // (the PLC project: this state machine and its enum, and a helper that is none)
+        await toApp({
+          type: 'projectPous',
+          project: 'Line202',
+          pous: [
+            { name: 'SM_TableManager.TcPOU', path: 'C:\\proj\\SM_TableManager.TcPOU', content: sample.pou },
+            { name: 'FB_Helper.TcPOU', path: 'C:\\proj\\FB_Helper.TcPOU', content: '<TcPlcObject><POU Name="FB_Helper"><Declaration>FUNCTION_BLOCK FB_Helper</Declaration></POU></TcPlcObject>' },
+          ],
+          duts: [{ name: 'E_TableManager_States.TcDUT', relativePath: 'E_TableManager_States.TcDUT', path: 'C:\\proj\\E_TableManager_States.TcDUT', content: sample.dut }],
+        });
       } else if (m.type === 'projectBuilds') {
         await toApp({ type: 'projectBuildsResult', requestId: m.requestId, builds: opts.builds ?? [] });
       } else if (m.type === 'plcLicense') {
@@ -115,6 +124,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     rows: document.querySelectorAll('#compare-table tbody tr').length,
   }));
   expect(dlg.title === 'Compare PLCs' && /^5\.1\.2\.3\.1\.1:851 \(1 transitions\)/.test(dlg.a) && /^5\.9\.9\.9\.1\.1:851 \(3 transitions\)/.test(dlg.b) && dlg.rows > 0, `Differences…: the two sessions compared (${JSON.stringify(dlg)})`);
+  // Where they part: both left the first state, A to the second, B to the third
+  const first = await a.page.evaluate(() => { const e = document.getElementById('compare-first-diff'); return e ? { state: e.getAttribute('data-state'), same: e.getAttribute('data-same'), text: e.innerText.replace(/\s+/g, ' ') } : null; });
+  expect(first?.state === nameOf(1) && first.same === '0' && new RegExp(`A: → ${nameOf(2)} after`).test(first.text) && new RegExp(`B: → ${nameOf(3)} after`).test(first.text) && !!(await a.page.$('#compare-first-diff-show')), `the first difference: in ${nameOf(1)}, what each did next (${first?.text.slice(0, 160)})`);
   // (B moves on: the dialog follows)
   await b.toApp({ type: 'liveValues', events: [{ t: Date.now(), value: 3 }] });
   let bNow = '';
@@ -154,6 +166,11 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       reopened = await a.page.evaluate(() => ({ a: document.getElementById('compare-a')?.textContent ?? '', b: document.getElementById('compare-b')?.textContent ?? '', rows: document.querySelectorAll('#compare-table tbody tr').length }));
     }
     expect(/^5\.1\.2\.3\.1\.1:851 \(1 transitions\)/.test(reopened?.a ?? '') && /^5\.9\.9\.9\.1\.1:851 \(4 transitions\)/.test(reopened?.b ?? '') && reopened.rows > 0, `the saved comparison opened again: both sides (${JSON.stringify(reopened)})`);
+    // Show on chart: the comparison closes, the chart at the state where they part
+    await a.page.click('#compare-first-diff-show').catch(() => {});
+    await sleep(600);
+    const shown = await a.page.evaluate(() => ({ open: !!document.getElementById('compare-dialog'), selected: document.querySelector('#mermaid-canvas-area g.node.selected, #mermaid-canvas-area g.node.node-selected, #mermaid-canvas-area g.node[data-selected="true"]')?.getAttribute('data-state-id') ?? null }));
+    expect(!shown.open, `Show on chart: the comparison closed (${JSON.stringify(shown)})`);
   }
   await a.page.keyboard.press('Escape');
   await a.page.evaluate(() => document.querySelector('#compare-dialog button[title="Close"]')?.click());
@@ -206,6 +223,19 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(300);
   const sess = await a.page.$$eval('.live-coverage-session', (r) => r.map((e) => ({ text: e.textContent.replace(/\s+/g, ' ').trim(), taken: Number(e.getAttribute('data-taken')) })));
   expect(sess.length === 2 && /– now/.test(sess[0].text) && sess[0].taken >= 1 && /before the first reset/.test(sess[1].text) && sess[1].taken === cov.taken, `two sessions, newest first (${JSON.stringify(sess)})`);
+
+  // The project's coverage (Project…): every state machine (the helper left out), this one's as in the Live tab
+  const liveNow = await covNow();
+  await a.page.click('#live-coverage-project').catch(() => {});
+  await a.page.waitForSelector('#project-coverage-dialog', { timeout: 15000 }).catch(() => {});
+  const proj = await a.page.evaluate(() => ({
+    rows: [...document.querySelectorAll('.project-coverage-row')].map((r) => ({ pou: r.getAttribute('data-pou'), taken: Number(r.getAttribute('data-taken')), total: Number(r.getAttribute('data-total')) })),
+    title: document.querySelector('#project-coverage-dialog .font-semibold')?.textContent ?? '',
+  }));
+  expect(proj.rows.length === 1 && proj.rows[0].pou === 'SM_TableManager' && proj.rows[0].taken === liveNow.taken && proj.rows[0].total === cov.total && /Line202/.test(proj.title), `the project's coverage: as in the Live tab (${JSON.stringify(proj)})`);
+  await a.page.keyboard.press('Escape');
+  await sleep(300);
+  expect(!(await a.page.$('#project-coverage-dialog')), 'Esc: closed');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

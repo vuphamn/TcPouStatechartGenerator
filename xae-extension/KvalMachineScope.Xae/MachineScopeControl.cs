@@ -1337,7 +1337,7 @@ namespace KvalMachineScope.Xae
                     instanceType,
                     stateNames,
                     activeProject,
-                    compileInfo = CompareBuilds(plcBuildId, ProjectBuilds(_pouPath)),
+                    compileInfo = CompareBuilds(plcBuildId, RecordProjectBuilds(_pouPath)),
                     loadedProject = LoadedProjectOf(_pouPath)?.name,
                     twinCatBuild,
                     xaeBuild = ActiveXaeBuild(out var xaeVersion),
@@ -1469,7 +1469,7 @@ namespace KvalMachineScope.Xae
             _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
             {
                 await TaskScheduler.Default;
-                var builds = ProjectBuilds(pou).Select(b => new { id = b.Key, at = b.Value.ToString("o") }).ToList();
+                var builds = RecordProjectBuilds(pou).Select(b => new { id = b.Key, at = b.Value.ToString("o") }).ToList();
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "projectBuildsResult", requestId, builds });
             });
@@ -1511,6 +1511,49 @@ namespace KvalMachineScope.Xae
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "plcLicenseResult", requestId, trial });
             });
+        }
+
+        // The builds of the PLC project seen (XAE keeps only the latest's compile info): kept beside the .plcproj, to
+        // commit with the project (as shared/tcCompileInfo.cjs: the same file for every edition)
+        private const string BuildHistoryFile = "MachineScope.builds.json";
+
+        /// <summary>
+        /// The project's builds: its _CompileInfo now and its history file together, newest first; a build new to the
+        /// history written into it (the file made when there is none; a read-only folder: not written)
+        /// </summary>
+        private static List<KeyValuePair<string, DateTime>> RecordProjectBuilds(string pouPath)
+        {
+            var now = ProjectBuilds(pouPath);
+            var dir = string.IsNullOrEmpty(pouPath) ? null : FolderWith(pouPath, ".plcproj");
+            if (dir == null) return now;
+            var file = Path.Combine(dir, BuildHistoryFile);
+            var known = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (File.Exists(file) && new JavaScriptSerializer().DeserializeObject(File.ReadAllText(file)) is Dictionary<string, object> root && root.TryGetValue("builds", out var b) && b is System.Collections.IEnumerable list && !(b is string))
+                {
+                    foreach (var o in list.Cast<object>().OfType<Dictionary<string, object>>())
+                    {
+                        if (o.TryGetValue("id", out var id) && id is string s && Guid.TryParse(s, out _) && o.TryGetValue("at", out var at) && at is string a
+                            && DateTime.TryParse(a, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var when))
+                            known[s.ToUpperInvariant()] = when;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is InvalidOperationException) { }
+            var fresh = now.Where(x => !known.ContainsKey(x.Key)).ToList();
+            foreach (var x in fresh) known[x.Key] = x.Value;
+            var all = known.Select(k => new KeyValuePair<string, DateTime>(k.Key, k.Value)).OrderByDescending(k => k.Value).Take(200).ToList();
+            if (fresh.Count > 0)
+            {
+                try
+                {
+                    var body = string.Join(",\n", all.Select(k => $"    {{\n      \"id\": \"{k.Key}\",\n      \"at\": \"{k.Value.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}\"\n    }}"));
+                    File.WriteAllText(file, "{\n  \"note\": \"The builds of this PLC project seen by Kval MachineScope (XAE keeps only the latest one's compile info): a PLC running one of them runs an older build of this project. Commit it with the project.\",\n  \"builds\": [\n" + body + "\n  ]\n}\n");
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
+            }
+            return all;
         }
 
         /// <summary>The PLC's build against the project's: newest, older (of this copy) or other (not built here)</summary>

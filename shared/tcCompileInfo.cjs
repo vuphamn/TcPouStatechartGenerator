@@ -58,6 +58,48 @@ function projectBuilds(pouPath) {
     .sort((a, b) => b.at.localeCompare(a.at));
 }
 
+// The builds of the PLC project seen (XAE keeps only the latest's compile info): kept beside the .plcproj, to commit
+// with the project (colleagues, every edition); the newest MAX_HISTORY
+const HISTORY_FILE = 'MachineScope.builds.json';
+const MAX_HISTORY = 200;
+
+/** The builds in the project's history file, newest first: [{ id, at }] ([] when there is none) */
+function buildHistory(pouPath) {
+  const dir = pouPath ? folderWith(pouPath, '.plcproj') : null;
+  if (!dir) return [];
+  try {
+    const f = JSON.parse(fs.readFileSync(path.join(dir, HISTORY_FILE), 'utf8'));
+    return (Array.isArray(f?.builds) ? f.builds : [])
+      .filter((b) => b && /^[0-9A-Fa-f-]{36}$/.test(String(b.id)) && typeof b.at === 'string')
+      .map((b) => ({ id: String(b.id).toUpperCase(), at: b.at }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The project's builds: its _CompileInfo now and its history file together, newest first; a build new to the history
+ * written into it (the file made when there is none). → [{ id, at }]
+ */
+function recordProjectBuilds(pouPath) {
+  const now = projectBuilds(pouPath);
+  const known = buildHistory(pouPath);
+  const byId = new Map(known.map((b) => [b.id, b]));
+  const fresh = now.filter((b) => !byId.has(b.id));
+  for (const b of fresh) byId.set(b.id, b);
+  const all = [...byId.values()].sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_HISTORY);
+  const dir = pouPath ? folderWith(pouPath, '.plcproj') : null;
+  if (fresh.length && dir) {
+    const text = `${JSON.stringify({ note: 'The builds of this PLC project seen by Kval MachineScope (XAE keeps only the latest one\'s compile info): a PLC running one of them runs an older build of this project. Commit it with the project.', builds: all }, null, 2)}\n`;
+    try {
+      fs.writeFileSync(path.join(dir, HISTORY_FILE), text);
+    } catch {
+      // (read-only folder: the app keeps its own)
+    }
+  }
+  return all;
+}
+
 /** The TwinCAT project (its .tsproj's name) the POU belongs to, or null */
 function loadedProjectOf(pouPath) {
   const dir = pouPath ? folderWith(pouPath, '.tsproj') : null;
@@ -81,4 +123,4 @@ function compareBuilds(plcId, builds) {
   return { plc: plcId, newest, state: !match ? 'other' : match === newest ? 'newest' : 'older', builtAt: match?.at ?? null };
 }
 
-module.exports = { guidText, plcCompileId, projectBuilds, loadedProjectOf, compareBuilds };
+module.exports = { guidText, plcCompileId, projectBuilds, buildHistory, recordProjectBuilds, loadedProjectOf, compareBuilds, HISTORY_FILE };

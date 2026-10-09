@@ -75,6 +75,8 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   await a.waitForSelector('#live-license-notice', { timeout: 8000 }).catch(() => {});
   const again = await a.$eval('#live-license-notice', (e) => e.getAttribute('data-state')).catch(() => '');
   expect(/SYSTEM › License/.test(steps) && /7 Days Trial License/.test(steps) && /TwinCAT XAE is starting/.test(opened) && again === 'soon', `Renew: the steps, Open XAE ("${opened}"), read again (${again})`);
+  const chip = await a.$eval('#live-license', (e) => e.getAttribute('data-level') + '|' + e.textContent).catch(() => '');
+  expect(/^soon\|trial until .*\([45] h\)$/.test(chip), `its end in a chip (${chip})`);
 
   const status = () => a.$eval('#plc-build-status', (e) => ({ phase: e.getAttribute('data-phase'), ok: e.getAttribute('data-ok'), text: e.textContent.trim() })).catch(() => ({ phase: '', ok: '', text: '' }));
   const waitDone = async () => { let s = await status(); for (let i = 0; i < 100 && s.phase !== 'done'; i++) { await sleep(200); s = await status(); } return s; };
@@ -202,6 +204,9 @@ const cfg = require('../fakes/symbols-plc.cjs').writeSymbolsPlc('fake-ams2-build
   const dlWarning = await a.$eval('#plc-build-confirm', (e) => e.innerText).catch(() => '');
   const dlOff = await a.$eval('#plc-build-confirm-btn', (e) => e.disabled).catch(() => null);
   expect(dlOff === true && /application stops, takes the new code and starts again/.test(dlWarning), `Download's confirmation: "${dlWarning.split('\n')[1]?.slice(0, 80)}", off until checked`);
+  // (the trial license running out soon: said before the download starts the application again)
+  const dlLicense = await a.$eval('#plc-build-license', (e) => e.getAttribute('data-state') + '|' + e.textContent).catch(() => '');
+  expect(/^soon\|The PLC's TwinCAT trial license runs out in [45] h/.test(dlLicense), `the license said before the download: "${dlLicense.slice(0, 80)}"`);
   await a.click('#plc-build-safe');
   await a.click('#plc-build-confirm-btn');
   s = await waitDone();

@@ -42,6 +42,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       await toApp({ type: 'liveStatus', state: 'stopped', message: 'Stopped' });
     } else if (m.type === 'liveWatch') {
       await toApp({ type: 'liveWatchResult', vars: [] });
+    } else if (m.type === 'plcLicense') {
+      // (its trial license ran out yesterday)
+      await toApp({ type: 'plcLicenseResult', requestId: m.requestId, trial: { expires: new Date(Date.now() - 86400000).toISOString() } });
     } else if (m.type === 'activateProject') {
       await toApp({ type: 'activateResult', requestId: m.requestId, ok: true, message: 'Line202 activated: TwinCAT restarts in Run mode' });
     } else if (m.type === 'discoverPlcs') {
@@ -104,7 +107,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const askedActivate = await page.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
   await page.click('#text-prompt-submit').catch(() => {});
   for (let t = 0; t < 3000 && !sent.some((m) => m.type === 'activateProject'); t += 200) await sleep(200);
-  expect(/Activate Line202\?/.test(askedActivate) && sent.some((m) => m.type === 'activateProject'), `Activate: asked, then XAE asked (${askedActivate.replace(/\s+/g, ' ').slice(0, 80)})`);
+  expect(/Activate Line202\? The PLC's trial license ran out/.test(askedActivate) && /would stay stopped/.test(askedActivate) && sent.some((m) => m.type === 'activateProject'), `Activate: asked (the license that ran out said), then XAE asked (${askedActivate.replace(/\s+/g, ' ').slice(0, 160)})`);
   await sleep(400);
 
   // Update .TcDUT from the PLC (asked): the enum matches, the warning goes

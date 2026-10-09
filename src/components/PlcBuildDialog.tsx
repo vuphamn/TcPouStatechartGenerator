@@ -53,6 +53,8 @@ export const PlcBuildDialog: React.FC<{
   canOpen: (item: PlcBuildItem) => boolean;
   onRebuild: () => void;
   onWrite: (write: PlcWrite) => void;
+  /** The PLC's trial license ran out or runs out soon: said before a download or an activation (the PLC restarts) */
+  license?: { state: 'expired' | 'soon'; text: string } | null;
   onClose: () => void;
   /** XAE edition: its own Login / Activate Configuration write it (no write here) */
   canWrite?: boolean;
@@ -66,7 +68,7 @@ export const PlcBuildDialog: React.FC<{
   onOpenXae?: () => Promise<{ ok: boolean; message: string }>;
   /** The PLC application started (after a write left it in Stop) */
   onStartPlc?: () => Promise<{ state: string | null; ok: boolean; error?: string }>;
-}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae, onReadAppInfo, saveForXae, onOpenXae, onStartPlc }) => {
+}> = ({ state, onOpenItem, canOpen, onRebuild, onWrite, onClose, canWrite = true, onCloseXae, onReadAppInfo, saveForXae, onOpenXae, onStartPlc, license }) => {
   // Start the PLC: asked (its box ticked), running, what it did
   const [starting, setStarting] = useState<{ phase: 'ask' | 'running' | 'done'; safe: boolean; result?: { ok: boolean; text: string } } | null>(null);
   // The online change from XAE, step by step: the count before, what Save did, what the check found
@@ -345,6 +347,15 @@ export const PlcBuildDialog: React.FC<{
               {WRITE_TEXT[confirming].warning} Target: <span className="font-mono">{state.target ?? 'the connected PLC'}</span>. Its sources are downloaded with it.
             </span>
           </div>
+          {license && confirming !== 'online' && (
+            <div id="plc-build-license" data-state={license.state} className={`flex gap-2 rounded border px-2 py-1 ${license.state === 'expired' ? 'border-rose-800 bg-rose-950/40 text-rose-200' : 'border-amber-800 bg-amber-950/30 text-amber-200'}`}>
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>
+                {license.text}
+                {license.state === 'expired' ? ' This write is refused: renew the license first.' : ''}
+              </span>
+            </div>
+          )}
           {state.changes && (
             <div id="plc-build-changes" className="max-h-40 overflow-y-auto rounded bg-slate-950 border border-slate-800 px-2 py-1 font-mono text-[11px] space-y-1">
               <div className="font-sans text-slate-400">What changes on the PLC:</div>

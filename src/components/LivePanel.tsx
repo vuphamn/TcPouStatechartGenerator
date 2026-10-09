@@ -87,6 +87,8 @@ interface LivePanelProps {
   /** The commissioning sessions (from each reset to the next), newest first; one's CSV */
   coverageSessions?: import('../utils/transitionCoverage.ts').CoverageSession[];
   onExportCoverageSession?: (index: number) => void;
+  /** Every state machine of the project: its coverage (a table, CSVs) */
+  onProjectCoverage?: () => void;
   onCoverageAllTime?: () => void;
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
@@ -349,7 +351,8 @@ const CoverageStrip: React.FC<{
   onAllTime?: () => void;
   sessions?: import('../utils/transitionCoverage.ts').CoverageSession[];
   onExportSession?: (index: number) => void;
-}> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime, sessions, onExportSession }) => {
+  onProject?: () => void;
+}> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime, sessions, onExportSession, onProject }) => {
   const [open, setOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const day = (ms: number | null) => (ms ? new Date(ms).toLocaleDateString() : '');
@@ -392,6 +395,11 @@ const CoverageStrip: React.FC<{
         {coverage.since && onAllTime && (
           <button type="button" id="live-coverage-all" onClick={onAllTime} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Count every transition the PLC has taken (before the reset too)">
             All time
+          </button>
+        )}
+        {onProject && (
+          <button type="button" id="live-coverage-project" onClick={onProject} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Every state machine of the project: the transitions taken, per POU (for commissioning sign-off)">
+            Project…
           </button>
         )}
         {onExport && (
@@ -458,6 +466,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onResetCoverage,
   coverageSessions,
   onExportCoverageSession,
+  onProjectCoverage,
   onCoverageAllTime,
   peers,
   onPeerDiff,
@@ -1763,7 +1772,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
       {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
-        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} />
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} onProject={onProjectCoverage} />
       )}
 
       {/* Trail */}

@@ -274,6 +274,8 @@ import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
 import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.tsx';
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
+import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
+import { projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
 import { trialLicenseState } from './utils/plcLicense.ts';
@@ -2908,6 +2910,32 @@ export const App: React.FC = () => {
       setDocProgress(null);
     }
   }, [pouPath, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
+
+  // The coverage of every state machine of the project (commissioning sign-off): read as the documentation reads them
+  const [projectCoverageData, setProjectCoverageData] = useState<ProjectCoverage | null>(null);
+  const handleProjectCoverage = useCallback(async () => {
+    setIsExportMenuOpen(false);
+    docCancelRef.current = false;
+    setDocProgress({ done: 0, total: 0, name: 'Reading the project...' });
+    try {
+      const files = await loadProjectFiles(pouPath);
+      if ('error' in files && files.error) {
+        if (files.error !== 'canceled') showCopyToast(files.error, 'error');
+        return;
+      }
+      const project = files as Exclude<typeof files, { error: string }>;
+      const data = await projectCoverage(
+        { project: project.project ?? 'PLC project', pous: project.pous ?? [], duts: project.duts ?? [] },
+        (done, total) => setDocProgress({ done, total, name: 'Coverage' }),
+        () => docCancelRef.current
+      );
+      if (!data) return showCopyToast('Coverage canceled', 'error');
+      if (!data.pous.length) return showCopyToast('No state machines (POUs with a doState() CASE) were found in the project', 'error');
+      setProjectCoverageData(data);
+    } finally {
+      setDocProgress(null);
+    }
+  }, [pouPath, showCopyToast]);
 
   // Edits from the diagram: rename a state, add a state, add a transition (connect mode)
   const [promptRequest, setPromptRequest] = useState<TextPromptRequest | null>(null);
@@ -6321,9 +6349,12 @@ export const App: React.FC = () => {
   // program changes: Live connects again by itself)
   const handleActivateProject = useCallback(() => {
     const name = liveStatus.loadedProject ?? 'the project';
+    // (the PLC's trial license: ran out, the PLC would stay stopped after the restart; soon: said)
+    const lic = licenseNotice;
     setPromptRequest({
-      title: `Activate ${name}?`,
-      label: `The PLC runs ${liveStatus.activeProject?.name ?? 'another project'}'s configuration. Activating ${name} replaces it on ${liveStatus.target ?? 'the PLC'} (as XAE's Activate Configuration): TwinCAT restarts in Run mode and the machine's program changes.`,
+      title: lic?.state === 'expired' ? `Activate ${name}? The PLC's trial license ran out` : `Activate ${name}?`,
+      label: `The PLC runs ${liveStatus.activeProject?.name ?? 'another project'}'s configuration. Activating ${name} replaces it on ${liveStatus.target ?? 'the PLC'} (as XAE's Activate Configuration): TwinCAT restarts in Run mode and the machine's program changes.${lic?.state === 'expired' ? ' With its trial license run out, TwinCAT would not start the configuration: the PLC would stay stopped. Renew the license first.' : ''}`,
+      ...(lic ? { details: [lic.text] } : {}),
       confirmOnly: true,
       danger: true,
       submitLabel: `Activate ${name}`,
@@ -6338,7 +6369,7 @@ export const App: React.FC = () => {
         postToHost({ type: 'activateProject', requestId });
       },
     });
-  }, [liveStatus.loadedProject, liveStatus.activeProject, liveStatus.target, showCopyToast]);
+  }, [liveStatus.loadedProject, liveStatus.activeProject, liveStatus.target, licenseNotice, showCopyToast]);
   // The inheritance view (the header's extends chip): the POU and its bases, each one's own methods
   const [inheritanceOpen, setInheritanceOpen] = useState(false);
   const inheritanceLevels = useMemo(
@@ -9275,6 +9306,21 @@ export const App: React.FC = () => {
                       </div>
                     </button>
                   </div>
+                  <div className="py-1">
+                    <button
+                      id="dropdown-project-coverage-btn"
+                      type="button"
+                      onClick={() => void handleProjectCoverage()}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Every state machine of the PLC project: the transitions its PLC took (seen live here), for commissioning sign-off"
+                    >
+                      <ListChecks className="w-4 h-4 text-emerald-300 shrink-0" />
+                      <div>
+                        <div className="text-white text-xs">Coverage of all state machines…</div>
+                        <div className="text-[10px] text-slate-400">The transitions taken, per POU (CSV)</div>
+                      </div>
+                    </button>
+                  </div>
                   <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                     High-Resolution Export
                   </div>
@@ -10355,6 +10401,7 @@ export const App: React.FC = () => {
             onCoverageOnChart={setCoverageOnChart}
             onResetCoverage={handleResetCoverage}
             coverageSessions={liveCoverageSessions}
+            onProjectCoverage={isXaeHost() || pouPath ? () => void handleProjectCoverage() : undefined}
             onExportCoverageSession={(k) => {
               const s = liveCoverageSessions[k];
               if (!s) return;
@@ -10732,6 +10779,7 @@ export const App: React.FC = () => {
           onClose={() => setPlcBuildShown(false)}
           onCloseXae={isXaeHost() ? undefined : handleCloseXae}
           onReadAppInfo={isXaeHost() ? undefined : handleReadAppInfo}
+          license={licenseNotice}
           onOpenXae={handleOpenXae}
           onStartPlc={handleStartPlc}
           saveForXae={
@@ -10915,6 +10963,23 @@ export const App: React.FC = () => {
           names={liveEnumNames}
           edges={availableEdges}
           pouName={pouTypeName}
+          onShowState={(s) => handleJumpToState(s)}
+        />
+      )}
+      {projectCoverageData && (
+        <ProjectCoverageDialog
+          data={projectCoverageData}
+          onClose={() => setProjectCoverageData(null)}
+          onExportSummary={() => void downloadCsv(`${projectCoverageData.project}-coverage.csv`, projectCoverageCsv(projectCoverageData))}
+          onExportTransitions={() => void downloadCsv(`${projectCoverageData.project}-coverage-transitions.csv`, projectTransitionsCsv(projectCoverageData))}
+          onOpenPou={
+            isXaeHost() || pouPath
+              ? (name) => {
+                  setProjectCoverageData(null);
+                  void handleOpenType(name, 'machinescope');
+                }
+              : undefined
+          }
         />
       )}
       {peerDiff && (
@@ -10925,6 +10990,7 @@ export const App: React.FC = () => {
           names={liveEnumNames}
           edges={availableEdges}
           pouName={pouTypeName}
+          onShowState={(s) => handleJumpToState(s)}
         />
       )}
       {gatewayRecordingsOpen && (
