@@ -274,7 +274,8 @@ import { OtherPlcsOverview } from './components/OtherPlcsOverview.tsx';
 import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.tsx';
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
-import { useLivePeers, type LiveShare } from './utils/livePeers.ts';
+import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
+import { buildCopyOf, loadBuilds, rememberBuild, withSeenBuilds } from './utils/buildHistory.ts';
 import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
 import { loadPathChecks, pathCheckFindings, pathCheckFrom, runPathChecks, savePathChecks, type PathCheck } from './utils/pathChecks.ts';
 import { downloadCsv, toCsv } from './utils/csv.ts';
@@ -326,7 +327,7 @@ import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
 import { fetchProjectVersions, findProjectPou, resolveInheritance, revertProjectFiles } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
-import { coverageCsv, transitionCoverage } from './utils/transitionCoverage.ts';
+import { coverageCsv, coverageStartNow, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
@@ -6393,10 +6394,33 @@ export const App: React.FC = () => {
     });
   }, [pouPath, pouContent, handleReplaceSources, showCopyToast]);
   // Transition coverage (the Live tab): the chart's transitions against the ones the PLC took (seen, per POU type)
+  // (counted from a reset, after commissioning changes: kept per POU type)
+  const [coverageStart, setCoverageStart] = useState<CoverageStart | null>(null);
+  useEffect(() => setCoverageStart(loadCoverageStart(pouTypeName)), [pouTypeName]);
   const liveCoverage = useMemo(() => {
     const list = [...edgeMembersAll.values()].flat();
-    return list.length ? transitionCoverage(list, seen) : null;
-  }, [edgeMembersAll, seen]);
+    return list.length ? transitionCoverage(list, seen, coverageStart) : null;
+  }, [edgeMembersAll, seen, coverageStart]);
+  const handleResetCoverage = useCallback(() => {
+    if (!pouTypeName) return;
+    setPromptRequest({
+      title: 'Count the coverage again?',
+      label: `From now on, ${pouTypeName}'s coverage counts only the transitions the PLC takes after this (after commissioning changes). The transitions seen so far are kept (their checks, learned conditions); All time shows them again.`,
+      details: liveCoverage ? [`So far: ${liveCoverage.taken} / ${liveCoverage.total} transitions taken`] : undefined,
+      confirmOnly: true,
+      submitLabel: 'Reset',
+      onSubmit: () => {
+        const start = coverageStartNow(seen);
+        saveCoverageStart(pouTypeName, start);
+        setCoverageStart(start);
+        showCopyToast(`Coverage counted from now (${new Date(start.at).toLocaleString()})`, 'success');
+      },
+    });
+  }, [pouTypeName, liveCoverage, seen, showCopyToast]);
+  const handleCoverageAllTime = useCallback(() => {
+    saveCoverageStart(pouTypeName, null);
+    setCoverageStart(null);
+  }, [pouTypeName]);
   // Live on two PLCs (Compare…): this window's PLC, state and transitions said to the others live on the same POU type;
   // theirs shown in the Live tab, Differences… compares the two sessions as they go
   const livePlcLabel = useMemo(() => {
@@ -6416,6 +6440,19 @@ export const App: React.FC = () => {
     };
   }, [liveStatus, pouTypeName, livePlcLabel, liveSession, liveSettings.instance]);
   const livePeers = useLivePeers(liveShare);
+  // The builds of this project copy seen when live (XAE keeps only the latest's compile info): the PLC's ID seen
+  // before is an older build of this copy, with when it was built
+  const liveStatusShown = useMemo(() => {
+    if (liveStatus.state !== 'connected' || !liveStatus.compileInfo || !pouPath) return liveStatus;
+    const copy = buildCopyOf(pouPath);
+    const c = liveStatus.compileInfo;
+    const seenBuilds = c.newest ? rememberBuild(copy, { id: c.newest.id, at: c.newest.at }) : loadBuilds(copy);
+    return { ...liveStatus, compileInfo: withSeenBuilds(c, seenBuilds) };
+  }, [liveStatus, pouPath]);
+  const peerHighlight = useMemo(
+    () => (livePeers.length ? livePeers.flatMap((p, k) => (p.state ? [{ stateId: p.state, label: p.plc, color: peerColor(k) }] : [])) : null),
+    [livePeers]
+  );
   const [peerDiffId, setPeerDiffId] = useState<string | null>(null);
   const peerDiff = peerDiffId ? livePeers.find((x) => x.id === peerDiffId) ?? null : null;
   // (on the chart: the never-taken ones dashed and dimmed, while the Coverage strip's toggle is on)
@@ -10040,6 +10077,7 @@ export const App: React.FC = () => {
                   pathHighlight={pathHighlight}
                   diffHighlight={diffHighlight}
                   coverageHighlight={coverageHighlight}
+                  peerHighlight={peerHighlight}
                   liveGuards={liveGuardViews ?? simViews}
                   contextMenuItems={diagramContextMenuItems}
                   connectFrom={connectFrom}
@@ -10259,6 +10297,8 @@ export const App: React.FC = () => {
             coverage={liveCoverage}
             coverageOnChart={coverageOnChart}
             onCoverageOnChart={setCoverageOnChart}
+            onResetCoverage={handleResetCoverage}
+            onCoverageAllTime={handleCoverageAllTime}
             peers={livePeers}
             onPeerDiff={setPeerDiffId}
             onComparePlc={(plc) => {
@@ -10278,7 +10318,7 @@ export const App: React.FC = () => {
             rememberToken={liveVia === 'link' ? rememberLinkCode : rememberGatewayToken}
             onRememberTokenChange={liveVia === 'link' ? setRememberLinkCode : setRememberGatewayToken}
             stateVar={identifiedStatesResult.stateVarName || 'machineState'}
-            status={liveStatus}
+            status={liveStatusShown}
             session={liveSession}
             hasEnumNames={liveEnumNames.size > 0}
             settings={liveSettings}

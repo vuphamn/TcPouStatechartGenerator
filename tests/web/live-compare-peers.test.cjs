@@ -103,6 +103,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(/\(4 transitions\)/.test(bNow), `kept current as B moves on (${bNow})`);
   peer = await peerOf(a.page, '5.9.9.9.1.1:851');
   expect(peer?.state === nameOf(3) && !peer.same, `B in another state than A: shown so (${peer?.text})`);
+  // On A's chart: B's state outlined in B's colour, its name above (the same colour beside its name in the Live tab)
+  const onChart = await a.page.evaluate(() => {
+    const badge = document.querySelector('#mermaid-canvas-area g.peer-badge[data-plc="5.9.9.9.1.1:851"]');
+    const node = badge?.closest('g.node');
+    return badge ? { state: badge.getAttribute('data-state-id'), text: badge.textContent, color: node?.style.getPropertyValue('--peer-color'), marked: !!node?.classList.contains('peer-current-node'), swatch: document.querySelector('.live-peer .live-peer-color')?.style.background } : null;
+  });
+  expect(onChart?.state === nameOf(3) && onChart.marked && /5\.9\.9\.9\.1\.1:851/.test(onChart.text ?? '') && !!onChart.color && !!onChart.swatch, `B's state on A's chart, in its colour (${JSON.stringify(onChart)})`);
   await a.page.keyboard.press('Escape');
   await a.page.evaluate(() => document.querySelector('#compare-dialog button[title="Close"]')?.click());
   await sleep(300);
@@ -111,6 +118,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await b.page.close();
   for (let t = 0; t < 9000 && (await peerOf(a.page, '5.9.9.9.1.1:851')); t += 250) await sleep(250);
   expect(!(await peerOf(a.page, '5.9.9.9.1.1:851')) && !(await a.page.$('#live-peers')), 'B closed: gone from the list');
+  expect(!(await a.page.$('#mermaid-canvas-area g.peer-badge')) && !(await a.page.$('#mermaid-canvas-area .peer-current-node')), "and from A's chart");
 
   // Coverage on the chart: the never-taken transitions dashed and dimmed while "On the chart" is on
   const cov = await a.page.evaluate(() => { const e = document.getElementById('live-coverage'); return e ? { taken: Number(e.getAttribute('data-taken')), total: Number(e.getAttribute('data-total')) } : null; });
@@ -127,6 +135,27 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(400);
   const after = await a.page.evaluate(() => document.querySelectorAll('#mermaid-canvas-area .coverage-never').length);
   expect(after === 0, `off: drawn as before (${after})`);
+
+  // Coverage counted again (Reset…, asked): none taken since; one taken after; All time: every one again
+  const covNow = () => a.page.evaluate(() => { const e = document.getElementById('live-coverage'); return e ? { taken: Number(e.getAttribute('data-taken')), since: !!document.getElementById('live-coverage-since') } : null; });
+  await a.page.click('#live-coverage-reset').catch(() => {});
+  await a.page.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+  const askedReset = await a.page.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+  await a.page.click('#text-prompt-submit').catch(() => {});
+  await sleep(400);
+  const reset = await covNow();
+  expect(/Count the coverage again\?/.test(askedReset) && reset?.taken === 0 && reset.since, `Reset: asked, counted from now (${JSON.stringify(reset)})`);
+  await a.toApp({ type: 'liveValues', events: [{ t: Date.now() - 500, value: 1 }, { t: Date.now(), value: 2 }] });
+  let since = reset;
+  for (let t = 0; t < 4000 && !(since?.taken > 0); t += 250) {
+    await sleep(250);
+    since = await covNow();
+  }
+  expect(since?.taken >= 1 && since.taken <= cov.taken + 1, `a transition taken after the reset: counted (${JSON.stringify(since)})`);
+  await a.page.click('#live-coverage-all').catch(() => {});
+  await sleep(400);
+  const all = await covNow();
+  expect(all?.taken >= cov.taken && !all.since, `All time: every one taken again (${JSON.stringify(all)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

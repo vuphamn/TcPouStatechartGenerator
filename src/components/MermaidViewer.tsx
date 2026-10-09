@@ -495,6 +495,8 @@ export interface MermaidViewerProps {
   stateTimes?: Record<string, { level: number; label: string; title: string }> | null;
   /** Changes tab: states / transitions added (green) or changed (amber) against the compared version */
   diffHighlight?: { added: string[]; changed: string[]; edgesAdded: { from: string; to: string }[]; edgesChanged: { from: string; to: string }[] } | null;
+  /** Live on other PLCs too (Compare…): the state each one is in, in its colour, with its name */
+  peerHighlight?: { stateId: string; label: string; color: string }[] | null;
   /** Live coverage on the chart: the transitions the PLC never took (dashed, dimmed; their labels too) */
   coverageHighlight?: { never: { from: string; to: string }[] } | null;
   /** Live view: each transition's guard result (TRUE / FALSE / unknown) and its variables' values, by edge id */
@@ -2002,6 +2004,7 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     pathHighlight,
     diffHighlight,
     coverageHighlight,
+    peerHighlight,
     liveGuards,
     contextMenuItems,
     connectFrom = null,
@@ -4239,6 +4242,54 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
       findEdgePathElement(svg, `${prev}->${liveHighlight.stateId}`, availableEdges)?.classList.add('live-last-edge');
     }
   }, [renderedSvg, liveHighlight, availableEdges]);
+
+  // Live on other PLCs: their states outlined in their colours, their names in badges above (several side by side)
+  useEffect(() => {
+    const svg = renderedSvg;
+    if (!svg) return;
+    svg.querySelectorAll('.peer-badge').forEach((el) => el.remove());
+    svg.querySelectorAll('.peer-current-node').forEach((el) => {
+      el.classList.remove('peer-current-node');
+      (el as SVGElement).style.removeProperty('--peer-color');
+    });
+    if (!peerHighlight?.length) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    const placed: Record<string, number> = {};
+    for (const p of peerHighlight) {
+      const node = svg.querySelector(`g.node[data-state-id="${CSS.escape(p.stateId)}"]`) as SVGGElement | null;
+      if (!node) continue;
+      let box: DOMRect;
+      try {
+        box = node.getBBox();
+      } catch {
+        continue;
+      }
+      node.classList.add('peer-current-node');
+      node.style.setProperty('--peer-color', p.color);
+      const x0 = placed[p.stateId] ?? box.x;
+      const g = document.createElementNS(ns, 'g');
+      g.setAttribute('class', 'peer-badge');
+      g.setAttribute('data-state-id', p.stateId);
+      g.setAttribute('data-plc', p.label);
+      const title = document.createElementNS(ns, 'title');
+      title.textContent = `${p.label} is in this state (live in another tab / window)`;
+      const rect = document.createElementNS(ns, 'rect');
+      rect.setAttribute('fill', p.color);
+      const text = document.createElementNS(ns, 'text');
+      text.textContent = p.label;
+      text.setAttribute('x', String(x0 + 5));
+      text.setAttribute('y', String(box.y - 6));
+      g.append(title, rect, text);
+      node.appendChild(g);
+      const tb = text.getBBox();
+      rect.setAttribute('x', String(tb.x - 4));
+      rect.setAttribute('y', String(tb.y - 1));
+      rect.setAttribute('width', String(tb.width + 8));
+      rect.setAttribute('height', String(tb.height + 2));
+      rect.setAttribute('rx', '4');
+      placed[p.stateId] = tb.x + tb.width + 10;
+    }
+  }, [renderedSvg, peerHighlight]);
 
   // Live guard values: a TRUE / FALSE / ? badge on each transition's label, and the values of its variables
   // under it (the active state's transitions, and the selected one). Drawn inside the label's group, so they move

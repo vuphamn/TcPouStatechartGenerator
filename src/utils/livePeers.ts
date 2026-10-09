@@ -35,6 +35,9 @@ const CHANNEL = 'kss-live-compare';
 const EVERY_MS = 2000;
 const GONE_MS = 7000;
 export const MAX_SHARED = 1000;
+/** Each other PLC's colour on the chart and in the Live tab (in the order listed) */
+export const PEER_COLORS = ['#f59e0b', '#e879f9', '#38bdf8', '#f87171'];
+export const peerColor = (index: number) => PEER_COLORS[index % PEER_COLORS.length];
 
 const windowId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 

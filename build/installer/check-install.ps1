@@ -230,6 +230,46 @@ if ($tcSystem.TcVersion) {
     $names = @(([xml](Get-Content $routeFile -Raw)).SelectNodes('//Route') | ForEach-Object { $_.Name })
     Add 'TwinCAT routes' 'OK' "$($names.Count) in $routeFile$(if ($names.Count) { ': ' + ($names -join ', ') })"
   } else { Add 'TwinCAT routes' '--' 'No StaticRoutes.xml (no routes yet)' }
+  # License: this computer's TwinCAT license files (4026: ProgramData; 4024: the installation's Target), each one's
+  # expiry and what it licenses (a 7-day trial is renewed in XAE: License > 7 Days Trial License). Only matters when
+  # this computer runs a configuration itself
+  $licDirs = @("$env:ProgramData\Beckhoff\TwinCAT\3.1\License", $(if ($tcDir) { Join-Path $tcDir '3.1\Target\License' }), 'C:\TwinCAT\3.1\Target\License') | Where-Object { $_ -and (Test-Path $_) }
+  $licFiles = @($licDirs | ForEach-Object { Get-ChildItem $_ -Filter '*.tclrs' -File -ErrorAction SilentlyContinue })
+  if (-not $licFiles.Count) { Add 'TwinCAT license' '--' 'No license on this computer (none needed to build; a configuration run here needs one: XAE > License > 7 Days Trial License)' }
+  foreach ($f in $licFiles) {
+    try { $info = ([xml](Get-Content $f.FullName -Raw)).TcLicenseInfo.LicenseInfo } catch { $info = $null }
+    if (-not $info) { Add "TwinCAT license $($f.Name)" '!!' "Not readable: $($f.FullName)"; continue }
+    $names = @($info.License | ForEach-Object { $_.Name } | Where-Object { $_ })
+    $what = if ($names.Count -gt 6) { (($names | Select-Object -First 6) -join ', ') + ", +$($names.Count - 6) more" } else { $names -join ', ' }
+    $kind = if ($f.Name -like 'Trial*') { 'Trial' } else { 'License' }
+    if ($info.ExpireTime) {
+      # (UTC in the file: IssueTime is when it was written, in UTC)
+      $expires = [datetime]::SpecifyKind([datetime]$info.ExpireTime, 'Utc').ToLocalTime()
+      $left = $expires - (Get-Date)
+      if ($left.TotalSeconds -le 0) { Add "TwinCAT license" '!!' "$kind ran out $($expires.ToString('yyyy-MM-dd HH:mm')): a configuration run here stops (renew it in XAE: License > 7 Days Trial License, then activate). $what" }
+      else {
+        $soon = if ($left.TotalDays -lt 2) { ', renew it soon (XAE: License > 7 Days Trial License)' } else { '' }
+        Add "TwinCAT license" 'OK' "$kind until $($expires.ToString('yyyy-MM-dd HH:mm')) ($([math]::Floor($left.TotalDays)) d $($left.Hours) h left$soon): $what"
+      }
+    } else { Add "TwinCAT license" 'OK' "$kind without expiry: $what" }
+  }
+  # Real-time Ethernet (EtherCAT): the adapters with TwinCAT's driver (TwinCAT-Intel PCI Ethernet Adapter) or its
+  # RT-Ethernet protocol bound; none: a PLC runs here without I/O (TcRteInstall.exe sets an adapter up)
+  $rtAdapters = @()
+  $classKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}'
+  $netAdapters = @(Get-NetAdapter -ErrorAction SilentlyContinue)
+  Get-ChildItem $classKey -ErrorAction SilentlyContinue | ForEach-Object {
+    $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+    if ($p.DriverDesc -match 'TwinCAT' -or $p.ProviderName -match 'Beckhoff') {
+      $a = $netAdapters | Where-Object { $_.InterfaceGuid -eq $p.NetCfgInstanceId } | Select-Object -First 1
+      $rtAdapters += "$(if ($a) { "$($a.Name) " })($($p.DriverDesc)$(if ($a) { ", $($a.Status)" }))"
+    }
+  }
+  Get-NetAdapterBinding -AllBindings -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match 'TwinCAT|Beckhoff' -and $_.Enabled } | ForEach-Object { $rtAdapters += "$($_.Name) ($($_.DisplayName))" }
+  $rtAdapters = @($rtAdapters | Select-Object -Unique)
+  $rteTool = if ($tcDir) { Join-Path $tcDir '3.1\System\TcRteInstall.exe' } else { $null }
+  if ($rtAdapters.Count) { Add 'TwinCAT real-time adapters' 'OK' ($rtAdapters -join '; ') }
+  else { Add 'TwinCAT real-time adapters' '--' "None: a PLC runs here, but without EtherCAT I/O$(if ($rteTool -and (Test-Path $rteTool)) { " (to use an adapter for EtherCAT: $rteTool, as administrator)" })" }
   # Remote Manager: the engineering builds installed beside this TwinCAT
   $builds = @(Get-ChildItem 'C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Components\Base' -Directory -Filter 'Build_*' -ErrorAction SilentlyContinue | ForEach-Object { $_.Name -replace '^Build_', '' })
   if ($builds.Count) {

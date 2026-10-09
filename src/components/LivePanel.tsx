@@ -8,6 +8,7 @@ import { ipFieldFor, type AddRouteBoth, type AddRouteResult, type FoundPlc, type
 import { checkAsText, firewallCommands, type CheckRequest, type CheckResult } from '../utils/connectionCheck.ts';
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
+import { peerColor } from '../utils/livePeers.ts';
 import { formatLimit, notifyStuck, parseDuration } from '../utils/stateLimits.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
 import { versionWarning } from '../utils/twincatVersions.ts';
@@ -33,7 +34,7 @@ export interface LiveStatus {
   /** The TwinCAT project the PLC's configuration was activated from */
   activeProject?: { name: string; created?: string | null; plcProjects?: string[] } | null;
   /** The build the PLC runs against this project copy's builds */
-  compileInfo?: { plc: string; newest: { id: string; at: string } | null; state: 'newest' | 'older' | 'other' | null; builtAt: string | null } | null;
+  compileInfo?: import('../utils/buildHistory.ts').CompileInfo | null;
   /** The TwinCAT project the loaded POU belongs to */
   loadedProject?: string | null;
   /** Web edition: the PLCs the gateway offers, and who is signed in */
@@ -80,6 +81,9 @@ interface LivePanelProps {
   /** The never-taken transitions shown on the chart (dashed, dimmed) */
   coverageOnChart?: boolean;
   onCoverageOnChart?: (on: boolean) => void;
+  /** Counted again from now (after commissioning changes; asks), or from the start again (All time) */
+  onResetCoverage?: () => void;
+  onCoverageAllTime?: () => void;
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
@@ -306,11 +310,11 @@ const PeersStrip: React.FC<{ peers: import('../utils/livePeers.ts').LivePeer[]; 
   const since = (ms: number | null) => (ms ? formatDuration(Math.max(0, now - ms)) : '');
   return (
     <div id="live-peers" className="px-2.5 py-1.5 border-b border-slate-800 shrink-0 text-[11px] space-y-0.5">
-      {peers.map((p) => {
+      {peers.map((p, k) => {
         const same = !!p.state && p.state === own.state;
         return (
           <div key={p.id} className="live-peer flex items-center gap-2 min-w-0" data-plc={p.plc} data-state={p.state ?? ''}>
-            <span className="text-slate-500 shrink-0" title="Live on this POU in another tab / window (Compare…)">⇄</span>
+            <span className="live-peer-color shrink-0 w-2.5 h-2.5 rounded-sm" style={{ background: peerColor(k) }} title="Its colour on the chart: its state outlined, its name above" />
             <span className="font-semibold text-amber-200 truncate" title={p.instance ? `${p.plc}: ${p.instance}` : p.plc}>{p.plc}</span>
             <span className={`font-mono truncate ${same ? 'text-emerald-300' : 'text-slate-200'}`} title={same ? 'The same state as this PLC' : 'Another state than this PLC'}>
               {p.state ?? '—'}
@@ -330,7 +334,7 @@ const PeersStrip: React.FC<{ peers: import('../utils/livePeers.ts').LivePeer[]; 
 };
 
 /** Transition coverage: taken / total with a bar; the never-taken ones on demand; CSV */
-const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void; onChart?: boolean; onToggleChart?: (on: boolean) => void }> = ({ coverage, onExport, onChart, onToggleChart }) => {
+const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void; onChart?: boolean; onToggleChart?: (on: boolean) => void; onReset?: () => void; onAllTime?: () => void }> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime }) => {
   const [open, setOpen] = useState(false);
   const pct = Math.round((coverage.taken / coverage.total) * 100);
   const never = coverage.rows.filter((r) => r.n === 0);
@@ -343,6 +347,11 @@ const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts
         <span className="text-slate-400">
           {coverage.taken} / {coverage.total} transitions taken ({pct}%)
         </span>
+        {coverage.since && (
+          <span id="live-coverage-since" className="text-slate-500 shrink-0" title={`Counted since a reset, ${new Date(coverage.since).toLocaleString()}`}>
+            since {new Date(coverage.since).toLocaleDateString()}
+          </span>
+        )}
         <span className="flex-1 h-1.5 rounded bg-slate-800 overflow-hidden min-w-[3rem]">
           <span className="block h-full bg-emerald-600" style={{ width: `${pct}%` }} />
         </span>
@@ -356,6 +365,16 @@ const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts
             title="On the chart: the transitions never taken dashed and dimmed"
           >
             On the chart
+          </button>
+        )}
+        {onReset && (
+          <button type="button" id="live-coverage-reset" onClick={onReset} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Count again from now (after commissioning changes): the transitions taken so far no longer count (asks first)">
+            Reset…
+          </button>
+        )}
+        {coverage.since && onAllTime && (
+          <button type="button" id="live-coverage-all" onClick={onAllTime} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" title="Count every transition the PLC has taken (before the reset too)">
+            All time
           </button>
         )}
         {onExport && (
@@ -390,6 +409,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onExportCoverage,
   coverageOnChart,
   onCoverageOnChart,
+  onResetCoverage,
+  onCoverageAllTime,
   peers,
   onPeerDiff,
   onComparePlc,
@@ -660,7 +681,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               c.state === 'newest'
                 ? `The PLC runs this project copy's newest build (${when(c.builtAt)})`
                 : c.state === 'older'
-                  ? `The PLC runs an older build of this project copy (${when(c.builtAt)}); the newest here is from ${when(c.newest?.at)}: download or activate it to run it`
+                  ? `The PLC runs an older build of this project copy (built ${when(c.builtAt)}${c.seenBefore ? ', seen here before' : ''}); the newest here is from ${when(c.newest?.at)}: download or activate it to run it`
                   : `The PLC runs another build than this project copy's latest${c.newest ? ` (built ${when(c.newest.at)})` : ''}: an older build of this copy, or another copy's (another computer). XAE keeps only the latest build's compile info, so which one is not known. Download or activate the latest to run it`;
             return (
               <span id="live-build-state" data-state={c.state} className={`shrink-0 px-1.5 rounded border text-[11px] ${c.state === 'newest' ? 'border-emerald-700/70 text-emerald-300' : 'border-amber-500/70 bg-amber-950/60 text-amber-200'}`} title={title}>
@@ -1680,7 +1701,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
       {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
-        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} />
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} />
       )}
 
       {/* Trail */}

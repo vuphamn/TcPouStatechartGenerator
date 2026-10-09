@@ -281,6 +281,22 @@ path.diff-added {
   stroke: var(--kss-34d399) !important;
   stroke-width: 3px !important;
 }
+/* Live on other PLCs: the state each one is in (its colour), its name above */
+.peer-current-node > rect,
+.peer-current-node > polygon,
+.peer-current-node > circle,
+.peer-current-node > path.basic {
+  outline: 3px dashed var(--peer-color);
+  outline-offset: 5px;
+}
+.peer-badge rect {
+  opacity: 0.95;
+}
+.peer-badge text {
+  fill: #0f172a !important;
+  font-size: 11px;
+  font-weight: 600;
+}
 /* Live coverage on the chart: a transition the PLC never took */
 path.coverage-never {
   stroke-dasharray: 2 5 !important;
