@@ -211,10 +211,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let t = 0; t < 15000; t += 300) {
     await sleep(300);
     checks = await a.page.$$eval('.xae-check', (r) => r.map((e) => ({ id: e.getAttribute('data-check'), result: e.getAttribute('data-result'), detail: e.querySelector('.xae-check-detail')?.textContent ?? '' })));
-    if (checks.filter((c) => c.result).length >= 7) break;
+    if (checks.filter((c) => c.result).length >= 9) break;
   }
   const res = Object.fromEntries(checks.map((c) => [c.id, c.result]));
+  const detail = Object.fromEntries(checks.map((c) => [c.id, c.detail]));
   expect(res.builds === 'pass' && res['coverage-file'] === 'pass' && res['git-files'] === 'pass' && res.versions === 'pass' && res.license === 'pass' && res['compare-tabs'] === 'pass' && res['build-chip'] === 'fail' && !res['open-xae'] && !res.activate, `the XAE checks: read by themselves, the PLC without a compile ID failed, the manual ones left (${JSON.stringify(res)})`);
+  // (the other tab's state on the chart; the comparison saved earlier through the save dialog, and where)
+  expect(res['peer-chart'] === 'pass' && /5\.9\.9\.9\.1\.1:851 in /.test(detail['peer-chart']) && res['compare-save'] === 'pass' && /comparison\.json$/.test(detail['compare-save']), `the XAE checks: the other tab on the chart, the comparison saved (${detail['peer-chart']}; ${detail['compare-save']})`);
   await a.page.click('.xae-check[data-check="activate"] .xae-check-pass').catch(() => {});
   await a.page.click('#xae-checks-copy').catch(() => {});
   await sleep(300);
@@ -286,6 +289,23 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let t = 0; t < 4000 && saved.length === before; t += 200) await sleep(200);
   const report = saved[before];
   expect(/^Line202-coverage-signoff\.html$/.test(report?.name ?? '') && /Line202: transition coverage/.test(report?.content ?? '') && /Never taken/.test(report.content) && /Commissioned by/.test(report.content) && new RegExp(`<b>${proj.rows[0].taken} of ${proj.rows[0].total}</b>`).test(report.content), `the sign-off report (${report?.name})`);
+  // Print…: the same report in a hidden frame, printed (the print dialog); the frame gone afterwards
+  await a.page.evaluate(() => {
+    window.__printed = null;
+    new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => { if (n.id === 'kss-print-frame') window.__printed = n.srcdoc; }))).observe(document.body, { childList: true });
+  });
+  await a.page.click('#project-coverage-print').catch(() => {});
+  let printed = null;
+  for (let t = 0; t < 4000 && !printed; t += 200) {
+    await sleep(200);
+    printed = await a.page.evaluate(() => window.__printed);
+  }
+  await sleep(1500);
+  const frameLeft = await a.page.$('#kss-print-frame');
+  expect(/Line202: transition coverage/.test(printed ?? '') && /Commissioned by/.test(printed ?? '') && !frameLeft, 'Print…: the report printed from a hidden frame, the frame removed');
+  // The coverage file tracked by git: the Coverage strip says it is shared
+  const sharedChip = await a.page.evaluate(() => { const e = document.getElementById('live-coverage-shared'); return e ? `${e.getAttribute('data-state')}|${e.textContent.trim()}` : ''; });
+  expect(sharedChip === 'tracked|shared (git)', `the coverage: shared with the project (${sharedChip})`);
 
   // The project's coverage file: the colleague's transition counted here; this window's written back (with it)
   expect(liveNow.taken >= 2, `the coverage file: what was seen elsewhere counted (${liveNow.taken} taken)`);

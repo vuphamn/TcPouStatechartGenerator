@@ -29,12 +29,14 @@ interface Props {
   pouName?: string;
   /** The chart at a state (the first difference's): the dialog closes */
   onShowState?: (state: string) => void;
+  /** A comparison saved: where (XAE's save dialog, the desktop app's, a download) */
+  onSaved?: (path: string) => void;
 }
 
 /** The transitions shown of each path from where they part */
 const NEXT_SHOWN = 6;
 
-export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName, onShowState }) => {
+export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName, onShowState, onSaved }) => {
   // (a file chosen, else this session / the other PLC as they go)
   const [aFile, setA] = useState<Side | null>(null);
   const [bFile, setB] = useState<Side | null>(null);
@@ -145,7 +147,10 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
                   const name = comparisonFileName(a, b, pouName);
                   void import('../utils/projectFiles.ts').then(({ saveDocument }) => saveDocument(name, comparisonText(a, b, pouName))).then((r) => {
                     if (r?.error) setError(r.error);
-                    else if (!r?.canceled) setSaved(r?.path ?? name);
+                    else if (!r?.canceled) {
+                      setSaved(r?.path ?? name);
+                      onSaved?.(r?.path ?? name);
+                    }
                   });
                 }}
               >

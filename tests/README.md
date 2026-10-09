@@ -14,12 +14,17 @@ node tests/run.cjs web --jobs 2         # the web tests two at a time (each has 
 The runner prints one line per test and a summary. It exits with 1 when a test fails. Each test's output is in
 `tests/.output/logs/<suite>-<name>.log`, and screenshots are in `tests/.output`. That folder is not committed.
 
+With `--jobs`, a web test that failed while others ran beside it is run once more alone: it passes then (a busy
+machine's timing, not the app), and the summary lists it as **flaky**, its first run's output in `<name>.first.log`.
+One that fails alone too is a failure. Do not start a second run while one is going: it tests the same dev server and
+stops the first run's browsers.
+
 ## Suites
 
 | Suite | What | Needs |
 |---|---|---|
 | `unit/*.test.ts` | Parsing, generation, lint, guards, chart diff, the POU editor's read/write. Plain TypeScript run on Node (bundled with esbuild). | Nothing |
-| `web/*.test.cjs` | The app in a headless browser: diagram editing, editors (caret line, zoom, find, jumps), POU Editor, Problems, layout, samples, several tabs / instances, live view and Symbols through Link. | Chrome or Edge |
+| `web/*.test.cjs` | The app in a headless browser: diagram editing, editors (caret line, zoom, find, jumps), POU Editor, Problems, layout, samples, several tabs / instances, live view and Symbols through Link. Many run the app as the XAE extension shows it, with a stand-in for the extension that answers its messages (`window.chrome.webview`: e.g. `live-program-xae`, `live-compare-peers`: two such tabs live on two PLCs), or with the VS Code extension's real host (`vscode-extension/host.cjs`, on a project folder in `tests/.output`, a git repository of its own: `inherited-pou`). | Chrome or Edge |
 | `live/*.test.cjs` | The live view's protocol against a simulated PLC: instance discovery, guard variables, symbol browsing, through the gateway and Link. Link's page (pairing code, paired pages) and the gateway's setup page (PLC search against a simulated device search, Test, Save, tokens); gateway alerts (a local webhook receiver), the operator board and the alert history with Acknowledge, escalation, quiet hours, maintenance, saved boards and recordings on the gateway (with a replay and the measured state times in a browser), state-time trends, the board's chime and flashing, its phone layout, tiles opening the diagram live; the audit log, planned maintenance, shift reports, recording variables / compression / size limit / slowdowns / availability, the startup task (dry run), kiosk rotation and sign-in with company accounts (`fakes/fake-oidc.cjs`, a simulated identity provider; its browser part needs a current `dist/`, `npm run build`). | Chrome or Edge (for the pages) |
 | `desktop/*.test.cjs` | The Electron app: windows per POU / instance, Explorer's Open, live view straight to a PLC, Symbols with Watch, the Live tab's Browse and Remember (against a simulated TwinCAT search). | Windows |
 

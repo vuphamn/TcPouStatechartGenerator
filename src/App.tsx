@@ -276,6 +276,7 @@ import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
 import { XaeChecksDialog, type XaeCheck } from './components/XaeChecksDialog.tsx';
+import { printHtml } from './utils/printHtml.ts';
 import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
@@ -6598,11 +6599,18 @@ export const App: React.FC = () => {
   // MachineScope's files beside the project (builds, coverage) neither tracked nor ignored by git: asked once per
   // project and session (stage them to commit, or ignore them); Not now: not asked again for it in this browser
   const msFilesAskedRef = useRef(new Set<string>());
+  // (the coverage file: how it is shared, for the Coverage strip)
+  const [coverageShared, setCoverageShared] = useState<'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null>(null);
   useEffect(() => {
+    setCoverageShared(null);
     if (!pouPath || !(isXaeHost() || isDesktopApp())) return;
     let alive = true;
     const look = () =>
       void fetchMachineScopeFiles(pouPath).then((s) => {
+        if (alive && s?.dir) {
+          const f = s.files.find((x) => x.name === 'MachineScope.coverage.json');
+          setCoverageShared(!f ? 'unwritten' : !s.git ? 'no-git' : f.state);
+        }
         if (!alive || !s?.dir || !s.git) return;
         const open = s.files.filter((f) => f.state === 'untracked');
         const key = `kss.msFilesNotNow.${s.dir.toLowerCase()}`;
@@ -6614,7 +6622,11 @@ export const App: React.FC = () => {
         }
         if (!open.length || notNow || msFilesAskedRef.current.has(s.dir)) return;
         msFilesAskedRef.current.add(s.dir);
-        const act = (action: 'add' | 'ignore') => void machineScopeFilesAct(pouPath, action).then((r) => showCopyToast(r ? r.message : 'Not possible here', r?.ok ? 'success' : 'error', 8000));
+        const act = (action: 'add' | 'ignore') =>
+          void machineScopeFilesAct(pouPath, action).then((r) => {
+            showCopyToast(r ? r.message : 'Not possible here', r?.ok ? 'success' : 'error', 8000);
+            look();
+          });
         setPromptRequest({
           title: 'Share MachineScope\'s files with the project?',
           label: `MachineScope keeps these beside the PLC project, not yet in git: the builds it saw (an older build known as such) and the transitions each PLC took (the coverage). Committed, colleagues and every edition share them; ignored, they stay on this computer.`,
@@ -6657,7 +6669,12 @@ export const App: React.FC = () => {
     [livePeers]
   );
   const [peerDiffId, setPeerDiffId] = useState<string | null>(null);
+  // (the last comparison saved, and where: the XAE checks read it)
+  const [comparisonSaved, setComparisonSaved] = useState<string | null>(null);
   const peerDiff = peerDiffId ? livePeers.find((x) => x.id === peerDiffId) ?? null : null;
+  // The sign-off report (saved or printed): live on other PLCs too, this one against each in it
+  const signOffHtml = (data: ProjectCoverage) =>
+    coverageReportHtml(data, new Date(), liveStatus.state === 'connected' ? livePeers.map((peer) => ({ a: { label: livePlcLabel, transitions: liveSession.transitions }, b: { label: peer.plc, transitions: peer.transitions } })) : []);
   // (on the chart: the never-taken ones dashed and dimmed, while the Coverage strip's toggle is on)
   const [coverageOnChart, setCoverageOnChart] = useState(false);
   const coverageHighlight = useMemo(
@@ -10519,6 +10536,7 @@ export const App: React.FC = () => {
             onResetCoverage={handleResetCoverage}
             coverageSessions={liveCoverageSessions}
             onProjectCoverage={isXaeHost() || pouPath ? () => void handleProjectCoverage() : undefined}
+            coverageShared={coverageShared}
             onExportCoverageSession={(k) => {
               const s = liveCoverageSessions[k];
               if (!s) return;
@@ -11147,6 +11165,24 @@ export const App: React.FC = () => {
                 run: async () => (!live ? notLive : livePeers.length ? { ok: true, detail: livePeers.map((x) => `${x.plc}: ${x.state ?? '?'}`).join(', ') } : { ok: null, detail: 'No other tab live on this POU: Compare… first' }),
               },
               {
+                id: 'peer-chart',
+                title: "The other tab's state on the chart",
+                how: "While another tab is live on this POU: the state it is in outlined in its colour, its PLC's name in a badge above.",
+                run: async () => {
+                  if (!live) return notLive;
+                  if (!livePeers.length) return { ok: null, detail: 'No other tab live on this POU: Compare… first' };
+                  const badges = [...document.querySelectorAll('#mermaid-canvas-area g.peer-badge')].map((b) => `${b.getAttribute('data-plc')} in ${b.getAttribute('data-state-id')}`);
+                  return badges.length ? { ok: true, detail: badges.join(', ') } : { ok: false, detail: `${livePeers.length} other tab${livePeers.length === 1 ? '' : 's'} live, none drawn on the chart` };
+                },
+              },
+              {
+                id: 'compare-save',
+                title: "A comparison saved through XAE's save dialog",
+                how: 'Differences… (beside the other tab in the Live tab), then Save comparison…: XAE asks where, the file is written there.',
+                run: async () => (comparisonSaved ? { ok: true, detail: comparisonSaved } : { ok: null, detail: 'No comparison saved yet: Differences… → Save comparison…' }),
+                ...(livePeers.length ? { action: { label: 'Differences…', run: () => setPeerDiffId(livePeers[0].id) } } : {}),
+              },
+              {
                 id: 'open-xae',
                 title: 'Open in the XAE of the committed version',
                 how: "The version chip's menu (when the project was converted): the other XAE starts with the solution, or this one says it is the right one.",
@@ -11169,15 +11205,11 @@ export const App: React.FC = () => {
           onExportSummary={() => void downloadCsv(`${projectCoverageData.project}-coverage.csv`, projectCoverageCsv(projectCoverageData))}
           onExportTransitions={() => void downloadCsv(`${projectCoverageData.project}-coverage-transitions.csv`, projectTransitionsCsv(projectCoverageData))}
           onReport={() =>
-            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, coverageReportHtml(
-                projectCoverageData,
-                new Date(),
-                // (live on other PLCs too: this one against each, in the report)
-                liveStatus.state === 'connected' ? livePeers.map((peer) => ({ a: { label: livePlcLabel, transitions: liveSession.transitions }, b: { label: peer.plc, transitions: peer.transitions } })) : []
-              )).then((r) =>
+            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, signOffHtml(projectCoverageData)).then((r) =>
               r.error ? showCopyToast(`Could not save the report: ${r.error}`, 'error') : !r.canceled && showCopyToast(`Sign-off report saved${r.path ? `: ${r.path}` : ''}`, 'success', 8000)
             )
           }
+          onPrint={() => void printHtml(signOffHtml(projectCoverageData)).then((ok) => !ok && showCopyToast('Could not print here: save the report and print it from the browser', 'error', 8000))}
           onOpenPou={
             isXaeHost() || pouPath
               ? (name) => {
@@ -11197,6 +11229,7 @@ export const App: React.FC = () => {
           edges={availableEdges}
           pouName={pouTypeName}
           onShowState={(s) => handleJumpToState(s)}
+          onSaved={setComparisonSaved}
         />
       )}
       {gatewayRecordingsOpen && (

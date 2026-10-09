@@ -13,9 +13,11 @@ export const ProjectCoverageDialog: React.FC<{
   onExportTransitions: () => void;
   /** The printable sign-off report (HTML) */
   onReport?: () => void;
+  /** The report printed at once (the system's print dialog) */
+  onPrint?: () => void;
   /** Open that POU here (its coverage in its Live tab) */
   onOpenPou?: (name: string) => void;
-}> = ({ data, onClose, onExportSummary, onExportTransitions, onOpenPou, onReport }) => {
+}> = ({ data, onClose, onExportSummary, onExportTransitions, onOpenPou, onReport, onPrint }) => {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -85,8 +87,13 @@ export const ProjectCoverageDialog: React.FC<{
           </div>
           <div className="flex justify-end gap-2">
             {onReport && (
-              <button id="project-coverage-report" className="mr-auto px-2 py-0.5 rounded border border-emerald-700 text-emerald-200 hover:bg-slate-800" onClick={onReport} title="A printable report for commissioning sign-off: the coverage of each state machine, the transitions never taken, lines to sign (HTML)">
+              <button id="project-coverage-report" className={`${onPrint ? '' : 'mr-auto '}px-2 py-0.5 rounded border border-emerald-700 text-emerald-200 hover:bg-slate-800`} onClick={onReport} title="A printable report for commissioning sign-off: the coverage of each state machine, the transitions never taken, lines to sign (HTML)">
                 Sign-off report…
+              </button>
+            )}
+            {onPrint && (
+              <button id="project-coverage-print" className="mr-auto px-2 py-0.5 rounded border border-emerald-700 text-emerald-200 hover:bg-slate-800" onClick={onPrint} title="The sign-off report printed at once (the print dialog: a printer, or Save as PDF)">
+                Print…
               </button>
             )}
             <button id="project-coverage-csv" className="px-2 py-0.5 rounded border border-slate-700 hover:bg-slate-800" onClick={onExportSummary} title="One row per state machine (CSV)">

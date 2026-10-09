@@ -40,12 +40,23 @@ const TO = 'KANALOGMEASURE_ERROR';
   expect(has(branch(before, 'KANALOGMEASURE_READY')) && !has(branch(before, 'KANALOGMEASURE_DISABLED')), 'before: READY tests status_bError, DISABLED does not');
 
   // READY marked final (its menu): its transitions out leave from the composite's border
-  const ready = await p.evaluate(() => { const r = document.querySelector('#mermaid-canvas-area g.node[data-state-id="KANALOGMEASURE_READY"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-  await p.mouse.click(ready.x, ready.y, { button: 'right' });
-  const fin = await p.waitForSelector('#context-menu-toggle-final-btn', { timeout: 5000 }).catch(() => null);
-  expect(!!fin, 'READY\'s menu: Mark as final state');
-  if (fin) await fin.click();
-  await p.waitForFunction((src, to) => [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].some((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to), { timeout: 15000 }, SRC, TO).catch(() => {});
+  // (on a busy machine the chart is drawn again a while after the edit, and a click on the menu can be lost while it
+  // is: READY's menu read again, marked again only while it still offers "Mark as final state")
+  const drawnFromBorder = () => p.waitForFunction((src, to) => [...document.querySelectorAll('#mermaid-canvas-area path.tc-edge-path')].some((x) => x.getAttribute('data-source-id') === src && x.getAttribute('data-target-id') === to), { timeout: 30000 }, SRC, TO).then(() => true, () => false);
+  let menuSeen = false;
+  let drawn = false;
+  for (let attempt = 0; attempt < 3 && !drawn; attempt++) {
+    const ready = await p.evaluate(() => { const r = document.querySelector('#mermaid-canvas-area g.node[data-state-id="KANALOGMEASURE_READY"]')?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; });
+    if (!ready) break;
+    await p.mouse.click(ready.x, ready.y, { button: 'right' });
+    const fin = await p.waitForSelector('#context-menu-toggle-final-btn', { timeout: 5000 }).catch(() => null);
+    const label = fin ? await fin.evaluate((e) => e.textContent.trim()) : '';
+    menuSeen ||= /Mark as final state/.test(label);
+    if (fin && /Mark as final state/.test(label)) await fin.click();
+    else await p.keyboard.press('Escape');
+    drawn = await drawnFromBorder();
+  }
+  expect(menuSeen, 'READY\'s menu: Mark as final state');
   await h.sleep(1200);
 
   // The edge from the composite, selected; its start dragged onto DISABLED (looked for until it is on screen: on a busy

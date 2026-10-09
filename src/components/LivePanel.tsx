@@ -89,6 +89,8 @@ interface LivePanelProps {
   onExportCoverageSession?: (index: number) => void;
   /** Every state machine of the project: its coverage (a table, CSVs) */
   onProjectCoverage?: () => void;
+  /** How the project's coverage file (MachineScope.coverage.json) is shared: in git, not, ignored, not written yet */
+  coverageShared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null;
   onCoverageAllTime?: () => void;
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
@@ -352,7 +354,16 @@ const CoverageStrip: React.FC<{
   sessions?: import('../utils/transitionCoverage.ts').CoverageSession[];
   onExportSession?: (index: number) => void;
   onProject?: () => void;
-}> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime, sessions, onExportSession, onProject }) => {
+  shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null;
+}> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime, sessions, onExportSession, onProject, shared }) => {
+  const SHARED = {
+    tracked: { text: 'shared (git)', cls: 'border-emerald-700/70 text-emerald-300', title: 'MachineScope.coverage.json is in git: committed, colleagues see what was taken here, and their coverage counts here' },
+    untracked: { text: 'not in git', cls: 'border-amber-600/70 text-amber-200', title: 'MachineScope.coverage.json is beside the project but not in git: commit it to share the coverage with colleagues' },
+    ignored: { text: 'this computer', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.coverage.json is ignored by git (.gitignore): the coverage stays on this computer' },
+    'no-git': { text: 'this computer', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.coverage.json is beside the project, which is not in a git working copy: copy it along to share it' },
+    unwritten: { text: 'not shared yet', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.coverage.json is written beside the project a few seconds after the PLC takes a transition here' },
+  } as const;
+  const sharedChip = shared ? SHARED[shared] : null;
   const [open, setOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const day = (ms: number | null) => (ms ? new Date(ms).toLocaleDateString() : '');
@@ -367,6 +378,11 @@ const CoverageStrip: React.FC<{
         <span className="text-slate-400">
           {coverage.taken} / {coverage.total} transitions taken ({pct}%)
         </span>
+        {sharedChip && (
+          <span id="live-coverage-shared" data-state={shared ?? ''} className={`shrink-0 px-1 rounded border text-[10px] ${sharedChip.cls}`} title={sharedChip.title}>
+            {sharedChip.text}
+          </span>
+        )}
         {coverage.since && (
           <span id="live-coverage-since" className="text-slate-500 shrink-0" title={`Counted since a reset, ${new Date(coverage.since).toLocaleString()}`}>
             since {new Date(coverage.since).toLocaleDateString()}
@@ -467,6 +483,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   coverageSessions,
   onExportCoverageSession,
   onProjectCoverage,
+  coverageShared,
   onCoverageAllTime,
   peers,
   onPeerDiff,
@@ -1772,7 +1789,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
       {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
-        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} onProject={onProjectCoverage} />
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} onProject={onProjectCoverage} shared={coverageShared} />
       )}
 
       {/* Trail */}
