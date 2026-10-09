@@ -49,6 +49,25 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   v = await projectVersions(pou);
   expect(!v.converted, 'not converted any more');
 
+  // MachineScope's files beside the PLC project: how git sees them; staged or ignored
+  const { machineScopeFiles, machineScopeFilesAct } = require('../../shared/projectVersions.cjs');
+  expect((await machineScopeFiles(pou)).files.length === 0, 'none there yet: nothing to ask');
+  fs.writeFileSync(path.join(plcDir, 'MachineScope.builds.json'), '{"builds":[]}\n');
+  fs.writeFileSync(path.join(plcDir, 'MachineScope.coverage.json'), '{"pous":{}}\n');
+  let ms = await machineScopeFiles(pou);
+  expect(ms.git && ms.files.length === 2 && ms.files.every((f: { state: string }) => f.state === 'untracked'), `both there, untracked (${JSON.stringify(ms.files.map((f: { state: string }) => f.state))})`);
+  let act = await machineScopeFilesAct(pou, 'ignore');
+  const ignore = fs.readFileSync(path.join(plcDir, '.gitignore'), 'utf8');
+  ms = await machineScopeFiles(pou);
+  expect(act.ok && /# Kval MachineScope/.test(ignore) && /MachineScope\.builds\.json\nMachineScope\.coverage\.json\n$/.test(ignore) && ms.files.every((f: { state: string }) => f.state === 'ignored'), `ignored: the .gitignore beside them (${act.message})`);
+  act = await machineScopeFilesAct(pou, 'ignore');
+  expect(!act.ok && fs.readFileSync(path.join(plcDir, '.gitignore'), 'utf8') === ignore, 'again: nothing to do, the .gitignore not touched');
+  // (the .gitignore gone: staged instead)
+  fs.rmSync(path.join(plcDir, '.gitignore'));
+  act = await machineScopeFilesAct(pou, 'add');
+  ms = await machineScopeFiles(pou);
+  expect(act.ok && ms.files.every((f: { state: string }) => f.state === 'tracked'), `staged (git add): tracked (${act.message})`);
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);

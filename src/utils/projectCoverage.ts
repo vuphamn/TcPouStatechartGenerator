@@ -9,6 +9,7 @@ import { isStateMachinePou, type ProjectFiles } from './projectDocumentation.ts'
 import { loadSeen, mergeSeenCounts } from './seenTransitions.ts';
 import { loadCoverageStart, transitionCoverage, type Coverage } from './transitionCoverage.ts';
 import { toCsv } from './csv.ts';
+import { firstDifference, type ComparisonSide } from './liveComparison.ts';
 
 export interface PouCoverage {
   /** Its type name (the POU's Name) and file */
@@ -73,11 +74,48 @@ export function projectCoverageCsv(p: ProjectCoverage): string {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/** The paths shown from where two sessions part, each */
+const PATH_SHOWN = 6;
+
+/**
+ * Two PLCs compared (live on both: commissioning a line of machines alike), for the report: where they part (the
+ * first difference, each one's path from there), and the transitions only one of them took
+ */
+function comparisonSection(a: ComparisonSide, b: ComparisonSide): string {
+  const d = firstDifference(a.transitions, b.transitions);
+  const count = (s: ComparisonSide) => {
+    const m = new Map<string, number>();
+    for (const t of s.transitions) m.set(`${t.from} → ${t.to}`, (m.get(`${t.from} → ${t.to}`) ?? 0) + 1);
+    return m;
+  };
+  const ca = count(a);
+  const cb = count(b);
+  const only = (x: Map<string, number>, y: Map<string, number>) => [...x.entries()].filter(([k]) => !y.has(k));
+  const onlyA = only(ca, cb);
+  const onlyB = only(cb, ca);
+  const path = (s: ComparisonSide, start: number) =>
+    s.transitions
+      .slice(start, start + PATH_SHOWN)
+      .map((t) => `<div>${esc(t.from)} → ${esc(t.to)} <span class="muted">${(t.dwellMs / 1000).toFixed(1)} s</span></div>`)
+      .join('') || '<div class="muted">ends there</div>';
+  const part = !d
+    ? `<p>The same transitions in the same order (${a.transitions.length}).</p>`
+    : !d.state
+      ? '<p>They share no state to start from.</p>'
+      : `<p>First difference${d.same ? `, after ${d.same} transition${d.same === 1 ? '' : 's'} the same` : ''}: in <span class="mono">${esc(d.state)}</span>.</p>
+<table><thead><tr><th>${esc(a.label)} from there</th><th>${esc(b.label)} from there</th></tr></thead><tbody><tr><td class="mono">${path(a, d.startA + d.same)}</td><td class="mono">${path(b, d.startB + d.same)}</td></tr></tbody></table>`;
+  const list = (l: [string, number][]) => (l.length ? l.map(([k, n]) => `<div>${esc(k)} (${n}×)</div>`).join('') : '<div class="muted">none</div>');
+  return `<section><h2>Compared live: ${esc(a.label)} and ${esc(b.label)}</h2>
+<div class="muted">${a.transitions.length} and ${b.transitions.length} transitions, the same state machine on two PLCs.</div>
+${part}
+<table><thead><tr><th>Only ${esc(a.label)} took</th><th>Only ${esc(b.label)} took</th></tr></thead><tbody><tr><td class="mono">${list(onlyA)}</td><td class="mono">${list(onlyB)}</td></tr></tbody></table></section>`;
+}
+
 /**
  * The commissioning sign-off report (HTML, printable): the project, when, the coverage of each state machine and the
  * whole, each one's transitions never taken (what was not seen working), and lines to sign
  */
-export function coverageReportHtml(p: ProjectCoverage, now = new Date()): string {
+export function coverageReportHtml(p: ProjectCoverage, now = new Date(), comparisons: { a: ComparisonSide; b: ComparisonSide }[] = []): string {
   const rows = [...p.pous].sort((a, b) => pct(a.coverage) - pct(b.coverage) || a.name.localeCompare(b.name));
   const when = now.toLocaleString();
   const never = rows.filter((x) => x.coverage.taken < x.coverage.total);
@@ -115,6 +153,7 @@ ${
         .join('\n')}`
     : '<h2>Never taken</h2><p>None: every transition of every state machine was taken.</p>'
 }
+${comparisons.map((c) => comparisonSection(c.a, c.b)).join('\n')}
 <div class="sign"><div>Commissioned by</div><div>Signature</div><div>Date</div></div>
 </body></html>
 `;

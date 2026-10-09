@@ -163,6 +163,26 @@ function hostAsk<T>(message: Record<string, unknown> & { type: string }, replyTy
   });
 }
 
+export interface MachineScopeFiles {
+  dir: string | null;
+  git: boolean;
+  files: { name: string; path: string; state: 'tracked' | 'ignored' | 'untracked' }[];
+}
+
+/** MachineScope's files beside the PLC project (builds, coverage) and how git sees them: XAE, VS Code, the desktop app */
+export async function fetchMachineScopeFiles(pouPath: string | undefined): Promise<MachineScopeFiles | null> {
+  if (isXaeHost()) return hostAsk<MachineScopeFiles>({ type: 'machineScopeFiles' }, 'machineScopeFilesResult');
+  const d = (window as unknown as { tcDesktop?: { machineScopeFiles?: (p: string) => Promise<MachineScopeFiles> } }).tcDesktop;
+  return d?.machineScopeFiles && pouPath ? d.machineScopeFiles(pouPath).catch(() => null) : null;
+}
+
+/** The untracked ones staged (git add) or ignored (.gitignore beside them) */
+export async function machineScopeFilesAct(pouPath: string | undefined, action: 'add' | 'ignore'): Promise<{ ok: boolean; message: string } | null> {
+  if (isXaeHost()) return hostAsk<{ ok: boolean; message: string }>({ type: 'machineScopeFilesAct', action }, 'machineScopeFilesActResult');
+  const d = (window as unknown as { tcDesktop?: { machineScopeFilesAct?: (p: string, a: string) => Promise<{ ok: boolean; message: string }> } }).tcDesktop;
+  return d?.machineScopeFilesAct && pouPath ? d.machineScopeFilesAct(pouPath, action).catch(() => null) : null;
+}
+
 /**
  * The coverage counts beside the PLC project (MachineScope.coverage.json): every POU type's (XAE, VS Code, the desktop
  * app); null where there is no file access (the web edition)

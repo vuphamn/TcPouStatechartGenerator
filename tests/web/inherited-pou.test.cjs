@@ -44,6 +44,8 @@ fs.writeFileSync(path.join(work, 'Machine.tsproj'), '<?xml version="1.0"?>\n<TcS
 // (the .plcproj converted too, with a line of its own besides: Revert says it is lost)
 const committedPlcproj = fs.readFileSync(path.join(work, 'P.plcproj'), 'utf8');
 fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><ProgramVersion>3.1.4026.27</ProgramVersion></PropertyGroup>\n<ItemGroup><Compile Include="POUs\\New.TcPOU" /></ItemGroup></Project>');
+// (MachineScope's builds file beside the project, not in git: asked about when the POU opens)
+fs.writeFileSync(path.join(work, 'MachineScope.builds.json'), '{\n  "builds": []\n}\n');
 
 (async () => {
   const nonce = crypto.randomBytes(12).toString('base64');
@@ -82,6 +84,18 @@ fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><Program
     await p.waitForSelector('#mermaid-canvas-area g.node[data-state-id="ST_RUN"]', { timeout: 60000 }).catch(() => {});
     await h.sleep(1500);
 
+    // MachineScope's builds file not in git: asked once; Ignore them: the .gitignore beside it
+    await p.waitForSelector('#ms-files-ignore', { timeout: 8000 }).catch(() => {});
+    const askedFiles = await p.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+    await p.click('#ms-files-ignore').catch(() => {});
+    let ignored = '';
+    for (let t = 0; t < 4000 && !ignored; t += 200) {
+      await h.sleep(200);
+      ignored = fs.existsSync(path.join(work, '.gitignore')) ? fs.readFileSync(path.join(work, '.gitignore'), 'utf8') : '';
+    }
+    expect(/Share MachineScope's files with the project\?/.test(askedFiles) && /MachineScope\.builds\.json/.test(askedFiles) && /Stage them \(git add\)/.test(askedFiles) && /^# Kval MachineScope \(kept per computer\)\nMachineScope\.builds\.json\n$/.test(ignored), `MachineScope's files: asked, then ignored (${ignored.replace(/\n/g, ' | ')})`);
+    await h.sleep(500);
+
     // The chart: the base's states, its methods' transitions (the override's and the base's)
     const chart = await p.evaluate(() => ({
       states: [...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id^="ST_"]')].map((n) => n.getAttribute('data-state-id')),
@@ -96,6 +110,18 @@ fs.writeFileSync(path.join(work, 'P.plcproj'), '<Project><PropertyGroup><Program
     await p.waitForSelector('#pou-version-guard', { timeout: 8000 }).catch(() => {});
     const guard = await p.evaluate(() => { const e = document.getElementById('pou-version-guard'); return e ? { text: e.textContent.trim(), title: e.getAttribute('title') } : null; });
     expect(/^⚠ 4024\.59 → 4026\.27 \(not committed\) ▾$/.test(guard?.text ?? '') && /\.tsproj 3\.1\.4024\.59 in git, 3\.1\.4026\.27 here/.test(guard?.title ?? ''), `converted since committed: said (${guard?.text})`);
+    // A narrow window: the Function Block entry in the header's Hidden menu, said on its button (⚠: the version
+    // chip among it), its chips in the menu
+    await p.setViewport({ width: 900, height: 1000 });
+    await p.waitForSelector('#header-hidden-source-hint', { timeout: 5000 }).catch(() => {});
+    const hint = await p.evaluate(() => { const e = document.getElementById('header-hidden-source-hint'); return e ? { text: e.textContent.trim(), warn: e.getAttribute('data-warn') } : null; });
+    await p.click('#header-hidden-controls-btn').catch(() => {});
+    await p.waitForSelector('#header-hidden-controls-menu', { timeout: 3000 }).catch(() => {});
+    const hiddenMenu = await p.evaluate(() => ['extends', 'version', 'version-open-xae', 'version-revert'].map((id) => document.getElementById(`dock-menu-header-note-${id}`)?.textContent?.trim() ?? ''));
+    await p.keyboard.press('Escape');
+    expect(hint?.text === '⚠ POU' && hint.warn === 'true' && hiddenMenu[0] === 'extends SM_Base' && /^⚠ 4024\.59 → 4026\.27/.test(hiddenMenu[1]) && hiddenMenu[2] === 'Open in XAE 4024…' && hiddenMenu[3] === 'Revert…', `narrow: the hidden entry said, its chips in the menu (${hint?.text}: ${hiddenMenu.join(' | ')})`);
+    await p.setViewport({ width: 1600, height: 1000 });
+    await h.sleep(800);
     // The inheritance view: the levels, an overridden method and its override marked
     await p.click('#pou-inherited-chip').catch(() => {});
     await p.waitForSelector('#inheritance-dialog', { timeout: 4000 }).catch(() => {});

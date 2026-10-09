@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   projectVersions: (pouPath) => ipcRenderer.invoke('tc:project-versions', pouPath),
   projectBuilds: (pouPath) => ipcRenderer.invoke('tc:project-builds', pouPath),
   openXaeFor: (pouPath, version) => ipcRenderer.invoke('tc:open-xae-for', pouPath, version),
+  machineScopeFiles: (pouPath) => ipcRenderer.invoke('tc:ms-files', pouPath),
+  machineScopeFilesAct: (pouPath, action) => ipcRenderer.invoke('tc:ms-files-act', pouPath, action),
   coverageFile: (pouPath) => ipcRenderer.invoke('tc:coverage-file', pouPath),
   coverageFileSave: (pouPath, pouType, counts) => ipcRenderer.invoke('tc:coverage-file-save', pouPath, pouType, counts),
   revertProjectFiles: (pouPath, paths) => ipcRenderer.invoke('tc:revert-project-files', pouPath, paths),

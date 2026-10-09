@@ -275,6 +275,7 @@ import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.ts
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
+import { XaeChecksDialog, type XaeCheck } from './components/XaeChecksDialog.tsx';
 import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
@@ -328,7 +329,7 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
+import { fetchMachineScopeFiles, machineScopeFilesAct, fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
 import { addCoverageReset, coverageCsv, coverageSessions, coverageStartNow, loadCoverageResets, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
@@ -2611,6 +2612,8 @@ export const App: React.FC = () => {
   }, [multiSelected.length]);
   // The command palette (Ctrl+Shift+P), Go to Symbol (Ctrl+T in XAE / the desktop app; Ctrl+Shift+O everywhere)
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The XAE checks (in XAE: the extension's features checked in one sitting)
+  const [xaeChecksOpen, setXaeChecksOpen] = useState(false);
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -5605,6 +5608,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    if (isXaeHost()) cmds.push({ id: 'app:xae-checks', group: 'Help', label: 'XAE checks…', hint: "the extension's features checked in one sitting", run: () => setXaeChecksOpen(true) });
     cmds.push({ id: 'app:symbol', group: 'Go', label: 'Go to symbol…', hint: 'Ctrl+Shift+O', run: () => setSymbolSearchOpen(true) });
     cmds.push({
       id: 'app:snippets',
@@ -6483,6 +6487,37 @@ export const App: React.FC = () => {
       },
     });
   }, [pouPath, pouContent, handleReplaceSources, showCopyToast]);
+  // The version chip's props (its menu: Open in XAE of the committed version, Revert); the header's Hidden menu too
+  const versionGuardProps = useMemo(() => {
+    if (!versionGuard) return undefined;
+    const committed = versionGuard.changed[0]?.head;
+    const family = committed?.replace(/^3\.1\./, '').slice(0, 4);
+    const short = committed?.replace(/^3\.1\./, '');
+    return {
+      ...versionGuard,
+      onRevert: handleRevertConversion,
+      ...(committed && (isXaeHost() || pouPath)
+        ? {
+            openXae: {
+              label: `Open in XAE ${family}…`,
+              title: `Open the project in TwinCAT ${family}'s XAE, the version it is committed in (${short}): saved there, it stays in that version. Its Remote Manager must have ${short}, else XAE converts it again`,
+              onOpen: () => void openXaeFor(pouPath, committed).then((r) => showCopyToast(r ? r.message : 'TwinCAT XAE cannot be started from here', r?.ok ? 'success' : 'error', 12000)),
+            },
+          }
+        : {}),
+    };
+  }, [versionGuard, handleRevertConversion, pouPath, showCopyToast]);
+  // The Function Block entry's chips, for the header's Hidden menu when the entry does not fit
+  const headerSourceNotes = useMemo(() => {
+    const notes: { id: string; label: string; title?: string; warn?: boolean; onSelect?: () => void }[] = [];
+    if (inheritance && inheritance.key === inheritKey && inheritance.bases.length) notes.push({ id: 'extends', label: `extends ${inheritance.bases[0]}`, title: 'The inheritance view: the chain and which methods each level overrides', onSelect: () => setInheritanceOpen(true) });
+    if (versionGuardProps) {
+      notes.push({ id: 'version', label: `⚠ ${versionGuardProps.text}`, title: versionGuardProps.title, warn: true });
+      if (versionGuardProps.openXae) notes.push({ id: 'version-open-xae', label: versionGuardProps.openXae.label, title: versionGuardProps.openXae.title, onSelect: versionGuardProps.openXae.onOpen });
+      notes.push({ id: 'version-revert', label: 'Revert…', title: 'Put the project files back to the TwinCAT version committed (asks first)', onSelect: versionGuardProps.onRevert });
+    }
+    return notes;
+  }, [inheritance, inheritKey, versionGuardProps]);
   // Transition coverage (the Live tab): the chart's transitions against the ones the PLC took (seen, per POU type)
   // (counted from a reset, after commissioning changes: kept per POU type)
   const [coverageStart, setCoverageStart] = useState<CoverageStart | null>(null);
@@ -6560,6 +6595,52 @@ export const App: React.FC = () => {
       window.removeEventListener('focus', look);
     };
   }, [pouPath]);
+  // MachineScope's files beside the project (builds, coverage) neither tracked nor ignored by git: asked once per
+  // project and session (stage them to commit, or ignore them); Not now: not asked again for it in this browser
+  const msFilesAskedRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!pouPath || !(isXaeHost() || isDesktopApp())) return;
+    let alive = true;
+    const look = () =>
+      void fetchMachineScopeFiles(pouPath).then((s) => {
+        if (!alive || !s?.dir || !s.git) return;
+        const open = s.files.filter((f) => f.state === 'untracked');
+        const key = `kss.msFilesNotNow.${s.dir.toLowerCase()}`;
+        let notNow = false;
+        try {
+          notNow = localStorage.getItem(key) === '1';
+        } catch {
+          // (asked again)
+        }
+        if (!open.length || notNow || msFilesAskedRef.current.has(s.dir)) return;
+        msFilesAskedRef.current.add(s.dir);
+        const act = (action: 'add' | 'ignore') => void machineScopeFilesAct(pouPath, action).then((r) => showCopyToast(r ? r.message : 'Not possible here', r?.ok ? 'success' : 'error', 8000));
+        setPromptRequest({
+          title: 'Share MachineScope\'s files with the project?',
+          label: `MachineScope keeps these beside the PLC project, not yet in git: the builds it saw (an older build known as such) and the transitions each PLC took (the coverage). Committed, colleagues and every edition share them; ignored, they stay on this computer.`,
+          details: open.map((f) => `${f.name} (${s.dir})`),
+          confirmOnly: true,
+          submitLabel: 'Stage them (git add)',
+          altAction: { id: 'ms-files-ignore', label: 'Ignore them (.gitignore)', title: 'Their names added to the .gitignore beside them', run: () => act('ignore') },
+          cancelLabel: 'Not now',
+          onCancel: () => {
+            try {
+              localStorage.setItem(key, '1');
+            } catch {
+              // per-viewer convenience only
+            }
+          },
+          onSubmit: () => act('add'),
+        });
+      });
+    look();
+    // (the files appear once builds or coverage are seen: looked at again now and then)
+    const timer = window.setInterval(look, 120000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [pouPath, showCopyToast]);
   // The builds of this project copy seen (XAE keeps only the latest's compile info): the PLC's ID seen before is an
   // older build of this copy, with when it was built
   const liveStatusShown = useMemo(() => {
@@ -9185,31 +9266,7 @@ export const App: React.FC = () => {
                 : undefined
             }
             hostConflict={hostConflictActions}
-            versionGuard={
-              versionGuard
-                ? {
-                    ...versionGuard,
-                    onRevert: handleRevertConversion,
-                    ...(versionGuard.changed[0]?.head && (isXaeHost() || pouPath)
-                      ? (() => {
-                          const committed = versionGuard.changed[0].head!;
-                          const short = committed.replace(/^3\.1\./, '');
-                          const family = short.slice(0, 4);
-                          return {
-                            openXae: {
-                              label: `Open in XAE ${family}…`,
-                              title: `Open the project in TwinCAT ${family}'s XAE, the version it is committed in (${short}): saved there, it stays in that version. Its Remote Manager must have ${short}, else XAE converts it again`,
-                              onOpen: () =>
-                                void openXaeFor(pouPath, committed).then((r) =>
-                                  showCopyToast(r ? r.message : 'TwinCAT XAE cannot be started from here', r?.ok ? 'success' : 'error', 12000)
-                                ),
-                            },
-                          };
-                        })()
-                      : {}),
-                  }
-                : undefined
-            }
+            versionGuard={versionGuardProps}
             inherited={
               inheritance && inheritance.key === inheritKey
                 ? {
@@ -9670,6 +9727,7 @@ export const App: React.FC = () => {
               isPrintingPdf={isPrintingPdf}
               onOpenMermaidLive={handleOpenMermaidLive}
               hasOutput={Boolean(outputMarkdown)}
+              sourceNotes={headerSourceNotes}
             />
           )}
           {/* Theme & Preset: the whole app's theme and the diagram presets, together */}
@@ -11025,6 +11083,85 @@ export const App: React.FC = () => {
           onShowState={(s) => handleJumpToState(s)}
         />
       )}
+      {xaeChecksOpen && (
+        <XaeChecksDialog
+          about={pouFileName || 'no POU open'}
+          onClose={() => setXaeChecksOpen(false)}
+          onCopy={(text) => void navigator.clipboard?.writeText(text).then(() => showCopyToast('XAE check results copied', 'success'), () => showCopyToast('Could not copy the results', 'error'))}
+          checks={((): XaeCheck[] => {
+            const live = liveStatus.state === 'connected';
+            const notLive = { ok: null, detail: 'Go live first (the Live tab)' } as const;
+            return [
+              {
+                id: 'builds',
+                title: 'Builds listed, kept in MachineScope.builds.json',
+                how: 'The PLC project\'s _CompileInfo read by the extension; the builds kept beside the .plcproj.',
+                run: async () => {
+                  const b = await fetchProjectBuilds(pouPath);
+                  return b ? { ok: true, detail: `${b.length} build${b.length === 1 ? '' : 's'}${b[0] ? `, newest ${b[0].id.slice(0, 8)}… ${new Date(b[0].at).toLocaleString()}` : ''}` } : { ok: false, detail: 'No answer from the extension' };
+                },
+              },
+              {
+                id: 'coverage-file',
+                title: 'Coverage file read (MachineScope.coverage.json)',
+                how: 'The transitions each PLC took, beside the .plcproj: written a few seconds after going live and seeing a transition.',
+                run: async () => {
+                  const c = await fetchCoverageFile(pouPath);
+                  return c ? { ok: true, detail: `${Object.keys(c).length} POU type${Object.keys(c).length === 1 ? '' : 's'} in it${Object.keys(c).length ? `: ${Object.entries(c).map(([t, v]) => `${t} ${Object.keys(v).length}`).join(', ')}` : ' (none yet)'}` } : { ok: false, detail: 'No answer from the extension' };
+                },
+              },
+              {
+                id: 'git-files',
+                title: "MachineScope's files and git",
+                how: 'How git sees the two files (tracked, ignored, untracked); untracked ones are asked about once.',
+                run: async () => {
+                  const s = await fetchMachineScopeFiles(pouPath);
+                  return s ? { ok: true, detail: s.git ? s.files.map((f) => `${f.name}: ${f.state}`).join(', ') || 'none there yet' : 'not in a git working copy' } : { ok: false, detail: 'No answer from the extension' };
+                },
+              },
+              {
+                id: 'versions',
+                title: 'Project versions against git',
+                how: "The .tsproj / .plcproj / .TcPOU TwinCAT versions here and in git's HEAD.",
+                run: async () => {
+                  const v = await fetchProjectVersions(pouPath);
+                  return v ? { ok: true, detail: v.files.map((f) => `${f.kind} ${f.working ?? '?'}${f.head ? ` (git ${f.head})` : ''}`).join(', ') + (v.converted ? ': converted' : '') } : { ok: false, detail: 'No answer from the extension' };
+                },
+              },
+              {
+                id: 'license',
+                title: "The PLC's trial license",
+                how: 'While live: its end in a chip beside the build chip (read from the PLC by the extension).',
+                run: async () => (!live ? notLive : { ok: true, detail: licenseExpires ? `trial until ${new Date(licenseExpires).toLocaleString()}` : 'no trial file read (a full license, or none there)' }),
+              },
+              {
+                id: 'build-chip',
+                title: 'The build the PLC runs',
+                how: "While live: latest / older / not the latest build, against this copy's builds.",
+                run: async () => (!live ? notLive : liveStatusShown.state === 'connected' && liveStatusShown.compileInfo ? { ok: true, detail: `${liveStatusShown.compileInfo.state ?? '?'}: PLC ${liveStatusShown.compileInfo.plc.slice(0, 8)}…` } : { ok: false, detail: 'No compile ID read from the PLC' }),
+              },
+              {
+                id: 'compare-tabs',
+                title: 'Compare… on another PLC: two tabs see each other',
+                how: 'While live: Compare… → a PLC. The new tab goes live there; each Live tab lists the other (⇄, its state), its state outlined on the chart.',
+                run: async () => (!live ? notLive : livePeers.length ? { ok: true, detail: livePeers.map((x) => `${x.plc}: ${x.state ?? '?'}`).join(', ') } : { ok: null, detail: 'No other tab live on this POU: Compare… first' }),
+              },
+              {
+                id: 'open-xae',
+                title: 'Open in the XAE of the committed version',
+                how: "The version chip's menu (when the project was converted): the other XAE starts with the solution, or this one says it is the right one.",
+                ...(versionGuardProps?.openXae ? { action: { label: versionGuardProps.openXae.label, run: versionGuardProps.openXae.onOpen } } : {}),
+              },
+              {
+                id: 'activate',
+                title: "Activate the POU's project on the PLC",
+                how: "While live on a PLC running another project (amber Active chip): Activate asks (with the license), then TwinCAT there restarts in Run mode. Changes the PLC: only on a machine that may.",
+                ...(live && liveStatus.loadedProject && liveStatus.activeProject && liveStatus.activeProject.name !== liveStatus.loadedProject ? { action: { label: `Activate ${liveStatus.loadedProject}…`, run: handleActivateProject } } : {}),
+              },
+            ];
+          })()}
+        />
+      )}
       {projectCoverageData && (
         <ProjectCoverageDialog
           data={projectCoverageData}
@@ -11032,7 +11169,12 @@ export const App: React.FC = () => {
           onExportSummary={() => void downloadCsv(`${projectCoverageData.project}-coverage.csv`, projectCoverageCsv(projectCoverageData))}
           onExportTransitions={() => void downloadCsv(`${projectCoverageData.project}-coverage-transitions.csv`, projectTransitionsCsv(projectCoverageData))}
           onReport={() =>
-            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, coverageReportHtml(projectCoverageData)).then((r) =>
+            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, coverageReportHtml(
+                projectCoverageData,
+                new Date(),
+                // (live on other PLCs too: this one against each, in the report)
+                liveStatus.state === 'connected' ? livePeers.map((peer) => ({ a: { label: livePlcLabel, transitions: liveSession.transitions }, b: { label: peer.plc, transitions: peer.transitions } })) : []
+              )).then((r) =>
               r.error ? showCopyToast(`Could not save the report: ${r.error}`, 'error') : !r.canceled && showCopyToast(`Sign-off report saved${r.path ? `: ${r.path}` : ''}`, 'success', 8000)
             )
           }

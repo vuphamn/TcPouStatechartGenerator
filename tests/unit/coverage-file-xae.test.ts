@@ -63,6 +63,14 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const html = coverageReportHtml(p, new Date('2026-10-09T12:00:00Z'));
   expect(/<b>3 of 5<\/b> transitions taken \(60%\)/.test(html) && /RUN → ERROR/.test(html) && /Y → &lt;Z&gt;/.test(html) && /Commissioned by/.test(html) && /Signature/.test(html) && !/IDLE → RUN<\/div>/.test(html), 'the report: the whole, the never-taken (escaped), the lines to sign');
 
+  // (live on two PLCs: the comparison in the report too)
+  const tr = (t: number, from: string, to: string) => ({ t, from, to, dwellMs: 1500, inModel: true });
+  const withCmp = coverageReportHtml(p, new Date('2026-10-09T12:00:00Z'), [
+    { a: { label: 'CX-A', transitions: [tr(1, 'IDLE', 'RUN'), tr(2, 'RUN', 'IDLE'), tr(3, 'IDLE', 'RUN'), tr(4, 'RUN', 'DONE')] }, b: { label: 'CX-B', transitions: [tr(1, 'IDLE', 'RUN'), tr(2, 'RUN', 'IDLE'), tr(3, 'IDLE', 'RUN'), tr(4, 'RUN', 'ERROR')] } },
+  ]);
+  expect(/Compared live: CX-A and CX-B/.test(withCmp) && /First difference, after 3 transitions the same: in <span class="mono">RUN<\/span>/.test(withCmp) && /CX-A from there/.test(withCmp) && /RUN → DONE <span class="muted">1\.5 s/.test(withCmp) && /Only CX-B took/.test(withCmp) && /RUN → ERROR \(1×\)/.test(withCmp) && withCmp.indexOf('Compared live') < withCmp.indexOf('Commissioned by'), 'the report with a comparison: where they part, both paths, what only one took, before the lines to sign');
+  expect(!/Compared live/.test(html), 'without one: none');
+
   // ---- the project in the XAE of its committed version ----
   process.env.KSS_BUILD_DRYRUN = '1';
   process.env.KSS_RM_BUILDS = '4026.27,4026.3';

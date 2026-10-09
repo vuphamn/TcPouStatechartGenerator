@@ -68,6 +68,9 @@ export type HostMessage =
   | { type: 'coverageFileResult'; requestId: number; pous: Record<string, Record<string, { n: number; last: number }>> }
   /** This POU type's counts merged into it: the type's counts there now */
   | { type: 'coverageFileSaveResult'; requestId: number; counts?: Record<string, { n: number; last: number }>; error?: string }
+  /** MachineScope's files beside the project and how git sees them */
+  | { type: 'machineScopeFilesResult'; requestId: number; dir: string | null; git: boolean; files: { name: string; path: string; state: 'tracked' | 'ignored' | 'untracked' }[] }
+  | { type: 'machineScopeFilesActResult'; requestId: number; ok: boolean; message: string }
   /** The project opened in the XAE of its committed version (openXaeFor) */
   | { type: 'openXaeForResult'; requestId: number; ok: boolean; message: string }
   /** The PLC project's builds here (its _CompileInfo), newest first */
@@ -191,6 +194,8 @@ export type AppMessage =
   | { type: 'projectBuilds'; requestId: number }
   | { type: 'openXaeFor'; requestId: number; version: string }
   | { type: 'coverageFile'; requestId: number }
+  | { type: 'machineScopeFiles'; requestId: number }
+  | { type: 'machineScopeFilesAct'; requestId: number; action: 'add' | 'ignore' }
   | { type: 'coverageFileSave'; requestId: number; pouType: string; counts: Record<string, { n: number; last: number }> }
   | { type: 'plcLicense'; requestId: number }
   /** The project's .tsproj / .plcproj back to git's HEAD (asked first in the app) */

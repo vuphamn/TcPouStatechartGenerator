@@ -420,6 +420,12 @@ namespace KvalMachineScope.Xae
                     case "coverageFile":
                         HandleCoverageFile(msg);
                         break;
+                    case "machineScopeFiles":
+                        HandleMachineScopeFiles(msg);
+                        break;
+                    case "machineScopeFilesAct":
+                        HandleMachineScopeFilesAct(msg);
+                        break;
                     case "coverageFileSave":
                         HandleCoverageFileSave(msg);
                         break;
@@ -1896,6 +1902,87 @@ namespace KvalMachineScope.Xae
                 }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "coverageFileSaveResult", requestId, counts, error });
+            });
+        }
+
+        // The files MachineScope keeps beside the PLC project (as shared/projectVersions.cjs)
+        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json" };
+
+        /// <summary>Those files there and how git sees them: (dir, git, [(name, path, state: tracked | ignored | untracked)])</summary>
+        private static (string dir, bool git, List<(string name, string path, string state)> files) MachineScopeFileStates(string pouPath)
+        {
+            var files = new List<(string, string, string)>();
+            var dir = string.IsNullOrEmpty(pouPath) ? null : FolderWith(pouPath, ".plcproj");
+            if (dir == null) return (null, false, files);
+            var plc = Directory.EnumerateFiles(dir, "*.plcproj").FirstOrDefault() ?? Path.Combine(dir, "x");
+            var inGit = RunGit(plc, "rev-parse --is-inside-work-tree") != null;
+            foreach (var name in MachineScopeFiles)
+            {
+                var file = Path.Combine(dir, name);
+                if (!File.Exists(file)) continue;
+                var state = !inGit ? "untracked" : RunGit(file, $"ls-files --error-unmatch -- \"{name}\"") != null ? "tracked" : RunGit(file, $"check-ignore -q -- \"{name}\"") != null ? "ignored" : "untracked";
+                files.Add((name, file, state));
+            }
+            return (dir, inGit, files);
+        }
+
+        /// <summary>machineScopeFiles → machineScopeFilesResult { requestId, dir, git, files: [{ name, path, state }] }</summary>
+        private void HandleMachineScopeFiles(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var s = MachineScopeFileStates(pou);
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "machineScopeFilesResult", requestId, dir = s.dir, git = s.git, files = s.files.Select(f => new { name = f.name, path = f.path, state = f.state }).ToList() });
+            });
+        }
+
+        /// <summary>
+        /// machineScopeFilesAct { action: add | ignore }: the untracked ones staged (git add) or added to the .gitignore
+        /// beside them → machineScopeFilesActResult { requestId, ok, message }
+        /// </summary>
+        private void HandleMachineScopeFilesAct(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var action = msg.TryGetValue("action", out var a) ? a as string : null;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var s = MachineScopeFileStates(pou);
+                var open = s.files.Where(f => f.state == "untracked").ToList();
+                bool ok = false;
+                string message;
+                if (s.dir == null || !s.git || open.Count == 0) message = !s.git ? "The project is not in a git working copy" : "Nothing to do: the files are tracked or ignored already";
+                else if (action == "add")
+                {
+                    ok = RunGit(open[0].path, "add -- " + string.Join(" ", open.Select(f => $"\"{f.name}\""))) != null;
+                    message = ok ? $"Staged {string.Join(", ", open.Select(f => f.name))}: commit them with the project" : "git add failed";
+                }
+                else if (action == "ignore")
+                {
+                    var ignore = Path.Combine(s.dir, ".gitignore");
+                    try
+                    {
+                        var text = File.Exists(ignore) ? File.ReadAllText(ignore) : "";
+                        var have = new HashSet<string>(text.Split('\n').Select(l => l.Trim()));
+                        var add = open.Select(f => f.name).Where(n => !have.Contains(n)).ToList();
+                        var eol = text.Contains("\r\n") ? "\r\n" : "\n";
+                        var next = text + (text.Length > 0 && !text.EndsWith("\n") ? eol : "") + (add.Count > 0 ? "# Kval MachineScope (kept per computer)" + eol + string.Join(eol, add) + eol : "");
+                        File.WriteAllText(ignore, next);
+                        ok = true;
+                        message = $"Added to {ignore}: {string.Join(", ", open.Select(f => f.name))}";
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { message = $"Could not write {ignore}: {ex.Message}"; }
+                }
+                else message = "Unknown action " + action;
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "machineScopeFilesActResult", requestId, ok, message });
             });
         }
 

@@ -169,6 +169,8 @@ function createHost({ pouPath, post, ui }) {
     projectVersions: async ({ requestId }) => post({ type: 'projectVersionsResult', requestId, ...(await require('../shared/projectVersions.cjs').projectVersions(pou)) }),
     coverageFile: ({ requestId }) => post({ type: 'coverageFileResult', requestId, ...require('../shared/coverageFile.cjs').readCoverageFile(pou) }),
     coverageFileSave: ({ requestId, pouType, counts }) => post({ type: 'coverageFileSaveResult', requestId, ...require('../shared/coverageFile.cjs').mergeCoverageFile(pou, pouType, counts) }),
+    machineScopeFiles: async ({ requestId }) => post({ type: 'machineScopeFilesResult', requestId, ...(await require('../shared/projectVersions.cjs').machineScopeFiles(pou)) }),
+    machineScopeFilesAct: async ({ requestId, action }) => post({ type: 'machineScopeFilesActResult', requestId, ...(await require('../shared/projectVersions.cjs').machineScopeFilesAct(pou, action)) }),
     openXaeFor: async ({ requestId, version }) => post({ type: 'openXaeForResult', requestId, ...(await require('../shared/projectVersions.cjs').openXaeForProject(pou, version)) }),
     projectBuilds: async ({ requestId }) => post({ type: 'projectBuildsResult', requestId, builds: require('../shared/tcCompileInfo.cjs').recordProjectBuilds(pou) }),
     revertProjectFiles: async ({ requestId, paths }) => post({ type: 'revertProjectFilesResult', requestId, ...(await require('../shared/projectVersions.cjs').revertProjectFiles(pou, paths)) }),

@@ -60,6 +60,10 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       } else if (m.type === 'saveDocument') {
         saved.push(m);
         await toApp({ type: 'saveDocumentResult', path: `C:\\Users\\me\\Documents\\${m.name}` });
+      } else if (m.type === 'machineScopeFiles') {
+        await toApp({ type: 'machineScopeFilesResult', requestId: m.requestId, dir: 'C:\\proj', git: true, files: [{ name: 'MachineScope.coverage.json', path: 'C:\\proj\\MachineScope.coverage.json', state: 'tracked' }] });
+      } else if (m.type === 'projectVersions') {
+        await toApp({ type: 'projectVersionsResult', requestId: m.requestId, files: [{ kind: 'tsproj', path: 'C:\\proj\\Line202.tsproj', working: '3.1.4026.27', head: '3.1.4026.27' }], converted: false });
       } else if (m.type === 'coverageFile') {
         await toApp({ type: 'coverageFileResult', requestId: m.requestId, pous: opts.coverageFile ?? {} });
       } else if (m.type === 'coverageFileSave') {
@@ -160,6 +164,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return badge ? { state: badge.getAttribute('data-state-id'), text: badge.textContent, color: node?.style.getPropertyValue('--peer-color'), marked: !!node?.classList.contains('peer-current-node'), swatch: document.querySelector('.live-peer .live-peer-color')?.style.background } : null;
   });
   expect(onChart?.state === nameOf(3) && onChart.marked && /5\.9\.9\.9\.1\.1:851/.test(onChart.text ?? '') && !!onChart.color && !!onChart.swatch, `B's state on A's chart, in its colour (${JSON.stringify(onChart)})`);
+
   await a.page.click('#compare-save').catch(() => {});
   for (let t = 0; t < 4000 && !saved.length; t += 200) await sleep(200);
   const file = saved[0];
@@ -190,6 +195,32 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   }
   await a.page.keyboard.press('Escape');
   await a.page.evaluate(() => document.querySelector('#compare-dialog button[title="Close"]')?.click());
+  await sleep(300);
+
+  // The XAE checks (the command palette, in XAE): Check all reads what it can; the results copied
+  await a.page.bringToFront();
+  await a.page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied = t; } } }));
+  await a.page.keyboard.down('Control'); await a.page.keyboard.down('Shift'); await a.page.keyboard.press('KeyP'); await a.page.keyboard.up('Shift'); await a.page.keyboard.up('Control');
+  await a.page.waitForSelector('#command-palette', { timeout: 3000 }).catch(() => {});
+  await a.page.keyboard.type('XAE checks', { delay: 10 });
+  await sleep(200);
+  await a.page.keyboard.press('Enter');
+  await a.page.waitForSelector('#xae-checks-dialog', { timeout: 4000 }).catch(() => {});
+  await a.page.click('#xae-checks-run-all').catch(() => {});
+  let checks = [];
+  for (let t = 0; t < 15000; t += 300) {
+    await sleep(300);
+    checks = await a.page.$$eval('.xae-check', (r) => r.map((e) => ({ id: e.getAttribute('data-check'), result: e.getAttribute('data-result'), detail: e.querySelector('.xae-check-detail')?.textContent ?? '' })));
+    if (checks.filter((c) => c.result).length >= 7) break;
+  }
+  const res = Object.fromEntries(checks.map((c) => [c.id, c.result]));
+  expect(res.builds === 'pass' && res['coverage-file'] === 'pass' && res['git-files'] === 'pass' && res.versions === 'pass' && res.license === 'pass' && res['compare-tabs'] === 'pass' && res['build-chip'] === 'fail' && !res['open-xae'] && !res.activate, `the XAE checks: read by themselves, the PLC without a compile ID failed, the manual ones left (${JSON.stringify(res)})`);
+  await a.page.click('.xae-check[data-check="activate"] .xae-check-pass').catch(() => {});
+  await a.page.click('#xae-checks-copy').catch(() => {});
+  await sleep(300);
+  const copied = await a.page.evaluate(() => window.__copied ?? '');
+  expect(/^Kval MachineScope: XAE checks \(SM_TableManager\.TcPOU\)/.test(copied) && /\[PASS\] Activate the POU's project/.test(copied) && /\[FAIL\] The build the PLC runs: No compile ID/.test(copied) && /\[NOT RUN\] Open in the XAE/.test(copied), `the results copied (${copied.split('\n').length} lines)`);
+  await a.page.keyboard.press('Escape');
   await sleep(300);
 
   // B closed: gone from A's list

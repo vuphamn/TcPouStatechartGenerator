@@ -121,4 +121,63 @@ async function openXaeForProject(pouPath, version) {
   return { ...r, message: `${r.message}.${rmNote}`, file, build, remoteManager };
 }
 
-module.exports = { projectVersions, revertProjectFiles, openXaeForProject };
+// The files MachineScope keeps beside the PLC project (the builds seen, the coverage): to commit with it, or to ignore
+const MACHINESCOPE_FILES = ['MachineScope.builds.json', 'MachineScope.coverage.json'];
+
+/**
+ * Those files and how git sees them: { dir, files: [{ name, path, state: 'tracked' | 'ignored' | 'untracked' }],
+ * git } (only the ones there; git: false when the project is not in a git working copy)
+ */
+async function machineScopeFiles(pouPath) {
+  const plc = typeof pouPath === 'string' && path.isAbsolute(pouPath) ? nearest(pouPath, '.plcproj') : null;
+  if (!plc) return { dir: null, files: [], git: false };
+  const dir = path.dirname(plc);
+  const inGit = (await git(plc, ['rev-parse', '--is-inside-work-tree'])).code === 0;
+  const files = [];
+  for (const name of MACHINESCOPE_FILES) {
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) continue;
+    let state = 'untracked';
+    if (!inGit) state = 'untracked';
+    else if ((await git(file, ['ls-files', '--error-unmatch', '--', name])).code === 0) state = 'tracked';
+    else if ((await git(file, ['check-ignore', '-q', '--', name])).code === 0) state = 'ignored';
+    files.push({ name, path: file, state });
+  }
+  return { dir, files, git: inGit };
+}
+
+/**
+ * The untracked ones staged (action 'add': git add, to commit with the project) or ignored ('ignore': their names
+ * added to the .gitignore beside them). → { ok, message }
+ */
+async function machineScopeFilesAct(pouPath, action) {
+  const { dir, files, git: inGit } = await machineScopeFiles(pouPath);
+  const open = files.filter((f) => f.state === 'untracked');
+  if (!dir || !inGit || !open.length) return { ok: false, message: !inGit ? 'The project is not in a git working copy' : 'Nothing to do: the files are tracked or ignored already' };
+  if (action === 'add') {
+    const r = await git(open[0].path, ['add', '--', ...open.map((f) => f.name)]);
+    return r.code === 0 ? { ok: true, message: `Staged ${open.map((f) => f.name).join(', ')}: commit them with the project` } : { ok: false, message: 'git add failed' };
+  }
+  if (action === 'ignore') {
+    const ignore = path.join(dir, '.gitignore');
+    let text = '';
+    try {
+      text = fs.readFileSync(ignore, 'utf8');
+    } catch {
+      // (none yet)
+    }
+    const have = new Set(text.split(/\r?\n/).map((l) => l.trim()));
+    const add = open.map((f) => f.name).filter((n) => !have.has(n));
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const next = `${text}${text && !/\r?\n$/.test(text) ? eol : ''}${add.length ? `# Kval MachineScope (kept per computer)${eol}${add.join(eol)}${eol}` : ''}`;
+    try {
+      fs.writeFileSync(ignore, next);
+    } catch (err) {
+      return { ok: false, message: `Could not write ${ignore}: ${err.message}` };
+    }
+    return { ok: true, message: `Added to ${ignore}: ${open.map((f) => f.name).join(', ')}` };
+  }
+  return { ok: false, message: `Unknown action ${action}` };
+}
+
+module.exports = { projectVersions, revertProjectFiles, openXaeForProject, machineScopeFiles, machineScopeFilesAct, MACHINESCOPE_FILES };

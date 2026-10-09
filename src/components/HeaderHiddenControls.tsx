@@ -42,6 +42,8 @@ export interface HeaderHiddenControlsProps {
   isPrintingPdf: boolean;
   onOpenMermaidLive: () => void;
   hasOutput: boolean;
+  /** The Function Block entry's chips (extends, the converted version …), listed with it when it is hidden here */
+  sourceNotes?: { id: string; label: string; title?: string; warn?: boolean; onSelect?: () => void }[];
 }
 
 export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
@@ -64,6 +66,7 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
   isPrintingPdf,
   onOpenMermaidLive,
   hasOutput,
+  sourceNotes = [],
 }) => {
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const closedAtRef = useRef<number>(0);
@@ -79,9 +82,13 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
       onFindDut
         ? { id: 'header-find-dut', label: 'Find .TcDUT...', icon: <FolderSearch className="w-3.5 h-3.5" />, onSelect: onFindDut }
         : { id: 'header-dut-info', label: `Enum: ${dutFileName || '-'}`, icon: <ListTree className="w-3.5 h-3.5" />, disabled: true },
+      ...sourceNotes.map((n) => ({ id: `header-note-${n.id}`, label: n.label, title: n.title, disabled: !n.onSelect, onSelect: n.onSelect }) as DockMenuItem),
       { id: 'sep-source', separator: true }
     );
   }
+  // (the Function Block entry hidden here: said on the button, so its chips are not missed)
+  const sourceHidden = has('source');
+  const sourceWarn = sourceHidden && sourceNotes.some((n) => n.warn);
   if (has('generate')) {
     actions.push({ id: 'header-generate', label: 'Generate', title: 'Draw the chart again from the code', icon: <Play className="w-3.5 h-3.5" />, onSelect: onGenerate });
   }
@@ -142,12 +149,17 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
             ? 'bg-amber-500/25 text-amber-300 border border-amber-500/70 shadow-sm ring-1 ring-amber-500/40'
             : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border border-amber-500/40 shadow-xs'
         }`}
-        title={`${hiddenCount} header action${hiddenCount === 1 ? '' : 's'} that do not fit in the header`}
+        title={`${hiddenCount} header action${hiddenCount === 1 ? '' : 's'} that do not fit in the header${sourceHidden ? `, the Function Block entry among them (${[pouFileName, ...sourceNotes.map((n) => n.label)].filter(Boolean).join(', ')}): widen the window or open this menu` : ''}`}
         aria-label="Hidden header actions menu"
         aria-expanded={Boolean(anchor)}
       >
         <MoreHorizontal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
         {!compact && <span>Hidden</span>}
+        {sourceHidden && (
+          <span id="header-hidden-source-hint" data-warn={sourceWarn ? 'true' : 'false'} className={`px-1 rounded text-[10px] font-bold leading-tight ${sourceWarn ? 'bg-rose-500 text-white' : 'bg-sky-500/80 text-slate-950'}`}>
+            {sourceWarn ? '⚠ POU' : 'POU'}
+          </span>
+        )}
         <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-slate-950 font-mono font-bold text-[10px] leading-tight">
           {hiddenCount}
         </span>
