@@ -2,8 +2,12 @@
 // 5.1.2.3.1.1 and 5.9.9.9.1.1. Each Live tab shows the other PLC with its current state (the same state as here: green)
 // and Differences… compares the two sessions (Compare PLCs: time per state, the transitions only one took), kept
 // current as the other PLC moves on; the other tab closed: gone from the list. Coverage on the chart: the transitions
-// never taken dashed and dimmed while the Coverage strip's "On the chart" is on
+// never taken dashed and dimmed while the Coverage strip's "On the chart" is on. The PLC's trial license end in a chip;
+// a build of this copy listed by XAE before (projectBuilds) and run by the PLC later: an older build, with when; the
+// comparison saved (both sides in one file) and opened again; coverage per commissioning session (each reset)
 const h = require('../lib/harness.cjs');
+const fs = require('fs');
+const path = require('path');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -14,7 +18,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const I = 'MAIN.mainStateMachine';
 
   // An XAE stand-in live on that PLC: its state values sent on liveStart
-  const open = async (target, values) => {
+  const saved = [];
+  const open = async (target, values, opts = {}) => {
     const page = await browser.newPage();
     page.on('pageerror', (e) => errors.push(`${target}: ${e.message}`));
     const toApp = (m) => page.evaluate((m) => window.__fromHost(m), m).catch(() => {});
@@ -29,7 +34,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       if (m.type === 'ready') {
         await toApp({ type: 'loadPou', source: { name: 'SM_TableManager.TcPOU', path: 'C:\\proj\\SM_TableManager.TcPOU', content: sample.pou, dutCandidates: [{ name: 'E_TableManager_States.TcDUT', relativePath: 'E_TableManager_States.TcDUT', path: 'C:\\proj\\E_TableManager_States.TcDUT', content: sample.dut }] } });
       } else if (m.type === 'liveStart') {
-        await toApp({ type: 'liveStatus', state: 'connected', message: `${I}.machineState on ${target}:851 (PLC Run)`, target: `${target}:851`, plcState: 'Run', instance: I, instances: [I], instanceType: 'SM_TableManager' });
+        await toApp({ type: 'liveStatus', state: 'connected', message: `${I}.machineState on ${target}:851 (PLC Run)`, target: `${target}:851`, plcState: 'Run', instance: I, instances: [I], instanceType: 'SM_TableManager', ...(opts.compileInfo ? { compileInfo: opts.compileInfo } : {}) });
         const t0 = Date.now() - values.length * 1000;
         await toApp({ type: 'liveValues', events: values.map((value, k) => ({ t: t0 + k * 1000, value })) });
       } else if (m.type === 'liveStop') {
@@ -38,6 +43,13 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
         await toApp({ type: 'liveWatchResult', vars: [] });
       } else if (m.type === 'projectPous') {
         await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
+      } else if (m.type === 'projectBuilds') {
+        await toApp({ type: 'projectBuildsResult', requestId: m.requestId, builds: opts.builds ?? [] });
+      } else if (m.type === 'plcLicense') {
+        await toApp({ type: 'plcLicenseResult', requestId: m.requestId, trial: opts.trial ?? null });
+      } else if (m.type === 'saveDocument') {
+        saved.push(m);
+        await toApp({ type: 'saveDocumentResult', path: `C:\\Users\\me\\Documents\\${m.name}` });
       }
     });
     await page.evaluateOnNewDocument(() => {
@@ -56,12 +68,22 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return { page, toApp, sample };
   };
 
-  const a = await open('5.1.2.3.1.1', [1, 2]);
+  // (A: its PLC's trial license runs out in 30 h)
+  const a = await open('5.1.2.3.1.1', [1, 2], { trial: { expires: new Date(Date.now() + 30 * 3600000).toISOString() } });
   await a.page.evaluate(() => localStorage.clear());
   const names = a.sample.values;
   const nameOf = (v) => names.find((x) => x.v === v)?.n;
   // (B: a longer session, ending in the state A is in)
-  const b = await open('5.9.9.9.1.1', [1, 3, 1, 2]);
+  // (B: XAE listed build B1 when the POU opened; the PLC runs it while the copy's latest is B2 by now)
+  const B1 = 'B1B1B1B1-0000-0000-0000-000000000001';
+  const b = await open('5.9.9.9.1.1', [1, 3, 1, 2], {
+    builds: [{ id: B1, at: '2026-10-08T20:42:44.000Z' }],
+    compileInfo: { plc: B1, newest: { id: 'B2B2B2B2-0000-0000-0000-000000000002', at: '2026-10-09T00:05:02.000Z' }, state: 'other', builtAt: null },
+  });
+  const buildB = await b.page.evaluate(() => { const e = document.getElementById('live-build-state'); return e ? { state: e.getAttribute('data-state'), text: e.textContent.trim(), title: e.getAttribute('title') } : null; });
+  expect(buildB?.state === 'older' && /older build/.test(buildB.text) && /seen here before/.test(buildB.title ?? ''), `a build listed before, run now: an older build (${JSON.stringify(buildB)})`);
+  const lic = await a.page.evaluate(() => { const e = document.getElementById('live-license'); return e ? { level: e.getAttribute('data-level'), text: e.textContent.trim() } : null; });
+  expect(lic?.level === 'soon' && /^trial until .*\(1 d [0-9]+ h\)$/.test(lic.text), `the trial license's end: a chip, soon (${JSON.stringify(lic)})`);
 
   // A's Live tab: B's PLC and its state (the same as A's: green)
   const peerOf = (page, plc) => page.evaluate((plc) => {
@@ -110,6 +132,29 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return badge ? { state: badge.getAttribute('data-state-id'), text: badge.textContent, color: node?.style.getPropertyValue('--peer-color'), marked: !!node?.classList.contains('peer-current-node'), swatch: document.querySelector('.live-peer .live-peer-color')?.style.background } : null;
   });
   expect(onChart?.state === nameOf(3) && onChart.marked && /5\.9\.9\.9\.1\.1:851/.test(onChart.text ?? '') && !!onChart.color && !!onChart.swatch, `B's state on A's chart, in its colour (${JSON.stringify(onChart)})`);
+  await a.page.click('#compare-save').catch(() => {});
+  for (let t = 0; t < 4000 && !saved.length; t += 200) await sleep(200);
+  const file = saved[0];
+  const savedName = await a.page.evaluate(() => document.getElementById('compare-saved')?.textContent ?? '');
+  const content = file ? JSON.parse(file.content) : null;
+  expect(/^SM_TableManager_5\.1\.2\.3\.1\.1_851_vs_5\.9\.9\.9\.1\.1_851\.comparison\.json$/.test(file?.name ?? '') && content?.kind === 'kss-live-comparison' && content.a.transitions.length === 1 && content.b.transitions.length === 4 && /comparison\.json$/.test(savedName), `Save comparison: both sides in one file (${file?.name}, ${savedName})`);
+  await a.page.evaluate(() => document.querySelector('#compare-dialog button[title="Close"]')?.click());
+  await sleep(300);
+  if (content) {
+    // (opened again: the recordings' Compare…, Open a saved comparison: both sides from the file)
+    const tmp = path.join(h.OUT, 'saved.comparison.json');
+    fs.writeFileSync(tmp, file.content);
+    await a.page.evaluate(() => document.getElementById('live-compare')?.click());
+    await a.page.waitForSelector('#compare-open-file', { timeout: 4000 }).catch(() => {});
+    const input = await a.page.$('#compare-open-file');
+    if (input) await input.uploadFile(tmp);
+    let reopened = null;
+    for (let t = 0; t < 4000 && !/5\.9\.9\.9/.test(reopened?.b ?? ''); t += 200) {
+      await sleep(200);
+      reopened = await a.page.evaluate(() => ({ a: document.getElementById('compare-a')?.textContent ?? '', b: document.getElementById('compare-b')?.textContent ?? '', rows: document.querySelectorAll('#compare-table tbody tr').length }));
+    }
+    expect(/^5\.1\.2\.3\.1\.1:851 \(1 transitions\)/.test(reopened?.a ?? '') && /^5\.9\.9\.9\.1\.1:851 \(4 transitions\)/.test(reopened?.b ?? '') && reopened.rows > 0, `the saved comparison opened again: both sides (${JSON.stringify(reopened)})`);
+  }
   await a.page.keyboard.press('Escape');
   await a.page.evaluate(() => document.querySelector('#compare-dialog button[title="Close"]')?.click());
   await sleep(300);
@@ -156,6 +201,11 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await sleep(400);
   const all = await covNow();
   expect(all?.taken >= cov.taken && !all.since, `All time: every one taken again (${JSON.stringify(all)})`);
+  // The commissioning sessions: before the reset, and since it (the transition taken after it)
+  await a.page.click('#live-coverage-sessions-toggle').catch(() => {});
+  await sleep(300);
+  const sess = await a.page.$$eval('.live-coverage-session', (r) => r.map((e) => ({ text: e.textContent.replace(/\s+/g, ' ').trim(), taken: Number(e.getAttribute('data-taken')) })));
+  expect(sess.length === 2 && /– now/.test(sess[0].text) && sess[0].taken >= 1 && /before the first reset/.test(sess[1].text) && sess[1].taken === cov.taken, `two sessions, newest first (${JSON.stringify(sess)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

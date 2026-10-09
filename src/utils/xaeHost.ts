@@ -64,6 +64,10 @@ export type HostMessage =
   | { type: 'activateResult'; requestId: number; ok: boolean; message: string }
   // The loaded POU's project files' TwinCAT version here and in git
   | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
+  /** The PLC project's builds here (its _CompileInfo), newest first */
+  | { type: 'projectBuildsResult'; requestId: number; builds: { id: string; at: string }[] }
+  /** The connected PLC's trial license (null: none, a full license) */
+  | { type: 'plcLicenseResult'; requestId: number; trial: { expires: string | null; issued?: string | null } | null; error?: string }
   /** The project files restored from git (revertProjectFiles) */
   | { type: 'revertProjectFilesResult'; requestId: number; reverted: string[]; errors: { path: string; error: string }[] }
   /** A rename's other files: the project's POUs whose code has the name */
@@ -178,6 +182,8 @@ export type AppMessage =
   | { type: 'findPou'; requestId: number; typeName: string }
   | { type: 'activateProject'; requestId: number }
   | { type: 'projectVersions'; requestId: number }
+  | { type: 'projectBuilds'; requestId: number }
+  | { type: 'plcLicense'; requestId: number }
   /** The project's .tsproj / .plcproj back to git's HEAD (asked first in the app) */
   | { type: 'revertProjectFiles'; requestId: number; paths: string[] }
   /** The PLC project's types (answered with projectSymbols) */

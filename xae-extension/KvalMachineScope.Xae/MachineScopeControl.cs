@@ -411,6 +411,12 @@ namespace KvalMachineScope.Xae
                     case "revertProjectFiles":
                         HandleRevertProjectFiles(msg);
                         break;
+                    case "projectBuilds":
+                        HandleProjectBuilds(msg);
+                        break;
+                    case "plcLicense":
+                        HandlePlcLicense(msg);
+                        break;
                     case "projectSymbols":
                         HandleProjectSymbols();
                         break;
@@ -1448,6 +1454,63 @@ namespace KvalMachineScope.Xae
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { }
             return list.OrderByDescending(b => b.Value).ToList();
+        }
+
+        /// <summary>
+        /// The builds of the loaded POU's PLC project here (its _CompileInfo), newest first: projectBuildsResult
+        /// { requestId, builds: [{ id, at }] }. The app asks when the POU opens, when it gets the focus back and every
+        /// minute, and remembers each one (XAE keeps only the latest build's compile info: an older build is known so)
+        /// </summary>
+        private void HandleProjectBuilds(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var builds = ProjectBuilds(pou).Select(b => new { id = b.Key, at = b.Value.ToString("o") }).ToList();
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "projectBuildsResult", requestId, builds });
+            });
+        }
+
+        /// <summary>
+        /// The connected PLC's TwinCAT trial license (read only, through its system service: 4026 keeps it beside the
+        /// boot folder, 4024 under Target): plcLicenseResult { requestId, trial: { expires, issued } (ISO, UTC) or null }.
+        /// A full license has no trial file: null
+        /// </summary>
+        private void HandlePlcLicense(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var monitor = _live;
+            if (monitor == null)
+            {
+                Post(new { type = "plcLicenseResult", requestId, trial = (object)null, error = "Not connected" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                object trial = null;
+                foreach (var f in new[] { "../License/TrialLicense.tclrs", "../Target/License/TrialLicense.tclrs" })
+                {
+                    byte[] bytes;
+                    try { bytes = monitor.ReadBootFile(f); } catch (Exception ex) when (ex is InvalidOperationException || ex is ObjectDisposedException) { bytes = null; }
+                    if (bytes == null) continue;
+                    var xml = System.Text.Encoding.UTF8.GetString(bytes);
+                    var expire = System.Text.RegularExpressions.Regex.Match(xml, "<ExpireTime>([^<]+)</ExpireTime>");
+                    if (!expire.Success) continue;
+                    // (UTC in the file, without a zone)
+                    string Utc(string t) => DateTime.TryParse(t, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var d) ? d.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") : null;
+                    var issue = System.Text.RegularExpressions.Regex.Match(xml, "<IssueTime>([^<]+)</IssueTime>");
+                    trial = new { expires = Utc(expire.Groups[1].Value), issued = issue.Success ? Utc(issue.Groups[1].Value) : null };
+                    break;
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "plcLicenseResult", requestId, trial });
+            });
         }
 
         /// <summary>The PLC's build against the project's: newest, older (of this copy) or other (not built here)</summary>

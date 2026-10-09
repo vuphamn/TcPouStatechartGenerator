@@ -314,6 +314,7 @@ ipcMain.handle('tc:layout-write', (_event, pouPath, text) => {
 
 // The loaded POU's project files' TwinCAT version here and in git (XAE of another build converts them when it saves)
 ipcMain.handle('tc:project-versions', (_event, pouPath) => require('../shared/projectVersions.cjs').projectVersions(pouPath));
+ipcMain.handle('tc:project-builds', (_event, pouPath) => require('../shared/tcCompileInfo.cjs').projectBuilds(pouPath));
 ipcMain.handle('tc:revert-project-files', (_event, pouPath, paths) => require('../shared/projectVersions.cjs').revertProjectFiles(pouPath, paths));
 
 ipcMain.handle('tc:git-show', async (_event, filePath) => {

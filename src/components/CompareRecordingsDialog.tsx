@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { GitCompare, X } from 'lucide-react';
 import { parseRecording } from '../utils/liveRecording.ts';
+import { comparisonFileName, comparisonText, parseComparison } from '../utils/liveComparison.ts';
 import { EMPTY_LIVE_SESSION, applyLiveSamples, formatDuration, type LiveTransition } from '../utils/liveView.ts';
 import { stateTimes } from '../utils/stateTimes.ts';
 import type { EdgeInfo } from '../types.ts';
@@ -24,9 +25,11 @@ interface Props {
   other?: Side | null;
   names: Map<number, string>;
   edges: EdgeInfo[];
+  /** The POU (the saved comparison's name and contents) */
+  pouName?: string;
 }
 
-export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges }) => {
+export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, other, names, edges, pouName }) => {
   // (a file chosen, else this session / the other PLC as they go)
   const [aFile, setA] = useState<Side | null>(null);
   const [bFile, setB] = useState<Side | null>(null);
@@ -34,8 +37,19 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
   const b = bFile ?? other ?? null;
   const [error, setError] = useState('');
 
+  const [saved, setSaved] = useState('');
   const load = async (file: File, set: (s: Side) => void) => {
-    const rec = parseRecording(await file.text());
+    const text = await file.text();
+    // (a saved comparison: both sides)
+    const cmp = parseComparison(text);
+    if (cmp && 'error' in cmp) return setError(`${file.name}: ${cmp.error}`);
+    if (cmp) {
+      setError('');
+      setA(cmp.a);
+      setB(cmp.b);
+      return;
+    }
+    const rec = parseRecording(text);
     if ('error' in rec) return setError(`${file.name}: ${rec.error}`);
     setError('');
     set({ label: file.name, transitions: applyLiveSamples(EMPTY_LIVE_SESSION, rec.values, names, edges).transitions });
@@ -112,6 +126,27 @@ export const CompareRecordingsDialog: React.FC<Props> = ({ onClose, current, oth
               )}
               {picker('compare-file-b', setB)}
             </div>
+          </div>
+          <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <span>Open a saved comparison</span>
+            {picker('compare-open-file', () => {})}
+            {a && b && (
+              <button
+                id="compare-save"
+                className="ml-auto px-2 py-0.5 rounded border border-slate-700 text-slate-200 hover:bg-slate-800"
+                title="Both sides in one file (their transitions as compared now), to open again here or share"
+                onClick={() => {
+                  const name = comparisonFileName(a, b, pouName);
+                  void import('../utils/projectFiles.ts').then(({ saveDocument }) => saveDocument(name, comparisonText(a, b, pouName))).then((r) => {
+                    if (r?.error) setError(r.error);
+                    else if (!r?.canceled) setSaved(r?.path ?? name);
+                  });
+                }}
+              >
+                Save comparison…
+              </button>
+            )}
+            {saved && <span id="compare-saved" className="text-emerald-300 truncate">{saved}</span>}
           </div>
           {error && <div className="text-rose-300">{error}</div>}
           {a && b && (

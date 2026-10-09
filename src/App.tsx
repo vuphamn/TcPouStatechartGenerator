@@ -275,7 +275,8 @@ import { GatewayRecordingsDialog } from './components/GatewayRecordingsDialog.ts
 import { BeforeAfterDialog } from './components/BeforeAfterDialog.tsx';
 import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.tsx';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
-import { buildCopyOf, loadBuilds, rememberBuild, withSeenBuilds } from './utils/buildHistory.ts';
+import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
+import { trialLicenseState } from './utils/plcLicense.ts';
 import { stateTimeLevels, stateTimes } from './utils/stateTimes.ts';
 import { loadPathChecks, pathCheckFindings, pathCheckFrom, runPathChecks, savePathChecks, type PathCheck } from './utils/pathChecks.ts';
 import { downloadCsv, toCsv } from './utils/csv.ts';
@@ -325,9 +326,9 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchProjectVersions, findProjectPou, resolveInheritance, revertProjectFiles } from './utils/projectFiles.ts';
+import { fetchProjectBuilds, fetchProjectVersions, findProjectPou, resolveInheritance, revertProjectFiles } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
-import { coverageCsv, coverageStartNow, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
+import { addCoverageReset, coverageCsv, coverageSessions, coverageStartNow, loadCoverageResets, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
 import { generatePouComplexityReport } from './utils/pouComplexityReport.ts';
 import { extractEdgesFromMermaid } from './utils/diagramNotes.ts';
@@ -4586,22 +4587,45 @@ export const App: React.FC = () => {
   // The connected PLC's TwinCAT trial license: read once per connection; the Live tab says so when it ran out or
   // runs out soon (the next application start would fail)
   const [licenseNotice, setLicenseNotice] = useState<{ state: 'expired' | 'soon'; text: string } | null>(null);
+  // (its end, when it has a trial license: a chip in the Live tab)
+  const [licenseExpires, setLicenseExpires] = useState<string | null>(null);
   // (Renew's Check again: read once more)
   const [licenseCheck, setLicenseCheck] = useState(0);
   useEffect(() => {
     setLicenseNotice(null);
-    if (liveStatus.state !== 'connected' || isXaeHost()) return;
+    setLicenseExpires(null);
+    if (liveStatus.state !== 'connected') return;
     let alive = true;
+    type Answer = { trial?: { expires: string | null } | null; state?: { state: 'expired' | 'soon' | 'ok'; text: string } | null };
     const desktop = desktopLive();
-    const ask: Promise<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }> = desktop?.license
-      ? desktop.license({ requestId: Date.now() % 1e9 })
-      : gatewayRef.current
-        ? gatewayRef.current.request<{ state: { state: 'expired' | 'soon' | 'ok'; text: string } | null }>({ type: 'plcLicense' }, 'plcLicenseResult', 20000)
-        : Promise.resolve({ state: null });
+    const ask: Promise<Answer> = isXaeHost()
+      ? new Promise((resolve) => {
+          const requestId = Date.now() % 1e9;
+          const timer = window.setTimeout(() => {
+            off();
+            resolve({});
+          }, 20000);
+          const off = onHostMessage((m) => {
+            if (m.type !== 'plcLicenseResult' || m.requestId !== requestId) return;
+            window.clearTimeout(timer);
+            off();
+            resolve({ trial: m.trial });
+          });
+          postToHost({ type: 'plcLicense', requestId });
+        })
+      : desktop?.license
+        ? desktop.license({ requestId: Date.now() % 1e9 })
+        : gatewayRef.current
+          ? gatewayRef.current.request<Answer>({ type: 'plcLicense' }, 'plcLicenseResult', 20000)
+          : Promise.resolve({});
     void ask
-      .catch(() => ({ state: null }))
+      .catch((): Answer => ({}))
       .then((r) => {
-        if (alive && r.state && r.state.state !== 'ok') setLicenseNotice({ state: r.state.state, text: r.state.text });
+        if (!alive) return;
+        const expires = r.trial?.expires ?? null;
+        const state = r.state ?? (expires ? trialLicenseState(expires) : null);
+        if (expires) setLicenseExpires(expires);
+        if (state && state.state !== 'ok') setLicenseNotice({ state: state.state, text: state.text });
       });
     return () => {
       alive = false;
@@ -6401,6 +6425,13 @@ export const App: React.FC = () => {
     const list = [...edgeMembersAll.values()].flat();
     return list.length ? transitionCoverage(list, seen, coverageStart) : null;
   }, [edgeMembersAll, seen, coverageStart]);
+  // The commissioning sessions (each reset kept): their coverage, newest first
+  const [coverageResets, setCoverageResets] = useState<CoverageStart[]>([]);
+  useEffect(() => setCoverageResets(loadCoverageResets(pouTypeName)), [pouTypeName]);
+  const liveCoverageSessions = useMemo(() => {
+    const list = [...edgeMembersAll.values()].flat();
+    return list.length ? coverageSessions(list, seen, coverageResets) : [];
+  }, [edgeMembersAll, seen, coverageResets]);
   const handleResetCoverage = useCallback(() => {
     if (!pouTypeName) return;
     setPromptRequest({
@@ -6413,6 +6444,7 @@ export const App: React.FC = () => {
         const start = coverageStartNow(seen);
         saveCoverageStart(pouTypeName, start);
         setCoverageStart(start);
+        setCoverageResets(addCoverageReset(pouTypeName, start));
         showCopyToast(`Coverage counted from now (${new Date(start.at).toLocaleString()})`, 'success');
       },
     });
@@ -6440,15 +6472,39 @@ export const App: React.FC = () => {
     };
   }, [liveStatus, pouTypeName, livePlcLabel, liveSession, liveSettings.instance]);
   const livePeers = useLivePeers(liveShare);
-  // The builds of this project copy seen when live (XAE keeps only the latest's compile info): the PLC's ID seen
-  // before is an older build of this copy, with when it was built
+  // The builds of this project copy, asked of the host when the POU opens, when the app gets the focus back and every
+  // minute (a build in XAE, or MachineScope's Build…): each one remembered, so the PLC running it later is an older build
+  const [buildsSeenSeq, setBuildsSeenSeq] = useState(0);
+  useEffect(() => {
+    if (!pouPath) return;
+    let alive = true;
+    const copy = buildCopyOf(pouPath);
+    const look = () =>
+      void fetchProjectBuilds(pouPath).then((b) => {
+        if (!alive || !b?.length) return;
+        const before = loadBuilds(copy).length;
+        if (rememberBuilds(copy, b).length !== before) setBuildsSeenSeq((n) => n + 1);
+      });
+    look();
+    const timer = window.setInterval(look, 60000);
+    window.addEventListener('focus', look);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', look);
+    };
+  }, [pouPath]);
+  // The builds of this project copy seen (XAE keeps only the latest's compile info): the PLC's ID seen before is an
+  // older build of this copy, with when it was built
   const liveStatusShown = useMemo(() => {
     if (liveStatus.state !== 'connected' || !liveStatus.compileInfo || !pouPath) return liveStatus;
     const copy = buildCopyOf(pouPath);
     const c = liveStatus.compileInfo;
     const seenBuilds = c.newest ? rememberBuild(copy, { id: c.newest.id, at: c.newest.at }) : loadBuilds(copy);
     return { ...liveStatus, compileInfo: withSeenBuilds(c, seenBuilds) };
-  }, [liveStatus, pouPath]);
+    // (buildsSeenSeq: a build seen meanwhile)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus, pouPath, buildsSeenSeq]);
   const peerHighlight = useMemo(
     () => (livePeers.length ? livePeers.flatMap((p, k) => (p.state ? [{ stateId: p.state, label: p.plc, color: peerColor(k) }] : [])) : null),
     [livePeers]
@@ -10298,6 +10354,13 @@ export const App: React.FC = () => {
             coverageOnChart={coverageOnChart}
             onCoverageOnChart={setCoverageOnChart}
             onResetCoverage={handleResetCoverage}
+            coverageSessions={liveCoverageSessions}
+            onExportCoverageSession={(k) => {
+              const s = liveCoverageSessions[k];
+              if (!s) return;
+              const day = (ms: number | null) => (ms ? new Date(ms).toISOString().slice(0, 10) : 'start');
+              void downloadCsv(`${pouTypeName ?? 'statechart'}-coverage-${day(s.from)}-to-${s.to ? day(s.to) : 'now'}.csv`, coverageCsv(s.coverage));
+            }}
             onCoverageAllTime={handleCoverageAllTime}
             peers={livePeers}
             onPeerDiff={setPeerDiffId}
@@ -10377,6 +10440,7 @@ export const App: React.FC = () => {
             onCheckPlc={handleCheckPlc}
             linkNotice={viaLink ? linkNotice : null}
             licenseNotice={licenseNotice}
+            licenseExpires={licenseExpires}
             onRecheckLicense={() => setLicenseCheck((n) => n + 1)}
             onOpenXae={handleOpenXae}
             onStartPlc={handleStartPlc}
@@ -10850,6 +10914,7 @@ export const App: React.FC = () => {
           current={liveSession.transitions.length ? { label: replay ? replay.file : 'this session', transitions: liveSession.transitions } : null}
           names={liveEnumNames}
           edges={availableEdges}
+          pouName={pouTypeName}
         />
       )}
       {peerDiff && (
@@ -10859,6 +10924,7 @@ export const App: React.FC = () => {
           other={{ label: peerDiff.plc, transitions: peerDiff.transitions }}
           names={liveEnumNames}
           edges={availableEdges}
+          pouName={pouTypeName}
         />
       )}
       {gatewayRecordingsOpen && (

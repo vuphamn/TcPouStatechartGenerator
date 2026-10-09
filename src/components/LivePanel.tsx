@@ -9,6 +9,7 @@ import { checkAsText, firewallCommands, type CheckRequest, type CheckResult } fr
 import { LiveSession, formatClock, formatDuration } from '../utils/liveView.ts';
 import { sameInstance } from '../utils/instanceLaunch.ts';
 import { peerColor } from '../utils/livePeers.ts';
+import { trialChip } from '../utils/plcLicense.ts';
 import { formatLimit, notifyStuck, parseDuration } from '../utils/stateLimits.ts';
 import type { EdgeGuardView } from '../utils/liveGuards.ts';
 import { versionWarning } from '../utils/twincatVersions.ts';
@@ -83,6 +84,9 @@ interface LivePanelProps {
   onCoverageOnChart?: (on: boolean) => void;
   /** Counted again from now (after commissioning changes; asks), or from the start again (All time) */
   onResetCoverage?: () => void;
+  /** The commissioning sessions (from each reset to the next), newest first; one's CSV */
+  coverageSessions?: import('../utils/transitionCoverage.ts').CoverageSession[];
+  onExportCoverageSession?: (index: number) => void;
   onCoverageAllTime?: () => void;
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
@@ -175,6 +179,8 @@ interface LivePanelProps {
   onScanPlcs?: (addresses: string[]) => Promise<PlcScanResult>;
   /** The PLC's TwinCAT trial license ran out, or runs out soon */
   licenseNotice?: { state: 'expired' | 'soon'; text: string } | null;
+  /** The connected PLC's trial license end (ISO; null: no trial file, a full license, or not read) */
+  licenseExpires?: string | null;
   /** The license read again (after renewing it) */
   onRecheckLicense?: () => void;
   /** TwinCAT XAE opened on this computer (desktop, Link): its license page renews a trial */
@@ -334,8 +340,19 @@ const PeersStrip: React.FC<{ peers: import('../utils/livePeers.ts').LivePeer[]; 
 };
 
 /** Transition coverage: taken / total with a bar; the never-taken ones on demand; CSV */
-const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts').Coverage; onExport?: () => void; onChart?: boolean; onToggleChart?: (on: boolean) => void; onReset?: () => void; onAllTime?: () => void }> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime }) => {
+const CoverageStrip: React.FC<{
+  coverage: import('../utils/transitionCoverage.ts').Coverage;
+  onExport?: () => void;
+  onChart?: boolean;
+  onToggleChart?: (on: boolean) => void;
+  onReset?: () => void;
+  onAllTime?: () => void;
+  sessions?: import('../utils/transitionCoverage.ts').CoverageSession[];
+  onExportSession?: (index: number) => void;
+}> = ({ coverage, onExport, onChart, onToggleChart, onReset, onAllTime, sessions, onExportSession }) => {
   const [open, setOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const day = (ms: number | null) => (ms ? new Date(ms).toLocaleDateString() : '');
   const pct = Math.round((coverage.taken / coverage.total) * 100);
   const never = coverage.rows.filter((r) => r.n === 0);
   return (
@@ -383,6 +400,35 @@ const CoverageStrip: React.FC<{ coverage: import('../utils/transitionCoverage.ts
           </button>
         )}
       </div>
+      {sessions && sessions.length > 1 && (
+        <div className="mt-1">
+          <button type="button" id="live-coverage-sessions-toggle" onClick={() => setSessionsOpen((v) => !v)} className="text-slate-400 hover:text-sky-300" title="Each commissioning session (from one reset to the next): its coverage and CSV">
+            {sessionsOpen ? '▾' : '▸'} Sessions ({sessions.length})
+          </button>
+          {sessionsOpen && (
+            <div id="live-coverage-sessions" className="mt-0.5 space-y-0.5">
+              {sessions.map((s, k) => {
+                const p = s.coverage.total ? Math.round((s.coverage.taken / s.coverage.total) * 100) : 0;
+                return (
+                  <div key={`${s.from ?? 0}-${s.to ?? 'now'}`} className="live-coverage-session flex items-center gap-2" data-taken={s.coverage.taken} data-total={s.coverage.total}>
+                    <span className="text-slate-300 w-40 shrink-0 truncate">
+                      {s.from ? day(s.from) : 'before the first reset'} – {s.to ? day(s.to) : 'now'}
+                    </span>
+                    <span className="text-slate-400">
+                      {s.coverage.taken} / {s.coverage.total} ({p}%)
+                    </span>
+                    {onExportSession && (
+                      <button type="button" className="live-coverage-session-csv ml-auto px-1.5 rounded border border-slate-700 text-slate-300 hover:text-sky-300 hover:bg-slate-800" onClick={() => onExportSession(k)} title="This session's transitions: how often each was taken in it (CSV)">
+                        CSV
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
       {open && (
         <div id="live-coverage-never" className="mt-1 max-h-32 overflow-y-auto font-mono text-slate-400">
           {never.length === 0 ? (
@@ -410,6 +456,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   coverageOnChart,
   onCoverageOnChart,
   onResetCoverage,
+  coverageSessions,
+  onExportCoverageSession,
   onCoverageAllTime,
   peers,
   onPeerDiff,
@@ -485,6 +533,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onCheckPlc,
   linkNotice,
   licenseNotice,
+  licenseExpires,
   onRecheckLicense,
   onOpenXae,
   onStartPlc,
@@ -686,6 +735,19 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             return (
               <span id="live-build-state" data-state={c.state} className={`shrink-0 px-1.5 rounded border text-[11px] ${c.state === 'newest' ? 'border-emerald-700/70 text-emerald-300' : 'border-amber-500/70 bg-amber-950/60 text-amber-200'}`} title={title}>
                 {c.state === 'newest' ? '✓ ' : '⚠ '}{text}
+              </span>
+            );
+          })()}
+          {status.state === 'connected' && licenseExpires && (() => {
+            const chip = trialChip(licenseExpires);
+            return (
+              <span
+                id="live-license"
+                data-level={chip.level}
+                className={`shrink-0 px-1.5 rounded border text-[11px] ${chip.level === 'ok' ? 'border-slate-700 text-slate-300' : chip.level === 'soon' ? 'border-amber-500/70 bg-amber-950/60 text-amber-200' : 'border-rose-700 bg-rose-950/50 text-rose-200'}`}
+                title={`The PLC's TwinCAT trial license: until ${new Date(licenseExpires).toLocaleString()}. When it has run out, the PLC runs on, but its next start (a download, a restart, an activation) fails: renew it in XAE (SYSTEM > License > 7 Days Trial License)`}
+              >
+                {chip.text}
               </span>
             );
           })()}
@@ -1701,7 +1763,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
       {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
-        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} />
+        <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} />
       )}
 
       {/* Trail */}

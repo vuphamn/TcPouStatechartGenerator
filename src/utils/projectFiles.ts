@@ -143,6 +143,29 @@ export async function fetchProjectVersions(pouPath: string | undefined): Promise
   return d?.projectVersions ? d.projectVersions(pouPath).catch(() => null) : null;
 }
 
+/** The PLC project's builds here (its _CompileInfo), newest first: XAE, VS Code, the desktop app; null elsewhere */
+export async function fetchProjectBuilds(pouPath: string | undefined): Promise<{ id: string; at: string }[] | null> {
+  if (!pouPath) return null;
+  if (isXaeHost()) {
+    const requestId = ++findSeq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        off();
+        resolve(null);
+      }, 15000);
+      const off = onHostMessage((m) => {
+        if (m.type !== 'projectBuildsResult' || m.requestId !== requestId) return;
+        window.clearTimeout(timer);
+        off();
+        resolve(m.builds ?? []);
+      });
+      postToHost({ type: 'projectBuilds', requestId });
+    });
+  }
+  const d = (window as unknown as { tcDesktop?: { projectBuilds?: (p: string) => Promise<{ id: string; at: string }[]> } }).tcDesktop;
+  return d?.projectBuilds ? d.projectBuilds(pouPath).catch(() => null) : null;
+}
+
 /**
  * The project's .tsproj / .plcproj restored from git (HEAD): XAE, VS Code, the desktop app; null where it cannot be
  * done (the web edition)

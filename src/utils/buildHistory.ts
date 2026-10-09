@@ -49,6 +49,13 @@ export function rememberBuild(copy: string, build: SeenBuild): SeenBuild[] {
   return next;
 }
 
+/** Every build listed (the copy's _CompileInfo now): each one kept */
+export function rememberBuilds(copy: string, builds: SeenBuild[]): SeenBuild[] {
+  let list = loadBuilds(copy);
+  for (const b of builds) list = rememberBuild(copy, b);
+  return list;
+}
+
 /** The PLC's build said with what was seen here: another ID seen before is an older build of this copy */
 export function withSeenBuilds(c: CompileInfo, seen: SeenBuild[]): CompileInfo {
   if (c.state !== 'other' || !c.plc) return c;
