@@ -49,6 +49,13 @@ file access.
   libraries (their names read from XAE's library cache, `_Libraries`), is flagged: a typo, most likely. Calls,
   names after a dot, ALL_CAPS names and a POU that extends a library's FB are not checked.
   `kvalMachineScope.structuredText.checks` switches them off.
+- **Auto Declare** (`Shift+F2` as in XAE, the right-click menu, and a Quick Fix on a name declared nowhere): the name
+  declared in the method's or the POU's `VAR`, `VAR_INPUT` or `VAR_OUTPUT` (a new block when there is none), its type
+  guessed from its use (`:= TRUE`: BOOL, `:= 1.5`: LREAL, `T#2S`: TIME, `E_Mode.Auto`: E_Mode, `x.Q`: TON). A variable
+  never used: **Remove the declaration** (a Quick Fix).
+- **Format Document** (`Shift+Alt+F`): each line's indentation from its blocks (`IF`, `CASE` labels and their statements,
+  the `CASE`'s `ELSE` at its level, loops, `VAR` blocks, structs, enums); only the leading white space changes, a
+  comment line and a call over several lines keep their own alignment, a section's own base indentation is kept.
 - **Hover:** a name's declaration (its line, with its comment) and where it is declared.
 - **Compare with Committed (git HEAD)** (an editor tab's menu, the right-click menu): the section beside its committed
   version, in VS Code's diff editor.

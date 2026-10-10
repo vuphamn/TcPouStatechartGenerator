@@ -15,6 +15,7 @@ const { libraryNames } = require('./libraryNames.cjs');
 const { completionsAt, signatureAt } = require('./stCompletion.cjs');
 const { projectRootOf } = require('../shared/tcBuild.cjs');
 const nav = require('./stNavigation.cjs');
+const { guessType, addDeclaration, removeDeclaration, formatSection } = require('./stEdits.cjs');
 // (the app's own: which method holds the POU's state machine, doState(), Execute() or the body)
 const { stateMethodName } = require('../src/utils/stateMethod.ts');
 const { plcProjectsUnder } = require('./plcTree.cjs');
@@ -320,6 +321,109 @@ function register(context) {
     const n = nameAt(doc.getText(), pos.line, pos.character);
     return n ? { a, n } : null;
   };
+
+  // Auto Declare (XAE's Shift+F2) and Remove: Quick Fixes on the checks' findings (a name declared nowhere, a
+  // variable never used); Format Document: each line's indentation from its blocks
+  const wholeRange = (doc) => new vscode.Range(0, 0, doc.lineCount, 0);
+  const declareTargets = (file, key) => {
+    const members = parseSafe(file) ?? [];
+    const own = key ? members.find((m) => m.key === key && m.decl) : null;
+    const pou = members.find((m) => m.key === '');
+    const pouName = path.basename(file).replace(/\.tcpou$/i, '');
+    const list = [];
+    if (own) for (const block of ['VAR', 'VAR_INPUT', 'VAR_OUTPUT']) list.push({ key, block, where: `${own.name}()'s ${block}`, members });
+    if (pou?.decl) for (const block of ['VAR', 'VAR_INPUT', 'VAR_OUTPUT', ...(own ? [] : ['VAR_TEMP'])]) list.push({ key: '', block, where: `${pouName}'s ${block}`, members });
+    return list;
+  };
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider({ scheme: SCHEME }, {
+      async provideCodeActions(doc, _range, ctx) {
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return [];
+        }
+        const out = [];
+        for (const d of ctx.diagnostics) {
+          if (d.source !== 'TwinCAT') continue;
+          const name = doc.getText(d.range);
+          if (d.code === 'unused' && a.section === 'decl') {
+            const text = removeDeclaration(doc.getText(), name);
+            if (text === null) continue;
+            const act = new vscode.CodeAction(`Remove the declaration of ${name}`, vscode.CodeActionKind.QuickFix);
+            act.diagnostics = [d];
+            act.isPreferred = true;
+            act.edit = new vscode.WorkspaceEdit();
+            act.edit.replace(doc.uri, wholeRange(doc), text);
+            out.push(act);
+          } else if (d.code === 'undeclared' && a.section === 'impl' && /\.tcpou$/i.test(a.file)) {
+            const type = guessType(doc.getText(), name);
+            let first = true;
+            for (const t of declareTargets(a.file, a.key)) {
+              const uri = sectionUri({ file: a.file, key: t.key, section: 'decl' }, t.members);
+              const declDoc = await vscode.workspace.openTextDocument(uri);
+              const r = addDeclaration(declDoc.getText(), { name, type, block: t.block });
+              const act = new vscode.CodeAction(`Declare ${name} : ${type} in ${t.where}`, vscode.CodeActionKind.QuickFix);
+              act.diagnostics = [d];
+              act.isPreferred = first;
+              first = false;
+              act.edit = new vscode.WorkspaceEdit();
+              act.edit.replace(uri, wholeRange(declDoc), r.text);
+              out.push(act);
+            }
+            const ask = new vscode.CodeAction(`Declare ${name}… (its type and block)`, vscode.CodeActionKind.QuickFix);
+            ask.diagnostics = [d];
+            ask.command = { command: 'kvalMachineScope.autoDeclare', title: 'Auto Declare', arguments: [doc.uri, name] };
+            out.push(ask);
+          }
+        }
+        return out;
+      },
+    }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
+    // Auto Declare… (the right-click menu, Shift+F2 as in XAE; a Quick Fix): the name at the caret, its type (guessed)
+    // and block asked, then declared and the declaration shown
+    vscode.commands.registerCommand('kvalMachineScope.autoDeclare', async (uriArg, nameArg, given = {}) => {
+      const ed = vscode.window.activeTextEditor;
+      const uri = uriArg instanceof vscode.Uri ? uriArg : ed?.document.uri;
+      if (!uri || uri.scheme !== SCHEME) return null;
+      const a = addressOf(uri.query);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const at = ed && ed.document.uri.toString() === uri.toString() ? nameAt(doc.getText(), ed.selection.active.line, ed.selection.active.character) : null;
+      const name = typeof nameArg === 'string' ? nameArg : at?.name;
+      if (!name) return null;
+      const implText = a.section === 'impl' ? doc.getText() : textOf(a.file, a.key, 'impl') ?? '';
+      const type = given.type ?? (await vscode.window.showInputBox({ prompt: `${name}'s type`, value: guessType(implText, name) }));
+      if (!type) return null;
+      const targets = declareTargets(a.file, a.key);
+      const picked = given.block
+        ? targets.find((t) => t.block === given.block && (given.pou ? t.key === '' : true))
+        : (await vscode.window.showQuickPick(targets.map((t) => ({ label: t.where, t })), { placeHolder: `Declare ${name} : ${type} in` }))?.t;
+      if (!picked) return null;
+      const declUri = sectionUri({ file: a.file, key: picked.key, section: 'decl' }, picked.members);
+      const declDoc = await vscode.workspace.openTextDocument(declUri);
+      const r = addDeclaration(declDoc.getText(), { name, type, block: picked.block });
+      const we = new vscode.WorkspaceEdit();
+      we.replace(declUri, wholeRange(declDoc), r.text);
+      await vscode.workspace.applyEdit(we);
+      const shown = await vscode.window.showTextDocument(declDoc, { preserveFocus: true, preview: false, viewColumn: vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === declUri.toString())?.viewColumn });
+      shown.revealRange(new vscode.Range(r.line, 0, r.line, 0));
+      return { uri: declUri.toString(), line: r.line };
+    }),
+    vscode.languages.registerDocumentFormattingEditProvider({ scheme: SCHEME }, {
+      provideDocumentFormattingEdits(doc, options) {
+        const text = doc.getText();
+        const next = formatSection(text, { indent: options.insertSpaces ? ' '.repeat(options.tabSize) : '\t' }).split(/\r?\n/);
+        // (only the lines whose indentation changes: the caret and the rest stay)
+        const edits = [];
+        for (let i = 0; i < doc.lineCount && i < next.length; i++) {
+          const line = doc.lineAt(i).text;
+          if (line !== next[i]) edits.push(vscode.TextEdit.replace(new vscode.Range(i, 0, i, line.length), next[i]));
+        }
+        return edits;
+      },
+    })
+  );
 
   // Navigation as in XAE (stNavigation.cjs): the project's symbols (Ctrl+T), folding, the type hierarchy, the calls
   // (Shift+Alt+H), Go to Implementation (Ctrl+F12); by name, as Find All References

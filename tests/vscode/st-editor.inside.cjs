@@ -191,6 +191,18 @@ exports.run = async function run() {
     const flagged = await waitFor(() => vscode.languages.getDiagnostics(exDoc.uri).find((d) => d.source === 'TwinCAT' && d.code === 'undeclared' && /noSuchVar/.test(d.message)), 8000);
     expect(flagged && flagged.range.start.line === 0, `checks: noSuchVar is not declared (${flagged ? flagged.message : vscode.languages.getDiagnostics(exDoc.uri).map((d) => d.message).join('; ') || 'none'})`);
 
+    // 15b. Auto Declare: the Quick Fixes on noSuchVar (declared in Execute()'s VAR first); Format Document
+    const fixes = await vscode.commands.executeCommand('vscode.executeCodeActionProvider', exDoc.uri, flagged ? flagged.range : new vscode.Range(0, 0, 0, 0), vscode.CodeActionKind.QuickFix.value);
+    const declareFix = (fixes ?? []).find((f) => /^Declare noSuchVar : \w+ in Execute\(\)'s VAR$/.test(f.title));
+    expect(declareFix && (fixes ?? []).some((f) => /in FB_ScanSequencer's VAR_INPUT/.test(f.title)), `Auto Declare: the Quick Fixes (${(fixes ?? []).map((f) => f.title).slice(0, 4).join(' | ')})`);
+    if (declareFix?.edit) await vscode.workspace.applyEdit(declareFix.edit);
+    const exDecl = vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'twincat-st' && /Execute \(Decl\)\.st$/.test(d.uri.path));
+    expect(exDecl && /noSuchVar : \w+;/.test(exDecl.getText()), `declared in Execute()'s declaration (${exDecl ? exDecl.getText().split(/\r?\n/).filter((l) => /noSuchVar/.test(l)).join('') : 'not open'})`);
+    const gone = await waitFor(() => !vscode.languages.getDiagnostics(exDoc.uri).some((d) => d.code === 'undeclared' && /noSuchVar/.test(d.message)), 8000);
+    expect(gone, 'the finding gone once declared');
+    const fmt = await vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', exDoc.uri, { insertSpaces: false, tabSize: 4 });
+    expect(Array.isArray(fmt), `Format Document: ${fmt?.length ?? 'no'} line(s) re-indented`);
+
     // 16. IntelliSense: after "E_ScanState." the enum's members; in MoveAndAdvance( its parameters
     const now = exDoc.getText().split(/\r?\n/);
     const qL = now.findIndex((l) => /E_ScanState\.\w+/.test(l));

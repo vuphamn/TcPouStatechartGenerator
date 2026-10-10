@@ -275,6 +275,11 @@
         "command": "kvalMachineScope.showStateInChart",
         "title": "Show in Statechart",
         "category": "Kval MachineScope"
+      },
+      {
+        "command": "kvalMachineScope.autoDeclare",
+        "title": "Auto Declare…",
+        "category": "TwinCAT"
       }
     ],
     "keybindings": [
@@ -307,6 +312,11 @@
         "command": "kvalMachineScope.prepareValue",
         "key": "ctrl+shift+f7",
         "when": "kvalMachineScope.loggedIn && resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.autoDeclare",
+        "key": "shift+f2",
+        "when": "editorTextFocus && resourceScheme == twincat-st"
       }
     ],
     "menus": {
@@ -476,6 +486,10 @@
         {
           "command": "kvalMachineScope.showStateInChart",
           "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.autoDeclare",
+          "when": "resourceScheme == twincat-st"
         }
       ],
       "editor/context": [
@@ -503,6 +517,11 @@
           "command": "kvalMachineScope.compareCommitted",
           "when": "resourceScheme == twincat-st",
           "group": "twincat@9"
+        },
+        {
+          "command": "kvalMachineScope.autoDeclare",
+          "when": "resourceScheme == twincat-st",
+          "group": "twincat@5"
         }
       ],
       "view/item/context": [
