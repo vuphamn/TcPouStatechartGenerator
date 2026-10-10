@@ -15,8 +15,15 @@ file access.
   **POU** list (the activity bar): each opens as its declaration and implementation (a property's Get / Set too). A
   graphical implementation (SFC, CFC) is said to be one: edit it in XAE.
 - **Highlighting:** the Structured Text language of an extension you have (`st`: *Structured Text language Support*),
-  else this extension's own grammar. Setting `kvalMachineScope.structuredText.language` chooses another (`twincat-st`,
-  `kval-st`).
+  else this extension's own grammar. Setting `kvalMachineScope.structuredText.language` chooses another language id
+  (`structured-text`, `iec-61131-3`, `kval-st`, …); the open sections change at once.
+- **Find All References** (`Shift+F12`, the right-click menu) and **Go to Definition** (`F12`, Ctrl+click): by name
+  across the project's `.TcPOU` / `.TcDUT` / `.TcGVL` / `.TcIO` sections (ignoring case, comments, strings and
+  pragmas; unsaved edits of open sections included), each opening its section at the line. A definition is the nearest
+  declaration: the method's own VAR, its POU's (or a base's, `EXTENDS`), then the project's types, global variables and
+  enum members; after a dot (`E_State.Idle`) the one in the type named before it. By name, not a compiler's
+  resolution: a local of the same name in another POU is listed too.
+- **Go to code** in the statechart opens the section at that line (the method's implementation), beside the chart.
 - **Save:** a section's text goes back into its CDATA block only: the objects' Ids, the line ids, the file's BOM and line
   breaks stay as they were. Two sections edited and saved one after the other do not conflict. A file changed on disk
   (XAE, git) shows in its open sections; one with unsaved edits asks first, as any file.

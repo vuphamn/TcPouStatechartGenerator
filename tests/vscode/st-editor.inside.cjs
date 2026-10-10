@@ -102,7 +102,38 @@ exports.run = async function run() {
     const diag = problem?.[1].find((d) => /noSuchVar/.test(d.message));
     expect(diag && diag.range.start.line === 0 && diag.severity === vscode.DiagnosticSeverity.Error && problem[0].toString() === exDoc.uri.toString(), `Build: the error on Execute()'s implementation, line 1 (${problem ? `${path.posix.basename(problem[0].path)}:${diag?.range.start.line + 1} ${diag?.message}` : vscode.languages.getDiagnostics().map(([u, l]) => `${u.scheme}:${path.posix.basename(u.path)}=${l.length}`).join(', ') || 'none'})`);
 
-    // 9. The TwinCAT commands (XAE's toolbar) are there
+    // 9. Find All References and Go to Definition on "State" in Execute() (the provider VS Code asks)
+    const exText = exDoc.getText().split(/\r?\n/);
+    const caseLine = exText.findIndex((l) => /CASE State OF/.test(l));
+    const statePos = new vscode.Position(caseLine, exText[caseLine].indexOf('State') + 2);
+    const refs = (await vscode.commands.executeCommand('vscode.executeReferenceProvider', exDoc.uri, statePos)) ?? [];
+    const declUri = refs.find((l) => /FB_ScanSequencer \(Decl\)\.st$/.test(l.uri.path));
+    expect(refs.length > 5 && refs.some((l) => /Execute \(Impl\)\.st$/.test(l.uri.path)) && declUri, `Find All References: State, ${refs.length} uses (${[...new Set(refs.map((l) => path.posix.basename(l.uri.path)))].join(', ')})`);
+    const defs = (await vscode.commands.executeCommand('vscode.executeDefinitionProvider', exDoc.uri, statePos)) ?? [];
+    const d0 = defs[0];
+    const defLine = d0 ? (await vscode.workspace.openTextDocument(d0.uri ?? d0.targetUri)).lineAt((d0.range ?? d0.targetRange).start.line).text : '';
+    expect(defs.length === 1 && /^\s*State\s*:\s*E_ScanState/.test(defLine), `Go to Definition: State's declaration (${defLine.trim()})`);
+    const qLine = exText.findIndex((l) => /E_ScanState\.\w+/.test(l));
+    const qPos = new vscode.Position(qLine, exText[qLine].indexOf('E_ScanState.') + 'E_ScanState.'.length + 1);
+    const qDefs = (await vscode.commands.executeCommand('vscode.executeDefinitionProvider', exDoc.uri, qPos)) ?? [];
+    expect(qDefs.length === 1 && /E_ScanState \(Decl\)\.st$/.test((qDefs[0].uri ?? qDefs[0].targetUri).path), `Go to Definition after a dot: the enum's member (${qDefs.map((x) => path.posix.basename((x.uri ?? x.targetUri).path)).join(', ') || 'none'})`);
+
+    // 10. Go to code (the statechart's): a place in the .TcPOU shown in its section, the caret there
+    const xmlNow = fs.readFileSync(pou, 'utf8').split(/\r?\n/);
+    const xLine = xmlNow.findIndex((l) => /CASE State OF/.test(l));
+    const shown = await vscode.commands.executeCommand('kvalMachineScope.revealInSource', pou, xLine, xmlNow[xLine].indexOf('CASE'));
+    const act = vscode.window.activeTextEditor;
+    expect(shown && act && /Execute \(Impl\)\.st$/.test(act.document.uri.path) && /CASE State OF/.test(act.document.lineAt(act.selection.active.line).text), `Go to code: Execute()'s implementation, at its line (${act ? `${path.posix.basename(act.document.uri.path)}:${act.selection.active.line + 1}` : 'none'})`);
+
+    // 11. The language setting: the open sections at once
+    const cfg = vscode.workspace.getConfiguration('kvalMachineScope');
+    await cfg.update('structuredText.language', 'plaintext', vscode.ConfigurationTarget.Global);
+    const plain = await waitFor(() => sections().length && sections().every((e) => e.document.languageId === 'plaintext'), 5000);
+    await cfg.update('structuredText.language', undefined, vscode.ConfigurationTarget.Global);
+    const back = await waitFor(() => sections().every((e) => e.document.languageId === 'kval-st'), 5000);
+    expect(plain && back, `the language setting: the open sections at once (plaintext ${!!plain}, back ${!!back})`);
+
+    // 12. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
     const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);

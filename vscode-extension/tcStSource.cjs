@@ -97,6 +97,33 @@ function writeSection(xml, key, section, text) {
   return xml.slice(0, part.start) + text + xml.slice(part.end);
 }
 
+/**
+ * The section a place in the file is in (line and column 0-based, as in the file): { key, section, line, column }
+ * (line and column within the section's text), or null: not in a section's text (the XML around them)
+ */
+function sectionAt(xml, line, column = 0) {
+  let lineStart = 0;
+  for (let l = 0; l < line; l++) {
+    const nl = xml.indexOf('\n', lineStart);
+    if (nl < 0) return null;
+    lineStart = nl + 1;
+  }
+  const nl = xml.indexOf('\n', lineStart);
+  const lineEnd = nl < 0 ? xml.length : nl;
+  const at = Math.min(lineStart + Math.max(0, column), lineEnd);
+  for (const mb of parseSource(xml).members) {
+    for (const section of ['decl', 'impl']) {
+      const part = mb[section];
+      // (the line touches the section's text; its first line shares the line with the tags: <ST><![CDATA[IF …)
+      if (!part || part.start > lineEnd || part.end < lineStart) continue;
+      const pos = Math.min(Math.max(at, part.start), part.end);
+      const lines = xml.slice(part.start, pos).split('\n');
+      return { key: mb.key, section, line: lines.length - 1, column: lines[lines.length - 1].replace(/\r$/, '').length };
+    }
+  }
+  return null;
+}
+
 /** What a member is called in lists ("doState()", "Speed (Get)") */
 function memberTitle(mb) {
   if (mb.key === '') return mb.name;
@@ -105,4 +132,4 @@ function memberTitle(mb) {
   return mb.name;
 }
 
-module.exports = { parseSource, readSection, writeSection, memberTitle };
+module.exports = { parseSource, readSection, writeSection, sectionAt, memberTitle };

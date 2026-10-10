@@ -7,7 +7,9 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { parseSource, memberTitle } = require('./tcStSource.cjs');
+const { parseSource, sectionAt, memberTitle } = require('./tcStSource.cjs');
+const { createIndex, nameAt, findReferences, findDefinition } = require('./stReferences.cjs');
+const { projectRootOf } = require('../shared/tcBuild.cjs');
 const { SCHEME, sectionAddress, addressOf, createSectionStore } = require('./sectionStore.cjs');
 
 const VIEW_TYPE = 'kvalMachineScope.structuredText';
@@ -119,7 +121,13 @@ function register(context) {
     const lang = await stLanguage();
     return doc.languageId === lang ? doc : vscode.languages.setTextDocumentLanguage(doc, lang);
   };
-  context.subscriptions.push(vscode.workspace.onDidOpenTextDocument((d) => void setLanguage(d).catch(() => {})));
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((d) => void setLanguage(d).catch(() => {})),
+    // (the setting changed: every open section in the new language at once)
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('kvalMachineScope.structuredText.language')) for (const d of vscode.workspace.textDocuments) void setLanguage(d).catch(() => {});
+    })
+  );
   for (const d of vscode.workspace.textDocuments) void setLanguage(d).catch(() => {});
 
   // Where the implementation goes: the editor group below the declaration's (made once, then reused)
@@ -130,7 +138,7 @@ function register(context) {
    * A member of a file opened as XAE does: its declaration in the group given (or the active one), its implementation
    * in the group below it. Only one of them: in the group given. A graphical implementation (SFC, CFC): said so
    */
-  async function openMember(file, key = '', { viewColumn } = {}) {
+  async function openMember(file, key = '', { viewColumn, focus } = {}) {
     const xml = fs.readFileSync(file, 'utf8');
     const { members } = parseSource(xml);
     const mb = members.find((m) => m.key === key) ?? members[0];
@@ -144,7 +152,11 @@ function register(context) {
     const open = async (section) => setLanguage(await vscode.workspace.openTextDocument(sectionUri({ file, key: mb.key, section }, members)));
     const decl = mb.decl ? await open('decl') : null;
     const impl = mb.impl ? await open('impl') : null;
-    if (decl) await vscode.window.showTextDocument(decl, { viewColumn: column, preview: false, preserveFocus: !!impl });
+    if (decl) {
+      const shown = await vscode.window.showTextDocument(decl, { viewColumn: column, preview: false, preserveFocus: !!impl });
+      // (Beside: the group it went to)
+      column = shown.viewColumn ?? column;
+    }
     if (impl && decl) {
       let implCol = below.get(column);
       if (!implCol || !groupExists(implCol) || implCol === column) {
@@ -163,6 +175,13 @@ function register(context) {
       await vscode.window.showTextDocument(impl, { viewColumn: implCol, preview: false });
     } else if (impl) {
       await vscode.window.showTextDocument(impl, { viewColumn: column, preview: false });
+    }
+    // (a place to show: that section's editor, the caret there)
+    const target = focus ? (focus.section === 'decl' ? decl : impl) : null;
+    if (target) {
+      const ed = vscode.window.visibleTextEditors.find((e) => e.document === target);
+      const pos = new vscode.Position(focus.line ?? 0, focus.column ?? 0);
+      await vscode.window.showTextDocument(target, { viewColumn: ed?.viewColumn ?? column, preview: false, selection: new vscode.Range(pos, pos) });
     }
     if (mb.implLanguage && mb.implLanguage !== 'ST') {
       void vscode.window.showInformationMessage(`${memberTitle(mb)}'s implementation is ${mb.implLanguage}, not text: edit it in TwinCAT XAE`);
@@ -233,7 +252,71 @@ function register(context) {
     vscode.commands.registerCommand('kvalMachineScope.openMember', (file, key) => openMember(file, key))
   );
   const sectionUriOf = (file, key, section, members) => sectionUri({ file, key, section }, members);
-  return { openMember, activeFile, fileOf, sectionUriOf };
+
+  /**
+   * A place in a TwinCAT file (line and column 0-based, as in the file: the statechart's Go to code) shown in its
+   * section, beside the chart (the declarations' group when there is one); not in a section's text: the file itself.
+   * true when shown in a section
+   */
+  async function revealInSource(file, line, column = 0) {
+    let at = null;
+    try {
+      at = sectionAt(fs.readFileSync(file, 'utf8'), line, column);
+    } catch {
+      at = null;
+    }
+    if (!at) return false;
+    const declGroup = [...below.keys()].find((c) => groupExists(c) && c !== vscode.window.tabGroups.activeTabGroup?.viewColumn);
+    await openMember(file, at.key, { viewColumn: declGroup ?? vscode.ViewColumn.Beside, focus: at });
+    return true;
+  }
+
+  // Find All References, Go to Definition (F12, Ctrl+click): by name, across the project's sections (the open,
+  // edited ones as they are now)
+  const index = createIndex();
+  const editedNow = () => {
+    const m = new Map();
+    for (const d of vscode.workspace.textDocuments) {
+      if (d.uri.scheme !== SCHEME || !d.isDirty) continue;
+      try {
+        const a = addressOf(d.uri.query);
+        m.set(`${path.resolve(a.file).toLowerCase()}|${a.key}|${a.section}`, d.getText());
+      } catch {
+        // (not a section)
+      }
+    }
+    return m;
+  };
+  const projectFiles = (file) => index.project(projectRootOf(file) ?? path.dirname(file), editedNow());
+  const locationOf = (files, r) => {
+    const members = files.find((f) => f.file === r.file)?.members;
+    return new vscode.Location(sectionUri({ file: r.file, key: r.key, section: r.section }, members), new vscode.Range(r.line, r.column, r.line, r.column + r.length));
+  };
+  const here = (doc, pos) => {
+    const a = addressOf(doc.uri.query);
+    const n = nameAt(doc.getText(), pos.line, pos.character);
+    return n ? { a, n } : null;
+  };
+  context.subscriptions.push(
+    vscode.languages.registerReferenceProvider({ scheme: SCHEME }, {
+      provideReferences(doc, pos, ctx) {
+        const h = here(doc, pos);
+        if (!h) return [];
+        const files = projectFiles(h.a.file);
+        return findReferences(files, h.n.name).filter((r) => ctx.includeDeclaration || !r.declaration).map((r) => locationOf(files, r));
+      },
+    }),
+    vscode.languages.registerDefinitionProvider({ scheme: SCHEME }, {
+      provideDefinition(doc, pos) {
+        const h = here(doc, pos);
+        if (!h) return [];
+        const files = projectFiles(h.a.file);
+        return findDefinition(files, { file: h.a.file, key: h.a.key, name: h.n.name, qualifier: h.n.qualifier }).map((r) => locationOf(files, r));
+      },
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.revealInSource', (file, line, column) => revealInSource(file, line, column))
+  );
+  return { openMember, activeFile, fileOf, sectionUriOf, revealInSource };
 }
 
 const ICONS = { POU: '$(symbol-class)', DUT: '$(symbol-structure)', GVL: '$(symbol-variable)', Itf: '$(symbol-interface)', Method: '$(symbol-method)', Property: '$(symbol-property)', Get: '$(arrow-right)', Set: '$(arrow-left)', Action: '$(symbol-event)', Transition: '$(arrow-swap)' };

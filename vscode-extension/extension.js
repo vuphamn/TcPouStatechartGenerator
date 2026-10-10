@@ -15,6 +15,8 @@ const VIEW_TYPE = 'kvalMachineScope.statechart';
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
   const appDir = vscode.Uri.joinPath(context.extensionUri, 'app');
+  // (TwinCAT files as Structured Text: also where the statechart's Go to code goes)
+  const st = stEditor.register(context);
   const version = context.extension.packageJSON.version;
 
   /** The app in a webview, its host for that .TcPOU */
@@ -41,6 +43,8 @@ function activate(context) {
         return u ? u.map((x) => x.fsPath) : null;
       },
       async reveal(file, line, column) {
+        // (a TwinCAT file: the section that place is in, as Structured Text; else, or outside the sections, the file)
+        if (/\.(tcpou|tcdut|tcgvl|tcio)$/i.test(file) && (await st.revealInSource(file, line, column).catch(() => false))) return;
         const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
         const pos = new vscode.Position(line, column);
         await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos), viewColumn: vscode.ViewColumn.Beside, preview: false });
@@ -98,7 +102,6 @@ function activate(context) {
 
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
-  const st = stEditor.register(context);
   twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
 }
 
