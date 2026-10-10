@@ -160,13 +160,39 @@ exports.run = async function run() {
     fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(standIn));
     const v2 = await waitFor(async () => (await shownOf())?.State === 'ComputeResult', 8000);
     expect(v2, `a value changed on the PLC: shown (${JSON.stringify(await shownOf())})`);
+    // Write Values: Busy prepared FALSE (the caret on it), written: the PLC's value changes
+    const busyLine = exText.findIndex((l) => /\bBusy\b/.test(l));
+    const exEd = await vscode.window.showTextDocument(exDoc);
+    const bPos = new vscode.Position(busyLine, exText[busyLine].indexOf('Busy') + 1);
+    exEd.selection = new vscode.Selection(bPos, bPos);
+    await vscode.commands.executeCommand('kvalMachineScope.prepareValue', { text: 'FALSE' });
+    const wrote = await vscode.commands.executeCommand('kvalMachineScope.writeValues', { confirmed: true });
+    const v4 = await waitFor(async () => (await shownOf())?.Busy === 'FALSE', 8000);
+    const onPlc = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')).symbols['MAIN.fbScan.Busy'].value;
+    expect(wrote?.written === 1 && onPlc === false && v4, `Write Values: Busy := FALSE written (${JSON.stringify(wrote)}; on the PLC ${onPlc}; shown ${JSON.stringify(await shownOf())})`);
     await vscode.commands.executeCommand('kvalMachineScope.logout');
     const v3 = await waitFor(async () => (await shownOf()) === null, 8000);
     expect(v3, `logged out: no values (${JSON.stringify(await shownOf())})`);
 
-    // 15. The TwinCAT commands (XAE's toolbar) are there
+    // 15. Checks while typing: noSuchVar (the build step's line) flagged as declared nowhere
+    const flagged = await waitFor(() => vscode.languages.getDiagnostics(exDoc.uri).find((d) => d.source === 'TwinCAT' && d.code === 'undeclared' && /noSuchVar/.test(d.message)), 8000);
+    expect(flagged && flagged.range.start.line === 0, `checks: noSuchVar is not declared (${flagged ? flagged.message : vscode.languages.getDiagnostics(exDoc.uri).map((d) => d.message).join('; ') || 'none'})`);
+
+    // 16. IntelliSense: after "E_ScanState." the enum's members; in MoveAndAdvance( its parameters
+    const now = exDoc.getText().split(/\r?\n/);
+    const qL = now.findIndex((l) => /E_ScanState\.\w+/.test(l));
+    const qC = now[qL].indexOf('E_ScanState.') + 'E_ScanState.'.length;
+    const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', exDoc.uri, new vscode.Position(qL, qC), '.');
+    const labels = (list?.items ?? []).map((i) => (typeof i.label === 'string' ? i.label : i.label.label));
+    expect(['InitializeScan', 'FastScan', 'ComputeResult'].every((n) => labels.includes(n)), `completion after E_ScanState.: its members (${labels.slice(0, 6).join(', ')})`);
+    const mL = now.findIndex((l) => /MoveAndAdvance\(/.test(l));
+    const mC = now[mL].indexOf('MoveAndAdvance(') + 'MoveAndAdvance('.length;
+    const help = await vscode.commands.executeCommand('vscode.executeSignatureHelpProvider', exDoc.uri, new vscode.Position(mL, mC), '(');
+    expect(help?.signatures?.[0] && /ProgramNumber/.test(help.signatures[0].label), `parameter hints in MoveAndAdvance( (${help?.signatures?.[0]?.label ?? 'none'})`);
+
+    // 17. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

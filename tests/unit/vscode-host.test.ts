@@ -51,10 +51,13 @@ fs.writeFileSync(path.join(dir, '_Boot', 'E_Skip.TcDUT'), 'x');
   await host.handle({ type: 'layoutWrite', path: pou, requestId: 3, text: null });
   expect(!fs.existsSync(path.join(dir, 'SM_A.machinescope.json')), 'the layout removed');
 
-  // Live: said not here
+  // Live: the desktop app's live session; no target given (none picked in VS Code here): it asks for the PLC's NetId
+  // (against a PLC: tests/live/vscode-host-live)
   posted.length = 0;
-  await host.handle({ type: 'liveStart' });
-  expect(posted.some((m) => m.type === 'liveStatus' && m.state === 'error' && /not available in VS Code/.test(String(m.message))), 'live: said not available');
+  await host.handle({ type: 'liveStart', stateVar: 'machineState' });
+  expect(posted.some((m) => m.type === 'liveStatus' && m.state === 'error' && /AMS NetId/.test(String(m.message))), `live: no target, its NetId asked for (${JSON.stringify(posted.filter((m) => m.type === 'liveStatus'))})`);
+  await host.handle({ type: 'liveStop' });
+  host.dispose?.();
 
   // A base the POU EXTENDS (findPou): found in the PLC project (the folder with the .plcproj), with its folder's enum
   fs.writeFileSync(path.join(dir, 'P.plcproj'), '<Project/>');

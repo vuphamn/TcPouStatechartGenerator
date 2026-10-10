@@ -10,7 +10,7 @@ const path = require('path');
 const ads = require('../shared/tcAds.cjs');
 const { parseSource } = require('./tcStSource.cjs');
 const { addressOf, SCHEME } = require('./sectionStore.cjs');
-const { watchNames, valueText } = require('./liveText.cjs');
+const { watchNames, valueText, parseValue, ADST } = require('./liveText.cjs');
 
 const MAX_NAMES = 150;
 
@@ -32,6 +32,14 @@ function adsSource(client) {
       }
       return ads.readTyped(client, h, info);
     },
+    async write(p, info, value) {
+      let h = handles.get(p);
+      if (h === undefined) {
+        h = await ads.createHandle(client, p);
+        handles.set(p, h);
+      }
+      await ads.writeTyped(client, h, info, value);
+    },
     async enumNames(type) {
       if (!type) return null;
       const dt = await ads.dataTypeInfo(client, type, types);
@@ -52,9 +60,16 @@ function standInSource(file) {
     instances: async (type) => read().instances?.[type] ?? [],
     probe: async (p) => {
       const s = sym(p);
-      return s ? { type: s.type, size: 4, dataType: 3, ...(s.struct ? { simple: false } : {}) } : null;
+      return s ? { type: s.type, size: s.size ?? (typeof s.value === 'string' ? 81 : 4), dataType: s.dataType ?? (typeof s.value === 'boolean' ? ADST.BIT : typeof s.value === 'string' ? ADST.STRING : Number.isInteger(s.value) ? ADST.INT32 : ADST.REAL64), ...(s.struct ? { simple: false } : {}) } : null;
     },
     read: async (p) => sym(p)?.value ?? null,
+    write: async (p, info, value) => {
+      const all = read();
+      const k = Object.keys(all.symbols ?? {}).find((x) => x.toLowerCase() === p.toLowerCase());
+      if (!k) throw new Error(`${p}: no such symbol`);
+      all.symbols[k].value = value;
+      fs.writeFileSync(file, JSON.stringify(all, null, 1));
+    },
     enumNames: async (type) => Object.values(read().symbols ?? {}).find((s) => s.type === type && s.enum)?.enum ?? null,
     dispose: async () => {},
   };
@@ -80,6 +95,10 @@ function registerLiveValues(context, { online, projectOf }) {
   const files = new Map();
   // (what is shown now, per section: for the tests and the hover)
   const shownNow = new Map();
+  // (each section's names shown, with their symbol: the one at the caret for Prepare Value)
+  const metaNow = new Map();
+  // Values prepared to write (Prepare Value…), by symbol: { full, root, info, value, text }
+  const prepared = new Map();
   const fileInfo = (file) => {
     let st;
     try {
@@ -155,6 +174,7 @@ function registerLiveValues(context, { online, projectOf }) {
         const names = watchNames(text, { from, to }).slice(0, MAX_NAMES);
         const list = [];
         const shown = {};
+        const meta = [];
         for (const n of names) {
           const full = `${inst.path}.${n.path}`;
           const k = `${p.root}|${full}`.toLowerCase();
@@ -172,13 +192,18 @@ function registerLiveValues(context, { online, projectOf }) {
           if (!enums.has(ek)) enums.set(ek, await src.enumNames(sym.type).catch(() => null));
           const t = valueText(value, { enumNames: enums.get(ek) });
           shown[n.path] = t;
+          meta.push({ full, root: p.root, sym, enumNames: enums.get(ek), uses: n.uses, text: t });
+          // (a value prepared to write: after the current one)
+          const prep = prepared.get(full.toLowerCase());
+          const label = prep ? ` ${t} ⇒ ${prep.text} ` : ` ${t} `;
           for (const u of n.uses) {
             const at = ed.document.positionAt(u.end);
-            list.push({ range: new vscode.Range(at, at), renderOptions: { after: { contentText: ` ${t} ` } }, hoverMessage: `${full} (${sym.type || 'value'}) = ${t}` });
+            list.push({ range: new vscode.Range(at, at), renderOptions: { after: { contentText: label } }, hoverMessage: `${full} (${sym.type || 'value'}) = ${t}${prep ? `; prepared: ${prep.text} (Write Values: Ctrl+F7)` : ''}` });
           }
         }
         ed.setDecorations(deco, list);
         shownNow.set(ed.document.uri.toString(), shown);
+        metaNow.set(ed.document.uri.toString(), meta);
       }
     } catch (err) {
       if (process.env.KSS_LIVE_DEBUG) console.error("live values:", err?.stack ?? err);
@@ -200,7 +225,58 @@ function registerLiveValues(context, { online, projectOf }) {
       void tick();
     }),
     // (what is shown now in a section: { name: value text }; the tests)
-    vscode.commands.registerCommand('kvalMachineScope.liveValuesShown', (uri) => shownNow.get(String(uri)) ?? null)
+    vscode.commands.registerCommand('kvalMachineScope.liveValuesShown', (uri) => shownNow.get(String(uri)) ?? null),
+    // Prepare Value… (the variable at the caret): its new value, typed or picked, shown after the current one
+    vscode.commands.registerCommand('kvalMachineScope.prepareValue', async (given) => {
+      const ed = vscode.window.activeTextEditor;
+      const meta = ed ? metaNow.get(ed.document.uri.toString()) : null;
+      const offset = ed ? ed.document.offsetAt(ed.selection.active) : -1;
+      const m = meta?.find((x) => x.uses.some((u) => u.start <= offset && offset <= u.end));
+      if (!m) return void vscode.window.showInformationMessage('Prepare Value: put the caret on a variable whose value is shown (logged in)');
+      const current = m.text;
+      let text = given?.text;
+      if (text === undefined) {
+        if (m.enumNames) text = (await vscode.window.showQuickPick(Object.values(m.enumNames), { placeHolder: `${m.full} (now ${current}): its new value` })) ?? undefined;
+        else if (m.sym.dataType === ADST.BIT) text = (await vscode.window.showQuickPick(['TRUE', 'FALSE'], { placeHolder: `${m.full} (now ${current}): its new value` })) ?? undefined;
+        else text = await vscode.window.showInputBox({ prompt: `${m.full} (${m.sym.type}, now ${current}): its new value`, validateInput: (v) => parseValue(v, m.sym, m.enumNames).error ?? null });
+      }
+      if (text === undefined) return;
+      const r = parseValue(text, m.sym, m.enumNames);
+      if (r.error) return void vscode.window.showErrorMessage(`${m.full}: ${r.error}`);
+      prepared.set(m.full.toLowerCase(), { full: m.full, root: m.root, info: m.sym, value: r.value, text: valueText(r.value, { enumNames: m.enumNames }) });
+      void vscode.commands.executeCommand('setContext', 'kvalMachineScope.prepared', prepared.size > 0);
+      void tick();
+    }),
+    // Write Values (Ctrl+F7): every prepared value, after one question naming them and the PLC
+    vscode.commands.registerCommand('kvalMachineScope.writeValues', async (opts) => {
+      const list = [...prepared.values()].filter((x) => online.isOnline(x.root));
+      if (!list.length) return void vscode.window.showInformationMessage('No values prepared: Prepare Value… on a variable first (logged in)');
+      if (!opts?.confirmed) {
+        const where = [...new Set(list.map((x) => online.targetName?.(x.root) ?? 'the PLC'))].join(', ');
+        const ok = await vscode.window.showWarningMessage(`Write ${list.length} value${list.length > 1 ? 's' : ''} to the PLC on ${where}?`, { modal: true, detail: list.slice(0, 12).map((x) => `${x.full} := ${x.text}`).join('\n') + (list.length > 12 ? `\n… and ${list.length - 12} more` : '') }, 'Write');
+        if (ok !== 'Write') return;
+      }
+      const failed = [];
+      for (const x of list) {
+        try {
+          const src = await online.source(x.root);
+          await src.write(x.full, x.info, x.value);
+          prepared.delete(x.full.toLowerCase());
+        } catch (err) {
+          failed.push(`${x.full}: ${err?.message ?? err}`);
+        }
+      }
+      void vscode.commands.executeCommand('setContext', 'kvalMachineScope.prepared', prepared.size > 0);
+      void tick();
+      if (failed.length) void vscode.window.showErrorMessage(`Not written: ${failed.join('; ')}`);
+      else void vscode.window.showInformationMessage(`Wrote ${list.length} value${list.length > 1 ? 's' : ''}`);
+      return { written: list.length - failed.length, failed };
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.clearPrepared', () => {
+      prepared.clear();
+      void vscode.commands.executeCommand('setContext', 'kvalMachineScope.prepared', false);
+      void tick();
+    })
   );
   return {
     /** Online state or the project changed: what was known is read again */

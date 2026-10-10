@@ -571,6 +571,66 @@ function xaeDialogs(pids, { answerOk = false } = {}) {
   });
 }
 
+// What XAE showed and did, kept for this computer (%LOCALAPPDATA%\KvalMachineScope; KSS_STATE_DIR: elsewhere, the tests)
+const stateDir = () => process.env.KSS_STATE_DIR || path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'KvalMachineScope');
+/** A dialog a hidden XAE showed while it built: one JSON line in xae-dialogs.jsonl (the newest 500 kept) */
+function logXaeDialog(d) {
+  try {
+    fs.mkdirSync(stateDir(), { recursive: true });
+    const file = path.join(stateDir(), 'xae-dialogs.jsonl');
+    let lines = [];
+    try {
+      lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    } catch {
+      lines = [];
+    }
+    lines.push(JSON.stringify({ at: new Date().toISOString(), title: d.title ?? '', text: d.text ?? '', buttons: d.buttons ?? [], answered: !!d.answered }));
+    fs.writeFileSync(file, lines.slice(-500).join('\n') + '\n');
+  } catch {
+    // (not kept: nothing else depends on it)
+  }
+}
+/** The dialogs kept, the newest last: [{ at, title, text, buttons, answered }] */
+function xaeDialogLog() {
+  try {
+    return fs.readFileSync(path.join(stateDir(), 'xae-dialogs.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+const crashFile = () => path.join(stateDir(), 'xae-rm-crashes.json');
+const projectKey = (tsprojOrRoot) => path.basename(String(tsprojOrRoot)).replace(/\.tsproj$/i, '').toLowerCase();
+/** The Remote Manager builds that stopped XAE while it opened this project: { '4026.3': '2026-10-10T…' } */
+function rmCrashesFor(project) {
+  try {
+    return JSON.parse(fs.readFileSync(crashFile(), 'utf8'))[projectKey(project)] ?? {};
+  } catch {
+    return {};
+  }
+}
+/** Remembered (stopped: true) or forgotten (it worked this time) */
+function noteRmBuild(project, rmVersion, stopped) {
+  if (!rmVersion) return;
+  try {
+    let all = {};
+    try {
+      all = JSON.parse(fs.readFileSync(crashFile(), 'utf8'));
+    } catch {
+      all = {};
+    }
+    const k = projectKey(project);
+    const mine = { ...(all[k] ?? {}) };
+    if (stopped) mine[rmVersion] = new Date().toISOString();
+    else if (!mine[rmVersion]) return;
+    else delete mine[rmVersion];
+    all[k] = mine;
+    fs.mkdirSync(stateDir(), { recursive: true });
+    fs.writeFileSync(crashFile(), JSON.stringify(all, null, 1));
+  } catch {
+    // (not kept)
+  }
+}
+
 class XaeWorker {
   constructor(progId = xaeProgId()) {
     this.progId = progId;
@@ -629,6 +689,7 @@ class XaeWorker {
         watching = true;
         try {
           for (const d of await xaeDialogs(this.mine, { answerOk: true })) {
+            logXaeDialog(d);
             const what = `${d.title ? `${d.title}: ` : ''}${d.text}`.trim();
             if (d.answered) {
               items.push({ level: 'warning', text: `XAE showed (answered OK): ${what}`, file: '', line: 0, column: 0, project: '' });
@@ -1265,7 +1326,10 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   }
   // (XAE stopped while it opened the project with the Remote Manager build chosen: seen with a build that XAE cannot
   // load this project in; said so, with what to do)
-  if (rmVersion && r.fatal && /0x800706BE|remote procedure call failed|XAE stopped/i.test(r.fatal)) r = { ...r, fatal: `${r.fatal}: XAE stopped while it opened the project with Remote Manager build ${rmVersion}. Choose (Default) or another build` };
+  if (rmVersion && r.fatal && /0x800706BE|remote procedure call failed|XAE stopped/i.test(r.fatal)) {
+    r = { ...r, fatal: `${r.fatal}: XAE stopped while it opened the project with Remote Manager build ${rmVersion}. Choose (Default) or another build` };
+    noteRmBuild(root, rmVersion, true);
+  } else if (rmVersion && !r.fatal) noteRmBuild(root, rmVersion, false);
   const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
   // Written: the new compile information into the project (XAE's next login matches the running code)
@@ -1304,4 +1368,4 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   return result;
 }
 
-module.exports = { xaeDialogs, xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, remoteManagerBuilds, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { xaeDialogs, xaeDialogLog, rmCrashesFor, noteRmBuild, xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, remoteManagerBuilds, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

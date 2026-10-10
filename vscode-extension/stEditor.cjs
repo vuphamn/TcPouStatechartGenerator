@@ -10,6 +10,9 @@ const path = require('path');
 const { parseSource, sectionAt, memberTitle } = require('./tcStSource.cjs');
 const { createIndex, nameAt, findReferences, findDefinition, renameEdits } = require('./stReferences.cjs');
 const { declarationOutline, implementationOutline } = require('./stOutline.cjs');
+const { checkSection, projectNames, extendsUnknown } = require('./stChecks.cjs');
+const { libraryNames } = require('./libraryNames.cjs');
+const { completionsAt, signatureAt } = require('./stCompletion.cjs');
 const { projectRootOf } = require('../shared/tcBuild.cjs');
 const { SCHEME, sectionAddress, addressOf, createSectionStore } = require('./sectionStore.cjs');
 
@@ -384,6 +387,123 @@ function register(context) {
         return list.map(toSymbol);
       },
     })
+  );
+  // Checks while typing (stChecks.cjs): a method's local never used (faded), a plain name declared nowhere in the
+  // project (a typo?); kvalMachineScope.structuredText.checks switches them off
+  const checks = vscode.languages.createDiagnosticCollection('TwinCAT checks');
+  // (the names the project declares and its libraries' (their cache in _Libraries): read again at most each minute)
+  const libraries = new Map();
+  const knownNames = (file, files) => {
+    const root = projectRootOf(file) ?? path.dirname(file);
+    let l = libraries.get(root);
+    if (!l || Date.now() - l.at > 60000) libraries.set(root, (l = { at: Date.now(), names: libraryNames(root) }));
+    const names = projectNames(files);
+    for (const n of l.names) names.add(n);
+    return names;
+  };
+  context.subscriptions.push(checks);
+  const textOf = (file, key, section) => {
+    const open = vscode.workspace.textDocuments.find((d) => {
+      if (d.uri.scheme !== SCHEME) return false;
+      try {
+        const a = addressOf(d.uri.query);
+        return path.resolve(a.file).toLowerCase() === path.resolve(file).toLowerCase() && a.key === key && a.section === section;
+      } catch {
+        return false;
+      }
+    });
+    if (open) return open.getText();
+    try {
+      return parseSource(fs.readFileSync(file, 'utf8')).members.find((m) => m.key === key)?.[section]?.text ?? '';
+    } catch {
+      return '';
+    }
+  };
+  const checkTimers = new Map();
+  const runChecks = (doc) => {
+    if (doc.uri.scheme !== SCHEME) return;
+    if (!vscode.workspace.getConfiguration('kvalMachineScope').get('structuredText.checks', true)) return checks.delete(doc.uri);
+    let a;
+    try {
+      a = addressOf(doc.uri.query);
+    } catch {
+      return;
+    }
+    const files = projectFiles(a.file);
+    const found = checkSection({
+      section: a.section,
+      text: doc.getText(),
+      declText: a.section === 'impl' ? textOf(a.file, a.key, 'decl') : '',
+      implText: a.section === 'decl' ? textOf(a.file, a.key, 'impl') : '',
+      files,
+      known: knownNames(a.file, files),
+      baseUnknown: extendsUnknown(files, a.file),
+    });
+    checks.set(doc.uri, found.map((c) => {
+      const d = new vscode.Diagnostic(new vscode.Range(c.line, c.column, c.line, c.column + c.length), c.message, c.kind === 'unused' ? vscode.DiagnosticSeverity.Hint : vscode.DiagnosticSeverity.Warning);
+      d.source = 'TwinCAT';
+      d.code = c.kind;
+      if (c.kind === 'unused') d.tags = [vscode.DiagnosticTag.Unnecessary];
+      return d;
+    }));
+  };
+  const checkSoon = (doc) => {
+    if (doc.uri.scheme !== SCHEME) return;
+    clearTimeout(checkTimers.get(doc.uri.toString()));
+    checkTimers.set(doc.uri.toString(), setTimeout(() => runChecks(doc), 400));
+  };
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument(checkSoon),
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      checkSoon(e.document);
+      // (a declaration changed: its implementation's checks again, and the other way)
+      for (const d of vscode.workspace.textDocuments) if (d !== e.document && d.uri.scheme === SCHEME && d.uri.path.split('(')[0] === e.document.uri.path.split('(')[0]) checkSoon(d);
+    }),
+    vscode.workspace.onDidCloseTextDocument((d) => checks.delete(d.uri)),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('kvalMachineScope.structuredText.checks')) for (const d of vscode.workspace.textDocuments) runChecks(d);
+    })
+  );
+  for (const d of vscode.workspace.textDocuments) checkSoon(d);
+
+  // IntelliSense: after a dot the members of the name's type, else the names visible here; parameter hints in a call
+  const KIND = { variable: vscode.CompletionItemKind.Variable, field: vscode.CompletionItemKind.Field, enumMember: vscode.CompletionItemKind.EnumMember, method: vscode.CompletionItemKind.Method, property: vscode.CompletionItemKind.Property, event: vscode.CompletionItemKind.Event, class: vscode.CompletionItemKind.Class, struct: vscode.CompletionItemKind.Struct, enum: vscode.CompletionItemKind.Enum, interface: vscode.CompletionItemKind.Interface };
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider({ scheme: SCHEME }, {
+      provideCompletionItems(doc, pos) {
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return [];
+        }
+        return completionsAt(projectFiles(a.file), { file: a.file, key: a.key, section: a.section, text: doc.getText(), offset: doc.offsetAt(pos) }).map((c) => {
+          const it = new vscode.CompletionItem(c.label, KIND[c.kind] ?? vscode.CompletionItemKind.Text);
+          it.detail = c.detail;
+          return it;
+        });
+      },
+    }, '.'),
+    vscode.languages.registerSignatureHelpProvider({ scheme: SCHEME }, {
+      provideSignatureHelp(doc, pos) {
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return null;
+        }
+        const s = signatureAt(projectFiles(a.file), { file: a.file, key: a.key, text: doc.getText(), offset: doc.offsetAt(pos) });
+        if (!s) return null;
+        const label = `${s.name}(${s.params.map((p) => `${p.name} ${p.dir === 'VAR_OUTPUT' ? '=>' : ':='} ${p.type}`).join(', ')})`;
+        const sig = new vscode.SignatureInformation(label);
+        sig.parameters = s.params.map((p) => new vscode.ParameterInformation(`${p.name} ${p.dir === 'VAR_OUTPUT' ? '=>' : ':='} ${p.type}`, p.dir));
+        const help = new vscode.SignatureHelp();
+        help.signatures = [sig];
+        help.activeSignature = 0;
+        help.activeParameter = s.active;
+        return help;
+      },
+    }, '(', ',')
   );
   return { openMember, activeFile, fileOf, sectionUriOf, revealInSource };
 }

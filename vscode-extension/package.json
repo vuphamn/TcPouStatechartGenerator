@@ -1,7 +1,7 @@
 {
   "name": "kval-machinescope-vscode",
   "displayName": "Kval MachineScope",
-  "description": "TwinCAT in VS Code: .TcPOU / .TcDUT as Structured Text (declaration and implementation, as in XAE), Build, Login, Start, Stop; state machines as statecharts: view, edit, simulate",
+  "description": "TwinCAT in VS Code: .TcPOU / .TcDUT as Structured Text (declaration and implementation, as in XAE), IntelliSense and checks, Build, Login, live values, Write Values, Start, Stop; state machines as statecharts: view, edit, simulate, live",
   "version": "1.0.0",
   "publisher": "kval",
   "private": true,
@@ -41,14 +41,30 @@
         "viewType": "kvalMachineScope.structuredText",
         "displayName": "TwinCAT Structured Text (Declaration and Implementation)",
         "selector": [
-          { "filenamePattern": "*.TcPOU" },
-          { "filenamePattern": "*.tcpou" },
-          { "filenamePattern": "*.TcDUT" },
-          { "filenamePattern": "*.tcdut" },
-          { "filenamePattern": "*.TcGVL" },
-          { "filenamePattern": "*.tcgvl" },
-          { "filenamePattern": "*.TcIO" },
-          { "filenamePattern": "*.tcio" }
+          {
+            "filenamePattern": "*.TcPOU"
+          },
+          {
+            "filenamePattern": "*.tcpou"
+          },
+          {
+            "filenamePattern": "*.TcDUT"
+          },
+          {
+            "filenamePattern": "*.tcdut"
+          },
+          {
+            "filenamePattern": "*.TcGVL"
+          },
+          {
+            "filenamePattern": "*.tcgvl"
+          },
+          {
+            "filenamePattern": "*.TcIO"
+          },
+          {
+            "filenamePattern": "*.tcio"
+          }
         ],
         "priority": "default"
       },
@@ -56,75 +72,343 @@
         "viewType": "kvalMachineScope.statechart",
         "displayName": "Kval MachineScope Statechart",
         "selector": [
-          { "filenamePattern": "*.TcPOU" },
-          { "filenamePattern": "*.tcpou" }
+          {
+            "filenamePattern": "*.TcPOU"
+          },
+          {
+            "filenamePattern": "*.tcpou"
+          }
         ],
         "priority": "option"
       }
     ],
     "commands": [
-      { "command": "kvalMachineScope.open", "title": "Open in Kval MachineScope", "category": "Kval MachineScope", "icon": "$(type-hierarchy)" },
-      { "command": "kvalMachineScope.openStructuredText", "title": "Open as Structured Text", "category": "TwinCAT", "icon": "$(symbol-keyword)" },
-      { "command": "kvalMachineScope.openXml", "title": "Open as XML", "category": "TwinCAT", "icon": "$(code)" },
-      { "command": "kvalMachineScope.goToMember", "title": "Go to Member (Method, Property, Action)…", "category": "TwinCAT", "icon": "$(symbol-method)" },
-      { "command": "kvalMachineScope.build", "title": "Build", "category": "TwinCAT", "icon": "$(tools)", "enablement": "!kvalMachineScope.busy" },
-      { "command": "kvalMachineScope.login", "title": "Login", "category": "TwinCAT", "icon": "$(plug)", "enablement": "!kvalMachineScope.busy" },
-      { "command": "kvalMachineScope.logout", "title": "Logout", "category": "TwinCAT", "icon": "$(debug-disconnect)", "enablement": "!kvalMachineScope.busy" },
-      { "command": "kvalMachineScope.start", "title": "Start", "category": "TwinCAT", "icon": "$(debug-start)", "enablement": "!kvalMachineScope.busy && kvalMachineScope.loggedIn" },
-      { "command": "kvalMachineScope.stop", "title": "Stop", "category": "TwinCAT", "icon": "$(debug-stop)", "enablement": "!kvalMachineScope.busy && kvalMachineScope.loggedIn" },
-      { "command": "kvalMachineScope.pickTarget", "title": "Choose Target…", "category": "TwinCAT", "icon": "$(server-environment)" },
-      { "command": "kvalMachineScope.pickBuild", "title": "Choose Build (Remote Manager)…", "category": "TwinCAT", "icon": "$(versions)" },
-      { "command": "kvalMachineScope.plcActions", "title": "PLC Actions…", "category": "TwinCAT" },
-      { "command": "kvalMachineScope.showOutput", "title": "Show Output", "category": "TwinCAT", "icon": "$(output)" },
-      { "command": "kvalMachineScope.refreshPlc", "title": "Refresh", "category": "TwinCAT", "icon": "$(refresh)" }
+      {
+        "command": "kvalMachineScope.open",
+        "title": "Open in Kval MachineScope",
+        "category": "Kval MachineScope",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "kvalMachineScope.openStructuredText",
+        "title": "Open as Structured Text",
+        "category": "TwinCAT",
+        "icon": "$(symbol-keyword)"
+      },
+      {
+        "command": "kvalMachineScope.openXml",
+        "title": "Open as XML",
+        "category": "TwinCAT",
+        "icon": "$(code)"
+      },
+      {
+        "command": "kvalMachineScope.goToMember",
+        "title": "Go to Member (Method, Property, Action)…",
+        "category": "TwinCAT",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "kvalMachineScope.build",
+        "title": "Build",
+        "category": "TwinCAT",
+        "icon": "$(tools)",
+        "enablement": "!kvalMachineScope.busy"
+      },
+      {
+        "command": "kvalMachineScope.login",
+        "title": "Login",
+        "category": "TwinCAT",
+        "icon": "$(plug)",
+        "enablement": "!kvalMachineScope.busy"
+      },
+      {
+        "command": "kvalMachineScope.logout",
+        "title": "Logout",
+        "category": "TwinCAT",
+        "icon": "$(debug-disconnect)",
+        "enablement": "!kvalMachineScope.busy"
+      },
+      {
+        "command": "kvalMachineScope.start",
+        "title": "Start",
+        "category": "TwinCAT",
+        "icon": "$(debug-start)",
+        "enablement": "!kvalMachineScope.busy && kvalMachineScope.loggedIn"
+      },
+      {
+        "command": "kvalMachineScope.stop",
+        "title": "Stop",
+        "category": "TwinCAT",
+        "icon": "$(debug-stop)",
+        "enablement": "!kvalMachineScope.busy && kvalMachineScope.loggedIn"
+      },
+      {
+        "command": "kvalMachineScope.pickTarget",
+        "title": "Choose Target…",
+        "category": "TwinCAT",
+        "icon": "$(server-environment)"
+      },
+      {
+        "command": "kvalMachineScope.pickBuild",
+        "title": "Choose Build (Remote Manager)…",
+        "category": "TwinCAT",
+        "icon": "$(versions)"
+      },
+      {
+        "command": "kvalMachineScope.plcActions",
+        "title": "PLC Actions…",
+        "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.showOutput",
+        "title": "Show Output",
+        "category": "TwinCAT",
+        "icon": "$(output)"
+      },
+      {
+        "command": "kvalMachineScope.refreshPlc",
+        "title": "Refresh",
+        "category": "TwinCAT",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "kvalMachineScope.prepareValue",
+        "title": "Prepare Value…",
+        "category": "TwinCAT",
+        "icon": "$(edit)",
+        "enablement": "kvalMachineScope.loggedIn"
+      },
+      {
+        "command": "kvalMachineScope.writeValues",
+        "title": "Write Values",
+        "category": "TwinCAT",
+        "icon": "$(cloud-upload)",
+        "enablement": "kvalMachineScope.loggedIn"
+      },
+      {
+        "command": "kvalMachineScope.clearPrepared",
+        "title": "Clear Prepared Values",
+        "category": "TwinCAT",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "kvalMachineScope.buildOnlineChange",
+        "title": "Build and Online Change",
+        "category": "TwinCAT",
+        "icon": "$(repo-push)",
+        "enablement": "!kvalMachineScope.busy"
+      },
+      {
+        "command": "kvalMachineScope.pickInstance",
+        "title": "Choose Instance (Live Values)…",
+        "category": "TwinCAT",
+        "icon": "$(symbol-field)"
+      },
+      {
+        "command": "kvalMachineScope.refreshSolution",
+        "title": "Refresh",
+        "category": "TwinCAT",
+        "icon": "$(refresh)"
+      }
     ],
     "keybindings": [
-      { "command": "kvalMachineScope.build", "key": "ctrl+shift+b", "when": "kvalMachineScope.twincatProject && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)" },
-      { "command": "kvalMachineScope.login", "key": "alt+f8", "when": "kvalMachineScope.twincatProject && !kvalMachineScope.loggedIn && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)" },
-      { "command": "kvalMachineScope.logout", "key": "ctrl+f8", "when": "kvalMachineScope.loggedIn && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)" },
-      { "command": "kvalMachineScope.goToMember", "key": "ctrl+shift+o", "when": "resourceScheme == twincat-st" }
+      {
+        "command": "kvalMachineScope.build",
+        "key": "ctrl+shift+b",
+        "when": "kvalMachineScope.twincatProject && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)"
+      },
+      {
+        "command": "kvalMachineScope.login",
+        "key": "alt+f8",
+        "when": "kvalMachineScope.twincatProject && !kvalMachineScope.loggedIn && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)"
+      },
+      {
+        "command": "kvalMachineScope.logout",
+        "key": "ctrl+f8",
+        "when": "kvalMachineScope.loggedIn && (resourceScheme == twincat-st || resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i)"
+      },
+      {
+        "command": "kvalMachineScope.goToMember",
+        "key": "ctrl+shift+o",
+        "when": "resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.writeValues",
+        "key": "ctrl+f7",
+        "when": "kvalMachineScope.loggedIn && resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.prepareValue",
+        "key": "ctrl+shift+f7",
+        "when": "kvalMachineScope.loggedIn && resourceScheme == twincat-st"
+      }
     ],
     "menus": {
       "explorer/context": [
-        { "command": "kvalMachineScope.open", "when": "resourceExtname =~ /^\\.tcpou$/i", "group": "navigation@9" },
-        { "command": "kvalMachineScope.openStructuredText", "when": "resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i", "group": "navigation@8" },
-        { "command": "kvalMachineScope.openXml", "when": "resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i", "group": "navigation@10" }
+        {
+          "command": "kvalMachineScope.open",
+          "when": "resourceExtname =~ /^\\.tcpou$/i",
+          "group": "navigation@9"
+        },
+        {
+          "command": "kvalMachineScope.openStructuredText",
+          "when": "resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i",
+          "group": "navigation@8"
+        },
+        {
+          "command": "kvalMachineScope.openXml",
+          "when": "resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i",
+          "group": "navigation@10"
+        }
       ],
       "editor/title/context": [
-        { "command": "kvalMachineScope.open", "when": "resourceExtname =~ /^\\.tcpou$/i || resourceScheme == twincat-st", "group": "navigation@9" },
-        { "command": "kvalMachineScope.openXml", "when": "resourceScheme == twincat-st", "group": "navigation@10" }
+        {
+          "command": "kvalMachineScope.open",
+          "when": "resourceExtname =~ /^\\.tcpou$/i || resourceScheme == twincat-st",
+          "group": "navigation@9"
+        },
+        {
+          "command": "kvalMachineScope.openXml",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@10"
+        }
       ],
       "editor/title": [
-        { "command": "kvalMachineScope.build", "when": "resourceScheme == twincat-st && kvalMachineScope.twincatProject", "group": "navigation@1" },
-        { "command": "kvalMachineScope.login", "when": "resourceScheme == twincat-st && kvalMachineScope.twincatProject && !kvalMachineScope.loggedIn", "group": "navigation@2" },
-        { "command": "kvalMachineScope.logout", "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn", "group": "navigation@2" },
-        { "command": "kvalMachineScope.start", "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && !kvalMachineScope.plcRunning", "group": "navigation@3" },
-        { "command": "kvalMachineScope.stop", "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.plcRunning", "group": "navigation@3" },
-        { "command": "kvalMachineScope.goToMember", "when": "resourceScheme == twincat-st", "group": "navigation@4" },
-        { "command": "kvalMachineScope.open", "when": "resourceScheme == twincat-st", "group": "navigation@5" }
+        {
+          "command": "kvalMachineScope.build",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.twincatProject",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.login",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.twincatProject && !kvalMachineScope.loggedIn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.logout",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.start",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && !kvalMachineScope.plcRunning",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.stop",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.plcRunning",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.goToMember",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@4"
+        },
+        {
+          "command": "kvalMachineScope.open",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@5"
+        },
+        {
+          "command": "kvalMachineScope.writeValues",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.prepared",
+          "group": "navigation@3"
+        }
       ],
       "view/title": [
-        { "command": "kvalMachineScope.build", "when": "view == kvalMachineScope.plc", "group": "navigation@1" },
-        { "command": "kvalMachineScope.login", "when": "view == kvalMachineScope.plc && !kvalMachineScope.loggedIn", "group": "navigation@2" },
-        { "command": "kvalMachineScope.logout", "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn", "group": "navigation@2" },
-        { "command": "kvalMachineScope.start", "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn && !kvalMachineScope.plcRunning", "group": "navigation@3" },
-        { "command": "kvalMachineScope.stop", "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn && kvalMachineScope.plcRunning", "group": "navigation@3" },
-        { "command": "kvalMachineScope.refreshPlc", "when": "view == kvalMachineScope.plc", "group": "navigation@9" },
-        { "command": "kvalMachineScope.goToMember", "when": "view == kvalMachineScope.pouMembers", "group": "navigation@1" }
+        {
+          "command": "kvalMachineScope.build",
+          "when": "view == kvalMachineScope.plc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.login",
+          "when": "view == kvalMachineScope.plc && !kvalMachineScope.loggedIn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.logout",
+          "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.start",
+          "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn && !kvalMachineScope.plcRunning",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.stop",
+          "when": "view == kvalMachineScope.plc && kvalMachineScope.loggedIn && kvalMachineScope.plcRunning",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.refreshPlc",
+          "when": "view == kvalMachineScope.plc",
+          "group": "navigation@9"
+        },
+        {
+          "command": "kvalMachineScope.goToMember",
+          "when": "view == kvalMachineScope.pouMembers",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.buildOnlineChange",
+          "when": "view == kvalMachineScope.plc",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.refreshSolution",
+          "when": "view == kvalMachineScope.solution",
+          "group": "navigation@1"
+        }
       ],
       "commandPalette": [
-        { "command": "kvalMachineScope.plcActions", "when": "kvalMachineScope.twincatProject" }
+        {
+          "command": "kvalMachineScope.plcActions",
+          "when": "kvalMachineScope.twincatProject"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "kvalMachineScope.prepareValue",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
+          "group": "twincat@1"
+        },
+        {
+          "command": "kvalMachineScope.writeValues",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.prepared",
+          "group": "twincat@2"
+        },
+        {
+          "command": "kvalMachineScope.clearPrepared",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.prepared",
+          "group": "twincat@3"
+        }
       ]
     },
     "viewsContainers": {
       "activitybar": [
-        { "id": "kvalTwinCAT", "title": "TwinCAT", "icon": "./media/twincat.svg" }
+        {
+          "id": "kvalTwinCAT",
+          "title": "TwinCAT",
+          "icon": "./media/twincat.svg"
+        }
       ]
     },
     "views": {
       "kvalTwinCAT": [
-        { "id": "kvalMachineScope.plc", "name": "PLC" },
-        { "id": "kvalMachineScope.pouMembers", "name": "POU" }
+        {
+          "id": "kvalMachineScope.plc",
+          "name": "PLC"
+        },
+        {
+          "id": "kvalMachineScope.pouMembers",
+          "name": "POU"
+        },
+        {
+          "id": "kvalMachineScope.solution",
+          "name": "Solution"
+        }
       ]
     },
     "configuration": {
@@ -139,6 +423,11 @@
           "type": "boolean",
           "default": true,
           "description": "Ask before Start and Stop of the PLC (its program runs or stops: the machine moves or stops being controlled)."
+        },
+        "kvalMachineScope.structuredText.checks": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Checks while typing in the Structured Text sections: a method's own variable never used (faded), and a plain name declared nowhere in the project (a typo?). Names of libraries are not known here: ALL_CAPS names, calls and names after a dot are not checked."
         }
       }
     }

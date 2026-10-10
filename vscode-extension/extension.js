@@ -17,6 +17,8 @@ function activate(context) {
   const appDir = vscode.Uri.joinPath(context.extensionUri, 'app');
   // (TwinCAT files as Structured Text: also where the statechart's Go to code goes)
   const st = stEditor.register(context);
+  // (the TwinCAT view: the statechart's live view goes to its target, its Build… is its build)
+  let tc = null;
   const version = context.extension.packageJSON.version;
 
   /** The app in a webview, its host for that .TcPOU */
@@ -52,6 +54,9 @@ function activate(context) {
       open(file) {
         void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
       },
+      // (live view: the target picked for the project in the TwinCAT view; Build…: its build)
+      target: (file) => tc?.targetFor(file) ?? null,
+      build: (file) => (tc ? tc.buildFor(file) : Promise.resolve({ ok: false, fatal: 'Not ready yet' })),
     };
     const host = createHost({ pouPath, post, ui });
     webviewPanel.title = `${path.basename(pouPath)} · statechart`;
@@ -67,6 +72,7 @@ function activate(context) {
     };
     subs.push(watcher, watcher.onDidChange(changed), watcher.onDidCreate(changed));
     webviewPanel.onDidDispose(() => {
+      host.dispose?.();
       for (const t of timers.values()) clearTimeout(t);
       for (const s of subs) s.dispose();
     });
@@ -102,7 +108,7 @@ function activate(context) {
 
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
-  twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
+  tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
 }
 
 function deactivate() {}

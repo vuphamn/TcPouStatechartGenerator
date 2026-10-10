@@ -72,6 +72,51 @@ function decodeTyped(buf, info) {
   }
 }
 
+/**
+ * A value as the symbol's ADS data type holds it (BOOL, the integers, REAL / LREAL, STRING / WSTRING): its bytes;
+ * throws for a type not written here, or a value out of its range
+ */
+function encodeTyped(value, info) {
+  const b = Buffer.alloc(info.size);
+  const int = (min, max) => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${value} is not a whole number from ${min} to ${max}`);
+    return n;
+  };
+  switch (info.dataType) {
+    case ADST.BIT: b.writeUInt8(value === true || value === 1 || /^(true|1)$/i.test(String(value)) ? 1 : 0, 0); break;
+    case ADST.INT8: b.writeInt8(int(-128, 127), 0); break;
+    case ADST.UINT8: b.writeUInt8(int(0, 255), 0); break;
+    case ADST.INT16: b.writeInt16LE(int(-32768, 32767), 0); break;
+    case ADST.UINT16: b.writeUInt16LE(int(0, 65535), 0); break;
+    case ADST.INT32: b.writeInt32LE(int(-2147483648, 2147483647), 0); break;
+    case ADST.UINT32: b.writeUInt32LE(int(0, 4294967295), 0); break;
+    case ADST.INT64: b.writeBigInt64LE(BigInt(int(Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)), 0); break;
+    case ADST.UINT64: b.writeBigUInt64LE(BigInt(int(0, Number.MAX_SAFE_INTEGER)), 0); break;
+    case ADST.REAL32: b.writeFloatLE(Number(value), 0); break;
+    case ADST.REAL64: b.writeDoubleLE(Number(value), 0); break;
+    case ADST.STRING: {
+      const s = String(value);
+      if (s.length > info.size - 1) throw new Error(`The text is longer than the variable holds (${info.size - 1} characters)`);
+      b.write(s, 0, 'latin1');
+      break;
+    }
+    case ADST.WSTRING: {
+      const s = String(value);
+      if ((s.length + 1) * 2 > info.size) throw new Error(`The text is longer than the variable holds (${info.size / 2 - 1} characters)`);
+      b.write(s, 0, 'utf16le');
+      break;
+    }
+    default: throw new Error('A value of this type is not written here (only BOOL, numbers, enums and strings)');
+  }
+  return b;
+}
+
+/** The value written by its handle (its symbol's type: see encodeTyped) */
+async function writeTyped(client, handle, info, value) {
+  await client.writeRaw(SYM_VALUE_BY_HANDLE, handle, encodeTyped(value, info));
+}
+
 async function readTyped(client, handle, info) {
   return decodeTyped(await client.readRaw(SYM_VALUE_BY_HANDLE, handle, info.size), info);
 }
@@ -418,7 +463,9 @@ module.exports = {
   subscribeHandle,
   isSimpleValue,
   decodeTyped,
+  encodeTyped,
   readTyped,
+  writeTyped,
   subscribeTyped,
   discoverInstances,
   findMember,

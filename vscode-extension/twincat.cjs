@@ -12,7 +12,8 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { buildFromProject, remoteManagerBuilds, xaeAvailable } = require('../shared/tcBuild.cjs');
+const { buildFromProject, remoteManagerBuilds, xaeAvailable, rmCrashesFor } = require('../shared/tcBuild.cjs');
+const { readPlcTree, plcProjectsUnder } = require('./plcTree.cjs');
 const { projectOf, projectTarget, findPlcproj } = require('./twincatProject.cjs');
 const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs');
 const { startPlc, stopPlc } = require('../shared/tcAppInfo.cjs');
@@ -218,6 +219,13 @@ function register(context, { activeFile, sectionUriOf }) {
     const p = project;
     const s = stateOf(p.root);
     if (!(await xaeAvailable())) throw new Error('TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)');
+    const crashed = rmOf(p) ? rmCrashesFor(p.tsproj)[rmOf(p)] : null;
+    if (crashed && !opts.confirmedRm) {
+      const DEF = 'Use (Default)';
+      const c = await vscode.window.showWarningMessage(`XAE stopped while it opened ${p.name} with Remote Manager build ${rmOf(p)} (${new Date(crashed).toLocaleString()}).`, { modal: true }, DEF, 'Try again');
+      if (!c) throw new Error('Not built');
+      if (c === DEF) await context.workspaceState.update(`kvalMachineScope.rm|${p.root.toLowerCase()}`, '');
+    }
     const saved = await saveProjectEdits(p);
     if (saved) log(`${saved} unsaved file(s) saved first`);
     s.busy = title;
@@ -315,6 +323,31 @@ function register(context, { activeFile, sectionUriOf }) {
     void poll();
   }
 
+  async function buildOnlineChange() {
+    const p = needProject();
+    const s = stateOf(p.root);
+    const t = targetOf(p);
+    const ok = await vscode.window.showWarningMessage(`Build ${p.name} and write it to the PLC on ${t.name} as an online change?`, { modal: true, detail: 'The PLC takes the new code while it keeps running; the boot project is updated too. When an online change is not possible, nothing is written (Login offers a download).' }, 'Build and Online Change');
+    if (!ok) return;
+    if (STAND_IN) {
+      s.loggedIn = true;
+      log(`Online change on ${t.name} (stand-in)`);
+      render();
+      live.refresh(p.root);
+      return;
+    }
+    const client = await plcClient(t);
+    const r = await runXae('Online change', { client, write: 'online', netId: t.netId });
+    showItems(p, r.items);
+    if (!r.ok) throw new Error(r.fatal ?? `Nothing was written: ${summary(r)}`);
+    s.loggedIn = true;
+    s.code = null;
+    log(`Online change on ${t.name}: made${r.bootProject === false ? ' (the boot project was not updated)' : ''}`);
+    render();
+    live.refresh(p.root);
+    void poll();
+  }
+
   async function logout() {
     const p = needProject();
     stateOf(p.root).loggedIn = false;
@@ -381,7 +414,8 @@ function register(context, { activeFile, sectionUriOf }) {
     const p = needProject();
     const builds = remoteManagerBuilds().sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     const current = rmOf(p);
-    const items = [{ label: '(Default)', description: "XAE's default", value: '' }, ...builds.map((b) => ({ label: b, description: `TwinCAT 3.1.${b}`, value: b }))].map((i) => ({ ...i, detail: i.value === current ? 'current' : undefined }));
+    const crashes = rmCrashesFor(p.tsproj);
+    const items = [{ label: '(Default)', description: "XAE's default", value: '' }, ...builds.map((b) => ({ label: b, description: `TwinCAT 3.1.${b}`, value: b }))].map((i) => ({ ...i, detail: [i.value === current ? 'current' : '', crashes[i.value] ? `$(warning) XAE stopped while it opened ${p.name} with it (${new Date(crashes[i.value]).toLocaleDateString()})` : ''].filter(Boolean).join(' · ') || undefined }));
     const picked = await vscode.window.showQuickPick(items, { placeHolder: `${p.name}: the TwinCAT build that builds it (XAE's Remote Manager)` });
     if (!picked) return;
     await context.workspaceState.update(`kvalMachineScope.rm|${p.root.toLowerCase()}`, picked.value);
@@ -394,6 +428,7 @@ function register(context, { activeFile, sectionUriOf }) {
     const s = stateOf(p.root);
     const items = [
       { label: '$(tools) Build', run: build },
+      { label: '$(cloud-upload) Build and Online Change', run: buildOnlineChange },
       s.loggedIn ? { label: '$(debug-disconnect) Logout', run: logout } : { label: '$(plug) Login', run: login },
       ...(s.loggedIn ? [s.plc === 'Run' ? { label: '$(debug-stop) Stop', run: () => startStop(false) } : { label: '$(debug-start) Start', run: () => startStop(true) }] : []),
       { label: '$(server-environment) Choose target…', run: pickTarget },
@@ -449,6 +484,7 @@ function register(context, { activeFile, sectionUriOf }) {
     vscode.commands.registerCommand('kvalMachineScope.build', guard(build)),
     vscode.commands.registerCommand('kvalMachineScope.login', guard(login)),
     vscode.commands.registerCommand('kvalMachineScope.logout', guard(logout)),
+    vscode.commands.registerCommand('kvalMachineScope.buildOnlineChange', guard(buildOnlineChange)),
     vscode.commands.registerCommand('kvalMachineScope.start', guard(() => startStop(true))),
     vscode.commands.registerCommand('kvalMachineScope.stop', guard(() => startStop(false))),
     vscode.commands.registerCommand('kvalMachineScope.pickTarget', guard(pickTarget)),
@@ -494,11 +530,103 @@ function register(context, { activeFile, sectionUriOf }) {
     return p;
   };
   const live = registerLiveValues(context, {
-    online: { isOnline: (root) => !!states.get(root)?.loggedIn, source: sourceOf },
+    online: { isOnline: (root) => !!states.get(root)?.loggedIn, source: sourceOf, targetName: (root) => targetOf(projects.get(root) ?? project)?.name ?? 'the PLC' },
     projectOf: cachedProjectOf,
   });
+  // ---- The Solution view: the PLC projects' trees (their .plcproj), as XAE's Solution Explorer shows them
+  const solution = (() => {
+    const changed = new vscode.EventEmitter();
+    const ICON = { TcPOU: 'symbol-class', TcDUT: 'symbol-structure', TcGVL: 'symbol-variable', TcIO: 'symbol-interface', TcVIS: 'eye', TcTTO: 'watch' };
+    const provider = {
+      onDidChangeTreeData: changed.event,
+      getChildren(el) {
+        if (!project) return [];
+        if (!el) {
+          return plcProjectsUnder(project.root).map((plcproj) => {
+            try {
+              const t = readPlcTree(plcproj);
+              return { label: t.name, plc: true, children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references }] : [])] };
+            } catch {
+              return { label: path.basename(plcproj), plc: true, children: [] };
+            }
+          });
+        }
+        if (el.references) return el.references.map((r) => ({ name: r, reference: true }));
+        return el.children ?? [];
+      },
+      getTreeItem(el) {
+        if (el.plc) {
+          const it = new vscode.TreeItem(el.label, vscode.TreeItemCollapsibleState.Expanded);
+          it.iconPath = new vscode.ThemeIcon('project');
+          it.description = 'PLC project';
+          return it;
+        }
+        if (el.references) return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), { iconPath: new vscode.ThemeIcon('library'), description: `${el.references.length}` });
+        if (el.reference) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None), { iconPath: new vscode.ThemeIcon('package') });
+        if (el.children) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.Collapsed), { iconPath: vscode.ThemeIcon.Folder });
+        const it = new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None);
+        it.iconPath = new vscode.ThemeIcon(ICON[el.ext] ?? 'file');
+        it.description = el.ext;
+        it.tooltip = el.file;
+        it.resourceUri = vscode.Uri.file(el.file);
+        // (a source: as Structured Text; another (a visualization, the task): the file itself)
+        it.command = /^(TcPOU|TcDUT|TcGVL|TcIO)$/i.test(el.ext) ? { command: 'kvalMachineScope.openStructuredText', title: 'Open', arguments: [vscode.Uri.file(el.file)] } : { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.file(el.file)] };
+        return it;
+      },
+    };
+    const view = vscode.window.createTreeView('kvalMachineScope.solution', { treeDataProvider: provider, showCollapseAll: true });
+    context.subscriptions.push(view, changed);
+    let shownRoot = null;
+    return {
+      refresh: () => {
+        view.description = project ? project.name : '';
+        view.message = project ? undefined : 'Open a file of a TwinCAT project to see its PLC project here.';
+        if (project?.root !== shownRoot) {
+          shownRoot = project?.root ?? null;
+          changed.fire(undefined);
+        }
+      },
+      reload: () => changed.fire(undefined),
+    };
+  })();
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+  const renderAll = render;
+  render = () => {
+    renderAll();
+    solution.refresh();
+  };
+
   follow();
-  return { projectOf };
+  return {
+    projectOf,
+    /** The statechart's live view: the target picked for the file's project ({ name, netId, address, local }) */
+    targetFor: (file) => {
+      const p = cachedProjectOf(file);
+      return p ? targetOf(p) : null;
+    },
+    /** The statechart's Build…: the file's project built as Build does (its messages in the Problems panel too) */
+    async buildFor(file) {
+      const p = cachedProjectOf(file);
+      if (!p) return { ok: false, fatal: 'This POU is not in a TwinCAT project folder (no .tsproj above it)' };
+      project = p;
+      render();
+      try {
+        const r = await runXae('Build', {});
+        stateOf(p.root).lastBuild = { ok: !!r.ok, at: Date.now(), text: r.fatal ?? summary(r) };
+        showItems(p, r.items);
+        render();
+        // (each message's file as XAE names it: <file>.TcPOU@<member> (Impl), in the project itself, not the build's copy)
+        const items = (r.items ?? []).map((i) => {
+          const plcproj = i.place ? findPlcproj(p.root, i.place.plcProject) : null;
+          const file = plcproj ? `${path.join(path.dirname(plcproj), ...i.place.path.split('/'))}${i.place.member ? `@${i.place.member}` : ''}${i.place.part ? ` (${i.place.part === 'declaration' ? 'Decl' : 'Impl'})` : ''}` : i.file;
+          return { level: i.level, text: i.text, file, line: i.line, column: i.column, project: i.project };
+        });
+        return { ok: !!r.ok, errors: r.errors ?? items.filter((i) => i.level === 'error').length, warnings: items.filter((i) => i.level === 'warning').length, ...(r.fatal ? { fatal: r.fatal } : {}), items };
+      } catch (err) {
+        return { ok: false, fatal: err?.message ?? String(err) };
+      }
+    },
+  };
 
 }
 

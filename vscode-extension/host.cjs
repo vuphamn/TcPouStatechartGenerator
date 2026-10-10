@@ -81,7 +81,9 @@ function locateInPou(xml, method, line, text) {
 
 /**
  * The host of one .TcPOU's panel. ui: { pick(kind: 'pou' | 'folder' | 'duts' | 'save', name?): Promise<string[] | null>,
- * reveal(file, line, column), open(file), version, info(msg) }. post: a message to the app.
+ * reveal(file, line, column), open(file), version, info(msg), target?(file): the PLC target picked for its project
+ * ({ name, netId, address, local }), build?(file): the project built ({ ok, errors, warnings, fatal, items }) }.
+ * post: a message to the app. Live view: the desktop app's live session (electron/tcLive.cjs), one per panel.
  */
 function createHost({ pouPath, post, ui }) {
   let pou = pouPath;
@@ -97,6 +99,15 @@ function createHost({ pouPath, post, ui }) {
     post({ type: 'loadPou', source: { name: path.basename(p), path: p, content, dutCandidates: duts } });
   };
   const layoutFile = (p) => `${p.replace(/\.tcpou$/i, '')}.machinescope.json`;
+  // (live view: made when first asked for)
+  let liveSession = null;
+  const live = () => (liveSession ??= require('../electron/tcLive.cjs')());
+  /** The target given, else the one picked for the project in VS Code (the TwinCAT view), else this computer's */
+  const targetOf = async (m) => {
+    if (m.netId) return { netId: m.netId, ip: m.ip };
+    const t = ui.target ? await ui.target(m.path || pou) : null;
+    return t?.netId ? { netId: t.netId, ip: t.local ? '127.0.0.1' : t.address || undefined } : {};
+  };
   const handlers = {
     ready: () => load(pou),
     save: ({ files = [] }) => {
@@ -202,22 +213,49 @@ function createHost({ pouPath, post, ui }) {
       post({ type: 'saveDocumentResult', path: p });
     },
     hostInfo: () => post({ type: 'hostInfo', edition: 'vscode', version: ui.version }),
-    // (not in VS Code: live view, the PLC, the project's other files)
-    liveStart: () => post({ type: 'liveStatus', state: 'error', message: 'Live view is not available in VS Code: use the desktop app, the web edition (Link or a gateway) or TwinCAT XAE' }),
-    liveStop: () => post({ type: 'liveStatus', state: 'stopped', message: 'Not connected' }),
+    // Live view: the desktop app's live session (its instance paths from the PLC project's files beside the POU)
+    liveStart: async (m) => live().start(post, { ...m, path: m.path || pou, ...(await targetOf(m)) }),
+    liveStop: async () => {
+      if (liveSession) await liveSession.stop(true, post);
+      else post({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
+    },
+    liveWatch: ({ vars }) => live().watch(vars),
+    // (not in VS Code: the project's other files)
     gitShow: ({ requestId }) => post({ type: 'gitShowResult', requestId, error: 'Not available in VS Code (use its Source Control view)' }),
     projectPous: () => post({ type: 'projectPous', error: 'Not available in VS Code' }),
     projectSymbols: () => post({ type: 'projectSymbols', error: 'Not available in VS Code' }),
     projectUses: ({ requestId }) => post({ type: 'projectUses', requestId, error: 'Not available in VS Code: rename it in TwinCAT XAE' }),
     saveOther: ({ requestId }) => post({ type: 'saveOtherResult', requestId, ok: false, message: 'Not available in VS Code' }),
-    buildProject: ({ requestId }) => post({ type: 'xaeBuildResult', requestId, ok: false, fatal: 'Building the PLC project is not available in VS Code: build it in TwinCAT XAE' }),
-    liveBrowse: ({ requestId, path: p }) => post({ type: 'liveBrowseResult', requestId, path: p, error: 'Not available in VS Code' }),
-    discoverPlcs: ({ requestId }) => post({ type: 'plcList', requestId, devices: [], errors: ['Finding PLCs is not available in VS Code'] }),
+    // Build…: the TwinCAT view's build (TwinCAT XAE's Automation Interface, a copy of the project)
+    buildProject: async ({ requestId }) => {
+      if (!ui.build) return post({ type: 'xaeBuildResult', requestId, ok: false, fatal: 'Building the PLC project is not available here' });
+      const r = await ui.build(pou);
+      post({ type: 'xaeBuildResult', requestId, ok: !!r.ok, errors: r.errors ?? 0, warnings: r.warnings ?? 0, ...(r.fatal ? { fatal: r.fatal } : {}), items: r.items ?? [] });
+    },
+    liveBrowse: (req) => live().browse(post, req),
+    // Browse (the Live tab): this computer's routes and the TwinCAT devices answering on the network
+    discoverPlcs: async ({ requestId }) => {
+      const { localRoutes, discover } = require('../shared/tcDiscovery.cjs');
+      const routes = localRoutes().map((r) => ({ netId: r.netId, ip: r.address, name: r.name, route: true, source: 'route' }));
+      const errors = [];
+      const found = await discover({}).catch((err) => {
+        errors.push(String(err?.message ?? err));
+        return [];
+      });
+      const seen = new Set(routes.map((r) => r.netId));
+      const devices = [...routes, ...found.filter((d) => d?.netId && !seen.has(d.netId)).map((d) => ({ netId: d.netId, ip: d.ip ?? d.address ?? '', name: d.name ?? d.hostname ?? d.netId, twincat: d.twincat, os: d.os, route: false, source: 'network' }))];
+      const t = ui.target ? await ui.target(pou) : null;
+      post({ type: 'plcList', requestId, devices, errors, projectTarget: t?.netId ?? null });
+    },
     probePlcs: ({ requestId }) => post({ type: 'probeResult', requestId, reachable: [] }),
     addRoute: ({ requestId }) => post({ type: 'addRouteResult', requestId, ok: false, message: 'Not available in VS Code' }),
     openInstance: () => post({ type: 'error', message: 'Live view is not available in VS Code' }),
   };
   return {
+    /** The panel closed: its live session ends */
+    dispose() {
+      if (liveSession) void liveSession.stop(false);
+    },
     /** A message from the app */
     async handle(m) {
       const h = m && handlers[m.type];

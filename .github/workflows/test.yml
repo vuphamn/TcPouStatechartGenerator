@@ -90,6 +90,40 @@ jobs:
           include-hidden-files: true
           retention-days: 7
 
+  vscode:
+    # The VS Code extension in VS Code itself: a portable VS Code (the zip) on the runner, the extension loaded from its
+    # sources with a profile of its own; Structured Text sections, Build's messages (XAE's stand-in), live values (a
+    # stand-in PLC), Rename, the outline, the checks and IntelliSense
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: VS Code (portable)
+        run: |
+          Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile vscode.zip
+          Expand-Archive vscode.zip -DestinationPath "$env:RUNNER_TEMP\vscode"
+          "KSS_VSCODE=$env:RUNNER_TEMP\vscode\Code.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: VS Code extension tests
+        run: node tests/run.cjs vscode
+      - name: Test summary
+        if: always()
+        run: node scripts/test-summary.cjs "VS Code extension" >> "$env:GITHUB_STEP_SUMMARY"
+      - name: Test logs
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: test-output-vscode
+          path: tests/.output
+          include-hidden-files: true
+          retention-days: 7
+
   desktop:
     # The Electron app (its window on the runner's desktop, driven over its debugging port) against the dev server
     runs-on: windows-latest
