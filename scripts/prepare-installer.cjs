@@ -15,7 +15,21 @@ const vsix = path.join(root, 'xae-extension', 'KvalMachineScope.Xae', 'bin', 'Re
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: 'inherit', cwd: root, ...opts });
 
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('dist/ is missing: run "npm run build" first');
-fs.rmSync(out, { recursive: true, force: true });
+// (a folder of the last run held open, e.g. watched by an editor: its files removed, its folders kept and filled again)
+try {
+  fs.rmSync(out, { recursive: true, force: true });
+} catch (err) {
+  if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(err.code)) throw err;
+  const files = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) files(p);
+      else fs.rmSync(p, { force: true });
+    }
+  };
+  files(out);
+  console.warn(`${out}: a folder in it is held open (an editor or a scan watching it?): its files were removed, its folders kept`);
+}
 fs.mkdirSync(out, { recursive: true });
 
 // 1. The XAE extension (Visual Studio's MSBuild is needed to build it)
@@ -58,7 +72,7 @@ fs.copyFileSync(path.join(root, 'build', 'installer', 'check-install.ps1'), path
 
 // 2. Kval MachineScope Link (a single exe)
 run(process.execPath, [path.join(root, 'scripts', 'build-link.cjs')]);
-fs.mkdirSync(path.join(out, 'link'));
+fs.mkdirSync(path.join(out, 'link'), { recursive: true });
 fs.copyFileSync(path.join(root, 'release', 'link', 'Kval MachineScope Link.exe'), path.join(out, 'link', 'Kval MachineScope Link.exe'));
 
 // 3. The gateway with its dependencies (the gateway machine then needs only Node.js)
