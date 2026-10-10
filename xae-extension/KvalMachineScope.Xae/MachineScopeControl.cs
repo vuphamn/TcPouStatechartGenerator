@@ -402,8 +402,8 @@ namespace KvalMachineScope.Xae
                     case "findPou":
                         HandleFindPou(msg);
                         break;
-                    case "findDut":
-                        HandleFindDut(msg);
+                    case "findEnumType":
+                        HandleFindEnumType(msg);
                         break;
                     case "activateProject":
                         HandleActivateProject(msg);
@@ -664,17 +664,17 @@ namespace KvalMachineScope.Xae
 
         /// <summary>
         /// The enum of a type anywhere in the PLC project (another company's POU: State : E_ScanState, its .TcDUT in
-        /// another folder) → findDutResult { requestId, typeName, dut: { name, relativePath, path, content } | error };
+        /// another folder) → findEnumTypeResult { requestId, typeName, dut: { name, relativePath, path, content } | error };
         /// it can be edited and saved here (known, watched)
         /// </summary>
-        private void HandleFindDut(Dictionary<string, object> msg)
+        private void HandleFindEnumType(Dictionary<string, object> msg)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
             var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
             if (string.IsNullOrEmpty(typeName) || !System.Text.RegularExpressions.Regex.IsMatch(typeName, @"^[A-Za-z_]\w*$"))
             {
-                Post(new { type = "findDutResult", requestId, typeName, error = "No type name" });
+                Post(new { type = "findEnumTypeResult", requestId, typeName, error = "No type name" });
                 return;
             }
             try
@@ -682,7 +682,7 @@ namespace KvalMachineScope.Xae
                 var target = FindInProject(typeName, ".TcDUT");
                 if (target == null)
                 {
-                    Post(new { type = "findDutResult", requestId, typeName, error = $"{typeName}.TcDUT was not found in the PLC project" });
+                    Post(new { type = "findEnumTypeResult", requestId, typeName, error = $"{typeName}.TcDUT was not found in the PLC project" });
                     return;
                 }
                 var content = HostFiles.CurrentContent(_pane, target);
@@ -691,11 +691,11 @@ namespace KvalMachineScope.Xae
                 var from = string.IsNullOrEmpty(_pouPath) ? null : Path.GetDirectoryName(_pouPath);
                 var relative = from == null ? Path.GetFileName(target) : new Uri(from.TrimEnd('\\') + "\\").MakeRelativeUri(new Uri(target)).ToString().Replace('/', '\\');
                 Log.Write($"enum of {typeName}: {target}");
-                Post(new { type = "findDutResult", requestId, typeName, dut = new { name = Path.GetFileName(target), relativePath = Uri.UnescapeDataString(relative), path = target, content } });
+                Post(new { type = "findEnumTypeResult", requestId, typeName, dut = new { name = Path.GetFileName(target), relativePath = Uri.UnescapeDataString(relative), path = target, content } });
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is UriFormatException)
             {
-                Post(new { type = "findDutResult", requestId, typeName, error = $"{typeName}.TcDUT could not be read: {ex.Message}" });
+                Post(new { type = "findEnumTypeResult", requestId, typeName, error = $"{typeName}.TcDUT could not be read: {ex.Message}" });
             }
         }
 
