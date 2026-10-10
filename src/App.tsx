@@ -10791,6 +10791,7 @@ export const App: React.FC = () => {
           browse={liveBrowse}
           values={liveVarValues}
           watched={liveWatched}
+          onWriteValue={liveMode === 'xae' || liveMode === 'desktop' ? handleWriteLiveVar : undefined}
           onVisibleValues={handleSymbolPaths}
           currentInstance={liveStatus.instance}
           stateVar={liveStateVar}

@@ -53,6 +53,8 @@ interface SymbolBrowserWindowProps {
   /** Values and lookups by watch id (see symbolWatchId) */
   values: Record<string, LiveValue>;
   watched: Record<string, WatchedVar>;
+  /** A value written to the PLC (asked first); absent where values cannot be written */
+  onWriteValue?: (v: { name: string; id: string; symbol?: string; type?: string; text: string }) => void;
   /** The value symbols on show (the host follows them) */
   onVisibleValues: (paths: string[]) => void;
   /** The instance this window follows */
@@ -102,6 +104,7 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
   browse,
   values,
   watched,
+  onWriteValue,
   onVisibleValues,
   currentInstance,
   stateVar,
@@ -546,11 +549,20 @@ export const SymbolBrowserWindow: React.FC<SymbolBrowserWindowProps> = ({
                     <span className="text-slate-500 truncate min-w-0 flex-1" title={c.type}>
                       {c.type}
                     </span>
-                    {value && (
-                      <span className={`symbol-value shrink-0 max-w-[45%] truncate text-right ${lookupError ? 'text-amber-300/80' : value.cls}`} title={lookupError ?? `${c.path} = ${value.text}`}>
-                        {lookupError ? '?' : value.text}
-                      </span>
-                    )}
+                    {value &&
+                      (onWriteValue && !lookupError && values[id] !== undefined ? (
+                        <button
+                          className={`symbol-value symbol-write shrink-0 max-w-[45%] truncate text-right underline decoration-dotted decoration-slate-600 hover:text-sky-300 ${value.cls}`}
+                          title={`${c.path} = ${value.text}: click to write a value…`}
+                          onClick={() => onWriteValue({ name: c.path, id, symbol: watched[id]?.symbol ?? c.path, type: watched[id]?.type ?? c.type, text: value.text })}
+                        >
+                          {value.text}
+                        </button>
+                      ) : (
+                        <span className={`symbol-value shrink-0 max-w-[45%] truncate text-right ${lookupError ? 'text-amber-300/80' : value.cls}`} title={lookupError ?? `${c.path} = ${value.text}`}>
+                          {lookupError ? '?' : value.text}
+                        </span>
+                      ))}
                     {c.stateMachine &&
                       (here ? (
                         <span className="shrink-0 font-sans text-[10px] text-emerald-300">this {openTarget}</span>

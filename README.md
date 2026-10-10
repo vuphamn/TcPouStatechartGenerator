@@ -687,7 +687,7 @@ While live, the diagram shows why the state machine does or doesn't leave its st
 - **All transitions:** every condition gets a badge. Values are shown for the current state's transitions and the selected one.
 - **Off:** nothing extra is read.
 
-**Write Values** (TwinCAT XAE, VS Code and the desktop app; as XAE's online view): click a variable in the Live tab's guard values to write it. Its value is asked for, typed as its type (`TRUE` / `FALSE` proposed the other way round for a BOOL, an enum's member by name, `16#FF`, `T#2S`, a string), with the symbol and the PLC named; **Write** sends it at once, and the PLC's answer (a value out of the type's range, a string too long) is shown. Forcing (holding a value against the program) stays XAE's.
+**Write Values** (TwinCAT XAE, VS Code and the desktop app; as XAE's online view): click a variable in the Live tab's guard values, or a value in the Symbols window, to write it. Its value is asked for, typed as its type (`TRUE` / `FALSE` proposed the other way round for a BOOL, an enum's member by name, `16#FF`, `T#2S`, a string), with the symbol and the PLC named; **Write** sends it at once, and the PLC's answer (a value out of the type's range, a string too long) is shown. Forcing (holding a value against the program) stays XAE's.
 
 **How the result is worked out:**
 - **The whole IF context counts:** a transition in an `ELSIF` or `ELSE` branch fires only when the earlier branches' conditions are FALSE, so those are part of its condition.

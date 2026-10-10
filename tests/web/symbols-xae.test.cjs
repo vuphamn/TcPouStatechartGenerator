@@ -56,7 +56,13 @@ const TREE = {
       const n = TREE[m.path];
       await toApp(n ? { type: 'liveBrowseResult', requestId: m.requestId, path: m.path, symbolType: n.symbolType, kind: 'struct', children: n.children } : { type: 'liveBrowseResult', requestId: m.requestId, path: m.path, error: `${m.path} is not in the PLC` });
     } else if (m.type === 'liveWatch') {
-      await toApp({ type: 'liveWatchResult', vars: m.vars.map((v) => ({ id: v.id, error: 'not in the PLC' })) });
+      // (nCount: 7, a DINT; the rest not in the PLC)
+      const isCount = (v) => /\.ncount$/.test(v.id);
+      await toApp({ type: 'liveWatchResult', vars: m.vars.map((v) => (isCount(v) ? { id: v.id, symbol: v.candidates[0], type: 'DINT' } : { id: v.id, error: 'not in the PLC' })) });
+      const counts = m.vars.filter(isCount);
+      if (counts.length) await toApp({ type: 'liveVars', values: counts.map((v) => ({ id: v.id, t: Date.now(), v: 7 })) });
+    } else if (m.type === 'liveWrite') {
+      await toApp({ type: 'liveWriteResult', requestId: m.requestId, ok: true, message: `${m.id} := ${m.value}` });
     } else if (m.type === 'projectPous') {
       await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
     }
@@ -120,6 +126,21 @@ const TREE = {
   const tree = await page.$$eval('#symbol-browser-tree .symbol-row', (r) => r.map((x) => x.getAttribute('data-path').split('.').pop()));
   const doorOpen = !!(await page.$(`.symbol-row[data-path="${R}.fbLine.smDoor"] .symbol-open-other`));
   expect(tree.includes('nCount') && tree.includes('smDoor') && doorOpen, `cleared: the whole tree (${tree.join(', ')}); smDoor (SM_DoorDasher): Open`);
+  // Write Values from the tree: nCount's value clicked, 9 written
+  let writeBtn = null;
+  for (let i = 0; i < 20 && !writeBtn; i++) {
+    await sleep(200);
+    writeBtn = await page.$(`.symbol-row[data-path="${R}.nCount"] .symbol-write`);
+  }
+  if (writeBtn) await writeBtn.click();
+  await page.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const was = await page.$eval('#text-prompt-input', (i) => i.value).catch(() => null);
+  await set('text-prompt-input', '9');
+  await sleep(200);
+  await page.click('#text-prompt-submit').catch(() => {});
+  await sleep(600);
+  const wrote = sent.find((m) => m.type === 'liveWrite');
+  expect(writeBtn && was === '7' && wrote?.id === `sym:${R.toLowerCase()}.ncount` && wrote.value === 9, `the tree's value written: nCount 7 → 9 (${JSON.stringify(wrote)})`);
 
   // 3. Another type in the filter; Open: a new MachineScope for SM_DoorDasher, live on it
   await set('symbol-browser-type-filter', 'SM_DoorDasher');
