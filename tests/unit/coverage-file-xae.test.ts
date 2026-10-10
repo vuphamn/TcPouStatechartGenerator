@@ -71,6 +71,25 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(/Compared live: CX-A and CX-B/.test(withCmp) && /First difference, after 3 transitions the same: in <span class="mono">RUN<\/span>/.test(withCmp) && /CX-A from there/.test(withCmp) && /RUN → DONE <span class="muted">1\.5 s/.test(withCmp) && /Only CX-B took/.test(withCmp) && /RUN → ERROR \(1×\)/.test(withCmp) && withCmp.indexOf('Compared live') < withCmp.indexOf('Commissioned by'), 'the report with a comparison: where they part, both paths, what only one took, before the lines to sign');
   expect(!/Compared live/.test(html), 'without one: none');
 
+  // ---- the report's heading (MachineScope.report.json beside the project) ----
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { readReportSettings, REPORT_SETTINGS_FILE } = require('../../shared/reportSettings.cjs');
+  expect(Object.keys(readReportSettings(pou)).length === 0, 'no settings file: no heading');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  fs.mkdirSync(path.join(plc, 'img'));
+  fs.writeFileSync(path.join(plc, 'img', 'logo.png'), png);
+  fs.writeFileSync(path.join(plc, REPORT_SETTINGS_FILE), '﻿{ "company": "Kval Inc.", "machine": " Line 202 ", "logo": "img/logo.png" }');
+  const hs = readReportSettings(pou);
+  expect(hs.company === 'Kval Inc.' && hs.machine === 'Line 202' && hs.logo === `data:image/png;base64,${png.toString('base64')}` && !hs.error, 'read: the company, the machine (trimmed), the logo embedded');
+  fs.writeFileSync(path.join(plc, REPORT_SETTINGS_FILE), '{ "company": "Kval", "logo": "logo.bmp" }');
+  expect(/must be a \.png/.test(readReportSettings(pou).error ?? '') && readReportSettings(pou).company === 'Kval', 'a logo of another type: said, the rest kept');
+  fs.writeFileSync(path.join(plc, REPORT_SETTINGS_FILE), '{ not json');
+  expect(/is not readable/.test(readReportSettings(pou).error ?? ''), 'a broken file: said');
+  const headed = coverageReportHtml(p, new Date('2026-10-09T12:00:00Z'), [], hs);
+  expect(/<div class="heading"><img src="data:image\/png;base64,/.test(headed) && /<div class="company">Kval Inc\.<\/div>/.test(headed) && /<div class="machine">Line 202<\/div>/.test(headed) && headed.indexOf('class="heading"') < headed.indexOf('<h1>'), 'the report: its heading above the title');
+  const badLogo = coverageReportHtml(p, new Date(), [], { company: '<b>X</b>', logo: 'javascript:alert(1)' });
+  expect(!/<img/.test(badLogo) && /&lt;b&gt;X&lt;\/b&gt;/.test(badLogo), 'only an image data URL becomes the logo; the names escaped');
+
   // ---- the project in the XAE of its committed version ----
   process.env.KSS_BUILD_DRYRUN = '1';
   process.env.KSS_RM_BUILDS = '4026.27,4026.3';

@@ -437,6 +437,7 @@ ipcMain.handle('tc:live-plc-start', (event, req) => new Promise((resolve) => liv
 ipcMain.handle('tc:open-xae', () => require('../shared/tcBuild.cjs').openXae());
 ipcMain.handle('tc:coverage-file', (_event, pouPath) => require('../shared/coverageFile.cjs').readCoverageFile(pouPath));
 ipcMain.handle('tc:coverage-file-save', (_event, pouPath, pouType, counts) => require('../shared/coverageFile.cjs').mergeCoverageFile(pouPath, pouType, counts));
+ipcMain.handle('tc:report-settings', (_event, pouPath) => require('../shared/reportSettings.cjs').readReportSettings(pouPath));
 ipcMain.handle('tc:ms-files', (_event, pouPath) => require('../shared/projectVersions.cjs').machineScopeFiles(pouPath));
 ipcMain.handle('tc:ms-files-act', (_event, pouPath, action) => require('../shared/projectVersions.cjs').machineScopeFilesAct(pouPath, action));
 ipcMain.handle('tc:open-xae-for', (_event, pouPath, version) => require('../shared/projectVersions.cjs').openXaeForProject(pouPath, version));

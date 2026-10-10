@@ -60,6 +60,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       } else if (m.type === 'saveDocument') {
         saved.push(m);
         await toApp({ type: 'saveDocumentResult', path: `C:\\Users\\me\\Documents\\${m.name}` });
+      } else if (m.type === 'reportSettings') {
+        await toApp({ type: 'reportSettingsResult', requestId: m.requestId, company: 'Kval Inc.', machine: 'Line 202', logo: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' });
       } else if (m.type === 'machineScopeFiles') {
         await toApp({ type: 'machineScopeFilesResult', requestId: m.requestId, dir: 'C:\\proj', git: true, files: [{ name: 'MachineScope.coverage.json', path: 'C:\\proj\\MachineScope.coverage.json', state: 'tracked' }] });
       } else if (m.type === 'projectVersions') {
@@ -289,6 +291,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   for (let t = 0; t < 4000 && saved.length === before; t += 200) await sleep(200);
   const report = saved[before];
   expect(/^Line202-coverage-signoff\.html$/.test(report?.name ?? '') && /Line202: transition coverage/.test(report?.content ?? '') && /Never taken/.test(report.content) && /Commissioned by/.test(report.content) && new RegExp(`<b>${proj.rows[0].taken} of ${proj.rows[0].total}</b>`).test(report.content), `the sign-off report (${report?.name})`);
+  expect(/<div class="heading"><img src="data:image\/png;base64,/.test(report?.content ?? '') && /<div class="company">Kval Inc\.<\/div>/.test(report?.content ?? '') && /<div class="machine">Line 202<\/div>/.test(report?.content ?? ''), "the report's heading: the project's company, machine and logo");
   // Print…: the same report in a hidden frame, printed (the print dialog); the frame gone afterwards
   await a.page.evaluate(() => {
     window.__printed = null;
@@ -314,6 +317,26 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await a.page.keyboard.press('Escape');
   await sleep(300);
   expect(!(await a.page.$('#project-coverage-dialog')), 'Esc: closed');
+
+  // Document all state machines: the project's coverage in it (the whole and its sharing, each one's in the contents,
+  // its never-taken transitions)
+  const docBefore = saved.length;
+  // (the Export menu, or the header's Hidden menu when Export does not fit: both have it)
+  if (await a.page.$('#export-dropdown-button')) {
+    await a.page.click('#export-dropdown-button').catch(() => {});
+    await a.page.waitForSelector('#dropdown-document-project-btn', { timeout: 3000 }).catch(() => {});
+    await a.page.click('#dropdown-document-project-btn').catch(() => {});
+  } else {
+    await a.page.click('#header-hidden-controls-btn').catch(() => {});
+    await a.page.waitForSelector('#dock-menu-header-document-project', { timeout: 3000 }).catch(() => {});
+    await a.page.click('#dock-menu-header-document-project').catch(() => {});
+  }
+  for (let t = 0; t < 20000 && saved.length === docBefore; t += 250) await sleep(250);
+  const doc = saved[docBefore]?.content ?? '';
+  expect(
+    new RegExp(`<b>Coverage:</b> ${liveNow.taken} / ${cov.total} transitions taken`).test(doc) && /the coverage file is shared with the project \(git\)/.test(doc) && new RegExp(`coverage ${liveNow.taken} / ${cov.total}`).test(doc) && /<h3>Coverage <span class="muted">/.test(doc) && /Never taken:/.test(doc),
+    `the documentation: the coverage in it (${saved[docBefore]?.name ?? 'not saved'})`
+  );
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

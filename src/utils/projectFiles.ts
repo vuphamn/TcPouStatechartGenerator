@@ -163,6 +163,22 @@ function hostAsk<T>(message: Record<string, unknown> & { type: string }, replyTy
   });
 }
 
+export interface ReportSettings {
+  company?: string;
+  machine?: string;
+  /** A data URL */
+  logo?: string;
+  file?: string;
+  error?: string;
+}
+
+/** The sign-off report's heading for the project (MachineScope.report.json beside it): XAE, VS Code, the desktop app */
+export async function fetchReportSettings(pouPath: string | undefined): Promise<ReportSettings | null> {
+  if (isXaeHost()) return hostAsk<ReportSettings>({ type: 'reportSettings' }, 'reportSettingsResult');
+  const d = (window as unknown as { tcDesktop?: { reportSettings?: (p: string) => Promise<ReportSettings> } }).tcDesktop;
+  return d?.reportSettings && pouPath ? d.reportSettings(pouPath).catch(() => null) : null;
+}
+
 export interface MachineScopeFiles {
   dir: string | null;
   git: boolean;

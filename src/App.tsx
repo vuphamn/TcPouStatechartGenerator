@@ -330,7 +330,7 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchMachineScopeFiles, machineScopeFilesAct, fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
+import { fetchReportSettings, fetchMachineScopeFiles, machineScopeFilesAct, fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
 import { addCoverageReset, coverageCsv, coverageSessions, coverageStartNow, loadCoverageResets, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
@@ -2925,11 +2925,23 @@ export const App: React.FC = () => {
         return;
       }
       const project = files as Exclude<typeof files, { error: string }>;
+      const projectFiles = { project: project.project ?? 'PLC project', pous: project.pous ?? [], duts: project.duts ?? [] };
+      // (the project's coverage in it: this browser's and the project's coverage file, and how that is shared)
+      const cov = await projectCoverage(projectFiles, undefined, () => docCancelRef.current, await fetchCoverageFile(pouPath));
+      const sharedText = coverageSharedRef.current === 'tracked' ? 'the coverage file is shared with the project (git)' : coverageSharedRef.current === 'untracked' ? 'the coverage file is beside the project, not in git' : coverageSharedRef.current === 'ignored' || coverageSharedRef.current === 'no-git' ? 'the coverage is kept on this computer' : undefined;
       const doc = await buildProjectDocumentation(
-        { project: project.project ?? 'PLC project', pous: project.pous ?? [], duts: project.duts ?? [] },
+        projectFiles,
         { flowchartOutput, collapseErrorSinkEdges, includeStateDescriptions, showTransitionPriorities, priorityFormat },
         (done, total, name) => setDocProgress({ done, total, name }),
-        () => docCancelRef.current
+        () => docCancelRef.current,
+        cov
+          ? {
+              byPou: new Map(cov.pous.map((x) => [x.name, { taken: x.coverage.taken, total: x.coverage.total, since: x.coverage.since, never: x.coverage.rows.filter((r) => r.n === 0) }])),
+              taken: cov.taken,
+              total: cov.total,
+              shared: sharedText,
+            }
+          : null
       );
       if (!doc) {
         showCopyToast('Documentation canceled', 'error');
@@ -2947,6 +2959,8 @@ export const App: React.FC = () => {
     }
   }, [pouPath, flowchartOutput, collapseErrorSinkEdges, choiceNodes, spellOutElse, includeStateDescriptions, showTransitionPriorities, priorityFormat, showCopyToast]);
 
+  // (how the coverage file is shared: set below, read by the documentation)
+  const coverageSharedRef = useRef<string | null>(null);
   // The coverage of every state machine of the project (commissioning sign-off): read as the documentation reads them
   const [projectCoverageData, setProjectCoverageData] = useState<ProjectCoverage | null>(null);
   const handleProjectCoverage = useCallback(async () => {
@@ -6601,6 +6615,7 @@ export const App: React.FC = () => {
   const msFilesAskedRef = useRef(new Set<string>());
   // (the coverage file: how it is shared, for the Coverage strip)
   const [coverageShared, setCoverageShared] = useState<'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null>(null);
+  coverageSharedRef.current = coverageShared;
   useEffect(() => {
     setCoverageShared(null);
     if (!pouPath || !(isXaeHost() || isDesktopApp())) return;
@@ -6672,9 +6687,18 @@ export const App: React.FC = () => {
   // (the last comparison saved, and where: the XAE checks read it)
   const [comparisonSaved, setComparisonSaved] = useState<string | null>(null);
   const peerDiff = peerDiffId ? livePeers.find((x) => x.id === peerDiffId) ?? null : null;
-  // The sign-off report (saved or printed): live on other PLCs too, this one against each in it
-  const signOffHtml = (data: ProjectCoverage) =>
-    coverageReportHtml(data, new Date(), liveStatus.state === 'connected' ? livePeers.map((peer) => ({ a: { label: livePlcLabel, transitions: liveSession.transitions }, b: { label: peer.plc, transitions: peer.transitions } })) : []);
+  // The sign-off report (saved or printed): its heading from the project (MachineScope.report.json: company, machine,
+  // logo); live on other PLCs too, this one against each in it
+  const signOffHtml = async (data: ProjectCoverage) => {
+    const heading = await fetchReportSettings(pouPath);
+    if (heading?.error) showCopyToast(`The report's heading: ${heading.error}`, 'error', 8000);
+    return coverageReportHtml(
+      data,
+      new Date(),
+      liveStatus.state === 'connected' ? livePeers.map((peer) => ({ a: { label: livePlcLabel, transitions: liveSession.transitions }, b: { label: peer.plc, transitions: peer.transitions } })) : [],
+      heading
+    );
+  };
   // (on the chart: the never-taken ones dashed and dimmed, while the Coverage strip's toggle is on)
   const [coverageOnChart, setCoverageOnChart] = useState(false);
   const coverageHighlight = useMemo(
@@ -9745,6 +9769,8 @@ export const App: React.FC = () => {
               onOpenMermaidLive={handleOpenMermaidLive}
               hasOutput={Boolean(outputMarkdown)}
               sourceNotes={headerSourceNotes}
+              onDocumentProject={() => void handleDocumentProject()}
+              onProjectCoverage={() => void handleProjectCoverage()}
             />
           )}
           {/* Theme & Preset: the whole app's theme and the diagram presets, together */}
@@ -11205,11 +11231,11 @@ export const App: React.FC = () => {
           onExportSummary={() => void downloadCsv(`${projectCoverageData.project}-coverage.csv`, projectCoverageCsv(projectCoverageData))}
           onExportTransitions={() => void downloadCsv(`${projectCoverageData.project}-coverage-transitions.csv`, projectTransitionsCsv(projectCoverageData))}
           onReport={() =>
-            void saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, signOffHtml(projectCoverageData)).then((r) =>
+            void signOffHtml(projectCoverageData).then((html) => saveDocument(`${projectCoverageData.project.replace(/[^\w.-]+/g, '_')}-coverage-signoff.html`, html)).then((r) =>
               r.error ? showCopyToast(`Could not save the report: ${r.error}`, 'error') : !r.canceled && showCopyToast(`Sign-off report saved${r.path ? `: ${r.path}` : ''}`, 'success', 8000)
             )
           }
-          onPrint={() => void printHtml(signOffHtml(projectCoverageData)).then((ok) => !ok && showCopyToast('Could not print here: save the report and print it from the browser', 'error', 8000))}
+          onPrint={() => void signOffHtml(projectCoverageData).then(printHtml).then((ok) => !ok && showCopyToast('Could not print here: save the report and print it from the browser', 'error', 8000))}
           onOpenPou={
             isXaeHost() || pouPath
               ? (name) => {

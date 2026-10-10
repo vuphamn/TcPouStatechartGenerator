@@ -38,6 +38,15 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return v;
   };
   const status = () => p.$eval('#status-message', (e) => e.textContent).catch(() => '');
+  // (what the status bar says for a few seconds after an edit, then Ready: waited for while it shows, up to ms)
+  const said = async (re, ms = 4000) => {
+    for (let t = 0; t < ms; t += 100) {
+      const s = await status();
+      if (re.test(s)) return s;
+      await h.sleep(100);
+    }
+    return await status();
+  };
   const selected = () => p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.node.multi-selected')].map((n) => n.getAttribute('data-state-id')).sort().join(','));
   // A box around DISABLED and ENABLING, drawn with Shift from the empty canvas
   const shiftBox = async () => {
@@ -73,20 +82,24 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     await p.evaluate(() => document.getElementById('text-prompt-input').select());
     await p.keyboard.type('Startup');
     await p.keyboard.press('Enter');
-    await h.sleep(2000);
   }
+  const saidGroup = await said(/Startup: 2 states in it/);
+  await h.sleep(800);
   dut = await enumText();
   expect(/\{region "Startup"\}\s*\n\s*DISABLED,\s*\n\s*ENABLING,\s*\n\s*\{endregion\}\s*\n\s*\{region "KPowerSupplyEnabled"\}/.test(dut), `Group: {region "Startup"} around them (${(dut.match(/\(\s*\n[\s\S]*?\)/) ?? [''])[0].replace(/\s+/g, ' ')})`);
-  expect(!!(await cluster('Startup')) && /Startup: 2 states in it/.test(await status()), `the composite drawn: ${await status()}`);
+  expect(!!(await cluster('Startup')) && /Startup: 2 states in it/.test(saidGroup), `the composite drawn: ${saidGroup}`);
 
   // ERROR dragged into Startup's box, then out of it
-  const drag = async (from, to) => {
+  const drag = async (from, to, expect = null) => {
     await p.mouse.move(from.x, from.y);
     await p.mouse.down();
     for (let i = 1; i <= 20; i++) await p.mouse.move(from.x + ((to.x - from.x) * i) / 20, from.y + ((to.y - from.y) * i) / 20);
     await h.sleep(150);
     await p.mouse.up();
-    await h.sleep(2000);
+    // (what the drop did, read while the status bar says it)
+    const s = expect ? await said(expect) : '';
+    await h.sleep(expect ? 500 : 2000);
+    return s;
   };
   // (Startup and ERROR in view: zoomed out, the canvas panned up, dragged on its empty part)
   for (let i = 0; i < 2; i++) { await p.click('#zoom-out-button'); await h.sleep(300); }
@@ -112,8 +125,20 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const er = await box('ERROR');
   const area = await p.evaluate(() => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; });
   expect(!!c && !!er && c.top > area.top && er.bottom < area.bottom, `Startup and ERROR in view (${JSON.stringify({ c, er, area })})`);
-  await drag(await box('ERROR'), { x: Math.min(c.right - 8, en.right + 30), y: Math.min(c.bottom - 8, en.bottom + 12) });
-  const inStartup = async () => /\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(await enumText());
+  // (the status bar says what the drop did for a few seconds, then "Ready": read while the drop is waited for)
+  let saidInStartup = '';
+  const watchStatus = async () => {
+    const s = await status();
+    if (/ERROR is in Startup/.test(s)) saidInStartup = s;
+  };
+  saidInStartup = await drag(await box('ERROR'), { x: Math.min(c.right - 8, en.right + 30), y: Math.min(c.bottom - 8, en.bottom + 12) }, /ERROR is in Startup/);
+  if (!/ERROR is in Startup/.test(saidInStartup)) saidInStartup = '';
+  const inStartup = async () => {
+    await watchStatus();
+    const yes = /\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(await enumText());
+    await watchStatus();
+    return yes;
+  };
   // (on a busy machine the chart is still being drawn when the drop lands, or the edit takes a moment: waited for,
   // then measured again and dropped once more)
   for (let i = 0; i < 10 && !(await inStartup()); i++) await h.sleep(300);
@@ -122,11 +147,14 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     await h.sleep(1500);
     c = await cluster('Startup');
     const en2 = await box('ENABLING');
-    if (c && en2) await drag(await box('ERROR'), { x: Math.min(c.right - 8, en2.right + 30), y: Math.min(c.bottom - 8, en2.bottom + 12) });
+    if (c && en2) {
+      const again = await drag(await box('ERROR'), { x: Math.min(c.right - 8, en2.right + 30), y: Math.min(c.bottom - 8, en2.bottom + 12) }, /ERROR is in Startup/);
+      if (/ERROR is in Startup/.test(again)) saidInStartup = again;
+    }
     for (let i = 0; i < 10 && !(await inStartup()); i++) await h.sleep(300);
   }
   dut = await enumText();
-  expect(/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in Startup/.test(await status()), `ERROR dropped in its box: in Startup (${await status()})`);
+  expect(/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in Startup/.test(saidInStartup), `ERROR dropped in its box: in Startup (said: ${saidInStartup || await status()})`);
   // (an empty spot of the canvas outside every composite)
   const free = await p.evaluate(() => {
     const a = document.getElementById('mermaid-canvas-area').getBoundingClientRect();
@@ -150,9 +178,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     return null;
   });
   await p.screenshot({ path: h.out('composite-group-before-out.png') });
-  if (free && grip) await drag(grip, free);
+  const saidOut = free && grip ? await drag(grip, free, /ERROR is in no composite/) : '';
   dut = await enumText();
-  expect(!/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in no composite/.test(await status()), `dropped outside: out of it (${await status()})`);
+  expect(!/\{region "Startup"\}[^{]*ERROR[^{]*\{endregion\}/.test(dut) && /ERROR is in no composite/.test(saidOut), `dropped outside: out of it (${saidOut})`);
 
   // Startup dragged by its title: its box and its states moved alike
   const titleAt = async () => p.evaluate(() => {

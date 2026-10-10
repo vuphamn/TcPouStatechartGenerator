@@ -115,7 +115,13 @@ ${part}
  * The commissioning sign-off report (HTML, printable): the project, when, the coverage of each state machine and the
  * whole, each one's transitions never taken (what was not seen working), and lines to sign
  */
-export function coverageReportHtml(p: ProjectCoverage, now = new Date(), comparisons: { a: ComparisonSide; b: ComparisonSide }[] = []): string {
+export function coverageReportHtml(
+  p: ProjectCoverage,
+  now = new Date(),
+  comparisons: { a: ComparisonSide; b: ComparisonSide }[] = [],
+  /** Its heading (MachineScope.report.json beside the project): the company, the machine, a logo (a data URL) */
+  heading: { company?: string; machine?: string; logo?: string } | null = null
+): string {
   const rows = [...p.pous].sort((a, b) => pct(a.coverage) - pct(b.coverage) || a.name.localeCompare(b.name));
   const when = now.toLocaleString();
   const never = rows.filter((x) => x.coverage.taken < x.coverage.total);
@@ -130,7 +136,14 @@ export function coverageReportHtml(p: ProjectCoverage, now = new Date(), compari
   .full > span { background: #16a34a; } .low > span { background: #d97706; }
   .never { columns: 2; font-family: Consolas, monospace; font-size: 12px; } .sign { margin-top: 36px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
   .sign div { border-top: 1px solid #333; padding-top: 4px; } section { break-inside: avoid; } @media print { body { margin: 12mm; } }
+  .heading { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid #111; }
+  .heading img { max-height: 56px; max-width: 220px; } .company { font-size: 16px; font-weight: 600; } .machine { color: #444; }
 </style></head><body>
+${
+  heading && (heading.company || heading.machine || heading.logo)
+    ? `<div class="heading">${heading.logo && /^data:image\/(png|jpeg|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(heading.logo) ? `<img src="${heading.logo}" alt="">` : ''}<div>${heading.company ? `<div class="company">${esc(heading.company)}</div>` : ''}${heading.machine ? `<div class="machine">${esc(heading.machine)}</div>` : ''}</div></div>`
+    : ''
+}
 <h1>${esc(p.project)}: transition coverage</h1>
 <div class="muted">Commissioning sign-off · ${esc(when)} · Kval MachineScope</div>
 <p><b>${p.taken} of ${p.total}</b> transitions taken (${pct(p)}%) across ${p.pous.length} state machine${p.pous.length === 1 ? '' : 's'}: each transition of each chart against the ones its PLC took while followed live (or replayed), since that state machine's coverage reset if any.</p>

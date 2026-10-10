@@ -402,6 +402,9 @@ namespace KvalMachineScope.Xae
                     case "findPou":
                         HandleFindPou(msg);
                         break;
+                    case "findDut":
+                        HandleFindDut(msg);
+                        break;
                     case "activateProject":
                         HandleActivateProject(msg);
                         break;
@@ -422,6 +425,9 @@ namespace KvalMachineScope.Xae
                         break;
                     case "machineScopeFiles":
                         HandleMachineScopeFiles(msg);
+                        break;
+                    case "reportSettings":
+                        HandleReportSettings(msg);
                         break;
                     case "machineScopeFilesAct":
                         HandleMachineScopeFilesAct(msg);
@@ -653,6 +659,43 @@ namespace KvalMachineScope.Xae
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 Post(new { type = "findPouResult", requestId, typeName, error = $"{typeName}.TcPOU could not be read: {ex.Message}" });
+            }
+        }
+
+        /// <summary>
+        /// The enum of a type anywhere in the PLC project (another company's POU: State : E_ScanState, its .TcDUT in
+        /// another folder) → findDutResult { requestId, typeName, dut: { name, relativePath, path, content } | error };
+        /// it can be edited and saved here (known, watched)
+        /// </summary>
+        private void HandleFindDut(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var typeName = msg.TryGetValue("typeName", out var t) ? t as string : null;
+            if (string.IsNullOrEmpty(typeName) || !System.Text.RegularExpressions.Regex.IsMatch(typeName, @"^[A-Za-z_]\w*$"))
+            {
+                Post(new { type = "findDutResult", requestId, typeName, error = "No type name" });
+                return;
+            }
+            try
+            {
+                var target = FindInProject(typeName, ".TcDUT");
+                if (target == null)
+                {
+                    Post(new { type = "findDutResult", requestId, typeName, error = $"{typeName}.TcDUT was not found in the PLC project" });
+                    return;
+                }
+                var content = HostFiles.CurrentContent(_pane, target);
+                _lastSeen[target] = HostFiles.ContentKey(content);
+                Watch(Path.GetDirectoryName(target));
+                var from = string.IsNullOrEmpty(_pouPath) ? null : Path.GetDirectoryName(_pouPath);
+                var relative = from == null ? Path.GetFileName(target) : new Uri(from.TrimEnd('\\') + "\\").MakeRelativeUri(new Uri(target)).ToString().Replace('/', '\\');
+                Log.Write($"enum of {typeName}: {target}");
+                Post(new { type = "findDutResult", requestId, typeName, dut = new { name = Path.GetFileName(target), relativePath = Uri.UnescapeDataString(relative), path = target, content } });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is UriFormatException)
+            {
+                Post(new { type = "findDutResult", requestId, typeName, error = $"{typeName}.TcDUT could not be read: {ex.Message}" });
             }
         }
 
@@ -1983,6 +2026,55 @@ namespace KvalMachineScope.Xae
                 else message = "Unknown action " + action;
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "machineScopeFilesActResult", requestId, ok, message });
+            });
+        }
+
+        /// <summary>
+        /// The sign-off report's heading (as shared/reportSettings.cjs): MachineScope.report.json beside the .plcproj
+        /// ({ company, machine, logo }), the logo embedded as a data URL (.png, .jpg, .gif, .svg; at most 512 KB) →
+        /// reportSettingsResult { requestId, company, machine, logo, file, error }
+        /// </summary>
+        private void HandleReportSettings(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                string company = null, machine = null, logo = null, file = null, error = null;
+                var dir = string.IsNullOrEmpty(pou) ? null : FolderWith(pou, ".plcproj");
+                var path = dir == null ? null : Path.Combine(dir, "MachineScope.report.json");
+                if (path != null && File.Exists(path))
+                {
+                    file = path;
+                    try
+                    {
+                        if (new JavaScriptSerializer().DeserializeObject(File.ReadAllText(path)) is Dictionary<string, object> s)
+                        {
+                            string Text(string key) => s.TryGetValue(key, out var v) && v is string t && t.Trim().Length > 0 ? (t.Trim().Length > 200 ? t.Trim().Substring(0, 200) : t.Trim()) : null;
+                            company = Text("company");
+                            machine = Text("machine");
+                            var logoName = Text("logo");
+                            if (logoName != null)
+                            {
+                                var logoPath = Path.GetFullPath(Path.Combine(dir, logoName));
+                                var ext = Path.GetExtension(logoPath).ToLowerInvariant();
+                                var type = ext == ".png" ? "image/png" : ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : ext == ".gif" ? "image/gif" : ext == ".svg" ? "image/svg+xml" : null;
+                                if (type == null) error = $"The logo must be a .png, .jpg, .gif or .svg ({logoName})";
+                                else if (!File.Exists(logoPath)) error = $"The logo is not there: {logoPath}";
+                                else if (new FileInfo(logoPath).Length > 512 * 1024) error = $"The logo is over 512 KB ({logoName})";
+                                else logo = $"data:{type};base64,{Convert.ToBase64String(File.ReadAllBytes(logoPath))}";
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is InvalidOperationException || ex is NotSupportedException)
+                    {
+                        error = $"MachineScope.report.json is not readable: {ex.Message}";
+                    }
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "reportSettingsResult", requestId, company, machine, logo, file, error });
             });
         }
 

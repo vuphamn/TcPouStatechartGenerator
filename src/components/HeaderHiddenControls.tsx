@@ -42,6 +42,9 @@ export interface HeaderHiddenControlsProps {
   isPrintingPdf: boolean;
   onOpenMermaidLive: () => void;
   hasOutput: boolean;
+  /** The Export menu's project actions (every state machine documented; their coverage), when Export is hidden here */
+  onDocumentProject?: () => void;
+  onProjectCoverage?: () => void;
   /** The Function Block entry's chips (extends, the converted version …), listed with it when it is hidden here */
   sourceNotes?: { id: string; label: string; title?: string; warn?: boolean; onSelect?: () => void }[];
 }
@@ -67,6 +70,8 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
   onOpenMermaidLive,
   hasOutput,
   sourceNotes = [],
+  onDocumentProject,
+  onProjectCoverage,
 }) => {
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
   const closedAtRef = useRef<number>(0);
@@ -101,7 +106,9 @@ export const HeaderHiddenControls: React.FC<HeaderHiddenControlsProps> = ({
   if (has('export')) {
     actions.push(
       { id: 'header-export', label: 'High-Res Export Dialog...', title: 'Export the chart as PNG or SVG: its size, scale and background', icon: <Sparkles className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onOpenExportDialog },
-      { id: 'header-export-preset', label: 'Export with Preset', title: 'Export the chart at once with the settings saved last', hint: exportPresetLabel, icon: <Bookmark className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onExportWithPreset }
+      { id: 'header-export-preset', label: 'Export with Preset', title: 'Export the chart at once with the settings saved last', hint: exportPresetLabel, icon: <Bookmark className="w-3.5 h-3.5" />, disabled: !hasOutput, onSelect: onExportWithPreset },
+      ...(onDocumentProject ? [{ id: 'header-document-project', label: 'Document all state machines…', title: 'Every state machine of the PLC project in one HTML document: charts, states, transitions, problems, coverage', onSelect: onDocumentProject }] : []),
+      ...(onProjectCoverage ? [{ id: 'header-project-coverage', label: 'Coverage of all state machines…', title: 'Every state machine of the PLC project: the transitions its PLC took (for commissioning sign-off)', onSelect: onProjectCoverage }] : [])
     );
   }
   if (has('pdf')) {

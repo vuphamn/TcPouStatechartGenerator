@@ -68,6 +68,8 @@ export type HostMessage =
   | { type: 'coverageFileResult'; requestId: number; pous: Record<string, Record<string, { n: number; last: number }>> }
   /** This POU type's counts merged into it: the type's counts there now */
   | { type: 'coverageFileSaveResult'; requestId: number; counts?: Record<string, { n: number; last: number }>; error?: string }
+  /** The sign-off report's heading (MachineScope.report.json beside the project) */
+  | { type: 'reportSettingsResult'; requestId: number; company?: string; machine?: string; logo?: string; file?: string; error?: string }
   /** MachineScope's files beside the project and how git sees them */
   | { type: 'machineScopeFilesResult'; requestId: number; dir: string | null; git: boolean; files: { name: string; path: string; state: 'tracked' | 'ignored' | 'untracked' }[] }
   | { type: 'machineScopeFilesActResult'; requestId: number; ok: boolean; message: string }
@@ -195,6 +197,7 @@ export type AppMessage =
   | { type: 'openXaeFor'; requestId: number; version: string }
   | { type: 'coverageFile'; requestId: number }
   | { type: 'machineScopeFiles'; requestId: number }
+  | { type: 'reportSettings'; requestId: number }
   | { type: 'machineScopeFilesAct'; requestId: number; action: 'add' | 'ignore' }
   | { type: 'coverageFileSave'; requestId: number; pouType: string; counts: Record<string, { n: number; last: number }> }
   | { type: 'plcLicense'; requestId: number }
