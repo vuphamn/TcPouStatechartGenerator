@@ -89,19 +89,26 @@ const Y = `${B}__Inner__Y`;
   }
 
   // 2. Go to code on Inner's state Y: the Method Editor at its CASE label in Inner()
-  const at = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; }, Y);
-  if (at) {
+  // (the chart just redrawn in another style may still be moving: measured again, right-clicked again, until its menu)
+  for (let tries = 0; tries < 4 && !(await p.$('#context-menu-goto-code-btn')); tries++) {
+    await h.sleep(tries ? 700 : 300);
+    const at = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null; }, Y);
+    if (!at) continue;
     await p.mouse.click(at.x, at.y, { button: 'right' });
-    await p.waitForSelector('#context-menu-goto-code-btn', { timeout: 3000 }).catch(() => {});
-    await p.click('#context-menu-goto-code-btn').catch(() => {});
+    await p.waitForSelector('#context-menu-goto-code-btn', { timeout: 2000 }).catch(() => {});
   }
-  await h.sleep(1500);
-  const code = await p.evaluate(() => {
+  await p.click('#context-menu-goto-code-btn').catch(() => {});
+  const readCode = () => p.evaluate(() => {
     const ta = document.getElementById('method-implementation-editor');
     const box = document.getElementById('method-selector-combobox');
     const n = Number(document.querySelector('[data-highlighted-line]')?.getAttribute('data-highlighted-line'));
     return { method: (box?.value || '').trim(), line: n && ta ? ta.value.split('\n')[n - 1]?.trim() ?? '' : '' };
   });
+  let code = await readCode();
+  for (let i = 0; i < 25 && !(/Inner/.test(code.method) && /E_INNER\.Y\s*:/.test(code.line)); i++) {
+    await h.sleep(200);
+    code = await readCode();
+  }
   expect(/Inner/.test(code.method) && /E_INNER\.Y\s*:/.test(code.line), `Go to code on Y: Inner() at its CASE label (${JSON.stringify(code)})`);
 
   // 3. Simulated

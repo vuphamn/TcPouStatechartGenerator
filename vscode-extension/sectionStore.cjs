@@ -17,8 +17,13 @@ function sectionAddress({ file, key, section }, members) {
   const member = parsed?.find((m) => m.key === key);
   // (the tab's title: EFX (Decl).st, EFX.doState (Impl).st, EFX.Speed.Get (Impl).st)
   const title = key === '' ? base : (member?.label ?? `${base}.${key.replace(/^\w+:/, '')}`);
-  const query = new URLSearchParams({ file, key, section }).toString();
+  // (the file as VS Code writes paths: one address for one section, however its path was spelled: C:\ or c:\)
+  const query = new URLSearchParams({ file: normalPath(file), key, section }).toString();
   return { path: `/${base}/${title} (${SECTION_LABEL[section]}).st`, query };
+}
+/** A path as VS Code spells it (resolved, its drive letter lower case): one key for one file */
+function normalPath(file) {
+  return path.resolve(file).replace(/^[A-Z]:/, (d) => d.toLowerCase());
 }
 function addressOf(query) {
   const q = new URLSearchParams(query);
@@ -78,4 +83,4 @@ function createSectionStore({ now = () => Date.now() } = {}) {
   return { stat, write, changedIn };
 }
 
-module.exports = { SCHEME, sectionAddress, addressOf, createSectionStore };
+module.exports = { SCHEME, sectionAddress, addressOf, createSectionStore, normalPath };

@@ -278,4 +278,83 @@ function findDefinition(files, { file, key, name, qualifier }) {
   return candidates.filter((c) => c.rank === best).map(({ rank, ...c }) => c); // eslint-disable-line no-unused-vars
 }
 
-module.exports = { blankCode, declarationsIn, createIndex, nameAt, findReferences, findDefinition };
+/**
+ * Rename, by the name's declaration (found from the place: file, key, qualifier): a method's own variable in that
+ * method only; a POU's variable in that POU and the POUs that extend it (EXTENDS), and its uses after a dot elsewhere
+ * (fbScan.State: their type not known here) apart, for a look; a global variable, an enum member, a type: everywhere.
+ * { edits: [{ file, key, section, line, column, length, apart }], scope } or { error }: the new name not an identifier
+ * or a keyword; the name a TwinCAT object's (a POU, DUT, GVL, method, property, action: XAE keeps it in the file's XML
+ * too); not declared in this project (a library's); the new name already declared where the old one is used
+ */
+function renameEdits(files, at, newName) {
+  const name = at.name;
+  const to = String(newName ?? '').trim();
+  if (!/^[A-Za-z_]\w*$/.test(to) || /__/.test(to)) return { error: `"${to}" is not a Structured Text name (letters, digits, single underscores)` };
+  if (KEYWORDS.has(to.toUpperCase())) return { error: `"${to}" is a Structured Text keyword` };
+  if (to === name) return { edits: [], scope: 'none' };
+  const want = name.toLowerCase();
+  for (const f of files) {
+    if (f.name.toLowerCase() === want) return { error: `${name} is the name of ${path.basename(f.file)}: rename it in TwinCAT XAE (the file and its object)` };
+    const mb = f.members.find((m) => m.key !== '' && m.name.toLowerCase() === want);
+    if (mb) return { error: `${name} is ${mb.kind === 'Method' ? 'a method' : mb.kind === 'Property' ? 'a property' : `an ${mb.kind.toLowerCase()}`} of ${f.name}: rename it in TwinCAT XAE (its object in the file)` };
+  }
+  const defs = findDefinition(files, at);
+  if (!defs.length) return { error: `${name} is not declared in this project (a library's?): it is not renamed here` };
+  const def = defs[0];
+  const same = (x, y) => path.resolve(x).toLowerCase() === path.resolve(y).toLowerCase();
+  const defFile = files.find((f) => same(f.file, def.file));
+  const refs = findReferences(files, name);
+  let scope;
+  let inScope;
+  if (def.key !== '' && defFile?.kind === 'POU') {
+    // (a method's, property's own variable: only there)
+    scope = 'member';
+    inScope = (r) => same(r.file, def.file) && (r.key === def.key || r.key.startsWith(`${def.key}.`));
+  } else if (defFile?.kind === 'POU' && def.key === '') {
+    // (a POU's variable: the POU, and the POUs that extend it, after EXTENDS after EXTENDS)
+    scope = 'pou';
+    const family = new Set([defFile.name.toLowerCase()]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const f of files) {
+        const base = /\bEXTENDS\s+([A-Za-z_]\w*)/i.exec(f.sections.find((x) => x.key === '' && x.section === 'decl')?.code ?? '')?.[1]?.toLowerCase();
+        if (base && family.has(base) && !family.has(f.name.toLowerCase())) {
+          family.add(f.name.toLowerCase());
+          grew = true;
+        }
+      }
+    }
+    inScope = (r) => family.has((files.find((f) => same(f.file, r.file))?.name ?? '').toLowerCase());
+  } else {
+    scope = 'project';
+    inScope = () => true;
+  }
+  // (uses after a dot outside the scope: fbScan.State in another POU: listed apart)
+  const dotted = (r) => {
+    const f = files.find((x) => same(x.file, r.file));
+    const sec = f?.sections.find((x) => x.key === r.key && x.section === r.section);
+    if (!sec) return false;
+    const off = sec.starts[r.line] + r.column;
+    return /\.\s*$/.test(sec.code.slice(Math.max(0, off - 40), off));
+  };
+  const edits = [];
+  for (const r of refs) {
+    if (inScope(r)) edits.push({ ...r, apart: false });
+    else if (scope === 'pou' && dotted(r)) edits.push({ ...r, apart: true });
+  }
+  if (!edits.length) return { error: `${name} is not used where it is declared` };
+  // (the new name already declared where the edits go)
+  if (to.toLowerCase() !== want) {
+    for (const e of edits) {
+      const f = files.find((x) => same(x.file, e.file));
+      for (const sec of f?.sections ?? []) {
+        if (scope === 'member' && !(sec.key === def.key || sec.key === '')) continue;
+        const clash = sec.decls.find((d) => d.name.toLowerCase() === to.toLowerCase());
+        if (clash) return { error: `${to} is already declared in ${f.name}${sec.key ? ` (${sec.key.replace(/^\w+:/, '')})` : ''}: choose another name` };
+      }
+    }
+  }
+  return { edits: edits.map(({ declaration, ...r }) => r), scope }; // eslint-disable-line no-unused-vars
+}
+
+module.exports = { blankCode, declarationsIn, createIndex, nameAt, findReferences, findDefinition, renameEdits, KEYWORDS };

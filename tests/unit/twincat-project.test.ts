@@ -21,8 +21,9 @@ const pou = path.join(proj, 'Robot', 'POUs', 'Sub', 'FB_Arm.TcPOU');
 fs.writeFileSync(pou, '<TcPlcObject/>');
 
 const p = projectOf(pou);
-expect(!!p && p.root === proj && p.name === 'Cell' && p.tsproj === path.join(proj, 'Cell.tsproj'), `the project (${p?.name} in ${p?.root})`);
-expect(p?.plcProject === 'Robot' && p?.plcproj === path.join(proj, 'Robot', 'Robot.plcproj'), `its PLC project: the one the file is in (${p?.plcProject})`);
+const same = (x?: string | null, y?: string | null) => (x ?? '').toLowerCase() === (y ?? '').toLowerCase();
+expect(!!p && same(p.root, proj) && p.name === 'Cell' && same(p.tsproj, path.join(proj, 'Cell.tsproj')), `the project (${p?.name} in ${p?.root})`);
+expect(p?.plcProject === 'Robot' && same(p?.plcproj, path.join(proj, 'Robot', 'Robot.plcproj')), `its PLC project: the one the file is in (${p?.plcProject})`);
 expect(projectTarget(p.tsproj) === '192.168.1.20.1.1', `the target the project names (${projectTarget(p.tsproj)})`);
 fs.writeFileSync(path.join(proj, 'Cell.tsproj'), '<?xml version="1.0"?>\r\n<TcSmProject>\r\n\t<Project ProjectGUID="{1}"/>\r\n</TcSmProject>\r\n');
 expect(projectTarget(p.tsproj) === null, 'none named: this computer');

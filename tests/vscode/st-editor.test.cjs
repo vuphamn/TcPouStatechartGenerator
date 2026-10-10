@@ -39,7 +39,18 @@ fs.writeFileSync(path.join(proj, 'Robot', 'DUTs', 'E_ScanState.TcDUT'), '﻿' + 
 
 const result = path.join(OUT, 'result.json');
 // (Build: the stand-in for XAE, KSS_BUILD_DRYRUN: no XAE started)
-const env = { ...process.env, KSS_TEST_PROJECT: proj, KSS_TEST_RESULT: result, KSS_BUILD_DRYRUN: "1" };
+// (Live values: a stand-in PLC: FB_ScanSequencer's instance and its values)
+const standIn = path.join(OUT, 'live.json');
+const names = ['InitializeScan', 'MoveToStart', 'ResetData', 'FastScan', 'ProcessFastScan', 'ComputeResult'];
+fs.writeFileSync(standIn, JSON.stringify({
+  instances: { FB_ScanSequencer: ['MAIN.fbScan'] },
+  symbols: {
+    'MAIN.fbScan.State': { type: 'E_ScanState', value: 3, enum: Object.fromEntries(names.map((n, i) => [i, n])) },
+    'MAIN.fbScan.Busy': { type: 'BOOL', value: true },
+    'MAIN.fbScan._Count': { type: 'INT', value: 7 },
+  },
+}));
+const env = { ...process.env, KSS_TEST_PROJECT: proj, KSS_TEST_RESULT: result, KSS_BUILD_DRYRUN: "1", KSS_LIVE_STANDIN: standIn, KSS_LIVE_POLL_MS: "200" };
 // (a VS Code terminal sets this: Code.exe would run as plain Node)
 delete env.ELECTRON_RUN_AS_NODE;
 const args = [

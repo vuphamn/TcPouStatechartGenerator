@@ -23,7 +23,16 @@ file access.
   declaration: the method's own VAR, its POU's (or a base's, `EXTENDS`), then the project's types, global variables and
   enum members; after a dot (`E_State.Idle`) the one in the type named before it. By name, not a compiler's
   resolution: a local of the same name in another POU is listed too.
-- **Go to code** in the statechart opens the section at that line (the method's implementation), beside the chart.
+- **Go to code** in the statechart opens the section at that line (the method's implementation), beside the chart, or
+  where that section is open already.
+- **Rename** (`F2`): by the name's declaration, always shown in the refactor preview first: a method's own variable in
+  that method; a POU's variable in the POU and the POUs that extend it, its uses after a dot elsewhere (`fbScan.State`)
+  listed apart to check one by one; a global variable, an enum member or a type everywhere. A POU's, method's,
+  property's or action's own name is renamed in XAE (it is in the file's XML too); a keyword, or a name already
+  declared there, is refused.
+- **Outline** (the Outline view, the breadcrumbs): a declaration's object, its VAR blocks and
+  variables (an enum's members); an implementation's `CASE` branches, the states (a nested `CASE`'s under its branch).
+  With *Structured Text language Support*, its own outline of a declaration is used (the same blocks and variables).
 - **Save:** a section's text goes back into its CDATA block only: the objects' Ids, the line ids, the file's BOM and line
   breaks stay as they were. Two sections edited and saved one after the other do not conflict. A file changed on disk
   (XAE, git) shows in its open sections; one with unsaved edits asks first, as any file.
@@ -47,6 +56,11 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   (or none): it asks first, as XAE does: **Login with online change** (the PLC keeps running) or **Login with
   download** (the application stops, takes the new code and starts again). XAE builds and writes it, and updates the
   boot project. **Logout:** offline again.
+- **Live values** (logged in): each variable's value after it in the sections, as in XAE's online view: numbers,
+  `TRUE` / `FALSE`, strings, enums by their names; a function block's members as `fbAxis.bDone`. Read over ADS twice a
+  second, for the visible part of each section. A POU's values are its instance's on the PLC (found in its symbol table;
+  with several, the status bar's instance item chooses one); a GVL's are its own. Hovering one shows its symbol and type.
+  Logged out: none.
 - **Start / Stop:** the PLC application, over ADS, while logged in. Asked first (they run or stop the machine's
   program); `kvalMachineScope.twincat.confirmStartStop` switches that off.
 - Needs TwinCAT XAE on this computer for Build and Login (its Automation Interface); Start, Stop and the PLC's state need

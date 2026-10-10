@@ -18,6 +18,9 @@ const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs')
 const { startPlc, stopPlc } = require('../shared/tcAppInfo.cjs');
 const { plcCompileId, projectBuilds, compareBuilds } = require('../shared/tcCompileInfo.cjs');
 const { localRoutes } = require('../shared/tcDiscovery.cjs');
+const { registerLiveValues, adsSource, standInSource } = require('./liveValues.cjs');
+// (the tests: a stand-in PLC, KSS_LIVE_STANDIN: a JSON file of its instances and values; logged in without ADS)
+const STAND_IN = process.env.KSS_LIVE_STANDIN || null;
 const ads = require('../shared/tcAds.cjs');
 const { parseSource } = require('./tcStSource.cjs');
 
@@ -119,6 +122,11 @@ function register(context, { activeFile, sectionUriOf }) {
     const p = project;
     const s = stateOf(p.root);
     try {
+      if (STAND_IN) {
+        s.plc = s.plc ?? 'Run';
+        s.code = { state: 'newest', at: Date.now() };
+        return;
+      }
       const client = await plcClient(targetOf(p));
       const st = await client.readState();
       s.plc = ads.ADS_STATES?.[st.adsState] ?? String(st.adsState);
@@ -131,6 +139,7 @@ function register(context, { activeFile, sectionUriOf }) {
       await dropClient();
     } finally {
       polling = false;
+      if (STAND_IN && project === p) render();
     }
     if (project === p) render();
   }
@@ -266,6 +275,14 @@ function register(context, { activeFile, sectionUriOf }) {
     const p = needProject();
     const s = stateOf(p.root);
     const t = targetOf(p);
+    if (STAND_IN) {
+      s.loggedIn = true;
+      s.plc = s.plc ?? 'Run';
+      log(`Logged in to ${t.name} (stand-in)`);
+      render();
+      live.refresh(p.root);
+      return;
+    }
     const client = await plcClient(t);
     const id = await plcCompileId(client);
     const cmp = compareBuilds(id, projectBuilds(p.plcproj ?? p.tsproj));
@@ -274,6 +291,7 @@ function register(context, { activeFile, sectionUriOf }) {
       s.loggedIn = true;
       log(`Logged in to ${t.name}: the PLC runs ${p.name}'s latest build`);
       render();
+      live.refresh(p.root);
       return;
     }
     const why = !id ? `The PLC on ${t.name} runs no program (or does not say which)` : `The PLC on ${t.name} runs other code than ${p.name}'s latest build`;
@@ -293,6 +311,7 @@ function register(context, { activeFile, sectionUriOf }) {
     s.code = null;
     log(`Logged in to ${t.name}: ${choice === ONLINE ? 'online change' : 'download'} made${r.bootProject === false ? ' (the boot project was not updated)' : ''}`);
     render();
+    live.refresh(p.root);
     void poll();
   }
 
@@ -300,7 +319,9 @@ function register(context, { activeFile, sectionUriOf }) {
     const p = needProject();
     stateOf(p.root).loggedIn = false;
     log(`Logged out of ${targetOf(p)?.name ?? 'the PLC'}`);
+    await dropSource(p.root);
     render();
+    live.refresh(p.root);
   }
 
   async function startStop(start) {
@@ -311,6 +332,11 @@ function register(context, { activeFile, sectionUriOf }) {
     if (vscode.workspace.getConfiguration('kvalMachineScope').get('twincat.confirmStartStop', true)) {
       const ok = await vscode.window.showWarningMessage(`${start ? 'Start' : 'Stop'} the PLC on ${t.name}?`, { modal: true, detail: start ? 'Its program runs: the machine may move.' : 'Its program stops: the machine stops being controlled.' }, start ? 'Start' : 'Stop');
       if (!ok) return;
+    }
+    if (STAND_IN) {
+      s.plc = start ? 'Run' : 'Stop';
+      log(`${start ? 'Start' : 'Stop'} on ${t.name} (stand-in): ${s.plc}`);
+      return render();
     }
     const client = await plcClient(t);
     s.busy = start ? 'Starting' : 'Stopping';
@@ -343,9 +369,11 @@ function register(context, { activeFile, sectionUriOf }) {
     s.loggedIn = false;
     s.plc = null;
     s.code = null;
+    await dropSource(p.root);
     await dropClient();
     log(`Target: ${picked.target.name} (${picked.target.netId})`);
     render();
+    live.refresh(p.root);
     void poll();
   }
 
@@ -432,8 +460,46 @@ function register(context, { activeFile, sectionUriOf }) {
       await poll();
     }))
   );
+  // ---- Live values (liveValues.cjs): each project's source, made when it is first asked for while logged in
+  const sources = new Map();
+  async function sourceOf(root) {
+    const proj = projects.get(root) ?? project;
+    if (STAND_IN) {
+      if (!sources.has(root)) sources.set(root, { client: null, src: standInSource(STAND_IN) });
+      return sources.get(root).src;
+    }
+    const t = targetOf(proj);
+    const client = await plcClient(t);
+    let e = sources.get(root);
+    if (!e || e.client !== client) {
+      if (e) await e.src.dispose().catch(() => {});
+      e = { client, src: adsSource(client) };
+      sources.set(root, e);
+    }
+    return e.src;
+  }
+  async function dropSource(root) {
+    const e = sources.get(root);
+    sources.delete(root);
+    if (e) await e.src.dispose().catch(() => {});
+  }
+  // (a file's project, kept: asked twice a second)
+  const projectCache = new Map();
+  const projects = new Map();
+  const cachedProjectOf = (file) => {
+    const k = path.dirname(path.resolve(file)).toLowerCase();
+    if (!projectCache.has(k)) projectCache.set(k, projectOf(file));
+    const p = projectCache.get(k);
+    if (p) projects.set(p.root, p);
+    return p;
+  };
+  const live = registerLiveValues(context, {
+    online: { isOnline: (root) => !!states.get(root)?.loggedIn, source: sourceOf },
+    projectOf: cachedProjectOf,
+  });
   follow();
   return { projectOf };
+
 }
 
 module.exports = { register, projectOf, projectTarget, findPlcproj };

@@ -8,8 +8,10 @@ const { projectRootOf } = require('../shared/tcBuild.cjs');
 /** The project of a file: { root, tsproj, name, plcproj, plcProject } or null (not in a TwinCAT project) */
 function projectOf(file) {
   if (!file) return null;
-  const root = projectRootOf(file);
-  if (!root) return null;
+  // (the folder as VS Code spells paths, its drive letter lower case: one project however the file's path was spelled)
+  const found = projectRootOf(file);
+  if (!found) return null;
+  const root = path.resolve(found).replace(/^[A-Z]:/, (d) => d.toLowerCase());
   const tsproj = fs.readdirSync(root).find((f) => /\.tsproj$/i.test(f));
   if (!tsproj) return null;
   // (the PLC project the file is in: the nearest .plcproj above it, up to the project's folder)

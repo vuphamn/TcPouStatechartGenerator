@@ -8,7 +8,8 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const { parseSource, sectionAt, memberTitle } = require('./tcStSource.cjs');
-const { createIndex, nameAt, findReferences, findDefinition } = require('./stReferences.cjs');
+const { createIndex, nameAt, findReferences, findDefinition, renameEdits } = require('./stReferences.cjs');
+const { declarationOutline, implementationOutline } = require('./stOutline.cjs');
 const { projectRootOf } = require('../shared/tcBuild.cjs');
 const { SCHEME, sectionAddress, addressOf, createSectionStore } = require('./sectionStore.cjs');
 
@@ -266,6 +267,21 @@ function register(context) {
       at = null;
     }
     if (!at) return false;
+    // (the section shown already: there, the active editor first; no more groups)
+    let members = null;
+    try {
+      members = parseSource(fs.readFileSync(file, 'utf8')).members;
+    } catch {
+      members = null;
+    }
+    const uri = sectionUri({ file, key: at.key, section: at.section }, members).toString();
+    const visible = vscode.window.visibleTextEditors.filter((e) => e.document.uri.toString() === uri);
+    const ed = visible.find((e) => e === vscode.window.activeTextEditor) ?? visible[0];
+    if (ed) {
+      const pos = new vscode.Position(at.line, at.column);
+      await vscode.window.showTextDocument(ed.document, { viewColumn: ed.viewColumn, preview: false, selection: new vscode.Range(pos, pos) });
+      return true;
+    }
     const declGroup = [...below.keys()].find((c) => groupExists(c) && c !== vscode.window.tabGroups.activeTabGroup?.viewColumn);
     await openMember(file, at.key, { viewColumn: declGroup ?? vscode.ViewColumn.Beside, focus: at });
     return true;
@@ -314,7 +330,60 @@ function register(context) {
         return findDefinition(files, { file: h.a.file, key: h.a.key, name: h.n.name, qualifier: h.n.qualifier }).map((r) => locationOf(files, r));
       },
     }),
-    vscode.commands.registerCommand('kvalMachineScope.revealInSource', (file, line, column) => revealInSource(file, line, column))
+    vscode.commands.registerCommand('kvalMachineScope.revealInSource', (file, line, column) => revealInSource(file, line, column)),
+    // Rename (F2): by the name's declaration (a method's local in that method, a POU's variable in its POU and the
+    // POUs that extend it, a global everywhere); always shown in the refactor preview first, each change to check
+    vscode.languages.registerRenameProvider({ scheme: SCHEME }, {
+      prepareRename(doc, pos) {
+        const h = here(doc, pos);
+        if (!h) throw new Error('Not a name to rename');
+        const r = renameEdits(projectFiles(h.a.file), { file: h.a.file, key: h.a.key, name: h.n.name, qualifier: h.n.qualifier }, `${h.n.name}_`);
+        if (r.error && !/already declared|not a Structured Text name/.test(r.error)) throw new Error(r.error);
+        const word = doc.getWordRangeAtPosition(pos, /[A-Za-z_]\w*/);
+        return { range: word, placeholder: h.n.name };
+      },
+      provideRenameEdits(doc, pos, newName) {
+        const h = here(doc, pos);
+        if (!h) return null;
+        const files = projectFiles(h.a.file);
+        const r = renameEdits(files, { file: h.a.file, key: h.a.key, name: h.n.name, qualifier: h.n.qualifier }, newName);
+        if (r.error) throw new Error(r.error);
+        const edit = new vscode.WorkspaceEdit();
+        const inScope = { needsConfirmation: true, label: `Rename ${h.n.name} to ${newName}`, description: r.scope === 'member' ? 'in its method' : r.scope === 'pou' ? 'in its POU and the POUs that extend it' : 'in the project' };
+        const apart = { needsConfirmation: true, label: `${h.n.name} after a dot in other POUs`, description: 'their type is not known here: check each one' };
+        for (const e of r.edits) {
+          const loc = locationOf(files, e);
+          edit.replace(loc.uri, loc.range, newName, e.apart ? apart : inScope);
+        }
+        return edit;
+      },
+    }),
+    // The outline (the Outline view, the breadcrumbs): the declaration's object, VAR blocks and variables; the
+    // implementation's CASE branches
+    vscode.languages.registerDocumentSymbolProvider({ scheme: SCHEME }, {
+      provideDocumentSymbols(doc) {
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return [];
+        }
+        // (a declaration in the "st" language of Structured Text language Support: its own outline has the same
+        // blocks and variables; not twice. An implementation's CASE branches: only here)
+        if (a.section === 'decl' && doc.languageId === 'st' && vscode.extensions.getExtension('serhioromano.vscode-st')) return [];
+        const text = doc.getText();
+        const list = a.section === 'decl' ? declarationOutline(text) : implementationOutline(text);
+        const KIND = { class: vscode.SymbolKind.Class, method: vscode.SymbolKind.Method, property: vscode.SymbolKind.Property, function: vscode.SymbolKind.Function, interface: vscode.SymbolKind.Interface, struct: vscode.SymbolKind.Struct, enum: vscode.SymbolKind.Enum, namespace: vscode.SymbolKind.Namespace, variable: vscode.SymbolKind.Variable, field: vscode.SymbolKind.Field, enumMember: vscode.SymbolKind.EnumMember, constant: vscode.SymbolKind.Constant, event: vscode.SymbolKind.Event };
+        const toSymbol = (sy) => {
+          const range = new vscode.Range(doc.positionAt(sy.start), doc.positionAt(Math.max(sy.start, sy.end)));
+          const sel = new vscode.Range(doc.positionAt(sy.nameStart), doc.positionAt(sy.nameEnd));
+          const d = new vscode.DocumentSymbol(sy.name, sy.detail ?? '', KIND[sy.kind] ?? vscode.SymbolKind.Variable, range.union(sel), sel);
+          d.children = sy.children.map(toSymbol);
+          return d;
+        };
+        return list.map(toSymbol);
+      },
+    })
   );
   return { openMember, activeFile, fileOf, sectionUriOf, revealInSource };
 }

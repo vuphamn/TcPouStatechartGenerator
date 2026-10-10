@@ -123,7 +123,8 @@ exports.run = async function run() {
     const xLine = xmlNow.findIndex((l) => /CASE State OF/.test(l));
     const shown = await vscode.commands.executeCommand('kvalMachineScope.revealInSource', pou, xLine, xmlNow[xLine].indexOf('CASE'));
     const act = vscode.window.activeTextEditor;
-    expect(shown && act && /Execute \(Impl\)\.st$/.test(act.document.uri.path) && /CASE State OF/.test(act.document.lineAt(act.selection.active.line).text), `Go to code: Execute()'s implementation, at its line (${act ? `${path.posix.basename(act.document.uri.path)}:${act.selection.active.line + 1}` : 'none'})`);
+    const at = require(path.join(__dirname, '..', '..', 'vscode-extension', 'tcStSource.cjs')).sectionAt(fs.readFileSync(pou, 'utf8'), xLine, xmlNow[xLine].indexOf('CASE'));
+    expect(shown && act && /Execute \(Impl\)\.st$/.test(act.document.uri.path) && /CASE State OF/.test(act.document.lineAt(act.selection.active.line).text), `Go to code: Execute()'s implementation, at its line (${act ? `${path.posix.basename(act.document.uri.path)}:${act.selection.active.line + 1}` : 'none'}; the place: ${JSON.stringify(at)}; editors: ${vscode.window.visibleTextEditors.map((e) => `${path.posix.basename(e.document.uri.path)}@${e.viewColumn}:${e.selection.active.line + 1}`).join(', ')})`);
 
     // 11. The language setting: the open sections at once
     const cfg = vscode.workspace.getConfiguration('kvalMachineScope');
@@ -133,7 +134,37 @@ exports.run = async function run() {
     const back = await waitFor(() => sections().every((e) => e.document.languageId === 'kval-st'), 5000);
     expect(plain && back, `the language setting: the open sections at once (plaintext ${!!plain}, back ${!!back})`);
 
-    // 12. The TwinCAT commands (XAE's toolbar) are there
+    // 12. The outline: Execute()'s states; the FB's declaration with its blocks and variables
+    const flat = (l, d = 0) => (l ?? []).flatMap((s) => [`${'  '.repeat(d)}${s.name}`, ...flat(s.children, d + 1)]);
+    const exSyms = flat(await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', exDoc.uri));
+    expect(['InitializeScan', 'ResetData', 'FastScan'].every((n) => exSyms.includes(n)), `the outline of Execute(): its states (${exSyms.slice(0, 6).join(', ')})`);
+    const declSyms = flat(await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', decl.document.uri));
+    expect(declSyms[0] === 'FB_ScanSequencer' && declSyms.includes('  VAR_OUTPUT') && declSyms.includes('    State'), `the outline of the declaration (${declSyms.slice(0, 5).join(' | ')})`);
+
+    // 13. Rename (F2): _Count in Execute(): the POU's variable, in its sections only (the edit looked at, not made)
+    const cLine = exText.findIndex((l) => /_Count\s*:=/.test(l));
+    const renamed = await vscode.commands.executeCommand('vscode.executeDocumentRenameProvider', exDoc.uri, new vscode.Position(cLine, exText[cLine].indexOf('_Count') + 1), '_Passes');
+    const entries = renamed?.entries() ?? [];
+    const edits = entries.flatMap(([u, list]) => list.map((e) => ({ name: path.posix.basename(u.path), text: e.newText })));
+    expect(edits.length >= 2 && edits.every((e) => e.text === '_Passes' && /^FB_ScanSequencer/.test(e.name)) && edits.some((e) => e.name === 'FB_ScanSequencer (Decl).st'), `Rename _Count: ${edits.length} edits in ${[...new Set(edits.map((e) => e.name))].join(', ')}`);
+
+    // 14. Live values (the stand-in PLC, KSS_LIVE_STANDIN): logged in, Execute()'s variables with their values;
+    // a value changed on the PLC shows; logged out, none
+    await vscode.window.showTextDocument(exDoc);
+    await vscode.commands.executeCommand('kvalMachineScope.login');
+    const shownOf = () => vscode.commands.executeCommand('kvalMachineScope.liveValuesShown', exDoc.uri.toString());
+    const v1 = await waitFor(async () => { const s = await shownOf(); return s && s.State === 'FastScan' && s.Busy === 'TRUE' ? s : null; }, 8000);
+    expect(v1, `logged in: the values shown (${JSON.stringify(await shownOf())})`);
+    const standIn = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8'));
+    standIn.symbols['MAIN.fbScan.State'].value = 5;
+    fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(standIn));
+    const v2 = await waitFor(async () => (await shownOf())?.State === 'ComputeResult', 8000);
+    expect(v2, `a value changed on the PLC: shown (${JSON.stringify(await shownOf())})`);
+    await vscode.commands.executeCommand('kvalMachineScope.logout');
+    const v3 = await waitFor(async () => (await shownOf()) === null, 8000);
+    expect(v3, `logged out: no values (${JSON.stringify(await shownOf())})`);
+
+    // 15. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
     const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);

@@ -95,7 +95,7 @@ expect(JSON.stringify(changed) === '["impl"]' && store.stat(impl).mtime > t0i &&
 // (the address: its tab title and back)
 const a = sectionAddress({ file, key: 'Method:Execute', section: 'impl' }, s.members);
 const back = addressOf(a.query);
-expect(a.path === '/FB_ScanSequencer/FB_ScanSequencer.Execute (Impl).st' && back.file === file && back.key === 'Method:Execute' && back.section === 'impl', `the address (${a.path})`);
+expect(a.path === '/FB_ScanSequencer/FB_ScanSequencer.Execute (Impl).st' && back.file.toLowerCase() === file.toLowerCase() && back.key === 'Method:Execute' && back.section === 'impl', `the address (${a.path})`);
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log(`${fails} failures`);
