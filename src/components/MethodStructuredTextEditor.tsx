@@ -1,3 +1,4 @@
+import { stateMethodLabel, stateMethodName } from '../utils/stateMethod.ts';
 import React, { useState, useEffect, useRef, useMemo, useCallback, useId } from 'react';
 import { caretAnchor } from '../utils/caretAnchor.ts';
 import { usePendingSave } from '../utils/pendingSaves.ts';
@@ -163,9 +164,10 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     // Format all items with () for standard method call notation
     const formatted = sorted.map((m) => (m.endsWith('()') ? m : `${m}()`));
 
-    // Ensure doState() is included if missing
-    if (!formatted.some((m) => m.replace(/\(\)$/, '').toLowerCase() === 'dostate')) {
-      formatted.push('doState()');
+    // Ensure the state method (doState(); Execute() in another company's POU) is included if missing
+    const stateMethod = stateMethodLabel(tcPouContent);
+    if (!formatted.some((m) => m.toLowerCase() === stateMethod.toLowerCase())) {
+      formatted.push(stateMethod);
       formatted.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     }
 
@@ -174,16 +176,17 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
 
   // 2. Default selected method: "doState()"
   const defaultMethodItem = useMemo<string>(() => {
+    const stateMethod = stateMethodLabel(tcPouContent);
     if (initialMethod) {
-      const formattedInitial = initialMethod.endsWith('()') ? initialMethod : `${initialMethod}()`;
+      const asked = initialMethod.endsWith('()') ? initialMethod : `${initialMethod}()`;
+      // (doState(): the POU's state method)
+      const formattedInitial = asked.toLowerCase() === 'dostate()' ? stateMethod : asked;
       if (availableMethods.includes(formattedInitial)) {
         return formattedInitial;
       }
     }
-    const doStateFound = availableMethods.find(
-      (m) => m.replace(/\(\)$/, '').toLowerCase() === 'dostate'
-    );
-    return doStateFound || 'doState()';
+    const doStateFound = availableMethods.find((m) => m.toLowerCase() === stateMethod.toLowerCase());
+    return doStateFound || stateMethod;
   }, [availableMethods, initialMethod]);
 
   const [selectedMethod, setSelectedMethod] = useState<string>(defaultMethodItem);
@@ -574,12 +577,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       return null;
     }
   }, [tcPouContent, cleanMethodName]);
+  // (the POU's state method shown: doState(), or Execute() in another company's POU; its CASE labels are the states)
+  const stateMethodLc = useMemo(() => stateMethodName(tcPouContent).toLowerCase(), [tcPouContent]);
+  const isStateMethod = cleanMethodName.toLowerCase() === stateMethodLc;
   const canvasStateOf = useCallback(
-    (name: string) => (cleanMethodName.toLowerCase() === 'dostate' ? name : subMachine && subMachine.states.includes(name) ? `${subMachine.parent}__${subMachine.method}__${name}` : null),
-    [cleanMethodName, subMachine]
+    (name: string) => (isStateMethod ? name : subMachine && subMachine.states.includes(name) ? `${subMachine.parent}__${subMachine.method}__${name}` : null),
+    [isStateMethod, subMachine]
   );
   useEffect(() => {
-    const isDoState = cleanMethodName.toLowerCase() === 'dostate' || !!subMachine;
+    const isDoState = isStateMethod || !!subMachine;
     const onSel = () => {
       const ta = document.activeElement as HTMLTextAreaElement | null;
       if (!ta || ta.id !== 'method-implementation-editor') return;
@@ -596,7 +602,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     };
     document.addEventListener('selectionchange', onSel);
     return () => document.removeEventListener('selectionchange', onSel);
-  }, [cleanMethodName, caseStates, followCanvas, subMachine, canvasStateOf]);
+  }, [cleanMethodName, isStateMethod, caseStates, followCanvas, subMachine, canvasStateOf]);
   // An edit here: the highlighted row is no longer known (its lines moved)
   useEffect(() => {
     const onInput = (e: Event) => {
@@ -607,7 +613,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   }, []);
   // The Enum Editor's caret on a member: its CASE label shown here
   useEffect(() => {
-    if (!codeFocus || codeFocus.from === 'method' || cleanMethodName.toLowerCase() !== 'dostate') return;
+    if (!codeFocus || codeFocus.from === 'method' || !isStateMethod) return;
     const lineIndex = findCaseLabelLineIndex(code, codeFocus.state, codeFocus.state);
     if (lineIndex < 0) return;
     caretStateRef.current = null;
@@ -655,11 +661,11 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   useEffect(() => {
     // (opened with a sub-machine's state selected, no method asked for: its method, as if selected now)
     const isStateChanged =
-      prevSelectedStateIdRef.current !== (selectedStateId || null) || (isInitialMountRef.current && (!initialMethod || /^dostate(\(\))?$/i.test(initialMethod)) && !!selectedStateId && selectedStateId.includes('__'));
+      prevSelectedStateIdRef.current !== (selectedStateId || null) || (isInitialMountRef.current && (!initialMethod || /^dostate(\(\))?$/i.test(initialMethod) || initialMethod.replace(/\(\)$/, '').toLowerCase() === stateMethodLc) && !!selectedStateId && selectedStateId.includes('__'));
     const methodChanged = prevMethodNameRef.current !== cleanMethodName;
     prevMethodNameRef.current = cleanMethodName;
     const parts = (selectedStateId ?? '').split('__');
-    let home = 'dostate';
+    let home = stateMethodLc;
     let labelName = selectedStateId ?? '';
     for (let i = parts.length - 2; i >= 1; i--) {
       const m = availableMethods.find((x) => x.replace(/\(\)$/, '').toLowerCase() === parts[i].toLowerCase());
@@ -717,7 +723,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
 
     // Search for the case label line in the implementation code
-    const lineIndex = findCaseLabelLineIndex(code, labelName, home === 'dostate' ? selectedStateLabel : labelName);
+    const lineIndex = findCaseLabelLineIndex(code, labelName, home === stateMethodLc ? selectedStateLabel : labelName);
     if (lineIndex >= 0) {
       lastScrolledTargetRef.current = selectedStateId;
       const targetLine = lineIndex + 1; // 1-based line number
@@ -2107,7 +2113,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             {/* Center / Right: State Jump Navigator & Code Folding Action Buttons */}
             <div className="flex items-center gap-1.5 ml-auto">
               {/* Follow: the canvas too (Identified States and the Enum Editor always follow the caret's state) */}
-              {cleanMethodName.toLowerCase() === 'dostate' && (
+              {isStateMethod && (
               <label className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-[10px] text-slate-300 cursor-pointer select-none" title="The caret's state: Identified States and the Enum Editor always show it; with Follow, the Diagram Canvas selects it and pans to it too">
                 <input id="method-follow-checkbox" type="checkbox" checked={followCanvas} onChange={(e) => setFollowCanvas(e.target.checked)} className="accent-sky-500 w-3 h-3" />
                 Follow

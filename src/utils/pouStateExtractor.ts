@@ -3,6 +3,7 @@
  * (along with optional .TcDUT enum declaration for groupings and descriptions).
  */
 
+import { stateMethodName } from './stateMethod.ts';
 import { parseTransitionsFromStateCode } from './pouStateEditor.ts';
 import { caseLabelLinePattern, splitStateLabels } from './stateNames.ts';
 import { expandStateCalls, readableInline, withInherited } from './pouInheritance.ts';
@@ -112,7 +113,9 @@ export function extractIdentifiedStatesFromPou(
   const umlGroupsMap = extractUmlCompositeGroups(pouXml);
 
   // 4. Locate doState() method
-  const methodRx = /<Method[^>]*\bName=["']doState["'][^>]*>([\s\S]*?)<\/Method>/i;
+  // (or the POU's state method: Execute() in another company's POU)
+  const stateMethod = stateMethodName(pouXml).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const methodRx = new RegExp(`<Method[^>]*\\bName=["']${stateMethod}["'][^>]*>([\\s\\S]*?)<\\/Method>`, 'i');
   const methodMatch = pouXml.match(methodRx);
   let doStateSt = '';
   if (methodMatch) {

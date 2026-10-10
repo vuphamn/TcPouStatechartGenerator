@@ -4455,7 +4455,8 @@ export const MermaidViewer = forwardRef<MermaidViewerHandle, MermaidViewerProps>
     const num = (el: Element, name: string) => parseFloat(el.getAttribute(name) || '0') || 0;
     svg.querySelectorAll('g.node[data-state-id]').forEach((node) => {
       const id = node.getAttribute('data-state-id') || '';
-      if (!marked.has(id)) return;
+      // (a sub-machine's state, <parent>__<method>__<name>: bookmarked by its name)
+      if (!marked.has(id) && !marked.has(id.split('__').pop() || id)) return;
       // The node's shape in its own coordinates (as the problem badges do)
       let box = { x: 0, y: 0, width: 0 };
       const shape = node.querySelector(':scope > rect, :scope > polygon, :scope > circle, :scope > ellipse, rect, polygon');

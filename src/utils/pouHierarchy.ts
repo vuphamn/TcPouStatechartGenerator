@@ -2,6 +2,7 @@
  * Utilities for extracting POU (Program Organization Unit) and Method hierarchy
  * information from Beckhoff TwinCAT 3 .TcPOU files.
  */
+import { stateMethodName } from './stateMethod.ts';
 
 export type PouType = 'FUNCTION_BLOCK' | 'PROGRAM' | 'FUNCTION' | 'POU';
 
@@ -19,6 +20,8 @@ export interface PouHierarchyMetadata {
   pouTypeShort: string; // 'FB', 'PRG', 'FUN', 'POU'
   allMethods: string[];
   methodSignatures: Record<string, MethodSignatureInfo>;
+  /** The method holding the state machine: doState, or Execute in another company's POU */
+  stateMethod?: string;
 }
 
 /**
@@ -72,6 +75,7 @@ export function extractPouHierarchyMetadata(
   const methodsList: string[] = [];
   const signatures: Record<string, MethodSignatureInfo> = {};
 
+  const stateMethod = stateMethodName(pouXml);
   let mMatch: RegExpExecArray | null;
   while ((mMatch = methodRegex.exec(pouXml)) !== null) {
     const rawMethodName = mMatch[1].trim();
@@ -100,7 +104,7 @@ export function extractPouHierarchyMetadata(
       }
     }
 
-    const isStateMethod = rawMethodName.toLowerCase() === 'dostate';
+    const isStateMethod = rawMethodName.toLowerCase() === stateMethod.toLowerCase();
 
     signatures[rawMethodName] = {
       name: rawMethodName,
@@ -110,11 +114,11 @@ export function extractPouHierarchyMetadata(
     };
   }
 
-  // Ensure doState is present
-  if (!methodsList.some((m) => m.toLowerCase() === 'dostate')) {
-    methodsList.push('doState');
-    signatures['doState'] = {
-      name: 'doState',
+  // Ensure the state method is present (doState; Execute in another company's POU)
+  if (!methodsList.some((m) => m.toLowerCase() === stateMethod.toLowerCase())) {
+    methodsList.push(stateMethod);
+    signatures[stateMethod] = {
+      name: stateMethod,
       isStateMethod: true,
       returnType: 'BOOL',
     };
@@ -126,6 +130,7 @@ export function extractPouHierarchyMetadata(
   );
 
   return {
+    stateMethod,
     fileName: cleanFileName,
     pouName,
     pouType,

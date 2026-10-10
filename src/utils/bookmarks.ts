@@ -90,6 +90,19 @@ export function labelStateAt(code: string, line: number): string | undefined {
   return names[0];
 }
 
+/**
+ * The name a state's bookmark is kept under: a sub-machine's state (<parent>__<method>__<name>) by its name, as its
+ * enum's member (the Enum Editor) and its CASE label in its method (the Method Editor) give it
+ */
+export const bookmarkStateName = (id: string): string => id.split('__').pop() || id;
+
+/** A CASE label of this state in the code (a state with none, as a default state the CASE leaves out, has no line to mark) */
+export function hasStateLabel(code: string, state: string): boolean {
+  return blankComments(code)
+    .split(/\r?\n/)
+    .some((l) => labelNames(l).includes(state));
+}
+
 /** Where a method's line bookmarks are now: the line with their text nearest to where they were */
 function resolveLines(b: PouBookmarks, method: string, code: string): { line: number; bookmark: LineBookmark }[] {
   const lines = code.split(/\r?\n/).map((l) => l.trim());
@@ -126,6 +139,16 @@ export function clearBookmarks(pou: string, method?: string, code?: string): voi
   const labels = new Set<string>();
   if (code) blankComments(code).split(/\r?\n/).forEach((l) => labelNames(l).forEach((n) => labels.add(n)));
   setBookmarks(pou, { states: b.states.filter((s) => !labels.has(s)), lines: b.lines.filter((l) => !sameMethod(l.method, method)) });
+}
+
+// (another browser window or tab of the app changed them: re-read there too)
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (e) => {
+    if (e.key !== null && !e.key.startsWith('kss.bookmarks.')) return;
+    if (e.key === null) cache.clear();
+    else cache.delete(e.key);
+    listeners.forEach((l) => l());
+  });
 }
 
 /** The POU's bookmarks, re-read when they change (in any view) */

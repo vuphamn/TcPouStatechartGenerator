@@ -1,5 +1,6 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
+import { inlineStateEnum, resolveStateMethod } from './utils/stateMethod.ts';
 import { findAllSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
@@ -234,7 +235,9 @@ const whereWritten = (stack: { method: string; owner: string }[], self: string) 
   return top ? { inMethod: top.method, ...(top.owner !== self ? { inheritedFrom: top.owner } : {}) } : {};
 };
 
-function getMethodSt(doc: Document | null, rawXml: string, name: string): string | null {
+function getMethodSt(doc: Document | null, rawXml: string, nameAsked: string): string | null {
+  // (doState: the POU's state method, Execute() in another company's POU)
+  const name = resolveStateMethod(rawXml, nameAsked);
   if (doc) {
     const methods = Array.from(doc.getElementsByTagName('Method'));
     const target = methods.find(
@@ -2071,10 +2074,12 @@ export function inferredComposites(tcDutContent: string, pouXml: string): { name
 
 /** The Mermaid code, the state variable, and the drawn edges with the code's transitions (and their IF context) */
 export function generateStatechartModel(
-  tcDutContent: string,
+  tcDutContentGiven: string,
   pouXml: string,
   options: GeneratorOptions = {}
 ): StatechartModel {
+  // (no enum given: the one written inline in the POU's declaration, when its states are such: Phase : (A, B))
+  const tcDutContent = tcDutContentGiven?.trim() ? tcDutContentGiven : inlineStateEnum(pouXml)?.dut ?? tcDutContentGiven;
   // (a POU that EXTENDS another: the bases found for it merged in, see pouInheritance)
   const tcPouContent = withInherited(pouXml);
   const collapseErrorSinkEdges = options.collapseErrorSinkEdges ?? DefaultCollapseErrorSinkEdges;
@@ -2108,21 +2113,15 @@ export function generateStatechartModel(
   }
 
   if (doStateSt === null && preProcessSt === null) {
-    throw new Error('Neither doState() nor preProcess() found in POU file.');
+    throw new Error('No state machine found in the POU: neither doState() nor preProcess(), nor a method with a CASE on a variable of an enum type.');
   }
 
   let stateVarName = 'machineState';
   if (doStateSt) {
     const pattern = /\bCASE\s*\(?\s*(.*?)\s*\)?\s*OF\b/i;
     const match = doStateSt.match(pattern);
-    if (match) {
-      stateVarName = match[1].trim();
-      if (stateVarName !== 'machineState' && stateVarName !== 'mainState') {
-        throw new Error(
-          `Unexpected state variable name: ${stateVarName}. Expected 'machineState' or 'mainState'.`
-        );
-      }
-    }
+    // (Kval's machineState / mainState; another company's POU: any, State)
+    if (match) stateVarName = match[1].trim();
   }
 
   const transitions: Transition[] = [];

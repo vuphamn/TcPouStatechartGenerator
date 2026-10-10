@@ -173,7 +173,7 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, ENUM_KEY, clearBookmarks, declarationOf, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BODY, ENUM_KEY, bookmarkStateName, clearBookmarks, declarationOf, enumMemberOnLine, hasStateLabel, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
 import { parseDutContent, updateDutDeclaration } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
@@ -277,6 +277,7 @@ import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.ts
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
 import { XaeChecksDialog, type XaeCheck } from './components/XaeChecksDialog.tsx';
 import { printHtml } from './utils/printHtml.ts';
+import { INLINE_ENUM_PATH, inlineStateEnum, stateEnumTypeOf, stateMethodName } from './utils/stateMethod.ts';
 import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
@@ -330,7 +331,7 @@ import { HeaderHiddenControls, HeaderItemId } from './components/HeaderHiddenCon
 import { useToolbarOverflow } from './hooks/useToolbarOverflow.ts';
 import { extractIdentifiedStatesFromPou } from './utils/pouStateExtractor.ts';
 import { extendsOf, hasOwnMethod, inheritedMethodsOf, mergeBaseEdits, ownMethodNames, plainMethodName, pouNameOf as pouTypeNameOf, registeredBases, setInheritedBases, withInherited } from './utils/pouInheritance.ts';
-import { fetchReportSettings, fetchMachineScopeFiles, machineScopeFilesAct, fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
+import { findProjectDut, fetchReportSettings, fetchMachineScopeFiles, machineScopeFilesAct, fetchCoverageFile, fetchProjectBuilds, fetchProjectVersions, findProjectPou, openXaeFor, resolveInheritance, revertProjectFiles, saveCoverageFile } from './utils/projectFiles.ts';
 import { applyPlcEnum } from './utils/plcEnumSync.ts';
 import { addCoverageReset, coverageCsv, coverageSessions, coverageStartNow, loadCoverageResets, loadCoverageStart, saveCoverageStart, transitionCoverage, type CoverageStart } from './utils/transitionCoverage.ts';
 import { InheritanceDialog } from './components/InheritanceDialog.tsx';
@@ -1408,6 +1409,10 @@ export const App: React.FC = () => {
     setSavedSources((b) => ({ ...b, dut: dut?.content ?? '' }));
   }, []);
 
+  // (the enum types looked for in the project once per POU: another company's POU keeps its enum elsewhere)
+  const dutLookedForRef = useRef(new Set<string>());
+  const pouPathForDutRef = useRef<string | null>(null);
+  const applyDutCandidatesRef = useRef<(pou: string, candidates: DutCandidate[], forceFirst?: boolean) => void>(() => {});
   /** Picks the enum that declares the most doState() states; `forceFirst` keeps a hand-picked file without a match */
   const applyDutCandidates = useCallback(
     (pou: string, candidates: DutCandidate[], forceFirst = false) => {
@@ -1431,6 +1436,21 @@ export const App: React.FC = () => {
         // (its doState() is in a base, still looked for: its enum is matched once it is found)
         applyDut(null);
         setDutStatus('pending');
+      } else if (inlineStateEnum(pou)) {
+        // (another company's POU, its states an enum written inline in its declaration: that enum, read only)
+        const inline = inlineStateEnum(pou)!;
+        applyDut({ name: `${inline.varName} (in ${pouTypeNameOf(pou)})`, relativePath: INLINE_ENUM_PATH, content: inline.dut });
+        setDutStatus('found');
+      } else if (stateEnumTypeOf(pou) && !dutLookedForRef.current.has(`${pouTypeNameOf(pou)}|${stateEnumTypeOf(pou)}`) && (isXaeHost() || isDesktopApp())) {
+        // (another company's POU: its enum elsewhere in the project, looked for by the state variable's type; once)
+        const type = stateEnumTypeOf(pou)!;
+        dutLookedForRef.current.add(`${pouTypeNameOf(pou)}|${type}`);
+        applyDut(null);
+        setDutStatus('pending');
+        void findProjectDut(type, pouPathForDutRef.current ?? undefined).then((found) => {
+          if (found && !candidates.some((c) => c.path && found.path && c.path.toLowerCase() === found.path.toLowerCase())) applyDutCandidatesRef.current(pou, [...candidates, found]);
+          else applyDutCandidatesRef.current(pou, candidates);
+        });
       } else {
         applyDut(null);
         setDutStatus('none');
@@ -1444,6 +1464,8 @@ export const App: React.FC = () => {
     },
     [showCopyToast, applyDut]
   );
+  applyDutCandidatesRef.current = applyDutCandidates;
+  pouPathForDutRef.current = pouPath ?? null;
 
   // The PLC instance this window follows, when it was opened for one (Live: Open instance): per window, so two windows
   // on the same POU follow different instances. null: the POU's saved live settings choose.
@@ -1468,6 +1490,9 @@ export const App: React.FC = () => {
       setSelectedSampleId('');
       if (src.dutCandidates) {
         applyDutCandidates(src.content, src.dutCandidates);
+      } else if (inlineStateEnum(src.content)) {
+        // (its states an enum written inline in it: no .TcDUT to find, that enum used at once)
+        applyDutCandidates(src.content, []);
       } else {
         // Web without folder access yet: the header offers "Find .TcDUT..."
         setDutMatches(null);
@@ -1575,7 +1600,7 @@ export const App: React.FC = () => {
               else {
                 applyLoadedPou(src);
                 // (its enum not found: how to give it)
-                if (!src.dutCandidates) showCopyToast('Its enum: drop its .TcDUT too, or the folder it is in (then any .TcPOU dropped from it finds its enum), or click Find .TcDUT…', 'success', 9000);
+                if (!src.dutCandidates && !inlineStateEnum(src.content)) showCopyToast('Its enum: drop its .TcDUT too, or the folder it is in (then any .TcPOU dropped from it finds its enum), or click Find .TcDUT…', 'success', 9000);
               }
             })
             .catch((e: unknown) => showCopyToast(`Could not open the .TcPOU: ${e instanceof Error ? e.message : String(e)}`, 'error', 8000))
@@ -1822,8 +1847,9 @@ export const App: React.FC = () => {
   const followSelectionRef = useRef(followSelection);
   followSelectionRef.current = followSelection;
   const handleEditorCaret = useCallback((m: Extract<HostMessage, { type: 'editorCaret' }>) => {
-    if (!followSelectionRef.current || m.method.toLowerCase() !== 'dostate') return;
+    // (the state method's editor: doState(), or Execute() in another company's POU)
     const pou = pouContentRef.current;
+    if (!followSelectionRef.current || m.method.toLowerCase() !== stateMethodName(pou).toLowerCase()) return;
     const declLines = declarationLineCount(pou, 'doState');
     const implLines = implementationLineCount(pou, 'doState');
     if (!declLines || !implLines) return;
@@ -2484,11 +2510,25 @@ export const App: React.FC = () => {
   // Bookmarks (the canvas, Identified States, the Method Editor share them)
   const bookmarks = useBookmarks(pouFileName);
   const handleToggleBookmark = useCallback(
-    (state: string) => {
+    (stateId: string) => {
+      // (a sub-machine's state, <parent>__<method>__<name>: its name, the one its enum and its method's CASE label give)
+      const state = bookmarkStateName(stateId);
+      const parts = stateId.split('__');
+      const ofMethod = parts.length >= 3 ? parts[parts.length - 2] : 'doState';
       const on = toggleStateBookmark(pouFileName, state);
+      // (a state the CASE has no label for, as a default state: nothing to mark in the method; said, and where it is marked)
+      const m = on && pouContent ? getMethodCodeFromPou(pouContent, ofMethod) : null;
+      if (m?.methodFound && !hasStateLabel(m.code, state)) {
+        const method = `${ofMethod === 'doState' ? stateMethodName(pouContent) : ofMethod}()`;
+        const decl = dutContent.trim() ? parseDutContent(dutContent).declaration : '';
+        const inEnum = decl.split(/\r?\n/).some((_, i) => enumMemberOnLine(decl, i + 1) === state);
+        const where = inEnum ? 'marked in the Enum Editor at its member' : "its .TcDUT shows it at its member in the Enum Editor (Find .TcDUT…)";
+        showCopyToast(`Bookmarked ${state}: ${method} has no CASE label for it, no line to mark there (${where})`, 'success', 6500);
+        return;
+      }
       showCopyToast(on ? `Bookmarked ${state}` : `Bookmark removed: ${state}`, 'success');
     },
-    [pouFileName, showCopyToast]
+    [pouFileName, pouContent, dutContent, showCopyToast]
   );
   // (a state's branch that calls a method with a state machine of its own: its sub-machine; see setSubMachineExpanded)
   const subMachines = useMemo(() => {
@@ -2755,7 +2795,7 @@ export const App: React.FC = () => {
     const code = m.methodFound ? blankComments(m.code).split(/\r?\n/) : [];
     for (const st of identifiedStatesResult.states) {
       const range = code.length ? caseBranchRange(code, st.id) : null;
-      const inBranch = (f: LintFinding) => !!range && f.method === 'doState' && !!f.line && f.line > range.start + 1 && f.line <= range.end;
+      const inBranch = (f: LintFinding) => !!range && (f.method === 'doState' || f.method === stateMethodName(pouContent)) && !!f.line && f.line > range.start + 1 && f.line <= range.end;
       const found = lintFindings.filter((f) => f.stateId === st.id || inBranch(f));
       if (found.length) out[st.id] = { messages: found.map((f) => f.message), names: found.map((f) => f.mark?.name ?? '').filter(Boolean) };
     }
@@ -5143,13 +5183,13 @@ export const App: React.FC = () => {
       if (target.type === 'node' && multiSelected.length > 1 && multiSelected.includes(target.id)) {
         const many = multiSelected;
         const n = many.length;
-        const allMarked = many.every((s) => bookmarks.states.includes(s));
+        const allMarked = many.every((s) => bookmarks.states.includes(bookmarkStateName(s)));
         items.push({
           id: 'multi-bookmark-btn',
           label: allMarked ? `Remove the bookmarks of the ${n} states` : `Bookmark the ${n} states`,
           icon: <Bookmark className="w-3.5 h-3.5" />,
           onSelect: () => {
-            for (const s of many) if (bookmarks.states.includes(s) === allMarked) toggleStateBookmark(pouFileName, s);
+            for (const s of new Set(many.map(bookmarkStateName))) if (bookmarks.states.includes(s) === allMarked) toggleStateBookmark(pouFileName, s);
             showCopyToast(allMarked ? `Removed ${n} bookmarks` : `Bookmarked ${n} states`, 'success');
           },
         });
@@ -5374,8 +5414,10 @@ export const App: React.FC = () => {
         items.push({ id: 'find-refs-btn', label: 'Find all references', icon: <Search className="w-3.5 h-3.5" />, title: 'Every use of the state in the POU: its CASE label, the transitions to it, …', onSelect: () => handleFindReferences(target.id) });
       }
       // A bookmark on the state
-      if (target.type === 'node' && target.id !== '[*]' && knownStates.has(target.id)) {
-        const on = bookmarks.states.includes(target.id);
+      // (a sub-machine's state too: by its name)
+      const isSubMachineState = (id: string) => subMachines.some((sm) => id.startsWith(`${sm.parent}__${sm.method}__`) && sm.states.includes(id.slice(`${sm.parent}__${sm.method}__`.length)));
+      if (target.type === 'node' && target.id !== '[*]' && (knownStates.has(target.id) || isSubMachineState(target.id))) {
+        const on = bookmarks.states.includes(bookmarkStateName(target.id));
         items.push({ id: 'bookmark-state-btn', label: on ? 'Remove bookmark' : 'Add bookmark', icon: <Bookmark className="w-3.5 h-3.5" />, title: 'Shown on the state, in Identified States and at its CASE label in the Method Editor', onSelect: () => handleToggleBookmark(target.id) });
       }
       if ((target.type === 'node' || target.type === 'canvas') && bookmarks.states.length + bookmarks.lines.length > 0)
@@ -10440,7 +10482,10 @@ export const App: React.FC = () => {
                   : handleSaveDutContent
               }
               enumMemberPrefix={enumSubView?.prefix}
-              enumReadOnlyNote={enumSubView?.note}
+              enumReadOnlyNote={
+                enumSubView?.note ??
+                (dutRelativePath === INLINE_ENUM_PATH ? `${inlineStateEnum(pouContent)?.varName ?? 'Its'}'s states are declared inline in the POU (${inlineStateEnum(pouContent)?.varName ?? 'the variable'} : (…)): read only here, edit them in the POU Editor's declaration` : undefined)
+              }
               onSaveMethodCode={handleSaveMethodCode}
               onSaveStateCode={handleSaveStateCode}
               onSavePreProcessCode={handleSavePreProcessCode}

@@ -4,6 +4,7 @@
  * entry/exit action inventory, and structural health ratings.
  */
 
+import { stateMethodName } from './stateMethod.ts';
 import { EdgeInfo, StateNodeInfo } from '../types.ts';
 
 export interface EntryExitActionItem {
@@ -194,11 +195,13 @@ export function extractEntryExitActions(
   // 2. Scan for dedicated entry/exit Methods <Method Name="...">
   const methodRegex = /<Method[^>]*\bName=["']([^"']+)["'][^>]*>([\s\S]*?)<\/Method>/gi;
   let mMatch: RegExpExecArray | null;
+  // (the state method: doState(), or Execute() in another company's POU)
+  const stateMethodLower = stateMethodName(tcPouContent).toLowerCase();
   while ((mMatch = methodRegex.exec(tcPouContent)) !== null) {
     const methodName = mMatch[1].trim();
     const methodLower = methodName.toLowerCase();
 
-    if (methodLower === 'dostate' || methodLower === 'preprocess' || methodLower === 'getstatedescription') {
+    if (methodLower === 'dostate' || methodLower === stateMethodLower || methodLower === 'preprocess' || methodLower === 'getstatedescription') {
       continue;
     }
 

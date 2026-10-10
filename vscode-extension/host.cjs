@@ -186,6 +186,15 @@ function createHost({ pouPath, post, ui }) {
       for (const d of duts) lastSeen.set(d.path, contentKey(d.content));
       post({ type: 'findPouResult', requestId, typeName, source: { name: path.basename(found), path: found, content, dutCandidates: duts } });
     },
+    // The enum of a type anywhere in the PLC project (another company's POU: its state variable's enum elsewhere)
+    findEnumType: ({ requestId, typeName }) => {
+      const found = /^[A-Za-z_]\w*$/.test(typeName ?? '') && findFile(projectRoot(pou), new RegExp(`^${typeName}\\.TcDUT$`, 'i'));
+      if (!found) return post({ type: 'findEnumTypeResult', requestId, typeName, error: `${typeName}.TcDUT was not found in the PLC project` });
+      const content = readText(found);
+      // (it can be edited and saved here: known)
+      lastSeen.set(found, contentKey(content));
+      post({ type: 'findEnumTypeResult', requestId, typeName, dut: { name: path.basename(found), relativePath: path.relative(path.dirname(pou), found), path: found, content } });
+    },
     saveDocument: async ({ name, content }) => {
       const p = (await ui.pick('save', name))?.[0];
       if (!p) return post({ type: 'saveDocumentResult', canceled: true });

@@ -11,6 +11,7 @@
  * state's. The inlined code is between "{kss-in <method> <owner>}" and "{kss-out}" lines (pragmas: the parsers skip
  * them), which say where a transition is written.
  */
+import { resolveStateMethod } from './stateMethod.ts';
 
 const START = '<!--kss-inherited';
 const END = '<!--/kss-inherited-->';
@@ -41,9 +42,10 @@ export function ownMethodNames(pouXml: string): string[] {
   return [...stripInherited(pouXml).matchAll(/<Method\b[^>]*\bName=["']([^"']+)["']/gi)].map((m) => m[1]);
 }
 
-/** Has the POU (itself, not a base) this method? */
+/** Has the POU (itself, not a base) this method? (doState: its state method, Execute() in another company's POU) */
 export function hasOwnMethod(pouXml: string, name: string): boolean {
-  return ownMethodNames(pouXml).some((n) => n.toLowerCase() === name.toLowerCase());
+  const wanted = resolveStateMethod(pouXml, name).toLowerCase();
+  return ownMethodNames(pouXml).some((n) => n.toLowerCase() === wanted);
 }
 
 /** Bases merged into the text (nearest first); empty when none */
@@ -156,6 +158,43 @@ function methodsOf(pouXml: string): Map<string, MethodInfo> {
 const stripComments = (s: string) => s.replace(/\(\*[\s\S]*?\*\)/g, '').replace(/\/\/[^\r\n]*/g, '');
 
 /** "[LABEL:] [SUPER^.|THIS^.]name(...);" alone on its line (a comment after it allowed) */
+/** A call's named arguments ("a := 1, NextState := E_X.Y" → { a: '1', NextState: 'E_X.Y' }; outputs (=>) left out) */
+function namedArguments(args: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let depth = 0;
+  let part = '';
+  const parts: string[] = [];
+  for (const ch of args) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) {
+      parts.push(part);
+      part = '';
+    } else part += ch;
+  }
+  if (part.trim()) parts.push(part);
+  for (const p of parts) {
+    const m = /^\s*([A-Za-z_]\w*)\s*:=\s*([\s\S]+?)\s*$/.exec(p);
+    if (m) out.set(m[1].toLowerCase(), m[2]);
+  }
+  return out;
+}
+
+/**
+ * A method's code with its parameters given by the call put in ("State := NextState" → "State := E_X.Y"): a word
+ * that is a parameter, not a member (.x), not a named argument of another call (x := / x =>)
+ */
+function withArguments(st: string, args: Map<string, string>): string {
+  if (!args.size) return st;
+  return st.replace(/(^|[^\w.])([A-Za-z_]\w*)\b(?!\s*(?::=|=>))/g, (all, before: string, word: string, at: number, whole: string) => {
+    const v = args.get(word.toLowerCase());
+    if (v === undefined) return all;
+    // (the left side of an assignment to the parameter itself stays: "NextState := …")
+    if (/^\s*:=/.test(whole.slice(at + all.length))) return all;
+    return before + v;
+  });
+}
+
 const CALL_LINE = /^(?:((?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*)\s*:(?!=)\s*)?(SUPER\^\.|THIS\^\.)?([A-Za-z_]\w*)\s*\(([^;]*)\)\s*;\s*(?:\/\/.*|\(\*.*?\*\))?$/i;
 
 /**
@@ -207,8 +246,25 @@ export function expandStateCalls(pouXml: string, st: string, stateVar: string, m
   const expand = (code: string, owner: string, stack: MethodInfo[]): string[] => {
     const out: string[] = [];
     let inComment = false;
-    for (const raw of code.split(/\r?\n/)) {
-      const line = raw.trim();
+    const all = code.split(/\r?\n/);
+    for (let i = 0; i < all.length; i++) {
+      const raw = all[i];
+      let line = raw.trim();
+      // (a call over several lines, "MoveAndAdvance(a := 1,\n  NextState := E_X.Y);": read as one when it calls a
+      // method that sets the state; its lines then skipped)
+      let through = i;
+      const depth = (t: string) => (t.match(/\(/g) ?? []).length - (t.match(/\)/g) ?? []).length;
+      if (!inComment && depth(line) > 0 && /^(?:(?:[A-Za-z_][\w.]*\s*,\s*)*[A-Za-z_][\w.]*\s*:(?!=)\s*)?(?:SUPER\^\.|THIS\^\.)?[A-Za-z_]\w*\s*\(/i.test(line)) {
+        let joined = line;
+        let j = i;
+        while (depth(joined) > 0 && j + 1 < all.length && j - i < 20) joined += ' ' + all[++j].trim();
+        const c = depth(joined) === 0 ? joined.match(CALL_LINE) : null;
+        const t = c ? resolve(c[3], /^SUPER/i.test(c[2] ?? ''), owner) : null;
+        if (t && !stack.includes(t) && setsState(t, new Set())) {
+          line = joined;
+          through = j;
+        }
+      }
       // (a call inside a (* ... *) comment stays one)
       const opens = (line.match(/\(\*/g) ?? []).length;
       const closes = (line.match(/\*\)/g) ?? []).length;
@@ -220,15 +276,17 @@ export function expandStateCalls(pouXml: string, st: string, stateVar: string, m
         out.push(raw);
         continue;
       }
+      i = through;
       changed = true;
       if (call[1]) out.push(`${call[1]}:`);
       out.push(`{kss-in ${target.name} ${ownerOf(target)}}`);
-      out.push(...expand(target.st, ownerOf(target), [...stack, target]));
+      // (its parameters as the call gives them: MoveAndAdvance(…, NextState := E_X.Y) sets State := E_X.Y)
+      out.push(...expand(withArguments(target.st, namedArguments(call[4] ?? '')), ownerOf(target), [...stack, target]));
       out.push('{kss-out}');
     }
     return out;
   };
-  const start = methods.get(method.toLowerCase());
+  const start = methods.get(resolveStateMethod(pouXml, method).toLowerCase());
   const lines = expand(st, start ? ownerOf(start) : self, start ? [start] : []);
   return changed ? lines.join('\n') : st;
 }

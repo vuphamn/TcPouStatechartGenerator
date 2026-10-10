@@ -206,6 +206,12 @@ export function writeStateAction(pouXml: string, state: string, stateVar: string
   return { pou: u.updatedPou, message: content.length ? `${state}: ${what} action set (${content.filter((l) => l.trim()).length} line${content.length === 1 ? '' : 's'})` : `${state}: ${what} action removed` };
 }
 
+/** The state variable: the state method's CASE (machineState, mainState; State in another company's POU) */
+function stateVarOfPou(pouXml: string): string {
+  const m = pouXml ? getMethodCodeFromPou(pouXml, 'doState') : null;
+  return m?.methodFound ? m.code.match(/\bCASE\s*\(?\s*(\w+)/i)?.[1] ?? 'machineState' : 'machineState';
+}
+
 /** Every state's actions (for the diagram): the states are doState()'s CASE labels */
 export function allStateActions(pouXml: string, stateVarGiven?: string): Map<string, { entry?: string; do?: string; exit?: string }> {
   const m = pouXml ? getMethodCodeFromPou(pouXml, 'doState') : null;
@@ -220,14 +226,14 @@ export function allStateActions(pouXml: string, stateVarGiven?: string): Map<str
 
 /** A state's whole code (its CASE branch's body in doState(), as written, without its indentation) */
 export function readStateCode(pouXml: string, state: string): string[] | { error: string } {
-  const b = branchOf(pouXml, state, 'machineState');
+  const b = branchOf(pouXml, state, stateVarOfPou(pouXml));
   if ('error' in b) return b;
   return trimBlank(dedent(b.lines.slice(b.bodyStart, b.bodyEnd)));
 }
 
 /** The POU with a state's whole code (its CASE branch's body) replaced, indented as the branch's body was */
 export function writeStateCode(pouXml: string, state: string, code: string): { pou: string; message: string } | { error: string } {
-  const b = branchOf(pouXml, state, 'machineState');
+  const b = branchOf(pouXml, state, stateVarOfPou(pouXml));
   if ('error' in b) return b;
   if (code.includes(']]>')) return { error: 'The code cannot hold ]]>' };
   const lines = [...b.lines];

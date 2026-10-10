@@ -163,6 +163,19 @@ function hostAsk<T>(message: Record<string, unknown> & { type: string }, replyTy
   });
 }
 
+/**
+ * The enum of a type anywhere in the PLC project (State : E_ScanState → E_ScanState.TcDUT): another company's POU
+ * keeps it elsewhere. XAE, VS Code, the desktop app; null where it cannot be looked for (the web edition)
+ */
+export async function findProjectDut(typeName: string, pouPath: string | undefined): Promise<DutCandidate | null> {
+  if (!/^[A-Za-z_]\w*$/.test(typeName)) return null;
+  if (isXaeHost()) return (await hostAsk<{ dut?: DutCandidate }>({ type: 'findEnumType', typeName }, 'findEnumTypeResult'))?.dut ?? null;
+  const d = (window as unknown as { tcDesktop?: { findEnumType?: (p: string, t: string) => Promise<DutCandidate | { error: string }> } }).tcDesktop;
+  if (!d?.findEnumType || !pouPath) return null;
+  const r = await d.findEnumType(pouPath, typeName).catch(() => null);
+  return r && !('error' in r) ? r : null;
+}
+
 export interface ReportSettings {
   company?: string;
   machine?: string;

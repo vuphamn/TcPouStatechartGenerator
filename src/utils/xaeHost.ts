@@ -68,6 +68,8 @@ export type HostMessage =
   | { type: 'coverageFileResult'; requestId: number; pous: Record<string, Record<string, { n: number; last: number }>> }
   /** This POU type's counts merged into it: the type's counts there now */
   | { type: 'coverageFileSaveResult'; requestId: number; counts?: Record<string, { n: number; last: number }>; error?: string }
+  /** The enum of a type found in the PLC project (findEnumType) */
+  | { type: 'findEnumTypeResult'; requestId: number; typeName: string; dut?: { name: string; relativePath: string; path: string; content: string }; error?: string }
   /** The sign-off report's heading (MachineScope.report.json beside the project) */
   | { type: 'reportSettingsResult'; requestId: number; company?: string; machine?: string; logo?: string; file?: string; error?: string }
   /** MachineScope's files beside the project and how git sees them */
@@ -198,6 +200,7 @@ export type AppMessage =
   | { type: 'coverageFile'; requestId: number }
   | { type: 'machineScopeFiles'; requestId: number }
   | { type: 'reportSettings'; requestId: number }
+  | { type: 'findEnumType'; requestId: number; typeName: string }
   | { type: 'machineScopeFilesAct'; requestId: number; action: 'add' | 'ignore' }
   | { type: 'coverageFileSave'; requestId: number; pouType: string; counts: Record<string, { n: number; last: number }> }
   | { type: 'plcLicense'; requestId: number }

@@ -1,3 +1,4 @@
+import { resolveStateMethod } from './stateMethod.ts';
 import { caseLabelLinePattern, splitStateLabels, unqualifyState, STATE_NAME_SRC, stateQualifier } from './stateNames.ts';
 /**
  * Utility for parsing, extracting, and updating Structured Text code
@@ -445,7 +446,8 @@ export function getAllMethodsFromPou(pouXml: string): string[] {
  * Extracts the Structured Text implementation and declaration of any method from a .TcPOU file.
  */
 export function getMethodCodeFromPou(pouXml: string, methodName: string): ExtractedMethodCode {
-  const cleanName = (methodName || 'doState').replace(/\(\)$/, '').trim();
+  // (doState(): the POU's state method, Execute() in another company's POU)
+  const cleanName = resolveStateMethod(pouXml ?? '', (methodName || 'doState').replace(/\(\)$/, '').trim());
 
   if (!pouXml || !pouXml.trim()) {
     return {
@@ -544,7 +546,7 @@ export function updateMethodCodeInPou(
   newCode: string,
   newDeclaration?: string
 ): UpdateMethodCodeResult {
-  const cleanName = (methodName || 'doState').replace(/\(\)$/, '').trim();
+  const cleanName = resolveStateMethod(pouXml ?? '', (methodName || 'doState').replace(/\(\)$/, '').trim());
 
   if (!pouXml || !pouXml.trim()) {
     return { success: false, methodName: cleanName, updatedPou: pouXml, error: 'Empty .TcPOU content' };

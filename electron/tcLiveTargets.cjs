@@ -203,6 +203,14 @@ function findPouInProject(fromPath, typeName) {
   return listFiles(path.dirname(plcproj), (n) => n.toLowerCase() === wanted)[0] ?? null;
 }
 
+/** The .TcDUT of a type (an enum) in the PLC project that contains `fromPath`, or null */
+function findEnumTypeInProject(fromPath, typeName) {
+  const plcproj = plcProjectFile(fromPath);
+  if (!plcproj || !/^[A-Za-z_]\w*$/.test(typeName)) return null;
+  const wanted = `${typeName}.tcdut`.toLowerCase();
+  return listFiles(path.dirname(plcproj), (n) => n.toLowerCase() === wanted)[0] ?? null;
+}
+
 /** Is `file` a .TcPOU inside the PLC project that contains `fromPath` */
 function isInSameProject(fromPath, file) {
   const plcproj = plcProjectFile(fromPath);
@@ -284,4 +292,4 @@ function projectUses(fromPath, name) {
   return { files };
 }
 
-module.exports = { plcPort, instancePaths, findPouInProject, isInSameProject, projectPous, projectSymbols, projectUses, DEFAULT_PLC_PORT };
+module.exports = { plcPort, instancePaths, findPouInProject, findEnumTypeInProject, isInSameProject, projectPous, projectSymbols, projectUses, DEFAULT_PLC_PORT };

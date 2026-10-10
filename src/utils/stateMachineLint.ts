@@ -4,6 +4,7 @@
  * implementation, as sourceLocation.ts) and may carry a fix.
  */
 
+import { resolveStateMethod, stateMethodName } from './stateMethod.ts';
 import type { EdgeInfo } from '../types.ts';
 import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
@@ -439,7 +440,9 @@ const ERROR_LIKE = /ERROR|FAULT|FAIL|ALARM|ABORT|EMERGENCY|ESTOP/i;
 export function lintStateMachine(pouXml: string, dutContent: string, edges: EdgeInfo[] = []): LintFinding[] {
   if (!pouXml?.trim()) return [];
   const units = codeUnits(pouXml);
-  const doState = units.find((u) => u.method?.toLowerCase() === 'dostate');
+  // (the state method: doState(), or Execute() in another company's POU)
+  const stateMethod = stateMethodName(pouXml).toLowerCase();
+  const doState = units.find((u) => u.method?.toLowerCase() === stateMethod);
   if (!doState) return [];
   const mainCase = scanMainCase(doState.code);
   if (!mainCase) return [];
@@ -480,8 +483,16 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     targets.get(a.target)!.push(a);
   }
   const unitOf = (a: Assignment) => units.find((u) => u.method === a.method)!;
+  // (a value the method declares itself, a parameter or a local: "State := NextState" in a helper given the next state
+  // by its caller, another company's POU; not a state's name)
+  const declaredIn = (method: string | null | undefined, name: string) => {
+    if (!method) return false;
+    const block = pouXml.match(new RegExp(`<Method\\b[^>]*\\bName=["']${method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*>[\\s\\S]*?<Declaration>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, 'i'))?.[1] ?? '';
+    return new RegExp(`(?:^|[\\s;,])${name}\\s*:(?!=)`, 'm').test(block.replace(/\(\*[\s\S]*?\*\)|\/\/[^\n]*/g, ' '));
+  };
   for (const [target, list] of targets) {
     const first = list[0];
+    if (list.every((a) => declaredIn(a.method, target))) continue;
     if (enumMatches && !enumNames.has(target)) {
       add({ key: `unknown-target:${target}`, rule: 'unknown-target', stateId: target, ...at(unitOf(first), first.line),
         message: `${target} is assigned but not declared in the enum`, fix: { kind: 'add-enum-member', name: target } });
@@ -631,7 +642,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
  * any branch: the CASE line, ELSE, code before / after the CASE)
  */
 export function stateAtLine(pouXml: string, line: number): string | null {
-  const doState = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === 'dostate');
+  const doState = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === stateMethodName(pouXml).toLowerCase());
   if (!doState) return null;
   const main = scanMainCase(doState.code);
   const branch = main?.branches.find((b) => line - 1 >= b.line && line - 1 < b.endLine);
@@ -639,13 +650,15 @@ export function stateAtLine(pouXml: string, line: number): string | null {
 }
 
 /** Number of lines of a method's ST implementation (TwinCAT's editor shows its declaration first) */
-export function implementationLineCount(pouXml: string, method: string): number | null {
+export function implementationLineCount(pouXml: string, methodAsked: string): number | null {
+  const method = resolveStateMethod(pouXml, methodAsked);
   const unit = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === method.toLowerCase());
   return unit ? unit.lines.length : null;
 }
 
 /** Lines of a method's declaration; TwinCAT's editor shows them before the implementation's lines */
-export function declarationLineCount(pouXml: string, method: string): number | null {
+export function declarationLineCount(pouXml: string, methodAsked: string): number | null {
+  const method = resolveStateMethod(pouXml, methodAsked);
   const escaped = method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = pouXml.match(new RegExp(`<Method\\b[^>]*\\bName="${escaped}"[^>]*>\\s*<Declaration>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, 'i'));
   return match ? match[1].split(/\r?\n/).length : null;

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { bookmarkStateName } from '../utils/bookmarks.ts';
 import {
   ListTree,
   Search,
@@ -97,6 +98,8 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   // (the outermost: its card is in the list; a nested one's inside its sub-machine's)
   const subOwner = (id: string | null | undefined) => (id ? subMachines?.filter((m) => id.startsWith(`${m.parent}__${m.method}__`)).sort((a, b) => a.parent.length - b.parent.length)[0] ?? null : null);
   const bookmarkSet = useMemo(() => new Set(bookmarkedStates ?? []), [bookmarkedStates]);
+  // (a sub-machine's state: bookmarked by its name)
+  const isBookmarked = (id: string) => bookmarkSet.has(id) || bookmarkSet.has(bookmarkStateName(id));
   // A card's right-click menu (Add / Remove bookmark)
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   useEffect(() => {
@@ -406,7 +409,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                         }
                       : undefined
                   }
-                  className={`relative flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
+                  className={`group relative flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                     isJustNavigated
                       ? 'bg-sky-950/80 border-sky-400 ring-2 ring-sky-400/80 text-white'
                       : isSelected
@@ -421,6 +424,33 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                     </span>
                   )}
                   <span className="font-mono truncate">
+                    {/* Its bookmark (its name's: the Enum Editor's member, its CASE label in its method): a click takes it off; a faint one on hover sets it */}
+                    {isBookmarked(id) ? (
+                      <span
+                        id={`state-bookmark-${id}`}
+                        className={`inline-block mr-1 align-[-1px] ${onToggleBookmark ? 'cursor-pointer hover:scale-125 transition-transform' : ''}`}
+                        title={onToggleBookmark ? 'Bookmark: a click removes it' : 'Bookmark'}
+                        onClick={(e) => {
+                          if (!onToggleBookmark) return;
+                          e.stopPropagation();
+                          onToggleBookmark(id);
+                        }}
+                      >
+                        <Bookmark className="w-3 h-3 text-sky-300 fill-sky-400" />
+                      </span>
+                    ) : onToggleBookmark ? (
+                      <span
+                        id={`state-add-bookmark-${id}`}
+                        className="inline-block mr-1 align-[-1px] cursor-pointer opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-sky-300"
+                        title="Bookmark this state (a click)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleBookmark(id);
+                        }}
+                      >
+                        <Bookmark className="w-3 h-3" />
+                      </span>
+                    ) : null}
                     {sub.start === name && <Play className="inline w-2.5 h-2.5 mr-1 text-emerald-400 fill-emerald-400/20" />}
                     {name}
                     {unreachable && <span className="ml-1 text-[10px] text-slate-500 italic">never reached</span>}
@@ -782,7 +812,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                       <div className="flex flex-col min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           {/* Its bookmark: a click takes it off; a faint one on hover: a click sets it */}
-                          {bookmarkSet.has(state.id) ? (
+                          {isBookmarked(state.id) ? (
                             <span
                               id={`state-bookmark-${state.id}`}
                               className={`shrink-0 ${onToggleBookmark ? 'cursor-pointer hover:scale-125 transition-transform' : ''}`}
@@ -1015,8 +1045,8 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
             className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
             title="Shown on the state, here, and at its CASE label in the Method Editor"
           >
-            <Bookmark className={`w-3.5 h-3.5 ${bookmarkSet.has(cardMenu.id) ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
-            {bookmarkSet.has(cardMenu.id) ? 'Remove bookmark' : 'Add bookmark'}
+            <Bookmark className={`w-3.5 h-3.5 ${isBookmarked(cardMenu.id) ? 'text-sky-300 fill-sky-400' : 'text-slate-400'}`} />
+            {isBookmarked(cardMenu.id) ? 'Remove bookmark' : 'Add bookmark'}
           </button>
           )}
           {onShowBookmarks && (

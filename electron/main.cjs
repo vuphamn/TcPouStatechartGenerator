@@ -220,6 +220,16 @@ ipcMain.handle('tc:open-pou-in-project', async (_event, fromPath, typeName, file
   return readPouWithDutCandidates(target);
 });
 
+// The enum of a type in the same PLC project (another company's POU: its state variable's enum elsewhere)
+ipcMain.handle('tc:find-enum-type', async (_event, fromPath, typeName) => {
+  const { findEnumTypeInProject } = require('./tcLiveTargets.cjs');
+  if (typeof fromPath !== 'string') return { error: 'The POU was not opened from its folder' };
+  const file = findEnumTypeInProject(fromPath, String(typeName || ''));
+  if (!file) return { error: `${typeName}.TcDUT was not found in the PLC project` };
+  const text = fs.readFileSync(file, 'utf8');
+  return { name: path.basename(file), relativePath: path.relative(path.dirname(fromPath), file), path: file, content: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text };
+});
+
 // Project documentation: the PLC project's state machine POUs and enums
 ipcMain.handle('tc:project-pous', async (_event, fromPath) => {
   const { projectPous } = require('./tcLiveTargets.cjs');

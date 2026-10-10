@@ -62,6 +62,8 @@ export const MethodEditorBreadcrumb: React.FC<MethodEditorBreadcrumbProps> = ({
   const cleanMethodName = useMemo(() => {
     return selectedMethod.replace(/\(\)$/, '').trim();
   }, [selectedMethod]);
+  // (the state method shown: doState(), or Execute() in another company's POU)
+  const isStateMethodShown = cleanMethodName.toLowerCase() === (metadata.stateMethod ?? 'doState').toLowerCase();
 
   const methodSig = metadata.methodSignatures[cleanMethodName];
 
@@ -122,7 +124,7 @@ export const MethodEditorBreadcrumb: React.FC<MethodEditorBreadcrumbProps> = ({
   // Fully qualified symbol path e.g. SM_DoorDasher.doState().Init
   const fullSymbolPath = useMemo(() => {
     const base = `${metadata.pouName}.${cleanMethodName}()`;
-    if (cleanMethodName.toLowerCase() === 'dostate' && activeStateId) {
+    if (isStateMethodShown && activeStateId) {
       return `${base}.${activeStateLabel || activeStateId}`;
     }
     return base;
@@ -298,7 +300,7 @@ export const MethodEditorBreadcrumb: React.FC<MethodEditorBreadcrumbProps> = ({
                           className={`w-3 h-3 shrink-0 ${
                             isCurrent
                               ? 'text-sky-400'
-                              : clean.toLowerCase() === 'dostate'
+                              : clean.toLowerCase() === (metadata.stateMethod ?? 'doState').toLowerCase()
                               ? 'text-amber-400'
                               : 'text-slate-400'
                           }`}
@@ -327,7 +329,7 @@ export const MethodEditorBreadcrumb: React.FC<MethodEditorBreadcrumbProps> = ({
         <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800/60 text-sky-200">
           <Code2
             className={`w-3.5 h-3.5 shrink-0 ${
-              cleanMethodName.toLowerCase() === 'dostate' ? 'text-amber-400' : 'text-sky-400'
+              isStateMethodShown ? 'text-amber-400' : 'text-sky-400'
             }`}
           />
           <span className="font-mono font-bold text-xs">{selectedMethod}</span>
@@ -342,7 +344,7 @@ export const MethodEditorBreadcrumb: React.FC<MethodEditorBreadcrumbProps> = ({
         </div>
 
         {/* 5. State / Case Branch Segment (Active when inside doState() and case branches exist) */}
-        {cleanMethodName.toLowerCase() === 'dostate' && caseBranches.length > 0 && (
+        {isStateMethodShown && caseBranches.length > 0 && (
           <>
             <ChevronRight className="w-3 h-3 text-slate-600 shrink-0" />
             <div ref={stateDropdownRef} className="relative flex items-center">

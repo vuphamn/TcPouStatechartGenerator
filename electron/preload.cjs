@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   newWindow: (filePath, launch) => ipcRenderer.invoke('tc:new-window', filePath || null, launch || null),
   /** Another POU of the same PLC project, by type name or path: a PouSource or { error } */
   openPouInProject: (fromPath, typeName, filePath) => ipcRenderer.invoke('tc:open-pou-in-project', fromPath, typeName, filePath),
+  findEnumType: (fromPath, typeName) => ipcRenderer.invoke('tc:find-enum-type', fromPath, typeName),
   /** Project documentation: the state machine POUs and enums of the PLC project that contains the file */
   projectPous: (fromPath) => ipcRenderer.invoke('tc:project-pous', fromPath),
   projectSymbols: (fromPath) => ipcRenderer.invoke('tc:project-symbols', fromPath),
