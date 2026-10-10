@@ -249,6 +249,7 @@ $script:dte = $null
 $script:sln = $null
 $script:sm = $null
 $script:openTsproj = $null
+$script:openRm = ''
 # (the TcXaeShell this script starts: the ones already running, the user's, are left alone)
 $script:before = @()
 $script:mine = @()
@@ -285,9 +286,22 @@ function Stop-Kss {
   if (@($script:before | Where-Object { $still -notcontains $_ }).Count -eq 0) { Restore-KssSettings }
 }
 function Open-Kss($r) {
-  if ($script:openTsproj -eq $r.tsproj) { return $false }
+  $rm = [string]$r.rmVersion
+  if ($script:openTsproj -eq $r.tsproj -and $script:openRm -eq $rm) { return $false }
   if ($script:openTsproj) { try { $script:sln.Close($false) } catch { } }
   $script:openTsproj = $null
+  # XAE's Remote Manager: the engineering build chosen (4026.27), set before the project opens (XAE's own toolbar
+  # choice; not kept in the project)
+  if ($rm) {
+    try {
+      $manager = $script:dte.GetObject('TcRemoteManager')
+      $manager.Version = '3.1.' + $rm
+      Say @{ kind = 'step'; text = ('Remote Manager: build ' + $rm) }
+    } catch {
+      Say @{ kind = 'item'; level = 'warning'; text = ('The Remote Manager build ' + $rm + ' could not be chosen (XAE builds with its default): ' + $_.Exception.Message); file = ''; line = 0; column = 0; project = '' }
+    }
+  }
+  $script:openRm = $rm
   Say @{ kind = 'step'; text = 'Opening the project in XAE' }
   $script:sln.Create($r.dir, 'MachineScopeBuild')
   $proj = $script:sln.AddFromFile($r.tsproj)
@@ -389,9 +403,10 @@ function Build-Kss($r) {
 }
 
 /** A build request for Build-Kss (checked: the write mode) */
-function xaeRequest({ dir, tsproj, plcProject, write = null, netId = '', changed = false }) {
+function xaeRequest({ dir, tsproj, plcProject, write = null, netId = '', changed = false, rmVersion = '' }) {
   if (write && !MODES[write]) throw new Error(`Unknown write: ${write}`);
-  return { dir, tsproj, plcProject, netId, write: write ?? null, writeText: write ? MODES[write] : '', changed: !!changed };
+  if (rmVersion && !/^\d{4}\.\d+$/.test(rmVersion)) throw new Error(`Not a Remote Manager build: ${rmVersion}`);
+  return { dir, tsproj, plcProject, netId, write: write ?? null, writeText: write ? MODES[write] : '', changed: !!changed, rmVersion: rmVersion || '' };
 }
 
 /**
@@ -494,6 +509,68 @@ const keepMinutes = () => {
  * XAE kept open: one PowerShell running serverScript, one build at a time (queued); quit after keepMinutes() idle,
  * when a build breaks it or times out, or with this process
  */
+// The windows a hidden XAE shows (its own processes only: the user's XAE is never looked at), read with UI Automation:
+// [{ title, text, buttons, answered }]. answerOk: a message with only an OK button is answered (XAE goes on loading:
+// a safety project's missing device description, a library note); a question (Yes / No, Cancel, Save) is left as it is
+const DIALOGS_PS = `param([string]$Pids, [switch]$AnswerOk)
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$A = [Windows.Automation.AutomationElement]
+$out = @()
+foreach ($id in ($Pids -split ',' | Where-Object { $_ })) {
+  $cond = New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty, [int]$id)
+  foreach ($w in $A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $cond)) {
+    $texts = @(); $buttons = @(); $title = $w.Current.Name
+    foreach ($e in $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+      $n = $e.Current.Name
+      if (-not $n) { continue }
+      # (a button: WPF's, or a Win32 dialog's, which UI Automation may report as a pane of class Button)
+      if ($e.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or $e.Current.ClassName -eq 'Button') { if ($n -match '^[\\w &]+$') { $buttons += $n } }
+      elseif (($e.Current.ControlType -eq [Windows.Automation.ControlType]::Text -or $e.Current.ClassName -eq 'Static') -and $texts -notcontains $n -and $n -ne 'OK') { $texts += $n }
+    }
+    if (-not $buttons.Count) { continue }
+    $answered = $false
+    # (the questions known to be answered OK: the project opened with the Remote Manager build chosen for it, not its
+    # own (XAE asks when the project's build is another; only the build's copy of the project is converted))
+    $known = ($texts -join ' ') -match 'Open project with the loaded version instead\?'
+    if ($AnswerOk -and (@($buttons | Where-Object { $_ -notmatch '^(OK|Close)$' }).Count -eq 0 -or ($known -and $buttons -contains 'OK'))) {
+      $ok = $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or $_.Current.ClassName -eq 'Button') -and $_.Current.Name -match '^(OK|Close)$' } | Select-Object -First 1
+      try { ($ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke(); $answered = $true } catch { }
+      # (a Win32 dialog's button: clicked with its window message, BM_CLICK)
+      if (-not $answered -and $ok -and $ok.Current.NativeWindowHandle) {
+        if (-not ('KssClick' -as [type])) { Add-Type -Namespace '' -Name KssClick -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);' }
+        $answered = [KssClick]::PostMessage([IntPtr]$ok.Current.NativeWindowHandle, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+      }
+    }
+    # (the buttons' own labels are no part of the message)
+    $texts = @($texts | Where-Object { $buttons -notcontains $_ })
+    $out += @{ title = $title; text = ($texts -join ' ') ; buttons = $buttons; answered = $answered }
+  }
+}
+ConvertTo-Json @($out) -Compress -Depth 3
+`;
+/** A hidden XAE's dialogs (see DIALOGS_PS); [] when none, or not readable */
+function xaeDialogs(pids, { answerOk = false } = {}) {
+  if (process.platform !== 'win32' || !pids?.length) return Promise.resolve([]);
+  const file = path.join(os.tmpdir(), 'kss-xae-dialogs.ps1');
+  try {
+    fs.writeFileSync(file, '\ufeff' + DIALOGS_PS);
+  } catch {
+    return Promise.resolve([]);
+  }
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file, '-Pids', pids.join(','), ...(answerOk ? ['-AnswerOk'] : [])], { windowsHide: true, timeout: 30000 }, (err, out) => {
+      if (err) return resolve([]);
+      try {
+        const v = JSON.parse(String(out).trim() || '[]');
+        resolve((Array.isArray(v) ? v : [v]).filter((d) => d && Array.isArray(d.buttons)));
+      } catch {
+        resolve([]);
+      }
+    });
+  });
+}
+
 class XaeWorker {
   constructor(progId = xaeProgId()) {
     this.progId = progId;
@@ -543,8 +620,37 @@ class XaeWorker {
         this.stop(true);
         finish({ ok: false, fatal: `XAE did not finish in ${Math.round(timeoutMs / 60000)} minutes (a dialog waiting?): stopped, nothing written` });
       }, timeoutMs);
+      // XAE's dialogs while it builds: a message (OK only) answered, its text kept as a warning; a question left
+      // as it is: the build stopped with it (nothing answered for the user), not waiting for the timeout
+      let watching = false;
+      const seen = new Map();
+      const watch = setInterval(async () => {
+        if (watching || !this.mine?.length) return;
+        watching = true;
+        try {
+          for (const d of await xaeDialogs(this.mine, { answerOk: true })) {
+            const what = `${d.title ? `${d.title}: ` : ''}${d.text}`.trim();
+            if (d.answered) {
+              items.push({ level: 'warning', text: `XAE showed (answered OK): ${what}`, file: '', line: 0, column: 0, project: '' });
+              onStep?.(`XAE showed a message (answered OK): ${d.text.slice(0, 160)}`);
+              continue;
+            }
+            const k = `${what}|${d.buttons.join('/')}`;
+            seen.set(k, (seen.get(k) ?? 0) + 1);
+            if (seen.get(k) >= 2) {
+              this.stop(true);
+              finish({ ok: false, fatal: `XAE is asking a question it cannot be answered for you: ${what} (${d.buttons.join(' / ')}). The build was stopped, nothing written: open the project in XAE once and answer it there` });
+              return;
+            }
+          }
+        } finally {
+          watching = false;
+        }
+      }, Number(process.env.KSS_XAE_DIALOG_POLL_MS) || 8000);
       const finish = (done) => {
         clearTimeout(timer);
+        clearInterval(watch);
+        if (!this.current) return;
         this.current = null;
         this.pending--;
         if (done.broken) this.stop(true);
@@ -964,7 +1070,21 @@ function standInBuild(ws, edits, write) {
   const script = path.join(ws.dir, 'kss-build.ps1');
   fs.writeFileSync(script, '\uFEFF' + buildScript({ dir: ws.dir, tsproj: ws.tsproj, plcProject: ws.plcProjects[0].name, write }));
   const items = [];
-  for (const e of edits) {
+  // (no edits given, the files saved first, as the VS Code extension does: the project's own POUs read, as XAE would)
+  const sources = edits.length ? edits : ws.plcProjects.flatMap((plc) => {
+    const out = [];
+    const walk = (dir, depth) => {
+      if (depth > 6) return;
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory() && !SKIP_DIRS.has(e.name)) walk(p, depth + 1);
+        else if (/\.TcPOU$/i.test(e.name)) out.push({ plcProject: plc.name, path: path.relative(plc.dir, p).replace(/\\/g, '/'), content: fs.readFileSync(p, 'utf8') });
+      }
+    };
+    walk(plc.dir, 0);
+    return out;
+  });
+  for (const e of sources) {
     const plc = ws.plcProjects.find((x) => x.name.toLowerCase() === String(e.plcProject ?? '').toLowerCase()) ?? ws.plcProjects[0];
     const file = path.join(plc.dir, e.path).replace(/\//g, '\\');
     const xml = String(e.content);
@@ -1091,7 +1211,7 @@ function saveIntoProject({ root, plcProject = '', path: rel, content }) {
  * [{ file: its full path, content }] put into the copy. write: null, 'online', 'download', 'activate'. →
  * { ok, items, ..., compileInfoCopied, compileInfoFiles: their paths in the project, plcRun }
  */
-async function buildFromProject(client, { file, edits = [], plcProject = '', write = null, netId = '', adsPort = 851, syncCompileInfo = true, onStep } = {}) {
+async function buildFromProject(client, { file, edits = [], plcProject = '', write = null, netId = '', adsPort = 851, syncCompileInfo = true, rmVersion = '', onStep } = {}) {
   // (live: the XAE of the PLC's own TwinCAT build, when it is here)
   const xae = xaeForTarget(client ? await targetBuildOf(client, netId) : null);
   if (!(await xaeAvailable(xae.progId))) return { ok: false, fatal: 'TwinCAT XAE is not installed on this computer: its Automation Interface builds the project (TcXaeShell)', items: [] };
@@ -1137,12 +1257,15 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   if (dry()) r = standInBuild(ws, edits.map((e) => ({ plcProject: plc.name, path: path.relative(path.join(root, path.relative(ws.dir, plc.dir)), path.resolve(e.file)).replace(/\\/g, '/'), content: e.content })), write);
   else {
     const previous = w.ws;
-    r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed }), { onStep });
+    r = await w.build(xaeRequest({ dir: ws.dir, tsproj: ws.tsproj, plcProject: plc.name, write, netId, changed, rmVersion }), { onStep });
     w.ws = w.running ? ws : null;
     for (const old of [previous, ...(w.running ? [] : [ws])]) {
       if (old && old !== w.ws) fs.rm(old.dir, { recursive: true, force: true }, () => {});
     }
   }
+  // (XAE stopped while it opened the project with the Remote Manager build chosen: seen with a build that XAE cannot
+  // load this project in; said so, with what to do)
+  if (rmVersion && r.fatal && /0x800706BE|remote procedure call failed|XAE stopped/i.test(r.fatal)) r = { ...r, fatal: `${r.fatal}: XAE stopped while it opened the project with Remote Manager build ${rmVersion}. Choose (Default) or another build` };
   const items = (r.items ?? []).map((i) => ({ ...i, place: placeOf(i, ws) }));
   if (licenseNote) items.unshift({ level: 'warning', text: licenseNote.text, file: '', line: 0, column: 0, project: '', place: null });
   // Written: the new compile information into the project (XAE's next login matches the running code)
@@ -1181,4 +1304,4 @@ async function buildFromProject(client, { file, edits = [], plcProject = '', wri
   return result;
 }
 
-module.exports = { xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, remoteManagerBuilds, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };
+module.exports = { xaeDialogs, xaeProgId, XAE_PROGIDS, XAE_BUILDS, xaeBuildOf, localTwinCatBuild, installedXaes, targetBuildOf, xaeForTarget, fetchProjectArchives, writeWorkspace, buildScript, serverScript, xaeRequest, runScript, placeOf, xaeAvailable, buildFromPlc, checkEdits, reuseWorkspace, archivesHash, XaeWorker, MODES, xaeOpenUntil, xaeOpenCount, xaeOpenList, xaeWorker, closeXae, openXae, remoteManagerBuilds, xaeExecutable, saveIntoProject, buildFromProject, projectRootOf, syncTree };

@@ -7,6 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { createHost, webviewHtml } = require('./host.cjs');
+const stEditor = require('./stEditor.cjs');
+const twincat = require('./twincat.cjs');
 
 const VIEW_TYPE = 'kvalMachineScope.statechart';
 
@@ -81,7 +83,10 @@ function activate(context) {
   // Open in Kval MachineScope (the Explorer's, an editor's menu, the Command Palette): the active / chosen .TcPOU
   context.subscriptions.push(
     vscode.commands.registerCommand('kvalMachineScope.open', async (uri) => {
-      const target = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+      // (a section of a TwinCAT file, "twincat-st:": its file)
+      const given = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+      const file = stEditor.fileOf(given);
+      const target = file ? vscode.Uri.file(file) : given;
       if (!target || !/\.tcpou$/i.test(target.fsPath)) {
         const picked = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { 'TwinCAT POU': ['TcPOU'] } });
         if (!picked?.length) return;
@@ -90,6 +95,11 @@ function activate(context) {
       return vscode.commands.executeCommand('vscode.openWith', target, VIEW_TYPE);
     })
   );
+
+  // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
+  // Start, Stop, Logout, the target and the Remote Manager build
+  const st = stEditor.register(context);
+  twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
 }
 
 function deactivate() {}

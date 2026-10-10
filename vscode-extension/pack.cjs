@@ -27,7 +27,24 @@ manifest.version = version;
 const files = [];
 const add = (name, data) => files.push({ name, data: Buffer.isBuffer(data) ? data : Buffer.from(data) });
 add('extension/package.json', JSON.stringify(manifest, null, 2));
-for (const f of ['extension.js', 'host.cjs', 'README.md']) if (fs.existsSync(path.join(HERE, f))) add(`extension/${f}`, fs.readFileSync(path.join(HERE, f)));
+// (its code in one file: extension.js with its modules, the shared TwinCAT ones (../shared: XAE's Automation
+// Interface, ADS) and ads-client bundled by esbuild; vscode is VS Code's own)
+const bundled = require('esbuild').buildSync({
+  entryPoints: [path.join(HERE, 'extension.js')],
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node20',
+  external: ['vscode'],
+  write: false,
+  logLevel: 'warning',
+});
+add('extension/extension.js', bundled.outputFiles[0].contents);
+if (fs.existsSync(path.join(HERE, 'README.md'))) add('extension/README.md', fs.readFileSync(path.join(HERE, 'README.md')));
+// (the Structured Text grammar and the TwinCAT view's icon)
+for (const dir of ['syntaxes', 'media']) {
+  for (const e of fs.readdirSync(path.join(HERE, dir))) add(`extension/${dir}/${e}`, fs.readFileSync(path.join(HERE, dir, e)));
+}
 const walk = (dir, rel) => {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
