@@ -519,6 +519,10 @@ export interface GuardVarView {
   name: string;
   text: string;
   known: boolean;
+  /** Its watch id (lower case), the PLC's symbol and type: to write it */
+  id?: string;
+  symbol?: string;
+  type?: string;
   /** Why it is unknown (not found in the PLC, not readable) */
   note?: string;
 }
@@ -637,7 +641,7 @@ export function evaluateGuards(
       const lower = path.toLowerCase();
       const v = inputs.values[lower];
       const w = inputs.watched[lower];
-      if (v !== undefined) vars.push({ name: path, text: formatLiveValue(v, w?.type, inputs.enums), known: true });
+      if (v !== undefined) vars.push({ name: path, text: formatLiveValue(v, w?.type, inputs.enums), known: true, id: lower, symbol: w?.symbol, type: w?.type });
       else {
         // An all-caps name the PLC does not have is an enum value or a constant whose declaration was not found
         const literal = w?.error && !w.symbol && /^[A-Z][A-Z0-9]*_[A-Z0-9_]*$/.test(path);

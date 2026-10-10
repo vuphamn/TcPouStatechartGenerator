@@ -44,6 +44,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const values = got.filter((m) => m.type === 'liveValues').flatMap((m) => m.events.map((e) => e.value)).filter((v, i, a) => i === 0 || v !== a[i - 1]);
     expect(statuses.includes('connected') || statuses.includes('live'), `connected (${[...new Set(statuses)].join(', ')}; ${got.find((m) => m.type === 'liveStatus' && m.state === 'error')?.message ?? ''})`);
     expect(values.includes(3) && values.includes(5), `the state's values come (${values.join(' → ')})`);
+
+    // Write Values from the Live tab (liveWrite): the followed variable written, its new value comes back; one out of
+    // its type's range refused
+    await host.handle({ type: 'liveWatch', vars: [{ id: 'state', candidates: ['MAIN.fbScan.State'] }] });
+    for (let i = 0; i < 30 && !got.some((m) => m.type === 'liveWatchResult'); i++) await sleep(100);
+    // (the script's last value held from here)
+    await sleep(1400);
+    await host.handle({ type: 'liveWrite', requestId: 9, id: 'state', value: 1 });
+    const w = got.find((m) => m.type === 'liveWriteResult' && m.requestId === 9);
+    for (let i = 0; i < 30 && !got.some((m) => m.type === 'liveVars' && m.values.some((x) => x.id === 'state' && x.v === 1)); i++) await sleep(100);
+    const seen = got.some((m) => m.type === 'liveVars' && m.values.some((x) => x.id === 'state' && x.v === 1));
+    expect(w?.ok === true && seen, `written: State := 1, its value back (${JSON.stringify(w)}; seen ${seen})`);
+    await host.handle({ type: 'liveWrite', requestId: 10, id: 'state', value: 70000 });
+    const bad = got.find((m) => m.type === 'liveWriteResult' && m.requestId === 10);
+    expect(bad?.ok === false && /whole number/.test(bad.message), `out of its range: refused (${bad?.message})`);
+    await host.handle({ type: 'liveWrite', requestId: 11, id: 'nothing', value: 1 });
+    expect(got.find((m) => m.type === 'liveWriteResult' && m.requestId === 11)?.ok === false, 'a variable not followed: refused');
+
     await host.handle({ type: 'liveStop' });
     await sleep(300);
     expect(got.filter((m) => m.type === 'liveStatus').pop()?.state === 'stopped', 'Stop: not connected');

@@ -40,6 +40,8 @@ const tmFile = path.join(h.REPO, 'src/samples/SM_TableManager.TcPOU');
     } else if (m.type === 'liveWatch') {
       await toApp({ type: 'liveWatchResult', vars: m.vars.map((v) => (v.id in values ? { id: v.id, symbol: v.candidates[0], type: /fhome/.test(v.id) ? 'LREAL' : 'BOOL' } : { id: v.id, error: 'not in the PLC (a local of the method, a property or a method?)' })) });
       await toApp({ type: 'liveVars', values: m.vars.filter((v) => v.id in values).map((v) => ({ id: v.id, t: Date.now(), v: values[v.id] })) });
+    } else if (m.type === 'liveWrite') {
+      await toApp({ type: 'liveWriteResult', requestId: m.requestId, ok: true, message: `${m.id} := ${m.value}` });
     } else if (m.type === 'projectPous') {
       await toApp({ type: 'projectPous', project: 'Commander_3', pous: [], duts: [{ name: 'E_FeedMode.TcDUT', relativePath: 'E_FeedMode.TcDUT', content: '<DUT Name="E_FeedMode"><Declaration><![CDATA[TYPE E_FeedMode : (FEEDMODE_OFF := 0, FEEDMODE_AUTO, FEEDMODE_FEEDTHRU); END_TYPE]]></Declaration></DUT>' }] });
     }
@@ -66,6 +68,31 @@ const tmFile = path.join(h.REPO, 'src/samples/SM_TableManager.TcPOU');
   const list = await page.$$eval('#mermaid-canvas-area g.edgeLabel[data-edge-id] g.live-guard', (gs) => gs.map((g) => `${g.closest('g.edgeLabel').getAttribute('data-edge-id')}=${g.getAttribute('data-guard-result')}`));
   console.log('   ', list.join('  '));
   expect(list.some((x) => /HOMMING_READY_TO_START->TABLEMANAGER_ERROR.*=true/.test(x)) && list.some((x) => /->TABLEMANAGER_HOMMING=false/.test(x)), 'badges from the extension\'s values (IF true: ERROR fires)');
+  // Write Values from the guard values: cmd_bHome (TRUE) clicked, FALSE proposed, written through the extension
+  await page.evaluate(() => document.getElementById('dock-tab-live')?.click());
+  await sleep(400);
+  const varBtn = await page.$('#live-guard-list .live-guard-var[data-var="cmd_bHome"]');
+  if (varBtn) await varBtn.click();
+  await page.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const proposed = await page.$eval('#text-prompt-input', (i) => i.value).catch(() => null);
+  const label = await page.$eval('#text-prompt-dialog', (d) => d.innerText).catch(() => '');
+  expect(varBtn && proposed === 'FALSE' && /cmd_bHome : BOOL on 5\.1\.2\.3\.1\.1:851/.test(label), `a guard variable clicked: its write asked, FALSE proposed (${proposed}; ${label.split('\n').slice(0, 2).join(' / ')})`);
+  await page.click('#text-prompt-submit').catch(() => {});
+  await sleep(800);
+  const wrote = sent.find((m) => m.type === 'liveWrite');
+  expect(wrote && wrote.id === 'cmd_bhome' && wrote.value === false, `liveWrite sent: ${JSON.stringify(wrote)}`);
+  const toast = await page.evaluate(() => document.body.innerText.match(/cmd_bHome := FALSE written/)?.[0] ?? '');
+  expect(toast, 'the result said');
+  // (a wrong value: said under the field, nothing sent)
+  if (varBtn) await (await page.$('#live-guard-list .live-guard-var[data-var="cmd_bHome"]'))?.click();
+  await page.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  await page.$eval('#text-prompt-input', (i) => { const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, 'maybe'); i.dispatchEvent(new Event('input', { bubbles: true })); }).catch(() => {});
+  await sleep(300);
+  const err = await page.$eval('#text-prompt-error', (e) => e.textContent).catch(() => '');
+  expect(/TRUE or FALSE/.test(err), `a value not of its type: said (${err})`);
+  await page.click('#text-prompt-cancel').catch(() => {});
+  await sleep(300);
+
   // The state changes: the new state's variables are asked for
   const before = sent.filter((m) => m.type === 'liveWatch').length;
   await toApp({ type: 'liveValues', events: [{ t: Date.now(), value: 33 }] });

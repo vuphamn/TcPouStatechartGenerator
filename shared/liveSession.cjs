@@ -456,6 +456,25 @@ function createLiveSession(hooks = {}) {
     }
   }
 
+  /**
+   * A followed variable's value written (liveWrite: XAE's Write Values): req { id, value } (a boolean, a number, a
+   * string) → { ok, message }; its type's checks (range, length) answer
+   */
+  async function write(req) {
+    const s = session;
+    if (!s || !s.connected) return { ok: false, message: 'Not connected' };
+    const entry = s.vars?.entries.get(String(req?.id ?? ''));
+    if (!entry) return { ok: false, message: 'That variable is not followed now' };
+    const value = req.value;
+    if (!['boolean', 'number', 'string'].includes(typeof value)) return { ok: false, message: 'No value to write' };
+    try {
+      await ads.writeTyped(s.client, entry.handle, entry.info, value);
+      return { ok: true, message: `${entry.symbol} := ${value}` };
+    } catch (err) {
+      return { ok: false, message: err?.message && !err.adsErrorCode ? err.message : ads.adsErrorText(err) };
+    }
+  }
+
   /** Guard variables to follow in the running session (liveWatch): [{ id, candidates }]; false when malformed */
   function watch(vars) {
     const parsed = parseWatchRequest(vars);
@@ -724,7 +743,7 @@ function createLiveSession(hooks = {}) {
     }
   }
 
-  return { start, stop, watch, browse, sources, instancesAt, startAt, plcStates, ioTree, ecatStates, projectCopy, projectPou, layoutFile, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
+  return { start, stop, watch, write, browse, sources, instancesAt, startAt, plcStates, ioTree, ecatStates, projectCopy, projectPou, layoutFile, build, projectBuild, closeBuild, license, appInfo, startPlc: start_ };
 }
 
 module.exports = { createLiveSession, systemClient, instancesAt, startAt, plcStates, localIpTowards, localAddressOn, defaultLocalNetId, localTwinCatNetId, PLC_PORTS };

@@ -129,6 +129,8 @@ interface LivePanelProps {
   onGuardScopeChange?: (scope: 'active' | 'all' | 'off') => void;
   /** The active state's transitions with their guard result and values */
   guards?: (EdgeGuardView & { edgeId: string; to: string })[];
+  /** A guard variable's value written to the PLC (asked first); absent where values cannot be written */
+  onWriteVar?: (v: { name: string; id: string; symbol?: string; type?: string; text: string }) => void;
   /** Measured state times of the session (live or a replay), and whether the diagram shows them */
   stateTimes?: StateTime[];
   showStateTimes?: boolean;
@@ -513,6 +515,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   guardScope = 'active',
   onGuardScopeChange,
   guards = [],
+  onWriteVar,
   stateTimes = [],
   showStateTimes = false,
   onShowStateTimesChange,
@@ -1770,11 +1773,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                       </div>
                       {g.vars.length > 0 && (
                         <div className="mt-0.5 pl-5 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px]">
-                          {g.vars.map((v) => (
-                            <span key={v.name} className={v.known ? 'text-slate-400' : 'text-amber-300/90'} title={v.note}>
-                              {v.name} = <span className={v.known ? 'text-slate-100' : ''}>{v.text}</span>
-                            </span>
-                          ))}
+                          {g.vars.map((v) =>
+                            onWriteVar && v.known && v.id ? (
+                              <button
+                                key={v.name}
+                                className="live-guard-var text-slate-400 hover:text-sky-300 text-left"
+                                data-var={v.name}
+                                title={`Write a value to ${v.symbol ?? v.name}${v.type ? ` (${v.type})` : ''}…`}
+                                onClick={() => onWriteVar({ name: v.name, id: v.id!, symbol: v.symbol, type: v.type, text: v.text })}
+                              >
+                                {v.name} = <span className="text-slate-100 underline decoration-dotted decoration-slate-600">{v.text}</span>
+                              </button>
+                            ) : (
+                              <span key={v.name} className={v.known ? 'text-slate-400' : 'text-amber-300/90'} title={v.note}>
+                                {v.name} = <span className={v.known ? 'text-slate-100' : ''}>{v.text}</span>
+                              </span>
+                            )
+                          )}
                         </div>
                       )}
                     </div>

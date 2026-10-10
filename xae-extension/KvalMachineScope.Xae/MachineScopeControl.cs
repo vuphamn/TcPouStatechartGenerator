@@ -372,6 +372,9 @@ namespace KvalMachineScope.Xae
                     case "liveWatch":
                         HandleLiveWatch(msg);
                         break;
+                    case "liveWrite":
+                        HandleLiveWrite(msg);
+                        break;
                     case "liveBrowse":
                         HandleLiveBrowse(msg);
                         break;
@@ -1157,6 +1160,31 @@ namespace KvalMachineScope.Xae
             }
             _liveWatchWanted = wanted;
             ApplyLiveWatch();
+        }
+
+        /// <summary>A followed variable's value written (XAE's Write Values from the Live tab; the app asks first)</summary>
+        private void HandleLiveWrite(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var id = msg.TryGetValue("id", out var i) ? i as string : null;
+            msg.TryGetValue("value", out var value);
+            var monitor = _live;
+            if (monitor == null || string.IsNullOrEmpty(id))
+            {
+                Post(new { type = "liveWriteResult", requestId, ok = false, message = "Not connected" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                string error;
+                try { error = monitor.WriteVar(id, value); }
+                catch (Exception ex) when (!(ex is OutOfMemoryException)) { error = ex.Message; }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write(error == null ? $"live: wrote {id} := {value}" : $"live: write {id}: {error}");
+                Post(new { type = "liveWriteResult", requestId, ok = error == null, message = error ?? $"{id} := {value}" });
+            });
         }
 
         /// <summary>Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult)</summary>

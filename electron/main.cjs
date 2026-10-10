@@ -369,6 +369,8 @@ ipcMain.handle('tc:live-start', (event, options) => {
 });
 // Guard variables to follow in the window's running session (their values also come back on 'tc:live')
 ipcMain.handle('tc:live-watch', (event, vars) => liveFor(event.sender).watch(vars));
+// A followed variable's value written (XAE's Write Values; the app asks first): { id, value } → { ok, message }
+ipcMain.handle('tc:live-write', (event, req) => liveFor(event.sender).write(req));
 // Symbol browser: a symbol's members in the connected PLC (answered with liveBrowseResult on 'tc:live')
 ipcMain.handle('tc:live-browse', (event, req) => {
   const contents = event.sender;

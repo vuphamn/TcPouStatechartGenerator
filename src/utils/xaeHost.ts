@@ -50,6 +50,8 @@ export type HostMessage =
   | { type: 'liveValues'; events: { t: number; value: number }[] }
   /** Guard variables (liveWatch): where each was found in the PLC, or why not */
   | { type: 'liveWatchResult'; vars: { id: string; symbol?: string; type?: string; error?: string }[] }
+  /** A watched variable's value written (liveWrite) */
+  | { type: 'liveWriteResult'; requestId: number; ok: boolean; message: string }
   /** Guard variables: new values (null: not a finite number) */
   | { type: 'liveVars'; values: { id: string; t: number; v: boolean | number | string | null }[] }
   /** The committed (git HEAD) version of a loaded file */
@@ -173,6 +175,8 @@ export type AppMessage =
   | { type: 'liveStop' }
   /** Guard variables to follow (replaces the previous set): the first candidate path the PLC has is used */
   | { type: 'liveWatch'; vars: LiveWatchVar[] }
+  /** A watched variable's value written to the PLC (its watch id; answered with liveWriteResult) */
+  | { type: 'liveWrite'; requestId: number; id: string; value: boolean | number | string }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
   | { type: 'gitShow'; path: string; requestId: number }
   /** A loaded POU's layout file beside it: read, or written (text; null: removed) */

@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
     stop: () => ipcRenderer.invoke('tc:live-stop'),
     /** Guard variables to follow: [{ id, candidates }] (answered with liveWatchResult, values in liveVars) */
     watch: (vars) => ipcRenderer.invoke('tc:live-watch', vars),
+    /** A followed variable's value written: { id, value } → { ok, message } */
+    write: (req) => ipcRenderer.invoke('tc:live-write', req),
     /** Symbol browser: { requestId, path, stateVar } (answered with liveBrowseResult) */
     browse: (req) => ipcRenderer.invoke('tc:live-browse', req),
     /** The PLC project's sources as the PLC keeps them: { project, plcProject, files: [{ path, content }] } or { error } */

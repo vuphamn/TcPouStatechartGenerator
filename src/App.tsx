@@ -200,6 +200,7 @@ import { ReferencedMachine, declaredMachineMembers, referencedMachines } from '.
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
+import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
 import { findPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
@@ -8828,6 +8829,31 @@ export const App: React.FC = () => {
       .map((e) => ({ edgeId: e.edgeId, to: e.to, ...liveGuardViews[e.edgeId] }));
   }, [liveGuardViews, liveGuardEdges]);
 
+  // Write Values (XAE's online view) from the guard values: the value typed (as its type), asked first, then written
+  const handleWriteLiveVar = useCallback(
+    (v: { name: string; id: string; symbol?: string; type?: string; text: string }) => {
+      const isBool = /^(BOOL|BIT)$/i.test(v.type ?? '');
+      const plc = liveStatus.target ?? 'the PLC';
+      setPromptRequest({
+        title: `Write ${v.name}`,
+        label: `${v.symbol ?? v.name}${v.type ? ` : ${v.type}` : ''} on ${plc}, now ${v.text}. The value is written at once: the machine's program sees it in its next cycle.`,
+        initial: isBool ? (v.text === 'TRUE' ? 'FALSE' : 'TRUE') : v.text.replace(/^'(.*)'$/, '$1'),
+        monospace: true,
+        submitLabel: 'Write',
+        validate: (text) => {
+          const r = parseLiveValue(text, v.type, liveEnums);
+          return 'error' in r ? r.error : null;
+        },
+        onSubmit: (text) => {
+          const r = parseLiveValue(text, v.type, liveEnums);
+          if ('error' in r) return;
+          void writeLiveVar(liveMode, v.id, r.value).then((res) => showCopyToast(res.ok ? `${v.name} := ${text.trim()} written` : `Not written: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 3000 : 8000));
+        },
+      });
+    },
+    [liveStatus.target, liveEnums, liveMode, showCopyToast]
+  );
+
   const hostConflictActions = hostConflict
     ? {
         name: hostConflict.name,
@@ -10673,6 +10699,7 @@ export const App: React.FC = () => {
             guardScope={liveGuardScope}
             onGuardScopeChange={setLiveGuardScope}
             guards={liveActiveGuards}
+            onWriteVar={liveMode === 'xae' || liveMode === 'desktop' ? handleWriteLiveVar : undefined}
             stateTimes={measuredStateTimes}
             showStateTimes={showStateTimes}
             onShowStateTimesChange={setShowStateTimes}

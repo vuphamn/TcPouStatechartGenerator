@@ -166,9 +166,17 @@ function handle(sock, f) {
       v.writeInt16LE(value);
       return result(0, withLength(v));
     }
-    case 3: // Write (release handle)
-      log(`write ig=0x${d.readUInt32LE(0).toString(16)} (release handle)`);
+    case 3: { // Write: a value by its handle (Write Values; the subscribers told), else a handle released
+      const ig = d.readUInt32LE(0);
+      if (ig === 0xf005 && d.readUInt32LE(4) === HANDLE && d.readUInt32LE(8) === 2) {
+        value = d.readInt16LE(12);
+        log('written', value);
+        for (const id of subs.keys()) sendNotification(id);
+        return result(0);
+      }
+      log(`write ig=0x${ig.toString(16)} (release handle)`);
       return result(0);
+    }
     case 6: { // AddDeviceNotification
       const ig = d.readUInt32LE(0);
       const io = d.readUInt32LE(4);

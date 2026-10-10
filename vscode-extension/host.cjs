@@ -222,6 +222,8 @@ function createHost({ pouPath, post, ui }) {
       else post({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
     },
     liveWatch: ({ vars }) => live().watch(vars),
+    // (a followed variable's value written: the app asks first)
+    liveWrite: async ({ requestId, id, value }) => post({ type: 'liveWriteResult', requestId, ...(await live().write({ id, value })) }),
     // The committed (git HEAD) version of a loaded file, from its folder's repository (as the XAE extension does)
     gitShow: ({ path: p, requestId }) => {
       if (!p || !lastSeen.has(p)) return post({ type: 'gitShowResult', requestId, error: 'Not a file loaded in MachineScope' });

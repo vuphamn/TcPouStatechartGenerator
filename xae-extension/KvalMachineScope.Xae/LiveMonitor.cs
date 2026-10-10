@@ -560,6 +560,78 @@ namespace KvalMachineScope.Xae
             catch (Exception ex) when (!(ex is OutOfMemoryException)) { Log.Write("live: release " + sub.Symbol + ": " + ex.Message); }
         }
 
+        /// <summary>
+        /// A followed variable's value written by its handle (bool, a number, a string as JSON gives them); null when
+        /// written, else why not (its type's range, a string's length, the PLC's answer)
+        /// </summary>
+        public string WriteVar(string id, object value)
+        {
+            lock (_varLock)
+            {
+                if (_port == 0) return "Not connected";
+                if (!_vars.TryGetValue(id, out var sub)) return "That variable is not followed now";
+                byte[] data;
+                try { data = EncodeTyped(value, sub.Info); }
+                catch (ArgumentException ex) { return ex.Message; }
+                try
+                {
+                    Check(AdsNative.AdsSyncWriteReqEx(_port, ref _target, AdsNative.SymValueByHandle, sub.Handle, (uint)data.Length, data), $"Writing {sub.Symbol}");
+                }
+                catch (AdsException ex) { return ex.Message; }
+                return null;
+            }
+        }
+
+        /// <summary>A value as the symbol's ADS type holds it (DecodeTyped's other way); ArgumentException when it does not fit</summary>
+        private static byte[] EncodeTyped(object value, SymbolInfo info)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            double Num()
+            {
+                if (value is bool b) return b ? 1 : 0;
+                if (value is string s && double.TryParse(s, System.Globalization.NumberStyles.Float, inv, out var p)) return p;
+                try { return Convert.ToDouble(value, inv); }
+                catch (Exception ex) when (ex is FormatException || ex is InvalidCastException || ex is OverflowException) { throw new ArgumentException($"{value} is not a number"); }
+            }
+            long Whole(double min, double max)
+            {
+                var n = Num();
+                if (n != Math.Floor(n) || n < min || n > max) throw new ArgumentException($"{value} is not a whole number from {min} to {max}");
+                return (long)n;
+            }
+            var d = new byte[info.Size];
+            switch (info.DataType)
+            {
+                case AdstBit: d[0] = (byte)(value is bool bb ? (bb ? 1 : 0) : Num() != 0 ? 1 : 0); break;
+                case AdstInt8: d[0] = (byte)(sbyte)Whole(sbyte.MinValue, sbyte.MaxValue); break;
+                case AdstUInt8: d[0] = (byte)Whole(0, byte.MaxValue); break;
+                case AdstInt16: BitConverter.GetBytes((short)Whole(short.MinValue, short.MaxValue)).CopyTo(d, 0); break;
+                case AdstUInt16: BitConverter.GetBytes((ushort)Whole(0, ushort.MaxValue)).CopyTo(d, 0); break;
+                case AdstInt32: BitConverter.GetBytes((int)Whole(int.MinValue, int.MaxValue)).CopyTo(d, 0); break;
+                case AdstUInt32: BitConverter.GetBytes((uint)Whole(0, uint.MaxValue)).CopyTo(d, 0); break;
+                case AdstInt64: BitConverter.GetBytes(Whole(-9007199254740991, 9007199254740991)).CopyTo(d, 0); break;
+                case AdstUInt64: BitConverter.GetBytes((ulong)Whole(0, 9007199254740991)).CopyTo(d, 0); break;
+                case AdstReal32: BitConverter.GetBytes((float)Num()).CopyTo(d, 0); break;
+                case AdstReal64: BitConverter.GetBytes(Num()).CopyTo(d, 0); break;
+                case AdstString:
+                {
+                    var bytes = Encoding.Default.GetBytes(Convert.ToString(value, inv) ?? "");
+                    if (bytes.Length > info.Size - 1) throw new ArgumentException($"The text is longer than the variable holds ({info.Size - 1} characters)");
+                    bytes.CopyTo(d, 0);
+                    break;
+                }
+                case AdstWString:
+                {
+                    var bytes = Encoding.Unicode.GetBytes(Convert.ToString(value, inv) ?? "");
+                    if (bytes.Length + 2 > info.Size) throw new ArgumentException($"The text is longer than the variable holds ({info.Size / 2 - 1} characters)");
+                    bytes.CopyTo(d, 0);
+                    break;
+                }
+                default: throw new ArgumentException("A value of this type is not written here (only BOOL, numbers, enums and strings)");
+            }
+            return d;
+        }
+
         public List<VarSample> DrainVars()
         {
             var list = new List<VarSample>();
