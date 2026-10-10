@@ -8,7 +8,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const { parseSource, sectionAt, memberTitle } = require('./tcStSource.cjs');
-const { createIndex, nameAt, findReferences, findDefinition, renameEdits } = require('./stReferences.cjs');
+const { createIndex, nameAt, findReferences, findDefinition, renameEdits, blankCode, declarationsIn, occurrencesIn } = require('./stReferences.cjs');
 const { declarationOutline, implementationOutline } = require('./stOutline.cjs');
 const { checkSection, projectNames, extendsUnknown } = require('./stChecks.cjs');
 const { libraryNames } = require('./libraryNames.cjs');
@@ -422,6 +422,37 @@ function register(context) {
         }
         return edits;
       },
+    })
+  );
+
+  // Reads and writes, as XAE's Cross Reference List tells them: a name's places in the section highlighted (write,
+  // read; its declaration), Find All Writes across the project ("who sets this?")
+  context.subscriptions.push(
+    vscode.languages.registerDocumentHighlightProvider({ scheme: SCHEME }, {
+      provideDocumentHighlights(doc, pos) {
+        const n = nameAt(doc.getText(), pos.line, pos.character);
+        if (!n) return [];
+        const code = blankCode(doc.getText());
+        const KIND = { write: vscode.DocumentHighlightKind.Write, read: vscode.DocumentHighlightKind.Read, call: vscode.DocumentHighlightKind.Read, declaration: vscode.DocumentHighlightKind.Text };
+        return occurrencesIn(code, declarationsIn(code), n.name).map((o) => {
+          const at = doc.positionAt(o.offset);
+          return new vscode.DocumentHighlight(new vscode.Range(at, at.translate(0, o.length)), KIND[o.access]);
+        });
+      },
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.findWrites', async (uriArg, posArg) => {
+      const ed = vscode.window.activeTextEditor;
+      const uri = uriArg instanceof vscode.Uri ? uriArg : ed?.document.uri;
+      if (!uri || uri.scheme !== SCHEME) return [];
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const pos = posArg instanceof vscode.Position ? posArg : ed?.selection.active;
+      const h = pos ? here(doc, pos) : null;
+      if (!h) return [];
+      const files = projectFiles(h.a.file);
+      const locs = findReferences(files, h.n.name).filter((r) => r.access === 'write').map((r) => locationOf(files, r));
+      if (!locs.length) void vscode.window.showInformationMessage(`${h.n.name} is written nowhere in this project (by name)`);
+      else if (!uriArg) await vscode.commands.executeCommand('editor.action.showReferences', uri, pos, locs);
+      return locs;
     })
   );
 

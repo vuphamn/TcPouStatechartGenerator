@@ -211,6 +211,33 @@ function nameAt(text, line, column) {
 }
 
 /** Every use of the name in the project: [{ file, key, section, line, column, length, declaration }] */
+/**
+ * How a name is used at a place of blanked code (its offset and length): 'write' (x := …, x.a[i] := …, x R= / S=, an
+ * output bound to it: Q => x), 'call' (x(…): an FB instance's or a function's call), else 'read'
+ */
+function accessOf(code, offset, length) {
+  // (its members and indexes after it: pos.x := 1 writes pos)
+  const rest = code.slice(offset + length).replace(/^(?:\s*(?:\.\s*[A-Za-z_]\w*|\[[^\]\n]*\]|\^))*/, '');
+  if (/^\s*(?::=|[RS]=)/.test(rest)) return 'write';
+  if (/=>\s*$/.test(code.slice(Math.max(0, offset - 60), offset))) return 'write';
+  if (/^\s*\(/.test(rest)) return 'call';
+  return 'read';
+}
+
+/** The places of a name in a section's blanked code: [{ offset, length, access: 'declaration' | 'write' | 'call' | 'read' }] */
+function occurrencesIn(code, decls, name) {
+  const want = String(name).toLowerCase();
+  const declAt = new Set((decls ?? []).filter((d) => d.name.toLowerCase() === want).map((d) => d.offset));
+  const out = [];
+  NAME_RX.lastIndex = 0;
+  let m;
+  while ((m = NAME_RX.exec(code))) {
+    if (m[0].toLowerCase() !== want) continue;
+    out.push({ offset: m.index, length: m[0].length, access: declAt.has(m.index) ? 'declaration' : accessOf(code, m.index, m[0].length) });
+  }
+  return out;
+}
+
 function findReferences(files, name) {
   const want = name.toLowerCase();
   const out = [];
@@ -221,7 +248,7 @@ function findReferences(files, name) {
       let m;
       while ((m = NAME_RX.exec(s.code))) {
         if (m[0].toLowerCase() !== want) continue;
-        out.push({ file: f.file, key: s.key, section: s.section, ...lineCol(s.starts, m.index), length: m[0].length, declaration: declAt.has(m.index) });
+        out.push({ file: f.file, key: s.key, section: s.section, ...lineCol(s.starts, m.index), length: m[0].length, declaration: declAt.has(m.index), access: declAt.has(m.index) ? 'declaration' : accessOf(s.code, m.index, m[0].length) });
       }
     }
   }
@@ -357,4 +384,4 @@ function renameEdits(files, at, newName) {
   return { edits: edits.map(({ declaration, ...r }) => r), scope }; // eslint-disable-line no-unused-vars
 }
 
-module.exports = { blankCode, declarationsIn, createIndex, nameAt, findReferences, findDefinition, renameEdits, KEYWORDS };
+module.exports = { blankCode, declarationsIn, createIndex, nameAt, findReferences, findDefinition, renameEdits, accessOf, occurrencesIn, KEYWORDS };

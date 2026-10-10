@@ -203,6 +203,16 @@ exports.run = async function run() {
     const fmt = await vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', exDoc.uri, { insertSpaces: false, tabSize: 4 });
     expect(Array.isArray(fmt), `Format Document: ${fmt?.length ?? 'no'} line(s) re-indented`);
 
+    // 15c. Reads and writes: State's places in Execute() highlighted (CASE State OF: read; State := …: write);
+    // Find All Writes: its assignments
+    const hl = await vscode.commands.executeCommand('vscode.executeDocumentHighlights', exDoc.uri, statePos);
+    const kinds = new Set((hl ?? []).map((x) => x.kind));
+    expect(kinds.has(vscode.DocumentHighlightKind.Write) && kinds.has(vscode.DocumentHighlightKind.Read), `State highlighted: written and read (${(hl ?? []).length} places)`);
+    const writes = await vscode.commands.executeCommand('kvalMachineScope.findWrites', exDoc.uri, statePos);
+    const writeLines = [];
+    for (const l of writes ?? []) writeLines.push((await vscode.workspace.openTextDocument(l.uri)).lineAt(l.range.start.line).text.trim());
+    expect(writeLines.length > 0 && writeLines.every((x) => /State\s*:=|=>\s*State/.test(x)), `Find All Writes: ${writeLines.length} (${writeLines.slice(0, 3).join(' | ')})`);
+
     // 16. IntelliSense: after "E_ScanState." the enum's members; in MoveAndAdvance( its parameters
     const now = exDoc.getText().split(/\r?\n/);
     const qL = now.findIndex((l) => /E_ScanState\.\w+/.test(l));

@@ -25,6 +25,9 @@ file access.
   resolution: a local of the same name in another POU is listed too.
 - **Go to code** in the statechart opens the section at that line (the method's implementation), beside the chart, or
   where that section is open already.
+- **Reads and writes**, as XAE's Cross Reference List tells them: the caret on a name highlights its places in the
+  section, writes (`x :=`, `x R=` / `S=`, an output bound to it: `Q => x`, a member or an index assigned) apart from
+  reads. **Find All Writes** (the right-click menu): every place in the project that sets it.
 - **Go to Symbol in Workspace** (`Ctrl+T`): the project's POUs, interfaces and DUTs, their methods, properties and
   actions (`FB_Axis.Move`), the global variables and the enums' members; letters in order are enough (`fbax`).
 - **Folding** as in XAE: `VAR` blocks, `IF` / `CASE` / `FOR` / `WHILE` / `REPEAT`, each `CASE` branch, `STRUCT`,

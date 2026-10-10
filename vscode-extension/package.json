@@ -280,6 +280,11 @@
         "command": "kvalMachineScope.autoDeclare",
         "title": "Auto Declare…",
         "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.findWrites",
+        "title": "Find All Writes",
+        "category": "TwinCAT"
       }
     ],
     "keybindings": [
@@ -490,6 +495,10 @@
         {
           "command": "kvalMachineScope.autoDeclare",
           "when": "resourceScheme == twincat-st"
+        },
+        {
+          "command": "kvalMachineScope.findWrites",
+          "when": "resourceScheme == twincat-st"
         }
       ],
       "editor/context": [
@@ -522,6 +531,11 @@
           "command": "kvalMachineScope.autoDeclare",
           "when": "resourceScheme == twincat-st",
           "group": "twincat@5"
+        },
+        {
+          "command": "kvalMachineScope.findWrites",
+          "when": "resourceScheme == twincat-st",
+          "group": "0_navigation@9"
         }
       ],
       "view/item/context": [
