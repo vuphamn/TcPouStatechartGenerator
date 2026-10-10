@@ -40,6 +40,15 @@ file access.
   libraries (their names read from XAE's library cache, `_Libraries`), is flagged: a typo, most likely. Calls,
   names after a dot, ALL_CAPS names and a POU that extends a library's FB are not checked.
   `kvalMachineScope.structuredText.checks` switches them off.
+- **Hover:** a name's declaration (its line, with its comment) and where it is declared.
+- **Compare with Committed (git HEAD)** (an editor tab's menu, the right-click menu): the section beside its committed
+  version, in VS Code's diff editor.
+- **Snippets** (`kval-st` and `st`): `tcsm` a state machine (`CASE` on an enum), `tcstate` / `tcstatet` a branch (with a
+  timeout), `tcfb` a function block, `tcmethod`, `tcprop`, `tcton`, `tcrtrig`, `tcfor`.
+- **Add POU… / Add DUT…** (the **Solution** view's title, a folder's buttons): its kind (function block, program,
+  function; struct, enum, alias) and name, then the new file in that folder with new object Ids, added to the
+  `.plcproj` (XAE, if it has the project open, asks to reload it). **Add Method… / Add Property…** (the **POU** view):
+  into the open POU, its declaration and an empty implementation (a property's Get and Set).
 - **Outline** (the Outline view, the breadcrumbs): a declaration's object, its VAR blocks and
   variables (an enum's members); an implementation's `CASE` branches, the states (a nested `CASE`'s under its branch).
   With *Structured Text language Support*, its own outline of a declaration is used (the same blocks and variables).
@@ -61,7 +70,9 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   its own (hidden; your XAE windows are not touched; kept open ten minutes for the next build). Unsaved files of the
   project are saved first. Its errors and warnings go to the **Problems** panel, on the section and line (a click opens
   it), and to the **TwinCAT** output. A message XAE shows while it loads the project (OK only, e.g. a safety project's
-  missing device description) is answered and listed as a warning; a question stops the build with its text. Every
+  missing device description) is answered and listed as a warning, and so are two questions with a known answer
+  (*Open project with the loaded version instead?*: OK; the copy *has been modified outside of TwinCAT XAE … reload*:
+  Yes); any other question stops the build with its text. Every
   dialog seen is kept in `%LOCALAPPDATA%\KvalMachineScope\xae-dialogs.jsonl`. A Remote Manager build that stopped XAE
   while it opened the project is remembered: the build picker marks it, and using it again asks first.
 - **Login:** the PLC's code is compared with the project's latest build (its compile ID). The same: logged in. Another
@@ -78,6 +89,11 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   its type: its range, `16#FF`, a string's length), then shown after the current one (`7 ⇒ 9`). **Write Values**
   (`Ctrl+F7`) writes every prepared value, after one question naming them and the PLC. **Clear Prepared Values**.
   Forcing (holding a value against the program) is XAE's.
+- **Watch** (the TwinCAT view): **Add to Watch** (a variable's right-click menu while logged in, or the view's `+` with
+  a full path such as `MAIN.fbTest.nCycles`): its value twice a second; **Write Value…** on one (asked first),
+  **Remove**, **Clear Watch**. **Show Trend**: the watched numbers and booleans over the last ten minutes.
+- **The PLC's code changed** while logged in (built anew here or in XAE, or changed on the PLC): said at once, with
+  **Build and Online Change** and **Logout**, since the live values may no longer match the code.
 - **Build and Online Change:** the project built and written to the PLC as an online change (it keeps running), asked
   first; logged in afterwards. Nothing is written when an online change is not possible (Login offers a download).
 - **Solution** view (the TwinCAT view): the PLC project as XAE's Solution Explorer shows it (its `.plcproj`'s folders,
@@ -97,6 +113,13 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
 - **Save:** your edits go back into the `.TcPOU` / `.TcDUT` files. A file changed on disk since it was loaded (saved in
   TwinCAT, git) is not overwritten unless you choose to keep your edits.
 - **Go to code:** opens the `.TcPOU` beside the chart at that line of the method.
+- **Follow selection:** the caret in a state's `CASE` branch (the state method's implementation) selects that state in
+  the POU's open statecharts.
+- **Its state machine:** Kval's `doState()`; else a method with a `CASE` on a variable of an enum type (`Execute()`);
+  else the POU's own body (`CASE State OF` in the function block's code), named by the POU.
+- **The project's files:** **Document all state machines…**, **Coverage of all state machines…**, the version chip
+  (the committed TwinCAT version, from git), and a rename that reaches other POUs read and write the PLC project's
+  files, as in XAE.
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
 - **Live view** of the statechart (the desktop app's live session): its target is the one picked in VS Code's status
   bar, unless given in the Live tab; Browse lists this computer's routes and the TwinCAT devices answering on the
@@ -116,6 +139,13 @@ node vscode-extension/pack.cjs    # release/kval-machinescope-vscode-<version>.v
 
 Tests: `node tests/run.cjs vscode` runs this computer's VS Code with the extension (a profile of its own in
 `tests/.output`; its window shows for a few seconds): Structured Text sections opened, edited, saved; a member; a
-`.TcDUT`; Build's messages in the Problems panel (XAE's stand-in).
+`.TcDUT`; Build's messages in the Problems panel (XAE's stand-in); the Watch view and its trend; hover; Compare with
+Committed; Add POU / Method.
+
+`KSS_REAL_PLC=1 node tests/run.cjs plc` runs against this computer's TwinCAT runtime (changes it: only on a PC that
+may; it replaces the active configuration): a test project made with XAE's Automation Interface
+(`tests/plc/create-project.ps1`), built, activated and downloaded; the PLC parts against it (Login's check, live
+values, Write Values, Stop and Start); then the same in VS Code itself, with a watched variable; the PLC stopped at the
+end.
 
 Then in VS Code: **Extensions → … → Install from VSIX…**.

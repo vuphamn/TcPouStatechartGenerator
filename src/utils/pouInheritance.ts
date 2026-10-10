@@ -11,7 +11,7 @@
  * state's. The inlined code is between "{kss-in <method> <owner>}" and "{kss-out}" lines (pragmas: the parsers skip
  * them), which say where a transition is written.
  */
-import { resolveStateMethod } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod } from './stateMethod.ts';
 
 const START = '<!--kss-inherited';
 const END = '<!--/kss-inherited-->';
@@ -45,6 +45,8 @@ export function ownMethodNames(pouXml: string): string[] {
 /** Has the POU (itself, not a base) this method? (doState: its state method, Execute() in another company's POU) */
 export function hasOwnMethod(pouXml: string, name: string): boolean {
   const wanted = resolveStateMethod(pouXml, name).toLowerCase();
+  // (the POU's body as its state method: its own)
+  if (isBodyMethod(pouXml, wanted)) return true;
   return ownMethodNames(pouXml).some((n) => n.toLowerCase() === wanted);
 }
 

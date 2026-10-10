@@ -3,7 +3,7 @@
  * (along with optional .TcDUT enum declaration for groupings and descriptions).
  */
 
-import { stateMethodName } from './stateMethod.ts';
+import { isBodyMethod, stateCodeOf, stateMethodName } from './stateMethod.ts';
 import { parseTransitionsFromStateCode } from './pouStateEditor.ts';
 import { caseLabelLinePattern, splitStateLabels } from './stateNames.ts';
 import { expandStateCalls, readableInline, withInherited } from './pouInheritance.ts';
@@ -118,7 +118,12 @@ export function extractIdentifiedStatesFromPou(
   const methodRx = new RegExp(`<Method[^>]*\\bName=["']${stateMethod}["'][^>]*>([\\s\\S]*?)<\\/Method>`, 'i');
   const methodMatch = pouXml.match(methodRx);
   let doStateSt = '';
-  if (methodMatch) {
+  // (the POU's body as its state method: FB_TestCycle's CASE in its own code)
+  const bodyName = stateMethodName(pouXml);
+  if (isBodyMethod(pouXml, bodyName)) {
+    result.doStateFound = true;
+    doStateSt = stateCodeOf(pouXml, bodyName) ?? '';
+  } else if (methodMatch) {
     result.doStateFound = true;
     const stRx = /<ST[^>]*>([\s\S]*?)<\/ST>/i;
     const stMatch = methodMatch[1].match(stRx);

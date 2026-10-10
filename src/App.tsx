@@ -279,7 +279,7 @@ import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.ts
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
 import { XaeChecksDialog, type XaeCheck } from './components/XaeChecksDialog.tsx';
 import { printHtml } from './utils/printHtml.ts';
-import { INLINE_ENUM_PATH, inlineStateEnum, stateEnumTypeOf, stateMethodName } from './utils/stateMethod.ts';
+import { INLINE_ENUM_PATH, inlineStateEnum, resolveStateMethod, stateEnumTypeOf, stateMethodLabel, stateMethodName } from './utils/stateMethod.ts';
 import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
@@ -2493,13 +2493,14 @@ export const App: React.FC = () => {
       if (!loc) {
         showCopyToast(
           target.kind === 'state'
-            ? `${target.id} has no CASE branch in doState()`
+            ? `${target.id} has no CASE branch in ${stateMethodLabel(pouContent)}`
             : `The code of ${target.edge.from} → ${target.edge.to} was not found`,
           'error'
         );
         return;
       }
-      postToHost({ type: 'navigate', path: pouPath, method: loc.method, line: loc.line, text: loc.text });
+      // (doState: the POU's state method by its name, Execute() or the POU's body)
+      postToHost({ type: 'navigate', path: pouPath, method: resolveStateMethod(pouContent, loc.method), line: loc.line, text: loc.text });
     },
     [pouPath, pouContent, showCopyToast]
   );
@@ -3003,7 +3004,7 @@ export const App: React.FC = () => {
         return;
       }
       if (doc.count === 0) {
-        showCopyToast('No state machines (POUs with a doState() CASE) were found in the project', 'error');
+        showCopyToast('No state machines (a CASE on an enum: in doState(), another method or the POU body) were found in the project', 'error');
         return;
       }
       const saved = await saveDocument(`${(project.project ?? 'project').replace(/[^\w.-]+/g, '_')}-state-machines.html`, doc.html);
@@ -3038,7 +3039,7 @@ export const App: React.FC = () => {
         shared
       );
       if (!data) return showCopyToast('Coverage canceled', 'error');
-      if (!data.pous.length) return showCopyToast('No state machines (POUs with a doState() CASE) were found in the project', 'error');
+      if (!data.pous.length) return showCopyToast('No state machines (a CASE on an enum: in doState(), another method or the POU body) were found in the project', 'error');
       setProjectCoverageData(data);
     } finally {
       setDocProgress(null);
@@ -5683,6 +5684,11 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
     if (isXaeHost()) cmds.push({ id: 'app:xae-checks', group: 'Help', label: 'XAE checks…', hint: "the extension's features checked in one sitting", run: () => setXaeChecksOpen(true) });
+    // (the PLC project's: every state machine in it)
+    if (isXaeHost() || pouPath) {
+      cmds.push({ id: 'app:document-project', group: 'Export', label: 'Document all state machines…', hint: 'the PLC project in one HTML document', run: () => void handleDocumentProject() });
+      cmds.push({ id: 'app:project-coverage', group: 'Export', label: 'Coverage of all state machines…', hint: 'the transitions each PLC took: commissioning sign-off', run: () => void handleProjectCoverage() });
+    }
     cmds.push({ id: 'app:symbol', group: 'Go', label: 'Go to symbol…', hint: 'Ctrl+Shift+O', run: () => setSymbolSearchOpen(true) });
     cmds.push({
       id: 'app:snippets',

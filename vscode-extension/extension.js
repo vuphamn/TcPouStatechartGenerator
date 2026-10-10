@@ -9,6 +9,9 @@ const crypto = require('crypto');
 const { createHost, webviewHtml } = require('./host.cjs');
 const stEditor = require('./stEditor.cjs');
 const twincat = require('./twincat.cjs');
+const { registerCreate } = require('./createCommands.cjs');
+const { parseSource } = require('./tcStSource.cjs');
+const { addressOf, normalPath } = require('./sectionStore.cjs');
 
 const VIEW_TYPE = 'kvalMachineScope.statechart';
 
@@ -19,6 +22,37 @@ function activate(context) {
   const st = stEditor.register(context);
   // (the TwinCAT view: the statechart's live view goes to its target, its Build… is its build)
   let tc = null;
+  // Follow selection: the caret in a POU's state method (its implementation section) selects that state in the POU's
+  // open statecharts; the message XAE sends (editorCaret: its line counted after the declaration's, as XAE's editor)
+  const charts = new Map();
+  let caretTimer = null;
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      const u = e.textEditor.document.uri;
+      if (u.scheme !== 'twincat-st') return;
+      clearTimeout(caretTimer);
+      caretTimer = setTimeout(() => {
+        let a;
+        try {
+          a = addressOf(u.query);
+        } catch {
+          return;
+        }
+        // (a method, or the POU's body: a state machine in the body is named by the POU)
+        if (a.section !== 'impl' || !(/^Method:/.test(a.key) || a.key === '')) return;
+        const posts = charts.get(normalPath(a.file).toLowerCase());
+        if (!posts?.size) return;
+        let declLines = 0;
+        try {
+          declLines = (parseSource(fs.readFileSync(a.file, 'utf8')).members.find((m) => m.key === a.key)?.decl?.text ?? '').split(/\r?\n/).length;
+        } catch {
+          return;
+        }
+        const line = declLines + e.selections[0].active.line + 1;
+        for (const post of posts) post({ type: 'editorCaret', method: a.key ? a.key.replace(/^Method:/, '') : path.basename(a.file).replace(/\.TcPOU$/i, ''), line, lineCount: declLines + e.textEditor.document.lineCount });
+      }, 150);
+    })
+  );
   const version = context.extension.packageJSON.version;
 
   /** The app in a webview, its host for that .TcPOU */
@@ -59,6 +93,12 @@ function activate(context) {
       build: (file) => (tc ? tc.buildFor(file) : Promise.resolve({ ok: false, fatal: 'Not ready yet' })),
     };
     const host = createHost({ pouPath, post, ui });
+    // (the caret in this POU's sections: followed by the chart)
+    const key = normalPath(pouPath).toLowerCase();
+    const posts = charts.get(key) ?? new Set();
+    posts.add(post);
+    charts.set(key, posts);
+    webviewPanel.onDidDispose(() => posts.delete(post));
     webviewPanel.title = `${path.basename(pouPath)} · statechart`;
     const index = fs.readFileSync(path.join(appDir.fsPath, 'index.html'), 'utf8');
     webview.html = webviewHtml(index, { base: webview.asWebviewUri(appDir).toString(), cspSource: webview.cspSource, nonce: crypto.randomBytes(16).toString('base64') });
@@ -109,6 +149,7 @@ function activate(context) {
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
   tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
+  registerCreate(context, { activeFile: st.activeFile, projectOf: twincat.projectOf, currentProject: () => tc.currentProject(), openMember: st.openMember, refreshSolution: () => vscode.commands.executeCommand('kvalMachineScope.refreshSolution') });
 }
 
 function deactivate() {}

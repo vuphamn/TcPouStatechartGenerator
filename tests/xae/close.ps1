@@ -8,7 +8,12 @@ if ($p -and $p.ProcessName -eq 'devenv' -and $p.MainWindowTitle -like '*Experime
 }
 if ($env:KSS_XAE_KEEP_COPY) { 'copy kept (KSS_XAE_KEEP_COPY)'; return }
 if (Test-Path $XaeCopy) {
-  # Long paths: \\?\ prefix
-  [System.IO.Directory]::Delete('\\?\' + (Resolve-Path $XaeCopy).Path, $true)
+  # Long paths: \\?\ prefix; read-only files (a git working copy's objects) made writable first
+  $long = '\\?\' + (Resolve-Path $XaeCopy).Path
+  foreach ($f in [System.IO.Directory]::EnumerateFiles($long, '*', [System.IO.SearchOption]::AllDirectories)) {
+    $a = [System.IO.File]::GetAttributes($f)
+    if ($a -band [System.IO.FileAttributes]::ReadOnly) { [System.IO.File]::SetAttributes($f, $a -band -bnot [System.IO.FileAttributes]::ReadOnly) }
+  }
+  [System.IO.Directory]::Delete($long, $true)
   "copy removed: $(-not (Test-Path $XaeCopy))"
 }

@@ -42,7 +42,7 @@ const bundled = require('esbuild').buildSync({
 add('extension/extension.js', bundled.outputFiles[0].contents);
 if (fs.existsSync(path.join(HERE, 'README.md'))) add('extension/README.md', fs.readFileSync(path.join(HERE, 'README.md')));
 // (the Structured Text grammar and the TwinCAT view's icon)
-for (const dir of ['syntaxes', 'media']) {
+for (const dir of ['syntaxes', 'media', 'snippets']) {
   for (const e of fs.readdirSync(path.join(HERE, dir))) add(`extension/${dir}/${e}`, fs.readFileSync(path.join(HERE, dir, e)));
 }
 const walk = (dir, rel) => {

@@ -209,6 +209,67 @@
         "title": "Refresh",
         "category": "TwinCAT",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "kvalMachineScope.addPou",
+        "title": "Add POU…",
+        "category": "TwinCAT",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "kvalMachineScope.addDut",
+        "title": "Add DUT…",
+        "category": "TwinCAT",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "kvalMachineScope.addMethod",
+        "title": "Add Method…",
+        "category": "TwinCAT",
+        "icon": "$(symbol-method)"
+      },
+      {
+        "command": "kvalMachineScope.addProperty",
+        "title": "Add Property…",
+        "category": "TwinCAT",
+        "icon": "$(symbol-property)"
+      },
+      {
+        "command": "kvalMachineScope.addWatch",
+        "title": "Add to Watch",
+        "category": "TwinCAT",
+        "icon": "$(add)"
+      },
+      {
+        "command": "kvalMachineScope.removeWatch",
+        "title": "Remove from Watch",
+        "category": "TwinCAT",
+        "icon": "$(close)"
+      },
+      {
+        "command": "kvalMachineScope.clearWatch",
+        "title": "Clear Watch",
+        "category": "TwinCAT",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "kvalMachineScope.writeWatch",
+        "title": "Write Value…",
+        "category": "TwinCAT",
+        "icon": "$(edit)",
+        "enablement": "kvalMachineScope.loggedIn"
+      },
+      {
+        "command": "kvalMachineScope.showTrend",
+        "title": "Show Trend",
+        "category": "TwinCAT",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "kvalMachineScope.compareCommitted",
+        "title": "Compare with Committed (git HEAD)",
+        "category": "TwinCAT",
+        "icon": "$(git-compare)"
       }
     ],
     "keybindings": [
@@ -271,6 +332,11 @@
           "command": "kvalMachineScope.openXml",
           "when": "resourceScheme == twincat-st",
           "group": "navigation@10"
+        },
+        {
+          "command": "kvalMachineScope.compareCommitted",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@11"
         }
       ],
       "editor/title": [
@@ -360,6 +426,41 @@
           "command": "kvalMachineScope.refreshSolution",
           "when": "view == kvalMachineScope.solution",
           "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.addPou",
+          "when": "view == kvalMachineScope.solution",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.addDut",
+          "when": "view == kvalMachineScope.solution",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.addMethod",
+          "when": "view == kvalMachineScope.pouMembers",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.addProperty",
+          "when": "view == kvalMachineScope.pouMembers",
+          "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.addWatch",
+          "when": "view == kvalMachineScope.watch",
+          "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.showTrend",
+          "when": "view == kvalMachineScope.watch",
+          "group": "navigation@2"
+        },
+        {
+          "command": "kvalMachineScope.clearWatch",
+          "when": "view == kvalMachineScope.watch",
+          "group": "navigation@3"
         }
       ],
       "commandPalette": [
@@ -383,6 +484,38 @@
           "command": "kvalMachineScope.clearPrepared",
           "when": "resourceScheme == twincat-st && kvalMachineScope.prepared",
           "group": "twincat@3"
+        },
+        {
+          "command": "kvalMachineScope.addWatch",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
+          "group": "twincat@4"
+        },
+        {
+          "command": "kvalMachineScope.compareCommitted",
+          "when": "resourceScheme == twincat-st",
+          "group": "twincat@9"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "kvalMachineScope.addPou",
+          "when": "view == kvalMachineScope.solution && viewItem == plcFolder",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.addDut",
+          "when": "view == kvalMachineScope.solution && viewItem == plcFolder",
+          "group": "inline@2"
+        },
+        {
+          "command": "kvalMachineScope.writeWatch",
+          "when": "view == kvalMachineScope.watch && viewItem == watchItem",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.removeWatch",
+          "when": "view == kvalMachineScope.watch && viewItem == watchItem",
+          "group": "inline@2"
         }
       ]
     },
@@ -408,6 +541,10 @@
         {
           "id": "kvalMachineScope.solution",
           "name": "Solution"
+        },
+        {
+          "id": "kvalMachineScope.watch",
+          "name": "Watch"
         }
       ]
     },
@@ -430,6 +567,16 @@
           "markdownDescription": "Checks while typing in the Structured Text sections: a method's own variable never used (faded), and a plain name declared nowhere in the project (a typo?). Names of libraries are not known here: ALL_CAPS names, calls and names after a dot are not checked."
         }
       }
-    }
+    },
+    "snippets": [
+      {
+        "language": "kval-st",
+        "path": "./snippets/twincat.code-snippets"
+      },
+      {
+        "language": "st",
+        "path": "./snippets/twincat.code-snippets"
+      }
+    ]
   }
 }

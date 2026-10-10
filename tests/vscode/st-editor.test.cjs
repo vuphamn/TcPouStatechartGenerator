@@ -25,7 +25,7 @@ const ext = path.join(OUT, 'ext');
 fs.mkdirSync(ext);
 require('esbuild').buildSync({ entryPoints: [path.join(REPO, 'vscode-extension', 'extension.js')], bundle: true, platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'], outfile: path.join(ext, 'extension.js'), logLevel: 'warning' });
 fs.copyFileSync(path.join(REPO, 'vscode-extension', 'package.json'), path.join(ext, 'package.json'));
-for (const dir of ['syntaxes', 'media']) fs.cpSync(path.join(REPO, 'vscode-extension', dir), path.join(ext, dir), { recursive: true });
+for (const dir of ['syntaxes', 'media', 'snippets']) fs.cpSync(path.join(REPO, 'vscode-extension', dir), path.join(ext, dir), { recursive: true });
 
 // A TwinCAT project: its .tsproj, a PLC project, a POU (CRLF, a BOM) and its enum
 const { pou, dut } = require(path.join(REPO, 'tests', 'fixtures', 'third-party-pou.cjs'));
@@ -36,6 +36,11 @@ fs.writeFileSync(path.join(proj, 'Cell.tsproj'), '<?xml version="1.0"?>\r\n<TcSm
 fs.writeFileSync(path.join(proj, 'Robot', 'Robot.plcproj'), '<?xml version="1.0" encoding="utf-8"?>\r\n<Project/>\r\n');
 fs.writeFileSync(path.join(proj, 'Robot', 'POUs', 'FB_ScanSequencer.TcPOU'), '﻿' + pou.replace(/\r?\n/g, '\r\n'));
 fs.writeFileSync(path.join(proj, 'Robot', 'DUTs', 'E_ScanState.TcDUT'), '﻿' + dut.replace(/\r?\n/g, '\r\n'));
+// (a git working copy, committed: Compare with Committed shows HEAD's sections)
+const git = (...a) => require('child_process').execFileSync('git', ['-C', proj, '-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c', 'core.autocrlf=false', ...a], { stdio: 'ignore' });
+git('init', '-q');
+git('add', '-A');
+git('commit', '-q', '-m', 'test project');
 
 const result = path.join(OUT, 'result.json');
 // (Build: the stand-in for XAE, KSS_BUILD_DRYRUN: no XAE started)

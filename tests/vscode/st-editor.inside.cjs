@@ -170,6 +170,17 @@ exports.run = async function run() {
     const v4 = await waitFor(async () => (await shownOf())?.Busy === 'FALSE', 8000);
     const onPlc = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')).symbols['MAIN.fbScan.Busy'].value;
     expect(wrote?.written === 1 && onPlc === false && v4, `Write Values: Busy := FALSE written (${JSON.stringify(wrote)}; on the PLC ${onPlc}; shown ${JSON.stringify(await shownOf())})`);
+    // The Watch view: _Count by its full path, its value; written from there; the trend panel
+    await vscode.commands.executeCommand('kvalMachineScope.addWatch', 'MAIN.fbScan._Count');
+    const w1 = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.watchShown'))?.['MAIN.fbScan._Count'] === '7', 8000);
+    const wrote2 = await vscode.commands.executeCommand('kvalMachineScope.writeWatch', 'MAIN.fbScan._Count', { text: '9', confirmed: true });
+    const w2 = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.watchShown'))?.['MAIN.fbScan._Count'] === '9', 8000);
+    expect(w1 && wrote2 && w2 && JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')).symbols['MAIN.fbScan._Count'].value === 9, `Watch: MAIN.fbScan._Count shown (7), written from there (9) (${JSON.stringify(await vscode.commands.executeCommand('kvalMachineScope.watchShown'))})`);
+    await vscode.commands.executeCommand('kvalMachineScope.showTrend');
+    const trendTab = await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => t.label === 'TwinCAT Trend'), 5000);
+    expect(trendTab, 'the trend panel opened');
+    if (trendTab) await vscode.window.tabGroups.close(trendTab);
+    await vscode.window.showTextDocument(exDoc);
     await vscode.commands.executeCommand('kvalMachineScope.logout');
     const v3 = await waitFor(async () => (await shownOf()) === null, 8000);
     expect(v3, `logged out: no values (${JSON.stringify(await shownOf())})`);
@@ -190,7 +201,26 @@ exports.run = async function run() {
     const help = await vscode.commands.executeCommand('vscode.executeSignatureHelpProvider', exDoc.uri, new vscode.Position(mL, mC), '(');
     expect(help?.signatures?.[0] && /ProgramNumber/.test(help.signatures[0].label), `parameter hints in MoveAndAdvance( (${help?.signatures?.[0]?.label ?? 'none'})`);
 
-    // 17. The TwinCAT commands (XAE's toolbar) are there
+    // 17. Hover: State's declaration
+    const hovers = await vscode.commands.executeCommand('vscode.executeHoverProvider', exDoc.uri, statePos);
+    const hoverText = (hovers ?? []).flatMap((h) => h.contents.map((c) => (typeof c === 'string' ? c : c.value))).join('\n');
+    expect(/State\s*:\s*E_ScanState/.test(hoverText) && /declared in FB_ScanSequencer/.test(hoverText), `hover: State's declaration (${hoverText.replace(/\s+/g, ' ').slice(0, 120)})`);
+
+    // 18. Compare with Committed: git's HEAD (the project as committed by the test) beside the section now
+    await vscode.window.showTextDocument(exDoc);
+    await vscode.commands.executeCommand('kvalMachineScope.compareCommitted', exDoc.uri);
+    const committed = await waitFor(() => vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'twincat-st-git' && /Execute \(Impl\)\.st$/.test(d.uri.path)), 5000);
+    expect(committed && /CASE State OF/.test(committed.getText()) && !/noSuchVar/.test(committed.getText()) && /noSuchVar/.test(exDoc.getText()), `Compare with Committed: HEAD's Execute() (without the edits) beside it (${committed ? committed.getText().split(/\r?\n/)[0] : 'not opened'})`);
+
+    // 19. Add Method / Add POU (their answers given): the method in the file, opened; the POU file and the .plcproj
+    const added = await vscode.commands.executeCommand('kvalMachineScope.addMethod', { name: 'Reset', type: '' });
+    const pouNow = fs.readFileSync(pou, 'utf8');
+    expect(added === 'Reset' && /<Method Name="Reset" Id="\{[0-9a-f-]{36}\}">/.test(pouNow) && sections().some((e) => /Reset \(Decl\)\.st$/.test(e.document.uri.path)), 'Add Method: Reset in the POU, opened');
+    const newFile = await vscode.commands.executeCommand('kvalMachineScope.addPou', undefined, { kind: 'Function Block', name: 'FB_Added' });
+    const plcprojText = fs.readFileSync(path.join(proj, 'Robot', 'Robot.plcproj'), 'utf8');
+    expect(newFile && fs.existsSync(newFile) && /<Compile Include="POUs\\FB_Added\.TcPOU">/.test(plcprojText), `Add POU: FB_Added.TcPOU and the .plcproj (${newFile})`);
+
+    // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
     const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);

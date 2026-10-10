@@ -238,7 +238,8 @@ function projectPous(fromPath) {
       const content = read(file);
       const rel = path.relative(root, file).split(path.sep).join('/');
       if (/\.tcpou$/i.test(file)) {
-        if (/<Method\b[^>]*\bName="doState"/i.test(content)) pous.push({ name: path.basename(file), path: file, content });
+        // (any POU with a CASE: the app tells the state machines, doState() or another company's)
+        if (/\bCASE\b/i.test(content)) pous.push({ name: path.basename(file), path: file, content });
       } else duts.push({ name: path.basename(file), relativePath: rel, path: file, content });
     } catch {
       // unreadable file
@@ -292,4 +293,4 @@ function projectUses(fromPath, name) {
   return { files };
 }
 
-module.exports = { plcPort, instancePaths, findPouInProject, findEnumTypeInProject, isInSameProject, projectPous, projectSymbols, projectUses, DEFAULT_PLC_PORT };
+module.exports = { plcPort, instancePaths, findPouInProject, findEnumTypeInProject, isInSameProject, projectPous, projectSymbols, projectUses, plcProjectFile, DEFAULT_PLC_PORT };

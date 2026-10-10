@@ -29,8 +29,9 @@ namespace KvalMachineScope.Xae
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var pouName = Path.GetFileNameWithoutExtension(pouPath);
+            var node = FindNode(services, pouPath, ref method);
+            // (no such method under the POU: its own editor, the body, where the line is then looked for)
             var caption = method != null ? pouName + "." + method : pouName;
-            var node = FindNode(services, pouPath, method);
             if (node == null) return $"{caption} was not found in an open TwinCAT project";
             var (hierarchy, itemId) = node.Value;
             Log.Write($"navigate: {Path.GetFileName(pouPath)} {method} line {line} (tree item {itemId})");
@@ -183,7 +184,7 @@ namespace KvalMachineScope.Xae
         }
 
         /// <summary>The tree node of the POU (by its file) and, when given, of its method child</summary>
-        private static (IVsHierarchy, uint)? FindNode(IServiceProvider services, string pouPath, string method)
+        private static (IVsHierarchy, uint)? FindNode(IServiceProvider services, string pouPath, ref string method)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
             if (!(services.GetService(typeof(SVsSolution)) is IVsSolution solution)) return null;
@@ -201,7 +202,8 @@ namespace KvalMachineScope.Xae
                 {
                     if (string.Equals(NodeName(hier, child), method, StringComparison.OrdinalIgnoreCase)) return (hier, child);
                 }
-                Log.Write($"navigate: no child '{method}' under the POU node");
+                Log.Write($"navigate: no child '{method}' under the POU node: its own editor");
+                method = null;
                 return pou;
             }
             return null;

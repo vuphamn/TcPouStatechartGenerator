@@ -121,7 +121,7 @@ function register(context) {
 
   // The section documents in the Structured Text language (also when VS Code reopens them at start)
   const setLanguage = async (doc) => {
-    if (doc.uri.scheme !== SCHEME) return doc;
+    if (doc.uri.scheme !== SCHEME && doc.uri.scheme !== 'twincat-st-git') return doc;
     const lang = await stLanguage();
     return doc.languageId === lang ? doc : vscode.languages.setTextDocumentLanguage(doc, lang);
   };
@@ -504,6 +504,58 @@ function register(context) {
         return help;
       },
     }, '(', ',')
+  );
+  // Hover: a name's declaration (its line, its comment) where it is declared (its member, its POU or its file)
+  context.subscriptions.push(
+    vscode.languages.registerHoverProvider({ scheme: SCHEME }, {
+      provideHover(doc, pos) {
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return null;
+        }
+        const n = nameAt(doc.getText(), pos.line, pos.character);
+        if (!n) return null;
+        const files = projectFiles(a.file);
+        const defs = findDefinition(files, { file: a.file, key: a.key, name: n.name, qualifier: n.qualifier });
+        if (!defs.length) return null;
+        const d = defs[0];
+        const f = files.find((x) => x.file === d.file);
+        const text = textOf(d.file, d.key, d.section).split(/\r?\n/)[d.line] ?? '';
+        const where = `${f?.name ?? path.basename(d.file)}${d.key ? `.${d.key.replace(/^\w+:/, '')}` : ''}`;
+        const md = new vscode.MarkdownString();
+        md.appendCodeblock(text.trim(), doc.languageId);
+        md.appendMarkdown(`*${d.section === 'decl' ? 'declared in' : 'in'} ${where}*${defs.length > 1 ? ` (and ${defs.length - 1} more)` : ''}`);
+        return new vscode.Hover(md, doc.getWordRangeAtPosition(pos, /[A-Za-z_]\w*/));
+      },
+    })
+  );
+
+  // Compare with Committed: the section as git's HEAD has it (its file's committed version), beside this one
+  const GIT_SCHEME = 'twincat-st-git';
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(GIT_SCHEME, {
+      provideTextDocumentContent(uri) {
+        const a = addressOf(uri.query);
+        const dir = path.dirname(a.file);
+        let xml = '';
+        try {
+          xml = require('child_process').execFileSync('git', ['-C', dir, 'show', `HEAD:./${path.basename(a.file)}`], { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (err) {
+          return `(not in git's HEAD: ${String(err?.stderr || err?.message || err).trim().split('\n')[0]})`;
+        }
+        return parseSource(xml).members.find((m) => m.key === a.key)?.[a.section]?.text ?? '(this section is not in the committed version)';
+      },
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.compareCommitted', async (uri) => {
+      const u = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+      if (!u || u.scheme !== SCHEME) return void vscode.window.showInformationMessage('Compare with Committed: open a TwinCAT section first');
+      const left = u.with({ scheme: GIT_SCHEME });
+      const doc = await vscode.workspace.openTextDocument(left);
+      await setLanguage(doc).catch(() => {});
+      await vscode.commands.executeCommand('vscode.diff', left, u, `${path.posix.basename(u.path)} (HEAD ↔ now)`);
+    })
   );
   return { openMember, activeFile, fileOf, sectionUriOf, revealInSource };
 }

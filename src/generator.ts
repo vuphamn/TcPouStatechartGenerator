@@ -1,6 +1,6 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
-import { inlineStateEnum, resolveStateMethod, stateMethodName } from './utils/stateMethod.ts';
+import { inlineStateEnum, isBodyMethod, resolveStateMethod, stateCodeOf, stateMethodName } from './utils/stateMethod.ts';
 import { findAllSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
@@ -238,6 +238,8 @@ const whereWritten = (stack: { method: string; owner: string }[], self: string) 
 function getMethodSt(doc: Document | null, rawXml: string, nameAsked: string): string | null {
   // (doState: the POU's state method, Execute() in another company's POU)
   const name = resolveStateMethod(rawXml, nameAsked);
+  // (the POU's body as its state method)
+  if (isBodyMethod(rawXml, name)) return stateCodeOf(rawXml, name);
   if (doc) {
     const methods = Array.from(doc.getElementsByTagName('Method'));
     const target = methods.find(

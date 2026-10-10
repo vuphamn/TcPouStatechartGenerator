@@ -133,7 +133,9 @@ function register(context, { activeFile, sectionUriOf }) {
       s.plc = ads.ADS_STATES?.[st.adsState] ?? String(st.adsState);
       if (!s.code || Date.now() - (s.code.at ?? 0) > 30000) {
         const id = await plcCompileId(client).catch(() => null);
+        const was = s.code?.state ?? null;
         s.code = { ...(compareBuilds(id, projectBuilds(p.plcproj ?? p.tsproj)) ?? { state: null }), at: Date.now() };
+        if (s.loggedIn && was === 'newest' && s.code.state && s.code.state !== 'newest') void codeChanged(p);
       }
     } catch {
       s.plc = null;
@@ -348,6 +350,15 @@ function register(context, { activeFile, sectionUriOf }) {
     void poll();
   }
 
+  /** The PLC no longer runs the project's latest build while logged in: said once, with Build and Online Change */
+  async function codeChanged(p) {
+    const t = targetOf(p);
+    const BUILD = 'Build and Online Change';
+    const c = await vscode.window.showWarningMessage(`The PLC on ${t?.name ?? '?'} no longer runs ${p.name}'s latest build (built anew here or in XAE, or changed on the PLC): the live values may not match the code.`, BUILD, 'Logout');
+    if (c === BUILD) await vscode.commands.executeCommand('kvalMachineScope.buildOnlineChange');
+    else if (c === 'Logout') await vscode.commands.executeCommand('kvalMachineScope.logout');
+  }
+
   async function logout() {
     const p = needProject();
     stateOf(p.root).loggedIn = false;
@@ -532,6 +543,7 @@ function register(context, { activeFile, sectionUriOf }) {
   const live = registerLiveValues(context, {
     online: { isOnline: (root) => !!states.get(root)?.loggedIn, source: sourceOf, targetName: (root) => targetOf(projects.get(root) ?? project)?.name ?? 'the PLC' },
     projectOf: cachedProjectOf,
+    currentRoot: () => project?.root ?? null,
   });
   // ---- The Solution view: the PLC projects' trees (their .plcproj), as XAE's Solution Explorer shows them
   const solution = (() => {
@@ -545,25 +557,27 @@ function register(context, { activeFile, sectionUriOf }) {
           return plcProjectsUnder(project.root).map((plcproj) => {
             try {
               const t = readPlcTree(plcproj);
-              return { label: t.name, plc: true, children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references }] : [])] };
+              return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references }] : [])] };
             } catch {
               return { label: path.basename(plcproj), plc: true, children: [] };
             }
           });
         }
         if (el.references) return el.references.map((r) => ({ name: r, reference: true }));
-        return el.children ?? [];
+        // (each node with its PLC project: Add POU / Add DUT there)
+        return (el.children ?? []).map((c) => ({ ...c, plcproj: el.plcproj }));
       },
       getTreeItem(el) {
         if (el.plc) {
           const it = new vscode.TreeItem(el.label, vscode.TreeItemCollapsibleState.Expanded);
           it.iconPath = new vscode.ThemeIcon('project');
           it.description = 'PLC project';
+          it.contextValue = 'plcFolder';
           return it;
         }
         if (el.references) return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), { iconPath: new vscode.ThemeIcon('library'), description: `${el.references.length}` });
         if (el.reference) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None), { iconPath: new vscode.ThemeIcon('package') });
-        if (el.children) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.Collapsed), { iconPath: vscode.ThemeIcon.Folder });
+        if (el.children) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.Collapsed), { iconPath: vscode.ThemeIcon.Folder, contextValue: 'plcFolder' });
         const it = new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None);
         it.iconPath = new vscode.ThemeIcon(ICON[el.ext] ?? 'file');
         it.description = el.ext;
@@ -599,6 +613,8 @@ function register(context, { activeFile, sectionUriOf }) {
   follow();
   return {
     projectOf,
+    /** The project the TwinCAT view shows (the active TwinCAT file's) */
+    currentProject: () => project,
     /** The statechart's live view: the target picked for the file's project ({ name, netId, address, local }) */
     targetFor: (file) => {
       const p = cachedProjectOf(file);

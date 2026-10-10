@@ -7,10 +7,14 @@
  * assigns machineState / mainState: 'doState' then (its base is looked for: see pouInheritance); otherwise its own
  * state method is looked for as above (another company's FB with a base of its own: TrackSample()).
  *
+ * The POU's body is its state method when no method is and its own code has such a CASE (FB_TestCycle: CASE State OF in
+ * its body): its name then stands for the body (isBodyMethod).
+ *
  * Code that asks for 'doState' (reading, editing, line counts, Go to code) gets that method through
  * resolveStateMethod(): the 76 places that name doState() follow it without change.
  */
 import { extendsOf, pouNameOf, registeredBases, stripInherited } from './pouInheritance.ts';
+import { getPouBody } from './pouBody.ts';
 
 const ELEMENTARY = new Set(
   'BOOL BIT BYTE WORD DWORD LWORD SINT USINT INT UINT DINT UDINT LINT ULINT REAL LREAL TIME LTIME DATE LDATE TIME_OF_DAY TOD LTOD DATE_AND_TIME DT LDT STRING WSTRING ANY POINTER REFERENCE'.split(' ')
@@ -57,6 +61,28 @@ function methodsWithCode(pouXml: string): { name: string; st: string }[] {
   return out;
 }
 
+/** The POU's own body (Structured Text), or null (none, or SFC …) */
+function ownBodySt(pouXml: string): string | null {
+  const b = getPouBody(stripInherited(pouXml));
+  return b.found && b.isStructuredText && b.implementation.trim() ? b.implementation : null;
+}
+
+/**
+ * Is this name the POU's body (its own name, no method called so)? The body as a state method (FB_TestCycle's CASE in
+ * its body) is asked for by the POU's name
+ */
+export function isBodyMethod(pouXml: string, name: string): boolean {
+  const pou = pouNameOf(pouXml);
+  if (!pou || !name || name.replace(/\(\)$/, '').toLowerCase() !== pou.toLowerCase()) return false;
+  return !methodsWithCode(pouXml).some((m) => m.name.toLowerCase() === pou.toLowerCase());
+}
+
+/** A method's code, the body's when the name is the POU's (isBodyMethod); null when there is none */
+export function stateCodeOf(pouXml: string, name: string): string | null {
+  if (isBodyMethod(pouXml, name)) return ownBodySt(pouXml);
+  return methodsWithCode(pouXml).find((m) => m.name.toLowerCase() === name.toLowerCase())?.st ?? null;
+}
+
 const CASE_OF = /\bCASE\s*\(?\s*([A-Za-z_]\w*)\s*\)?\s*OF\b/i;
 
 /** A method as the state method: its CASE variable and how many branches (labels) it has; null when it is none */
@@ -99,6 +125,10 @@ export function stateMethodName(pouXml: string): string {
       const c = stateCaseOf(pouXml, m.st);
       if (c && (!best || c.branches > best.branches)) best = { name: m.name, branches: c.branches };
     }
+    // (else its body: CASE State OF in the FB's own code; its name stands for it)
+    const body = best ? null : ownBodySt(pouXml);
+    const c = body ? stateCaseOf(pouXml, body) : null;
+    if (c && pouNameOf(pouXml)) best = { name: pouNameOf(pouXml), branches: c.branches };
     if (best) found = best.name;
   }
   if (cache.size > 16) cache.delete(cache.keys().next().value!);
@@ -117,8 +147,7 @@ export function resolveStateMethod(pouXml: string, name: string): string {
  */
 export function stateEnumTypeOf(pouXml: string): string | null {
   if (!pouXml) return null;
-  const method = stateMethodName(pouXml);
-  const st = methodsWithCode(pouXml).find((m) => m.name.toLowerCase() === method.toLowerCase())?.st;
+  const st = stateCodeOf(pouXml, stateMethodName(pouXml));
   const v = st ? CASE_OF.exec(stripComments(st))?.[1] : null;
   const type = v ? declaredTypeOf(pouXml, v) : null;
   return type && !ELEMENTARY.has(type.toUpperCase()) ? type.split('.').pop() ?? null : null;
@@ -134,8 +163,7 @@ export const INLINE_ENUM_PATH = '(declared in the POU)';
  */
 export function inlineStateEnum(pouXml: string): { varName: string; members: { name: string; value?: string }[]; dut: string; typeName: string } | null {
   if (!pouXml) return null;
-  const method = stateMethodName(pouXml);
-  const st = methodsWithCode(pouXml).find((m) => m.name.toLowerCase() === method.toLowerCase())?.st;
+  const st = stateCodeOf(pouXml, stateMethodName(pouXml));
   const v = st ? CASE_OF.exec(stripComments(st))?.[1] : null;
   const members = v ? inlineEnumOf(pouXml, v) : null;
   if (!v || !members) return null;

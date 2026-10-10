@@ -434,7 +434,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
 
   const insertTemplate = (templateType: 'full' | 'purpose' | 'safety' | 'io') => {
     let template = '';
-    const stateTitle = selectedStateLabel || selectedStateId;
+    const stateTitle = currentEffectiveStateLabel || currentEffectiveStateId;
     if (templateType === 'full') {
       template = `### Purpose & Overview\nPrimary function and operating mode for \`${stateTitle}\`.\n\n### Entry Preconditions\n- All preceding interlocks satisfied\n- Required signals active\n\n### Actions & Sequence\n- Energize actuators / command motion\n- Monitor completion feedback\n\n### Exit Criteria & Next States\n- Normal completion -> Transition to Next State\n- Timeout / Fault -> Transition to Error / Halt\n\n### Safety & Interlocks\n- E-Stop and guard door monitoring active\n`;
     } else if (templateType === 'purpose') {
@@ -901,7 +901,7 @@ export const StateNodeStyleInspector: React.FC<StateNodeStyleInspectorProps> = (
                       }, 0);
                     }
                   }}
-                  placeholder={`Describe the purpose of state '${selectedStateLabel || selectedStateId}'...\n\nExample:\n### Purpose & Overview\nControls the idle sequence before feed cycle engages.\n\n### Entry Preconditions\n- Safety circuits closed (bSafetyOk = TRUE)\n- Axis homed\n\n### Actuators & Outputs\n- Clamps energized\n- Feed drive in standstill\n\n### Exit Criteria\n- Start button pressed -> Transition to FEED_ACTIVE`}
+                  placeholder={`Describe the purpose of state '${currentEffectiveStateLabel || currentEffectiveStateId}'...\n\nExample:\n### Purpose & Overview\nControls the idle sequence before feed cycle engages.\n\n### Entry Preconditions\n- Safety circuits closed (bSafetyOk = TRUE)\n- Axis homed\n\n### Actuators & Outputs\n- Clamps energized\n- Feed drive in standstill\n\n### Exit Criteria\n- Start button pressed -> Transition to FEED_ACTIVE`}
                   className="p-3 text-slate-100 font-sans placeholder:text-slate-600"
                 />
               ) : (

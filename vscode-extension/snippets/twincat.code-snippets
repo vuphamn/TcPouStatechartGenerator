@@ -1,0 +1,95 @@
+{
+  "State machine (CASE on an enum)": {
+    "prefix": "tcsm",
+    "description": "A state machine: CASE on its state variable (an enum), each state's branch with its transitions",
+    "body": [
+      "CASE ${1:eState} OF",
+      "\t${2:E_State}.${3:Idle}:",
+      "\t\tIF ${4:bStart} THEN",
+      "\t\t\t${1:eState} := ${2:E_State}.${5:Running};",
+      "\t\tEND_IF",
+      "",
+      "\t${2:E_State}.${5:Running}:",
+      "\t\t$0",
+      "\t\tIF ${6:bDone} THEN",
+      "\t\t\t${1:eState} := ${2:E_State}.${7:Done};",
+      "\t\tEND_IF",
+      "",
+      "\t${2:E_State}.${7:Done}:",
+      "\t\t${1:eState} := ${2:E_State}.${3:Idle};",
+      "END_CASE"
+    ]
+  },
+  "State (a CASE branch)": {
+    "prefix": "tcstate",
+    "description": "A state's branch: its label, its work, a transition",
+    "body": [
+      "${1:E_State}.${2:NewState}:",
+      "\t$0",
+      "\tIF ${3:bCondition} THEN",
+      "\t\t${4:eState} := ${1:E_State}.${5:NextState};",
+      "\tEND_IF"
+    ]
+  },
+  "State with entry and timeout": {
+    "prefix": "tcstatet",
+    "description": "A state's branch with an entry action (once) and a timeout (TON)",
+    "body": [
+      "${1:E_State}.${2:Waiting}:",
+      "\tIF ${3:bEntry} THEN",
+      "\t\t${3:bEntry} := FALSE;",
+      "\t\t${4:tonTimeout}(IN := FALSE);",
+      "\t\t$0",
+      "\tEND_IF",
+      "\t${4:tonTimeout}(IN := TRUE, PT := ${5:T#5S});",
+      "\tIF ${6:bDone} THEN",
+      "\t\t${7:eState} := ${1:E_State}.${8:Next};",
+      "\t\t${3:bEntry} := TRUE;",
+      "\tELSIF ${4:tonTimeout}.Q THEN",
+      "\t\t${7:eState} := ${1:E_State}.${9:Error};",
+      "\t\t${3:bEntry} := TRUE;",
+      "\tEND_IF"
+    ]
+  },
+  "Function block": {
+    "prefix": "tcfb",
+    "description": "A function block's declaration",
+    "body": [
+      "FUNCTION_BLOCK ${1:FB_Name}",
+      "VAR_INPUT",
+      "\t${2:bEnable} : BOOL;",
+      "END_VAR",
+      "VAR_OUTPUT",
+      "\t${3:bBusy} : BOOL;",
+      "END_VAR",
+      "VAR",
+      "\t$0",
+      "END_VAR"
+    ]
+  },
+  "Method": {
+    "prefix": "tcmethod",
+    "description": "A method's declaration",
+    "body": ["METHOD ${1:PUBLIC} ${2:Name} : ${3:BOOL}", "VAR_INPUT", "\t$0", "END_VAR", "VAR", "END_VAR"]
+  },
+  "Property": {
+    "prefix": "tcprop",
+    "description": "A property's declaration",
+    "body": ["PROPERTY ${1:PUBLIC} ${2:Name} : ${3:BOOL}"]
+  },
+  "Timer (TON)": {
+    "prefix": "tcton",
+    "description": "A TON call and its output",
+    "body": ["${1:tonDelay}(IN := ${2:bStart}, PT := ${3:T#1S});", "IF ${1:tonDelay}.Q THEN", "\t$0", "END_IF"]
+  },
+  "Rising edge (R_TRIG)": {
+    "prefix": "tcrtrig",
+    "description": "An R_TRIG call and its output",
+    "body": ["${1:rtStart}(CLK := ${2:bStart});", "IF ${1:rtStart}.Q THEN", "\t$0", "END_IF"]
+  },
+  "FOR loop": {
+    "prefix": "tcfor",
+    "description": "A FOR loop",
+    "body": ["FOR ${1:i} := ${2:0} TO ${3:9} DO", "\t$0", "END_FOR"]
+  }
+}

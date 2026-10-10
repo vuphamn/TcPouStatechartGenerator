@@ -102,6 +102,8 @@ function createHost({ pouPath, post, ui }) {
   // (live view: made when first asked for)
   let liveSession = null;
   const live = () => (liveSession ??= require('../electron/tcLive.cjs')());
+  // (the PLC project's files: shared with the desktop app)
+  const targets = () => require('../electron/tcLiveTargets.cjs');
   /** The target given, else the one picked for the project in VS Code (the TwinCAT view), else this computer's */
   const targetOf = async (m) => {
     if (m.netId) return { netId: m.netId, ip: m.ip };
@@ -220,12 +222,42 @@ function createHost({ pouPath, post, ui }) {
       else post({ type: 'liveStatus', state: 'stopped', message: 'Not connected' });
     },
     liveWatch: ({ vars }) => live().watch(vars),
-    // (not in VS Code: the project's other files)
-    gitShow: ({ requestId }) => post({ type: 'gitShowResult', requestId, error: 'Not available in VS Code (use its Source Control view)' }),
-    projectPous: () => post({ type: 'projectPous', error: 'Not available in VS Code' }),
-    projectSymbols: () => post({ type: 'projectSymbols', error: 'Not available in VS Code' }),
-    projectUses: ({ requestId }) => post({ type: 'projectUses', requestId, error: 'Not available in VS Code: rename it in TwinCAT XAE' }),
-    saveOther: ({ requestId }) => post({ type: 'saveOtherResult', requestId, ok: false, message: 'Not available in VS Code' }),
+    // The committed (git HEAD) version of a loaded file, from its folder's repository (as the XAE extension does)
+    gitShow: ({ path: p, requestId }) => {
+      if (!p || !lastSeen.has(p)) return post({ type: 'gitShowResult', requestId, error: 'Not a file loaded in MachineScope' });
+      require('child_process').execFile('git', ['-C', path.dirname(p), 'show', `HEAD:./${path.basename(p)}`], { maxBuffer: 64 * 1024 * 1024, windowsHide: true, timeout: 15000 }, (err, stdout, stderr) => {
+        if (!err) return post({ type: 'gitShowResult', requestId, content: stdout.replace(/^\uFEFF/, '') });
+        const text = String(stderr || err.message || '');
+        // (as the XAE extension says it: no git, no repository, a file not committed yet)
+        const error =
+          err.code === 'ENOENT' ? 'git is not installed (or not on the PATH)'
+          : /not a git repository/i.test(text) ? 'The file is not in a git repository'
+          : /exists on disk, but not in|does not exist in/i.test(text) ? 'The file is not committed yet'
+          : text.trim().split(/\r?\n/)[0] || 'git did not answer';
+        post({ type: 'gitShowResult', requestId, error });
+      });
+    },
+    // The project's files: its POUs with a CASE (the documentation), its types (completion, the checks), a name's uses (a rename)
+    projectPous: () => post({ type: 'projectPous', ...targets().projectPous(pou) }),
+    projectSymbols: () => post({ type: 'projectSymbols', ...targets().projectSymbols(pou) }),
+    projectUses: ({ requestId, name }) => post({ type: 'projectUses', requestId, ...targets().projectUses(pou, name) }),
+    // Other POUs of the project written (a rename): each in the PLC project, unchanged on disk since it was read
+    saveOther: ({ requestId, files = [] }) => {
+      const plcproj = targets().plcProjectFile(pou);
+      const root = plcproj ? path.resolve(path.dirname(plcproj)).toLowerCase() + path.sep : null;
+      const inProject = (p) => !!root && typeof p === 'string' && /\.tcpou$/i.test(p) && path.resolve(p).toLowerCase().startsWith(root) && fs.existsSync(p);
+      const list = files.filter((f) => inProject(f.path) && typeof f.content === 'string' && typeof f.baseline === 'string');
+      if (!list.length) return post({ type: 'saveOtherResult', requestId, ok: false, message: 'No file of the PLC project to write' });
+      for (const f of list)
+        if (contentKey(readText(f.path)) !== contentKey(f.baseline))
+          return post({ type: 'saveOtherResult', requestId, ok: false, message: `${path.basename(f.path)} was changed on disk since it was read: nothing written` });
+      for (const f of list) {
+        const bom = fs.readFileSync(f.path).subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]));
+        fs.writeFileSync(f.path, (bom ? '\uFEFF' : '') + f.content);
+        if (lastSeen.has(f.path)) lastSeen.set(f.path, contentKey(f.content));
+      }
+      post({ type: 'saveOtherResult', requestId, ok: true, message: `Wrote ${list.length} other POU(s): ${list.map((f) => path.basename(f.path)).join(', ')}` });
+    },
     // Build…: the TwinCAT view's build (TwinCAT XAE's Automation Interface, a copy of the project)
     buildProject: async ({ requestId }) => {
       if (!ui.build) return post({ type: 'xaeBuildResult', requestId, ok: false, fatal: 'Building the PLC project is not available here' });

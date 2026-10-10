@@ -1,4 +1,4 @@
-import { resolveStateMethod } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod, stateCodeOf } from './stateMethod.ts';
 /**
  * Where a state or a transition is written in the .TcPOU: the method (doState / preProcess) and the 1-based line in
  * that method's ST implementation. Used to open TwinCAT's editor at that line (XAE extension).
@@ -16,6 +16,8 @@ export const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** The ST implementation (CDATA text) of a method, split into lines */
 export function methodLines(pouXml: string, methodAsked: string): string[] | null {
   const method = resolveStateMethod(pouXml, methodAsked);
+  // (the POU's body as its state method)
+  if (isBodyMethod(pouXml, method)) return stateCodeOf(pouXml, method)?.replace(/\r\n/g, '\n').split('\n') ?? null;
   const rx = new RegExp(`<Method[^>]*\\bName=["']${escapeRx(method)}["'][^>]*>([\\s\\S]*?)</Method>`, 'i');
   const m = pouXml.match(rx);
   if (!m) return null;

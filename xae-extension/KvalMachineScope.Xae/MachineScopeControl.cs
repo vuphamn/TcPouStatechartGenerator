@@ -327,7 +327,14 @@ namespace KvalMachineScope.Xae
                             _pendingInstance = null;
                             LoadPou(p, pi, pc);
                         }
-                        else if (_pouPath == null)
+                        else if (_pouPath != null)
+                        {
+                            // The page loaded again (its process restarted, or reloaded): the POU it showed, its instance
+                            Log.Write($"app reloaded: {_pouPath}");
+                            StopLive(true);
+                            LoadPou(_pouPath, _instance);
+                        }
+                        else
                         {
                             // A tab the IDE restored (it was open when the IDE closed): the POU it showed then
                             var last = TabMemory.Recall(Ide, TabNumber);
@@ -477,6 +484,8 @@ namespace KvalMachineScope.Xae
             ThreadHelper.ThrowIfNotOnUIThread();
             var path = msg.TryGetValue("path", out var p) ? p as string : null;
             var method = msg.TryGetValue("method", out var m) ? m as string : null;
+            // (the POU's name: its body, a state machine there; its own editor)
+            if (path != null && method != null && method.Equals(Path.GetFileNameWithoutExtension(path), StringComparison.OrdinalIgnoreCase)) method = null;
             var line = msg.TryGetValue("line", out var l) && l is int li ? li : 1;
             var text = msg.TryGetValue("text", out var t) ? t as string : null;
             if (path == null || !_lastSeen.ContainsKey(path)) return;
@@ -794,7 +803,7 @@ namespace KvalMachineScope.Xae
             });
         }
 
-        /// <summary>Project documentation: the state machine POUs (with a doState method) and all enums of the PLC project</summary>
+        /// <summary>Project documentation: the POUs with a CASE (the app tells the state machines) and all enums of the PLC project</summary>
         private void HandleProjectPous()
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -822,7 +831,8 @@ namespace KvalMachineScope.Xae
                     catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { continue; }
                     if (isPou)
                     {
-                        if (content.IndexOf("Name=\"doState\"", StringComparison.OrdinalIgnoreCase) >= 0) pous.Add(new { name = Path.GetFileName(file), path = file, content });
+                        // (any POU with a CASE: the app tells the state machines, doState() or another company's)
+                        if (System.Text.RegularExpressions.Regex.IsMatch(content, @"\bCASE\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) pous.Add(new { name = Path.GetFileName(file), path = file, content });
                     }
                     else duts.Add(new { name = Path.GetFileName(file), relativePath = rel.Replace('\\', '/'), path = file, content });
                 }
@@ -929,6 +939,8 @@ namespace KvalMachineScope.Xae
             // A document (HTML, opened after saving), a live recording (JSON) or a table (CSV)
             var recording = (name ?? "").EndsWith(".json", StringComparison.OrdinalIgnoreCase);
             var csv = (name ?? "").EndsWith(".csv", StringComparison.OrdinalIgnoreCase);
+            // (two PLCs' recordings compared: Differences… → Save comparison…)
+            var comparison = (name ?? "").EndsWith(".comparison.json", StringComparison.OrdinalIgnoreCase);
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
             // (personal: a live recording, offered in the user's own folder, not the project's: not for git)
             var personal = msg.TryGetValue("personal", out var pe) && pe is bool pb && pb;
@@ -944,9 +956,9 @@ namespace KvalMachineScope.Xae
             }
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                Title = recording ? "Save the live recording" : csv ? "Save the table" : "Save the documentation",
+                Title = comparison ? "Save the comparison" : recording ? "Save the live recording" : csv ? "Save the table" : "Save the documentation",
                 FileName = string.IsNullOrEmpty(name) ? "documentation.html" : Path.GetFileName(name),
-                Filter = recording ? "Live recording (*.json)|*.json" : csv ? "CSV (Excel) (*.csv)|*.csv" : "HTML document (*.html)|*.html",
+                Filter = comparison ? "Comparison (*.comparison.json)|*.comparison.json|JSON (*.json)|*.json" : recording ? "Live recording (*.json)|*.json" : csv ? "CSV (Excel) (*.csv)|*.csv" : "HTML document (*.html)|*.html",
                 InitialDirectory = personalDir ?? (plcproj != null ? Path.GetDirectoryName(Path.GetDirectoryName(plcproj)) : null),
             };
             if (dialog.ShowDialog() != true)
@@ -993,9 +1005,13 @@ namespace KvalMachineScope.Xae
             if (ErrorHandler.Failed(monitor.GetCurrentElementValue((uint)VSConstants.VSSELELEMID.SEID_DocumentFrame, out var frameObj)) || !(frameObj is IVsWindowFrame frame)) return;
             if (ErrorHandler.Failed(frame.GetProperty((int)__VSFPROPID.VSFPROPID_Caption, out var captionObj)) || !(captionObj is string caption)) return;
             // TwinCAT's method editor: "SM_X.doState" (maybe with a suffix such as " [Online]")
-            var prefix = Path.GetFileNameWithoutExtension(_pouPath) + ".";
-            if (!caption.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return;
-            var method = caption.Substring(prefix.Length).Split(' ')[0];
+            // (or the POU's own editor, "FB_X": its body, where a state machine can be too; named by the POU)
+            var pouName = Path.GetFileNameWithoutExtension(_pouPath);
+            var prefix = pouName + ".";
+            string method;
+            if (caption.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) method = caption.Substring(prefix.Length).Split(' ')[0];
+            else if (caption.Split(' ')[0].Equals(pouName, StringComparison.OrdinalIgnoreCase)) method = pouName;
+            else return;
             if (ErrorHandler.Failed(frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocView, out var docView)) || !(docView is IVsTextView view)) return;
             if (ErrorHandler.Failed(view.GetCaretPos(out var line, out _))) return;
             var lineCount = 0;
@@ -1411,24 +1427,24 @@ namespace KvalMachineScope.Xae
 #if VS2017
         private static int XaeBuild => 4024;
 #else
-        private static int XaeBuild
-        {
-            get
-            {
-                try
-                {
-                    using (var key = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry32).OpenSubKey(@"SOFTWARE\Beckhoff\TwinCAT3\System"))
-                    {
-                        var build = key?.GetValue("Build") as int?;
-                        if (build.HasValue && build.Value > 4000) return build.Value >= 4026 ? 4026 : 4024;
-                    }
-                }
-                catch (System.Security.SecurityException) { }
-                catch (System.IO.IOException) { }
-                return 4026;
-            }
-        }
+        private static int XaeBuild => InstalledTwinCatFamily() is int family && family > 0 ? family : 4026;
 #endif
+
+        /// <summary>This computer's TwinCAT's family (TwinCAT3\System's Build: 4024 or 4026); 0 when not known</summary>
+        private static int InstalledTwinCatFamily()
+        {
+            try
+            {
+                using (var key = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry32).OpenSubKey(@"SOFTWARE\Beckhoff\TwinCAT3\System"))
+                {
+                    var build = key?.GetValue("Build") as int?;
+                    if (build.HasValue && build.Value > 4000) return build.Value >= 4026 ? 4026 : 4024;
+                }
+            }
+            catch (System.Security.SecurityException) { }
+            catch (System.IO.IOException) { }
+            return 0;
+        }
 
         /// <summary>
         /// The engineering build this XAE has loaded: its Remote Manager's version ("3.1.4024.59": 4024, version
@@ -1802,7 +1818,13 @@ namespace KvalMachineScope.Xae
                 return;
             }
             string exe = null;
-            foreach (var progId in family >= 4026 ? new[] { "TcXaeShell.DTE.17.0" } : new[] { "TcXaeShell.DTE.15.0", "TcXaeShell.DTE.17.0" })
+            // (4024's 32-bit shell is DTE.15.0; the 64-bit one, DTE.17.0, is this computer's TwinCAT's: 4026's on a 4026
+            // computer, so not 4024's XAE there)
+            var installed = InstalledTwinCatFamily();
+            var progIds = new List<string>();
+            if (family == 4024) progIds.Add("TcXaeShell.DTE.15.0");
+            if (installed == 0 || installed == family) progIds.Add("TcXaeShell.DTE.17.0");
+            foreach (var progId in progIds)
             {
                 exe = XaeExecutable(progId);
                 if (exe != null) break;

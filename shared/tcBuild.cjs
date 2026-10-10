@@ -530,11 +530,17 @@ foreach ($id in ($Pids -split ',' | Where-Object { $_ })) {
     }
     if (-not $buttons.Count) { continue }
     $answered = $false
-    # (the questions known to be answered OK: the project opened with the Remote Manager build chosen for it, not its
-    # own (XAE asks when the project's build is another; only the build's copy of the project is converted))
-    $known = ($texts -join ' ') -match 'Open project with the loaded version instead\?'
-    if ($AnswerOk -and (@($buttons | Where-Object { $_ -notmatch '^(OK|Close)$' }).Count -eq 0 -or ($known -and $buttons -contains 'OK'))) {
-      $ok = $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or $_.Current.ClassName -eq 'Button') -and $_.Current.Name -match '^(OK|Close)$' } | Select-Object -First 1
+    # The questions known, and their answer (each about the build's own copy of the project, never the user's):
+    #  - the project opened with the Remote Manager build chosen for it, not its own: OK (only the copy is converted)
+    #  - the copy's files rewritten while XAE has it open (the next build or write): Yes, reload it
+    # Else a message with OK (or Close) only: OK. Any other question: not answered
+    $all = $texts -join ' '
+    $want = $null
+    if ($all -match 'Open project with the loaded version instead\\?' -and $buttons -contains 'OK') { $want = 'OK' }
+    elseif ($all -match 'has been modified outside of TwinCAT XAE.*reload the project' -and $buttons -contains 'Yes') { $want = 'Yes' }
+    elseif (@($buttons | Where-Object { $_ -notmatch '^(OK|Close)$' }).Count -eq 0) { $want = @($buttons)[0] }
+    if ($AnswerOk -and $want) {
+      $ok = $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or $_.Current.ClassName -eq 'Button') -and $_.Current.Name -eq $want } | Select-Object -First 1
       try { ($ok.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke(); $answered = $true } catch { }
       # (a Win32 dialog's button: clicked with its window message, BM_CLICK)
       if (-not $answered -and $ok -and $ok.Current.NativeWindowHandle) {

@@ -96,7 +96,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 if (suites.length === 0) suites = ['unit', 'web', 'live'];
 if (suites.includes('all')) suites = ['unit', 'web', 'live', 'desktop'];
-const TIMEOUT = { unit: 120000, web: 300000, live: 180000, desktop: 600000, vscode: 300000 };
+const TIMEOUT = { unit: 120000, web: 300000, live: 180000, desktop: 600000, vscode: 300000, plc: 1500000 };
 // A long test's own limit: '// runner-timeout: <seconds>' in its first lines (ms; 0: none)
 const ownTimeout = (file) => {
   try {
@@ -218,7 +218,7 @@ function failuresOf(log) {
       console.log(`\n${suite} (${list.length}${shard ? `, shard ${shard.k}/${shard.n}` : ''})`);
       // Everything but the logic and protocol tests runs against the app
       // (vscode: VS Code itself, with the extension: no app server)
-      if (suite !== 'unit' && suite !== 'live' && suite !== 'vscode' && !app) app = await startApp();
+      if (suite !== 'unit' && suite !== 'live' && suite !== 'vscode' && suite !== 'plc' && !app) app = await startApp();
       // (the dev server for the tests that import /src/, started once however many run at a time)
       let devStarting = null;
       const runOne = async (f, again = false) => {

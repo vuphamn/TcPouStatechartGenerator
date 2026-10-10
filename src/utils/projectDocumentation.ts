@@ -10,6 +10,7 @@ import { extractIdentifiedStatesFromPou } from './pouStateExtractor.ts';
 import { lintStateMachine, LINT_RULES } from './stateMachineLint.ts';
 import { rankDutCandidates, DutCandidate } from './dutMatcher.ts';
 import { guardOf } from './statePaths.ts';
+import { stateMethodName } from './stateMethod.ts';
 
 export interface ProjectFiles {
   project: string;
@@ -26,7 +27,9 @@ export interface DocumentationOptions {
 }
 
 /** A state machine: doState() with a CASE */
-export const isStateMachinePou = (content: string) => /<Method\b[^>]*\bName="doState"/i.test(content) && /\bCASE\b[\s\S]*?\bOF\b/i.test(content);
+/** A state machine: Kval's doState() with a CASE, or another company's (a method or the body with a CASE on an enum: Execute(), FB_TestCycle) */
+export const isStateMachinePou = (content: string) =>
+  /\bCASE\b[\s\S]*?\bOF\b/i.test(content) && (/<Method\b[^>]*\bName="doState"/i.test(content) || stateMethodName(content).toLowerCase() !== 'dostate');
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const anchor = (name: string) => 'pou-' + name.replace(/[^A-Za-z0-9_-]/g, '_');

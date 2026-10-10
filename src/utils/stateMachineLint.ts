@@ -4,7 +4,8 @@
  * implementation, as sourceLocation.ts) and may carry a fix.
  */
 
-import { resolveStateMethod, stateMethodName } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod, stateMethodName } from './stateMethod.ts';
+import { getPouBody } from './pouBody.ts';
 import type { EdgeInfo } from '../types.ts';
 import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
@@ -311,6 +312,14 @@ export function codeUnits(pouXml: string): CodeUnit[] {
   return units;
 }
 
+/** codeUnits, the body's named by the POU when it is the state method (FB_TestCycle: CASE State OF in its body) */
+function stateUnits(pouXml: string): CodeUnit[] {
+  const units = codeUnits(pouXml);
+  const sm = stateMethodName(pouXml);
+  if (isBodyMethod(pouXml, sm)) for (const u of units) if (u.method === null) u.method = sm;
+  return units;
+}
+
 interface CaseBranch {
   labels: string[];
   /** 0-based line of the label */
@@ -439,7 +448,7 @@ const ERROR_LIKE = /ERROR|FAULT|FAIL|ALARM|ABORT|EMERGENCY|ESTOP/i;
 
 export function lintStateMachine(pouXml: string, dutContent: string, edges: EdgeInfo[] = []): LintFinding[] {
   if (!pouXml?.trim()) return [];
-  const units = codeUnits(pouXml);
+  const units = stateUnits(pouXml);
   // (the state method: doState(), or Execute() in another company's POU)
   const stateMethod = stateMethodName(pouXml).toLowerCase();
   const doState = units.find((u) => u.method?.toLowerCase() === stateMethod);
@@ -642,7 +651,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
  * any branch: the CASE line, ELSE, code before / after the CASE)
  */
 export function stateAtLine(pouXml: string, line: number): string | null {
-  const doState = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === stateMethodName(pouXml).toLowerCase());
+  const doState = stateUnits(pouXml).find((u) => u.method?.toLowerCase() === stateMethodName(pouXml).toLowerCase());
   if (!doState) return null;
   const main = scanMainCase(doState.code);
   const branch = main?.branches.find((b) => line - 1 >= b.line && line - 1 < b.endLine);
@@ -652,13 +661,15 @@ export function stateAtLine(pouXml: string, line: number): string | null {
 /** Number of lines of a method's ST implementation (TwinCAT's editor shows its declaration first) */
 export function implementationLineCount(pouXml: string, methodAsked: string): number | null {
   const method = resolveStateMethod(pouXml, methodAsked);
-  const unit = codeUnits(pouXml).find((u) => u.method?.toLowerCase() === method.toLowerCase());
+  const unit = stateUnits(pouXml).find((u) => u.method?.toLowerCase() === method.toLowerCase());
   return unit ? unit.lines.length : null;
 }
 
 /** Lines of a method's declaration; TwinCAT's editor shows them before the implementation's lines */
 export function declarationLineCount(pouXml: string, methodAsked: string): number | null {
   const method = resolveStateMethod(pouXml, methodAsked);
+  // (the POU's body as its state method: the POU's declaration)
+  if (isBodyMethod(pouXml, method)) return getPouBody(pouXml).declaration.split(/\r?\n/).length;
   const escaped = method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = pouXml.match(new RegExp(`<Method\\b[^>]*\\bName="${escaped}"[^>]*>\\s*<Declaration>\\s*<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>`, 'i'));
   return match ? match[1].split(/\r?\n/).length : null;

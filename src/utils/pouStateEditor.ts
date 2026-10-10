@@ -1,4 +1,5 @@
-import { resolveStateMethod } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod } from './stateMethod.ts';
+import { getPouBody, updatePouBody } from './pouBody.ts';
 import { caseLabelLinePattern, splitStateLabels, unqualifyState, STATE_NAME_SRC, stateQualifier } from './stateNames.ts';
 /**
  * Utility for parsing, extracting, and updating Structured Text code
@@ -470,6 +471,20 @@ export function getMethodCodeFromPou(pouXml: string, methodName: string): Extrac
     stateVarName = caseMatch[1].trim();
   }
 
+  // (the POU's body as its state method: FB_TestCycle's CASE in its own code)
+  if (isBodyMethod(pouXml, cleanName)) {
+    const body = getPouBody(pouXml);
+    return {
+      success: true,
+      methodName: cleanName,
+      code: body.implementation,
+      declaration: body.declaration,
+      methodFound: true,
+      stateVarName,
+      detectedTransitions: parseTransitionsFromStateCode(body.implementation, stateVarName),
+    };
+  }
+
   // Escape special regex characters in cleanName
   const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // (a property's accessor, "bReady.Get" / "bReady.Set": its Get / Set element inside the property, edited like a method)
@@ -558,6 +573,13 @@ export function updateMethodCodeInPou(
   const caseMatch = pouXml.match(caseRx);
   if (caseMatch) {
     stateVarName = caseMatch[1].trim();
+  }
+
+  // (the POU's body as its state method: its own declaration and code)
+  if (isBodyMethod(pouXml, cleanName)) {
+    const r = updatePouBody(pouXml, newDeclaration ?? getPouBody(pouXml).declaration, newCode);
+    if (!r.success) return { success: false, methodName: cleanName, updatedPou: pouXml, error: r.error };
+    return { success: true, methodName: cleanName, updatedPou: r.updatedPou, action: 'updated', detectedTransitions: parseTransitionsFromStateCode(newCode, stateVarName) };
   }
 
   const escapedName = cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
