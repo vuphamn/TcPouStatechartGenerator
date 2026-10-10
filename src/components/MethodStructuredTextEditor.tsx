@@ -1248,13 +1248,14 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
 
   // PLC Bookmarks: the method's bookmarked lines (its own, and the label lines of bookmarked states)
   const bookmarkStore = useBookmarks(tcPouFileName);
-  const bookmarkLines = useMemo(() => bookmarkedLines(tcPouFileName, cleanMethodName, code), [bookmarkStore, tcPouFileName, cleanMethodName, code]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (a sub-machine's method: its states' keys, <method>.<name>)
+  const bookmarkLines = useMemo(() => bookmarkedLines(tcPouFileName, subMachine?.method ?? cleanMethodName, code, { plain: !subMachine }), [bookmarkStore, tcPouFileName, cleanMethodName, code, subMachine]); // eslint-disable-line react-hooks/exhaustive-deps
   const flashBookmark = (message: string) => {
     setScrollNotification(message);
     setTimeout(() => setScrollNotification(null), 2500);
   };
   const toggleBookmarkAt = (line: number) => {
-    const r = toggleLineBookmark(tcPouFileName, cleanMethodName, code, line);
+    const r = toggleLineBookmark(tcPouFileName, subMachine?.method ?? cleanMethodName, code, line, { scoped: !!subMachine });
     flashBookmark(r.state ? `${r.on ? 'Bookmarked' : 'Bookmark removed:'} ${r.state} (the state's bookmark)` : `${r.on ? 'Bookmark set' : 'Bookmark removed'} at line ${line}`);
   };
   // (and in the declaration shown: the method's, or the POU's)

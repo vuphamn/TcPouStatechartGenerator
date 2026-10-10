@@ -13,7 +13,12 @@ extension, with full file access.
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
 - **Not here:** live view (follow a PLC) — use the desktop app, the web edition with Link or a gateway, or TwinCAT XAE.
 
-## Build and install
+## Install
+
+The desktop installer (`Kval MachineScope Setup <version>.exe`) installs it: its **VS Code edition** page, on by
+default when VS Code is found. Running the setup again updates it.
+
+## Build and install by hand
 
 ```
 npm run build                     # the app (dist/)

@@ -67,9 +67,11 @@ const sameMethod = (a: string, b: string) => a.replace(/\(\)$/, '').toLowerCase(
  * A line of a method's implementation bookmarked or not (a CASE label line: its state's bookmark). opts.labels false:
  * the line as it is (a declaration's "nCount : INT;" is no CASE label)
  */
-export function toggleLineBookmark(pou: string, method: string, code: string, line: number, opts: { labels?: boolean } = {}): { on: boolean; state?: string } {
+export function toggleLineBookmark(pou: string, method: string, code: string, line: number, opts: { labels?: boolean; scoped?: boolean } = {}): { on: boolean; state?: string } {
   const lines = code.split(/\r?\n/);
-  const state = opts.labels === false ? undefined : labelStateAt(code, line);
+  const label = opts.labels === false ? undefined : labelStateAt(code, line);
+  // (a sub-machine's method: its state's key, <method>.<name>)
+  const state = label && opts.scoped ? `${method.replace(/\(\)$/, '')}.${label}` : label;
   if (state) return { on: toggleStateBookmark(pou, state), state };
   const b = getBookmarks(pou);
   const at = resolveLines(b, method, code);
@@ -91,10 +93,19 @@ export function labelStateAt(code: string, line: number): string | undefined {
 }
 
 /**
- * The name a state's bookmark is kept under: a sub-machine's state (<parent>__<method>__<name>) by its name, as its
+ * The key a state's bookmark is kept under: the main state machine's state, its name; a sub-machine's state
+ * (<parent>__<method>__<name>), <method>.<name> (readDiagnostics.INIT: the main machine's INIT is another), as its
  * enum's member (the Enum Editor) and its CASE label in its method (the Method Editor) give it
  */
-export const bookmarkStateName = (id: string): string => id.split('__').pop() || id;
+export function bookmarkStateName(id: string): string {
+  const parts = id.split('__');
+  return parts.length >= 3 ? `${parts[parts.length - 2]}.${parts[parts.length - 1]}` : id;
+}
+/** A sub-machine state's key (<method>.<name>): its method and name; null for the main machine's */
+export function scopedStateKey(key: string): { method: string; name: string } | null {
+  const m = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(key);
+  return m ? { method: m[1], name: m[2] } : null;
+}
 
 /** A CASE label of this state in the code (a state with none, as a default state the CASE leaves out, has no line to mark) */
 export function hasStateLabel(code: string, state: string): boolean {
@@ -120,13 +131,16 @@ function resolveLines(b: PouBookmarks, method: string, code: string): { line: nu
 }
 
 /** The bookmarked lines of a method's implementation (1-based, in order): its line bookmarks and the label lines of bookmarked states */
-export function bookmarkedLines(pou: string, method: string, code: string): number[] {
+export function bookmarkedLines(pou: string, method: string, code: string, opts: { plain?: boolean } = {}): number[] {
   const b = getBookmarks(pou);
   const set = new Set(resolveLines(b, method, code).map((x) => x.line));
   if (b.states.length) {
     const states = new Set(b.states);
+    const own = method.replace(/\(\)$/, '');
+    // (the main machine's states by their name; a sub-machine's, in its method, by <method>.<name>)
+    const marked = (n: string) => states.has(`${own}.${n}`) || (opts.plain !== false && states.has(n));
     blankComments(code).split(/\r?\n/).forEach((l, i) => {
-      if (labelNames(l).some((n) => states.has(n))) set.add(i + 1);
+      if (labelNames(l).some(marked)) set.add(i + 1);
     });
   }
   return [...set].sort((a, c) => a - c);
@@ -138,7 +152,8 @@ export function clearBookmarks(pou: string, method?: string, code?: string): voi
   if (!method) return setBookmarks(pou, EMPTY);
   const labels = new Set<string>();
   if (code) blankComments(code).split(/\r?\n/).forEach((l) => labelNames(l).forEach((n) => labels.add(n)));
-  setBookmarks(pou, { states: b.states.filter((s) => !labels.has(s)), lines: b.lines.filter((l) => !sameMethod(l.method, method)) });
+  const own = method.replace(/\(\)$/, '');
+  setBookmarks(pou, { states: b.states.filter((s) => !labels.has(s) && !(scopedStateKey(s)?.method === own && labels.has(scopedStateKey(s)!.name))), lines: b.lines.filter((l) => !sameMethod(l.method, method)) });
 }
 
 // (another browser window or tab of the app changed them: re-read there too)
@@ -175,12 +190,12 @@ export function enumMemberOnLine(code: string, line: number): string | null {
  * The enum's bookmarked lines: its own line bookmarks and the member lines of the bookmarked states (a state's
  * bookmark is one: Identified States, the canvas, the Method Editor's CASE label, the Enum Editor's member)
  */
-export function enumBookmarkedLines(pou: string, code: string): number[] {
+export function enumBookmarkedLines(pou: string, code: string, keyOf: (member: string) => string = (m) => m): number[] {
   const set = new Set(bookmarkedLines(pou, ENUM_KEY, code));
   const states = new Set(getBookmarks(pou).states);
   if (states.size) code.split(/\r?\n/).forEach((_, i) => {
     const m = enumMemberOnLine(code, i + 1);
-    if (m && states.has(m)) set.add(i + 1);
+    if (m && states.has(keyOf(m))) set.add(i + 1);
   });
   return [...set].sort((a, c) => a - c);
 }
@@ -215,6 +230,15 @@ export function listBookmarks(pou: string, codeOf: (method: string) => string | 
   const labels = blankComments(doState).split(/\r?\n/);
   const raw = doState.split(/\r?\n/);
   for (const s of b.states) {
+    const scoped = scopedStateKey(s);
+    if (scoped) {
+      // (a sub-machine's state: at its CASE label in its method)
+      const code = codeOf(scoped.method) ?? '';
+      const own = blankComments(code).split(/\r?\n/);
+      const j = own.findIndex((l) => labelNames(l).includes(scoped.name));
+      out.push({ kind: 'state', key: `state:${s}`, note: b.notes?.[`state:${s}`], state: s, method: scoped.method, line: j + 1, text: (code.split(/\r?\n/)[j] ?? s).trim() });
+      continue;
+    }
     const i = labels.findIndex((l) => labelNames(l).includes(s));
     out.push({ kind: 'state', key: `state:${s}`, note: b.notes?.[`state:${s}`], state: s, method: 'doState', line: i + 1, text: (raw[i] ?? s).trim() });
   }

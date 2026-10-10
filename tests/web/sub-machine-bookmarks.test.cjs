@@ -8,6 +8,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 const P = 'KANALOGMEASURE_ENABLING';
 const sub = (x) => `${P}__readDiagnostics__${x}`;
 const S = 'DIAG_READ_START';
+// (its bookmark's key: <method>.<name>, the main machine's state of the same name another)
+const KEY = `readDiagnostics.${S}`;
 
 (async () => {
   const browser = await h.launchBrowser({ defaultViewport: { width: 1600, height: 1000 } });
@@ -65,7 +67,7 @@ const S = 'DIAG_READ_START';
   const c1 = await waitFor(card, (v) => v);
   await p.click('#dock-tab-diagram').catch(() => {});
   const r1 = await waitFor(ribbon, (v) => v);
-  expect(found && e1 && c1 && r1 && (await stored()).includes(S), `set in the Enum Editor: its card and its node marked (member found ${found}, enum ${e1}, card ${c1}, canvas ${r1}, stored ${JSON.stringify(await stored())})`);
+  expect(found && e1 && c1 && r1 && (await stored()).includes(KEY), `set in the Enum Editor: its card and its node marked (member found ${found}, enum ${e1}, card ${c1}, canvas ${r1}, stored ${JSON.stringify(await stored())})`);
 
   // 2. Its card's bookmark clicked: off everywhere
   await p.click(`#state-bookmark-${sub(S)}`).catch(() => {});
@@ -75,7 +77,7 @@ const S = 'DIAG_READ_START';
   await p.click('#dock-tab-enum').catch(() => {});
   await h.sleep(700);
   const e2 = await enumMarked();
-  expect(!c2 && !r2 && e2 === false && !(await stored()).includes(S), `removed on its card: off on the canvas and in the Enum Editor (card ${c2}, canvas ${r2}, enum ${e2})`);
+  expect(!c2 && !r2 && e2 === false && !(await stored()).includes(KEY), `removed on its card: off on the canvas and in the Enum Editor (card ${c2}, canvas ${r2}, enum ${e2})`);
 
   // 3. Set from its card's menu (right-click): the Enum Editor's member marked
   const box = await (await p.$(`#state-list-item-${sub(S)}`)).boundingBox();
@@ -84,7 +86,24 @@ const S = 'DIAG_READ_START';
   await p.click('#state-list-bookmark-btn').catch(() => {});
   await h.sleep(700);
   const e3 = await waitFor(enumMarked, (v) => v);
-  expect((await card()) && e3 && (await stored()).filter((x) => x === S).length === 1, `set from its card: the Enum Editor's member marked (stored ${JSON.stringify(await stored())})`);
+  expect((await card()) && e3 && (await stored()).filter((x) => x === KEY).length === 1, `set from its card: the Enum Editor's member marked (stored ${JSON.stringify(await stored())})`);
+
+  // 4. The Method Editor on readDiagnostics() (its card selected): its CASE label's line marked
+  await p.click(`#state-list-item-${sub(S)}`).catch(() => {});
+  await h.sleep(500);
+  await p.click('#dock-tab-method').catch(() => {});
+  await p.waitForSelector('#method-implementation-editor', { timeout: 10000 }).catch(() => {});
+  const inMethod = await waitFor(
+    () => p.evaluate((name) => {
+      const ta = document.getElementById('method-implementation-editor');
+      const lines = (ta?.value ?? '').split('\n');
+      const line = lines.findIndex((l) => new RegExp(`^\\s*(?:[A-Za-z_]\\w*\\.)?${name}\\s*:`).test(l)) + 1;
+      const box = ta?.closest('.relative.flex-1.min-h-0.flex') ?? ta?.parentElement?.parentElement;
+      return { line, marked: line > 0 && [...(box?.querySelectorAll('[data-bookmark-line]') ?? [])].some((e) => +e.getAttribute('data-bookmark-line') === line), method: document.body.innerText.includes('readDiagnostics()') };
+    }, S),
+    (v) => v.marked
+  );
+  expect(inMethod.marked, `the Method Editor: readDiagnostics()'s CASE label marked (${JSON.stringify(inMethod)})`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

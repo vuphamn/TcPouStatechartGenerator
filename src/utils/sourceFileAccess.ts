@@ -354,6 +354,41 @@ export async function webProjectUses(name: string): Promise<{ files?: { name: st
 
 /** Web: a project folder was granted (a base POU can be looked for without asking) */
 export const webHasProjectFolder = () => !!grantedFolder;
+/** Web: the granted folder's name (null: none) */
+export const webProjectFolderName = () => grantedFolder?.name ?? null;
+
+/**
+ * Web: an enum type's .TcDUT anywhere in the granted folder (another company's POU keeps its enum elsewhere in the
+ * project, DUTs\ beside POUs\, where the .TcPOU's own folder is not searched), read and writable as the others; null:
+ * no folder granted, or not in it
+ */
+export async function webFindEnumType(typeName: string): Promise<DutCandidate | null> {
+  if (!grantedFolder || !/^[A-Za-z_]\w*$/.test(typeName)) return null;
+  const wanted = `${typeName}.tcdut`.toLowerCase();
+  async function find(d: FsDirectoryHandle, prefix: string, depth: number): Promise<{ file: FsFileHandle; prefix: string } | null> {
+    if (depth > MAX_DEPTH) return null;
+    const subDirs: FsDirectoryHandle[] = [];
+    for await (const entry of d.values()) {
+      if (entry.kind === 'directory') {
+        if (!entry.name.startsWith('.') && !SKIP_DIRS.has(entry.name.toLowerCase())) subDirs.push(entry);
+      } else if (entry.name.toLowerCase() === wanted) return { file: entry, prefix };
+    }
+    for (const sub of subDirs.sort((a, b) => a.name.localeCompare(b.name))) {
+      const hit = await find(sub, `${prefix}${sub.name}/`, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  try {
+    const hit = await find(grantedFolder, '', 0);
+    if (!hit) return null;
+    const content = (await (await hit.file.getFile()).text()).replace(/^﻿/, '');
+    dutHandles.set(hit.prefix + hit.file.name, hit.file);
+    return { name: hit.file.name, relativePath: hit.prefix + hit.file.name, content };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Web: a POU of the project by type name (a base the loaded POU EXTENDS), read only, with the .TcDUT files of its

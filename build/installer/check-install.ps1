@@ -4,8 +4,8 @@
 
 .DESCRIPTION
   One line per part: the desktop app, Explorer's menu entry, the TwinCAT XAE extension in Visual Studio 2022 / 2026
-  and in each TcXaeShell (TwinCAT 4026's 64-bit, 4024's 32-bit), the WebView2 Runtime the extension needs, Link and
-  its shortcuts, the gateway. Each one OK, -- (not on this computer, or not chosen) or !! (chosen but missing or
+  and in each TcXaeShell (TwinCAT 4026's 64-bit, 4024's 32-bit), the WebView2 Runtime the extension needs, the VS Code
+  extension, Link and its shortcuts, the gateway. Each one OK, -- (not on this computer, or not chosen) or !! (chosen but missing or
   broken), with where it is. The choices are the installer's (Software\Kval\MachineScope). Exit code 1 when a part is
   !!, else 0. TwinCAT on this computer too: its drivers, routes and engineering builds; a driver missing names the
   TwinCAT package that installs it (its Windows Installer product).
@@ -64,7 +64,7 @@ function Choice([string]$name) {
   }
   return $null
 }
-$choiceNames = 'ContextMenu', 'VisualStudio', 'TcXaeShell', 'TcXaeShell4024', 'Link', 'LinkStartup', 'Gateway'
+$choiceNames = 'ContextMenu', 'VisualStudio', 'TcXaeShell', 'TcXaeShell4024', 'VSCode', 'Link', 'LinkStartup', 'Gateway'
 $choices = [ordered]@{}
 foreach ($n in $choiceNames) { $choices[$n] = Choice $n }
 $chosen = { param($n) $choices[$n] -eq 1 }
@@ -162,6 +162,21 @@ $anyExtension = @($items | Where-Object { $_.part -match '^(Visual Studio:|TcXae
 if ($wv -and $wv -ne '0.0.0.0') { Add 'WebView2 Runtime' 'OK' $wv }
 elseif ($anyExtension) { Add 'WebView2 Runtime' '!!' 'Missing: the XAE extension needs it (https://developer.microsoft.com/microsoft-edge/webview2/)' }
 else { Add 'WebView2 Runtime' '--' 'Not found (only the XAE extension needs it)' }
+
+# 5b. VS Code: the extension in this user's VS Code (and Insiders') extensions folder
+$codeEditions = @(
+  @{ name = 'VS Code'; exe = @((Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'), (Join-Path $env:ProgramFiles 'Microsoft VS Code\Code.exe')); dir = Join-Path $env:USERPROFILE '.vscode\extensions' },
+  @{ name = 'VS Code Insiders'; exe = @((Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code Insiders\Code - Insiders.exe'), (Join-Path $env:ProgramFiles 'Microsoft VS Code Insiders\Code - Insiders.exe')); dir = Join-Path $env:USERPROFILE '.vscode-insiders\extensions' })
+$anyCode = $false
+foreach ($e in $codeEditions) {
+  if (-not ($e.exe | Where-Object { Test-Path $_ })) { continue }
+  $anyCode = $true
+  $ext = Get-ChildItem $e.dir -Directory -Filter 'kval.kval-machinescope-vscode-*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($ext) { Add $e.name 'OK' "Kval MachineScope $($ext.Name -replace '^kval\.kval-machinescope-vscode-', ''): $($ext.FullName)" }
+  elseif (& $chosen 'VSCode') { Add $e.name '!!' 'Chosen, but the extension is not installed (run the setup again, or: code --install-extension <the .vsix in the installer folder>)' }
+  else { Add $e.name '--' 'The extension is not installed (not chosen)' }
+}
+if (-not $anyCode) { Add 'VS Code' '--' 'Not on this computer' }
 
 # 6. Link: its exe, its Start menu shortcut, its start at sign-in
 $programs = @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('CommonPrograms'))

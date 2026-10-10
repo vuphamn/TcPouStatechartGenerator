@@ -6,7 +6,7 @@
 
 import type { ProjectFiles } from './projectDocumentation.ts';
 import { isXaeHost, onHostMessage, postToHost, type ProjectFileVersion } from './xaeHost.ts';
-import { webFindPou, type PouSource } from './sourceFileAccess.ts';
+import { webFindEnumType, webFindPou, type PouSource } from './sourceFileAccess.ts';
 import type { DutCandidate } from './dutMatcher.ts';
 import { extendsOf, hasOwnMethod, pouNameOf, type InheritedSource } from './pouInheritance.ts';
 import { triggerDownload } from './diagramExport.ts';
@@ -171,7 +171,9 @@ export async function findProjectDut(typeName: string, pouPath: string | undefin
   if (!/^[A-Za-z_]\w*$/.test(typeName)) return null;
   if (isXaeHost()) return (await hostAsk<{ dut?: DutCandidate }>({ type: 'findEnumType', typeName }, 'findEnumTypeResult'))?.dut ?? null;
   const d = (window as unknown as { tcDesktop?: { findEnumType?: (p: string, t: string) => Promise<DutCandidate | { error: string }> } }).tcDesktop;
-  if (!d?.findEnumType || !pouPath) return null;
+  // (the web edition: across the folder granted, when one is)
+  if (!d?.findEnumType) return webFindEnumType(typeName);
+  if (!pouPath) return null;
   const r = await d.findEnumType(pouPath, typeName).catch(() => null);
   return r && !('error' in r) ? r : null;
 }

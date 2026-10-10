@@ -1,6 +1,7 @@
 // Stages the desktop installer's optional components in release/installer-extras (build/installer.nsh packs them):
 //   KvalMachineScope.Xae.vsix, vs-extension.ps1, install-tcxaeshell.ps1   the TwinCAT XAE extension (VS 2022 / 2026, TcXaeShell)
 //   KvalMachineScope.Xae.Vs2017.vsix                                     the same for TwinCAT 4024's TcXaeShell (VS 2017 shell)
+//   kval-machinescope-vscode.vsix, vscode-extension.ps1                    the VS Code extension (Open in Kval MachineScope)
 //   link/Kval MachineScope Link.exe                                        the web edition's local helper
 //   gateway/                                                             the gateway, with its runtime dependencies
 // Run after "npm run build" (npm run build:exe does both). The VSIX is built with xae-extension/build.ps1 when missing.
@@ -46,6 +47,12 @@ if (fs.statSync(vsix2017).mtimeMs < fs.statSync(vsix).mtimeMs - 10 * 60 * 1000) 
 fs.copyFileSync(vsix2017, path.join(out, 'KvalMachineScope.Xae.Vs2017.vsix'));
 fs.copyFileSync(path.join(root, 'build', 'installer', 'vs-extension.ps1'), path.join(out, 'vs-extension.ps1'));
 fs.copyFileSync(path.join(root, 'xae-extension', 'install-tcxaeshell.ps1'), path.join(out, 'install-tcxaeshell.ps1'));
+// (the VS Code extension: packed from the app's build, dist/, as vscode-extension/pack.cjs does; a fixed name)
+run(process.execPath, [path.join(root, 'vscode-extension', 'pack.cjs'), '--out', path.relative(root, out)]);
+const codeVsix = fs.readdirSync(out).find((f) => /^kval-machinescope-vscode-.*\.vsix$/i.test(f));
+if (!codeVsix) throw new Error('vscode-extension/pack.cjs wrote no .vsix');
+fs.renameSync(path.join(out, codeVsix), path.join(out, 'kval-machinescope-vscode.vsix'));
+fs.copyFileSync(path.join(root, 'build', 'installer', 'vscode-extension.ps1'), path.join(out, 'vscode-extension.ps1'));
 // (what the installer set up, checked: read-only; its Start menu shortcut)
 fs.copyFileSync(path.join(root, 'build', 'installer', 'check-install.ps1'), path.join(out, 'check-install.ps1'));
 

@@ -108,6 +108,8 @@ import {
   findDutCandidates,
   chooseDutFiles,
   isDesktopApp,
+  webHasProjectFolder,
+  webProjectFolderName,
   canPickFolder,
   PouSource,
   canWriteBack,
@@ -173,7 +175,7 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, ENUM_KEY, bookmarkStateName, clearBookmarks, declarationOf, enumMemberOnLine, hasStateLabel, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BODY, ENUM_KEY, bookmarkStateName, scopedStateKey, clearBookmarks, declarationOf, enumMemberOnLine, hasStateLabel, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
 import { parseDutContent, updateDutDeclaration } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
@@ -1441,10 +1443,11 @@ export const App: React.FC = () => {
         const inline = inlineStateEnum(pou)!;
         applyDut({ name: `${inline.varName} (in ${pouTypeNameOf(pou)})`, relativePath: INLINE_ENUM_PATH, content: inline.dut });
         setDutStatus('found');
-      } else if (stateEnumTypeOf(pou) && !dutLookedForRef.current.has(`${pouTypeNameOf(pou)}|${stateEnumTypeOf(pou)}`) && (isXaeHost() || isDesktopApp())) {
-        // (another company's POU: its enum elsewhere in the project, looked for by the state variable's type; once)
+      } else if (stateEnumTypeOf(pou) && !dutLookedForRef.current.has(`${pouTypeNameOf(pou)}|${stateEnumTypeOf(pou)}|${webProjectFolderName() ?? ''}`) && (isXaeHost() || isDesktopApp() || webHasProjectFolder())) {
+        // (another company's POU: its enum elsewhere in the project, looked for by the state variable's type; once, and
+        // on the web once per folder granted: DUTs\ beside POUs\, the .TcPOU's own folder searched only)
         const type = stateEnumTypeOf(pou)!;
-        dutLookedForRef.current.add(`${pouTypeNameOf(pou)}|${type}`);
+        dutLookedForRef.current.add(`${pouTypeNameOf(pou)}|${type}|${webProjectFolderName() ?? ''}`);
         applyDut(null);
         setDutStatus('pending');
         void findProjectDut(type, pouPathForDutRef.current ?? undefined).then((found) => {
@@ -1454,6 +1457,12 @@ export const App: React.FC = () => {
       } else {
         applyDut(null);
         setDutStatus('none');
+        // (the web edition: its enum type not in the folder granted: a folder that holds it asked for)
+        const wanted = !isXaeHost() && !isDesktopApp() ? stateEnumTypeOf(pou) : null;
+        if (wanted) {
+          showCopyToast(`${wanted}.TcDUT (its states' enum) was not found${webProjectFolderName() ? ` in the folder ${webProjectFolderName()}` : ''}: Find .TcDUT… and pick the PLC project's folder`, 'error', 9000);
+          return;
+        }
         showCopyToast(
           candidates.length === 0
             ? 'No .TcDUT files in the .TcPOU folder or its subfolders'
@@ -2515,18 +2524,20 @@ export const App: React.FC = () => {
       const state = bookmarkStateName(stateId);
       const parts = stateId.split('__');
       const ofMethod = parts.length >= 3 ? parts[parts.length - 2] : 'doState';
+      const name = parts[parts.length - 1];
+      const shown = ofMethod === 'doState' ? name : `${name} (${ofMethod}())`;
       const on = toggleStateBookmark(pouFileName, state);
       // (a state the CASE has no label for, as a default state: nothing to mark in the method; said, and where it is marked)
       const m = on && pouContent ? getMethodCodeFromPou(pouContent, ofMethod) : null;
-      if (m?.methodFound && !hasStateLabel(m.code, state)) {
+      if (m?.methodFound && !hasStateLabel(m.code, name)) {
         const method = `${ofMethod === 'doState' ? stateMethodName(pouContent) : ofMethod}()`;
         const decl = dutContent.trim() ? parseDutContent(dutContent).declaration : '';
-        const inEnum = decl.split(/\r?\n/).some((_, i) => enumMemberOnLine(decl, i + 1) === state);
+        const inEnum = decl.split(/\r?\n/).some((_, i) => enumMemberOnLine(decl, i + 1) === name);
         const where = inEnum ? 'marked in the Enum Editor at its member' : "its .TcDUT shows it at its member in the Enum Editor (Find .TcDUT…)";
-        showCopyToast(`Bookmarked ${state}: ${method} has no CASE label for it, no line to mark there (${where})`, 'success', 6500);
+        showCopyToast(`Bookmarked ${shown}: ${method} has no CASE label for it, no line to mark there (${where})`, 'success', 6500);
         return;
       }
-      showCopyToast(on ? `Bookmarked ${state}` : `Bookmark removed: ${state}`, 'success');
+      showCopyToast(on ? `Bookmarked ${shown}` : `Bookmark removed: ${shown}`, 'success');
     },
     [pouFileName, pouContent, dutContent, showCopyToast]
   );
@@ -2684,7 +2695,11 @@ export const App: React.FC = () => {
     });
   // A bookmark opened where it is (a state: the state and its CASE label; a line: its editor at that line)
   const openBookmark = (e: BookmarkEntry) => {
-    if (e.kind === 'state' && e.state) handleJumpToState(e.state);
+    if (e.kind === 'state' && e.state) {
+      const scoped = scopedStateKey(e.state);
+      const sm = scoped ? subMachines.find((x) => x.method === scoped.method && x.states.includes(scoped.name)) : null;
+      handleJumpToState(sm && scoped ? `${sm.parent}__${sm.method}__${scoped.name}` : e.state);
+    }
     if (e.method === ENUM_KEY) {
       // (the enum: its member on that line selected in the Enum Editor)
       const member = /^\s*,?\s*([A-Za-z_]\w*)/.exec(e.text)?.[1];
@@ -3276,6 +3291,8 @@ export const App: React.FC = () => {
     (e: { from: string; to: string }) => {
       const w = edgeWritten.get(`${e.from}->${e.to}`);
       if (!w) return null;
+      // (set in a method outside the CASE, from any state: Reset())
+      if (e.from === 'AnyState') return `${e.to} is set in ${plainMethodName(w.method)}(), outside the CASE: change it there (Go to code)`;
       return w.base
         ? `${e.from} → ${e.to} is written in ${plainMethodName(w.method)}() of ${w.base}, which this POU EXTENDS: change it there (Go to code)`
         : `${e.from} → ${e.to} is written in ${w.method}(), which ${e.from} calls: change it there (Go to code)`;
@@ -5517,7 +5534,7 @@ export const App: React.FC = () => {
         const edge = availableEdges.find((e) => e.id === target.id) ?? { id: target.id, from: target.from, to: target.to, label: target.label };
         // Go to code: its condition where it is, in doState() or preProcess(); a sub-machine's entry: where its start is set
         if (edge.from !== '[*]' || subMachineId(pouContent, edge.to))
-          items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${subMachineId(pouContent, currentEdge(edge).to) ? `${subMachineId(pouContent, currentEdge(edge).to)!.method}()` : edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()'}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
+          items.push({ id: 'goto-code-btn', label: 'Go to code', icon: <Code2 className="w-3.5 h-3.5" />, title: `Its condition in ${subMachineId(pouContent, currentEdge(edge).to) ? `${subMachineId(pouContent, currentEdge(edge).to)!.method}()` : /^\[[A-Za-z_]\w*\(\)\]/.exec(edge.label ?? '')?.[0].slice(1, -1) ?? (edge.from === 'AnyState' || /^\[preProcess\]/i.test(edge.label ?? '') ? 'preProcess()' : 'doState()')}, in the Method Editor`, onSelect: () => handleGoToEdgeCode(edge) });
         // (a choice's arm: its state's order)
         const real = currentEdge(edge);
         const subReal = subEdgeOf(real);

@@ -225,7 +225,9 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       await p.mouse.up();
       // (moved: the status says so; the chart has it from there)
       let msg = '';
-      for (let i = 0; i < 20 && (msg === statusBefore || !msg); i++) { await h.sleep(250); msg = await status(); }
+      // (its message, not the status going back to "Ready" meanwhile: under load, a large sample's chart is redrawn
+      // after the earlier message's time is up)
+      for (let i = 0; i < 40 && (msg === statusBefore || !msg || /^Ready\b/.test(msg)); i++) { await h.sleep(250); msg = await status(); }
       await h.sleep(600);
       await settle();
       const after = await places();

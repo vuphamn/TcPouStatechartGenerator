@@ -99,8 +99,10 @@ export function locateTransition(
   const subTo = subMachineId(pouXml, edge.to);
   // (its label without its priority: "② cmd_bTestStart")
   if (subTo) return locateSubTransition(pouXml, subTo.method, subMachineId(pouXml, edge.from)?.name ?? null, subTo.name, guard.replace(/^(?:[①-⑳]|\[\d+\]|\(\d+\))\s*/, ''));
-  const fromPreProcess = /^\[preProcess\]/i.test(guard) || edge.from === 'AnyState';
-  const method = fromPreProcess ? 'preProcess' : 'doState';
+  // (set in a method outside the CASE, another company's Reset(): "[Reset()] …", from any state)
+  const entryMethod = /^\[([A-Za-z_]\w*)\(\)\]/.exec(guard)?.[1] ?? null;
+  const fromPreProcess = !entryMethod && (/^\[preProcess\]/i.test(guard) || edge.from === 'AnyState');
+  const method = entryMethod ?? (fromPreProcess ? 'preProcess' : 'doState');
   const lines = methodLines(pouXml, method);
   if (!lines) return null;
   const variable = caseVariable(methodLines(pouXml, 'doState') ?? lines);
@@ -110,7 +112,7 @@ export function locateTransition(
   // Search range: the source state's branch in doState(); all of preProcess()
   let start = 0;
   let end = lines.length;
-  if (!fromPreProcess) {
+  if (!fromPreProcess && !entryMethod) {
     const label = locateState(pouXml, edge.from);
     if (!label) return null;
     start = label.line - 1;
@@ -123,7 +125,7 @@ export function locateTransition(
     }
   }
 
-  const guardKey = squash(guard.replace(/^\[preProcess\]\s*/i, '')).slice(0, 40);
+  const guardKey = squash(guard.replace(/^\[(?:preProcess|[A-Za-z_]\w*\(\))\]\s*/i, '')).slice(0, 40);
   let best: SourceLocation | null = null;
   let bestScore = -1;
   for (let i = start; i < end; i++) {

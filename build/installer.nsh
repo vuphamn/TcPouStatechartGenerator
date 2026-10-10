@@ -1,7 +1,8 @@
 ; Kval MachineScope desktop installer: additions to electron-builder's NSIS installer (package.json build.nsis.include)
 ;  - "Open in Kval MachineScope" in Windows Explorer's context menu of .TcPOU files
-;  - optional components on two pages: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell, 4026's
-;    and 4024's (on by default when found), and the web edition's live view helpers Kval MachineScope Link and the gateway (off)
+;  - optional components on three pages: the TwinCAT XAE extension for Visual Studio 2022 / 2026 and for TcXaeShell, 4026's
+;    and 4024's (on by default when found), the VS Code extension (on by default when VS Code is found), and the web
+;    edition's live view helpers Kval MachineScope Link and the gateway (off)
 ; The components' files are staged in release\installer-extras by scripts\prepare-installer.cjs (npm run build:exe).
 
 !include nsDialogs.nsh
@@ -43,6 +44,9 @@
   Var kssLinkStartupBox
   Var kssGatewayBox
   Var kssGatewayDir
+  Var kssCode
+  Var kssCodeBox
+  Var kssCodeNames
 
   ; The previous installation's choices (by default: the context menu and the XAE extension on, Link and the gateway off;
   ; Link always unchecked on the page, see customInit)
@@ -84,6 +88,8 @@
       StrCpy $kssLinkStartup 0
     ${EndIf}
     !insertmacro kssReadChoice "Gateway" $kssGateway 0
+    ; (the VS Code extension: on by default, when VS Code is found; no administrator rights needed, a silent install too)
+    !insertmacro kssReadChoice "VSCode" $kssCode 1
     StrCpy $kssDetected 0
   !macroend
 
@@ -105,6 +111,7 @@
   ; the web edition's helpers (off by default). Each option with what it is for.
   !macro customPageAfterChangeDir
     Page custom kssPageCreate kssPageLeave
+    Page custom kssPageCodeCreate kssPageCodeLeave
     Page custom kssPage2Create kssPage2Leave
 
     ; What is on this computer: Visual Studio 2022 / 2026 (vswhere), TcXaeShell 64-bit (TwinCAT 4024 or 4026: both Visual
@@ -155,6 +162,25 @@
       StrCpy $kssXae24Found 0
       ${If} ${FileExists} "${KSS_XAE32}\Common7\IDE\TcXaeShell.exe"
         StrCpy $kssXae24Found 1
+      ${EndIf}
+      ; VS Code (this user's, all users', Insiders, or "code" on the PATH): its editions, one line
+      File "${KSS_EXTRAS}\vscode-extension.ps1"
+      nsExec::ExecToStack '${KSS_PS} "$PLUGINSDIR\vscode-extension.ps1" -Action Detect'
+      Pop $0
+      Pop $1
+      ${If} $0 == 0
+        ${Do}
+          StrCpy $2 $1 1 -1
+          ${If} $2 == "$\n"
+          ${OrIf} $2 == "$\r"
+            StrCpy $1 $1 -1
+          ${Else}
+            ${ExitDo}
+          ${EndIf}
+        ${Loop}
+        StrCpy $kssCodeNames $1
+      ${Else}
+        StrCpy $kssCodeNames ""
       ${EndIf}
     FunctionEnd
 
@@ -232,7 +258,40 @@
       ${EndIf}
     FunctionEnd
 
-    ; Page 2: the web edition's helpers (off by default)
+    ; The VS Code edition: the extension (on by default when VS Code is found)
+    Function kssPageCodeCreate
+      Call kssDetect
+      !insertmacro MUI_HEADER_TEXT "VS Code edition" "For a TwinCAT project opened as a folder in VS Code."
+      nsDialogs::Create 1018
+      Pop $0
+      ${If} $0 == error
+        Abort
+      ${EndIf}
+
+      !insertmacro kssHeading 0 "VS Code (the extension)"
+      !insertmacro kssNote 8u 10u 26u "The app inside VS Code: right-click a .TcPOU in VS Code's Explorer (or its editor tab) for Open in Kval MachineScope. Save writes the .TcPOU / .TcDUT files; Go to code opens the .TcPOU beside the chart. Live view: the desktop app or XAE."
+      ${If} $kssCodeNames != ""
+        ${NSD_CreateCheckbox} 8u 40u -8u 10u "&$kssCodeNames: Open in Kval MachineScope (right-click a .TcPOU)"
+        Pop $kssCodeBox
+        ${NSD_SetState} $kssCodeBox $kssCode
+      ${Else}
+        ${NSD_CreateCheckbox} 8u 40u -8u 10u "&VS Code (not found on this computer)"
+        Pop $kssCodeBox
+        EnableWindow $kssCodeBox 0
+      ${EndIf}
+      !insertmacro kssNote 20u 51u 18u "Installed for this Windows user (VS Code's extensions folder). An open VS Code shows it after Developer: Reload Window or a restart."
+      nsDialogs::Show
+    FunctionEnd
+
+    Function kssPageCodeLeave
+      ${If} $kssCodeNames != ""
+        ${NSD_GetState} $kssCodeBox $kssCode
+      ${Else}
+        StrCpy $kssCode 0
+      ${EndIf}
+    FunctionEnd
+
+    ; Page 3: the web edition's helpers (off by default)
     Function kssPage2Create
       !insertmacro MUI_HEADER_TEXT "Web edition helpers (optional)" "Only for using Kval MachineScope in a browser; not needed with the desktop app or XAE."
       nsDialogs::Create 1018
@@ -300,6 +359,9 @@
       ${If} $kssXae24Found != 1
         StrCpy $kssXae24 0
       ${EndIf}
+      ${If} $kssCodeNames == ""
+        StrCpy $kssCode 0
+      ${EndIf}
     ${EndIf}
 
     ; Explorer's context menu of .TcPOU files (HKCU for this user, HKLM for all users)
@@ -317,6 +379,7 @@
     SetOutPath "$INSTDIR\installer"
     File "${KSS_EXTRAS}\vs-extension.ps1"
     File "${KSS_EXTRAS}\install-tcxaeshell.ps1"
+    File "${KSS_EXTRAS}\vscode-extension.ps1"
     ; What the installer set up, checked (read-only): its Start menu shortcut
     File "${KSS_EXTRAS}\check-install.ps1"
     CreateShortCut "$SMPROGRAMS\Kval MachineScope - check installation.lnk" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -NoExit -File "$INSTDIR\installer\check-install.ps1"' "$appExe" 0
@@ -334,6 +397,13 @@
     ${If} $kssXae24 == 1
       File "${KSS_EXTRAS}\KvalMachineScope.Xae.Vs2017.vsix"
       !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -ShellRoot "${KSS_XAE32}" -Vsix "$INSTDIR\installer\KvalMachineScope.Xae.Vs2017.vsix"' "TcXaeShell (TwinCAT 4024) extension" "TcXaeShell"
+    ${EndIf}
+
+    ; The VS Code extension (code --install-extension, for this user)
+    ${If} $kssCode == 1
+      SetOutPath "$INSTDIR\installer"
+      File "${KSS_EXTRAS}\kval-machinescope-vscode.vsix"
+      !insertmacro kssRunHelper '${KSS_PS} "$INSTDIR\installer\vscode-extension.ps1" -Action Install -Vsix "$INSTDIR\installer\kval-machinescope-vscode.vsix"' "VS Code extension" "VS Code"
     ${EndIf}
 
     ; Kval MachineScope Link: the exe and a Start menu shortcut
@@ -383,6 +453,7 @@
     WriteRegDWORD SHCTX "${KSS_REG}" "Link" $kssLink
     WriteRegDWORD SHCTX "${KSS_REG}" "LinkStartup" $kssLinkStartup
     WriteRegDWORD SHCTX "${KSS_REG}" "Gateway" $kssGateway
+    WriteRegDWORD SHCTX "${KSS_REG}" "VSCode" $kssCode
     SetOutPath "$INSTDIR"
   !macroend
 !endif
@@ -410,6 +481,12 @@
     ${If} $0 == 1
       DetailPrint "Removing the TcXaeShell (TwinCAT 4024) extension..."
       nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\install-tcxaeshell.ps1" -Quiet -Uninstall -ShellRoot "${KSS_XAE32}"'
+      Pop $0
+    ${EndIf}
+    ReadRegDWORD $0 SHCTX "${KSS_REG}" "VSCode"
+    ${If} $0 == 1
+      DetailPrint "Removing the VS Code extension..."
+      nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\vscode-extension.ps1" -Action Uninstall'
       Pop $0
     ${EndIf}
     ; Link's start at sign-in (this user's)

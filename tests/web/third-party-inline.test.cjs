@@ -78,6 +78,9 @@ fs.writeFileSync(pouPath, '﻿' + pou);
     const all = new Set([...chart.paths, ...chart.edges]);
     expect(['Waiting', 'OffEdge', 'OnBest', 'OnLesser'].every((s) => chart.states.includes(s)), `its states drawn (${[...new Set(chart.states)].join(', ')})`);
     expect(['OffEdge->OnBest', 'OffEdge->OnLesser', 'OnBest->OffEdge', 'OnLesser->OffEdge'].every((k) => all.has(k)), `its transitions (${[...all].join(', ')})`);
+    // (set outside the CASE, in Reset() and Seed(): from "any state", labeled with the method)
+    const labels = await p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.edgeLabel')].map((x) => x.textContent.trim()));
+    expect(chart.states.includes('AnyState') && ['AnyState->Waiting', 'AnyState->OnBest'].every((k) => all.has(k)) && labels.some((l) => l.includes('[Reset()]')) && labels.some((l) => l.includes('[Seed()]')), `Reset() and Seed(): from any state (labels: ${labels.join(' | ')}; states: ${[...new Set(chart.states)].join(', ')}; edges: ${[...all].join(', ')})`);
 
     // The Enum Editor: the inline enum, read only (edited in the POU's declaration)
     await p.click('#dock-tab-enum').catch(() => {});

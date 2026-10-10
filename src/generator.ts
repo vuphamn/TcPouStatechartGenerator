@@ -1,6 +1,6 @@
 // Port of TcPouStatechartGenerator (C#) to TypeScript
 
-import { inlineStateEnum, resolveStateMethod } from './utils/stateMethod.ts';
+import { inlineStateEnum, resolveStateMethod, stateMethodName } from './utils/stateMethod.ts';
 import { findAllSubMachines } from './utils/subMachines.ts';
 import { DOMParser as XmldomParser } from '@xmldom/xmldom';
 import { unqualifyState, STATE_LABELS_SRC } from './utils/stateNames.ts';
@@ -735,6 +735,43 @@ function parsePreProcess(
       transitions.push(tr);
       pendingLower = null;
       pendingUpper = null;
+    }
+  }
+}
+
+/**
+ * Another company's POU (its state method not doState()): its state set outside its CASE, in a method of its own
+ * (Reset(): Phase := AwaitingFirstSample; Start(), SeedOnPlateau()), whatever the state then: drawn from "any state",
+ * labeled [Reset()]. Not a method the state method calls (its assignments are the calling state's transitions), nor
+ * FB_init / FB_exit / FB_reinit; only to the states (a helper's State := NextState is none)
+ */
+function parseEntryMethods(doc: Document | null, tcPouContent: string, stateVarName: string, members: Set<string>, transitions: Transition[], states: Set<string>) {
+  const main = stateMethodName(tcPouContent);
+  if (main.toLowerCase() === 'dostate') return;
+  const methods = methodsOf(doc, tcPouContent);
+  const byLower = new Map([...methods.keys()].map((k) => [k.toLowerCase(), k]));
+  // (the methods the state method calls, and the ones those call)
+  const called = new Set<string>([main.toLowerCase()]);
+  const queue = [main];
+  while (queue.length) {
+    const st = stripComments(methods.get(byLower.get(queue.pop()!.toLowerCase()) ?? '')?.st ?? '');
+    for (const m of st.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)) {
+      const k = m[1].toLowerCase();
+      if (byLower.has(k) && !called.has(k)) {
+        called.add(k);
+        queue.push(byLower.get(k)!);
+      }
+    }
+  }
+  for (const [name, { st }] of methods) {
+    if (!st || called.has(name.toLowerCase()) || /^FB_(init|exit|reinit)$/i.test(name)) continue;
+    const found: Transition[] = [];
+    parsePreProcess(st, stateVarName, found, new Set<string>());
+    for (const t of found) {
+      if (!members.has(t.to)) continue;
+      states.add('AnyState');
+      states.add(t.to);
+      transitions.push({ ...t, source: 'entryMethod', inMethod: name, priority: null });
     }
   }
 }
@@ -1799,7 +1836,7 @@ function buildMermaid(
   for (const t of tr) {
     if (redundant.has(t)) continue;
     const prioKey = showTransitionPriorities ? (t.priority ?? '') : '';
-    const key = `${t.effectiveFrom}###${t.effectiveTo}###${t.guard ?? ''}###${t.source}###${prioKey}`;
+    const key = `${t.effectiveFrom}###${t.effectiveTo}###${t.guard ?? ''}###${t.source}${t.source === 'entryMethod' ? `:${t.inMethod}` : ''}###${prioKey}`;
     if (!seen.has(key)) {
       seen.add(key);
       uniq.push(t);
@@ -1836,6 +1873,10 @@ function buildMermaid(
     if (t.source === 'preProcess') {
       lbl = !lbl ? '[preProcess]' : `[preProcess] ${lbl}`;
     }
+    // (set in a method outside the CASE: its name)
+    if (t.source === 'entryMethod') {
+      lbl = !lbl ? `[${t.inMethod}()]` : `[${t.inMethod}()] ${lbl}`;
+    }
 
     return lbl;
   };
@@ -1850,6 +1891,7 @@ function buildMermaid(
           m.effectiveTo === t.effectiveTo &&
           (m.guard ?? '') === (t.guard ?? '') &&
           m.source === t.source &&
+          (m.source !== 'entryMethod' || m.inMethod === t.inMethod) &&
           (!showTransitionPriorities || (m.priority ?? '') === (t.priority ?? '')) &&
           (m.effectiveFrom === t.effectiveFrom || (redundant.has(m) && groups.stateToGroup.get(m.from) === t.effectiveFrom))
       ))
@@ -2133,6 +2175,8 @@ export function generateStatechartModel(
 
   if (doStateSt) parseDoState(doStateSt, stateVarName, transitions, states, new Set(enumOrder), self);
   if (preProcessSt) parsePreProcess(preProcessSt, stateVarName, transitions, states, self);
+  // (another company's POU: its state set in a method outside its CASE, Reset() / Start(): from any state)
+  if (doStateSt) parseEntryMethods(doc, tcPouContent, stateVarName, enumOrder.length ? new Set(enumOrder) : new Set(states), transitions, states);
 
   // Composites: only the enum's {region} markers (nothing inferred from names, TwinCAT's UML chart or preProcess())
   const groups: GroupingResult = {
