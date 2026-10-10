@@ -14,6 +14,10 @@ const { checkSection, projectNames, extendsUnknown } = require('./stChecks.cjs')
 const { libraryNames } = require('./libraryNames.cjs');
 const { completionsAt, signatureAt } = require('./stCompletion.cjs');
 const { projectRootOf } = require('../shared/tcBuild.cjs');
+const nav = require('./stNavigation.cjs');
+// (the app's own: which method holds the POU's state machine, doState(), Execute() or the body)
+const { stateMethodName } = require('../src/utils/stateMethod.ts');
+const { plcProjectsUnder } = require('./plcTree.cjs');
 const { SCHEME, sectionAddress, addressOf, createSectionStore } = require('./sectionStore.cjs');
 
 const VIEW_TYPE = 'kvalMachineScope.structuredText';
@@ -316,6 +320,138 @@ function register(context) {
     const n = nameAt(doc.getText(), pos.line, pos.character);
     return n ? { a, n } : null;
   };
+
+  // Navigation as in XAE (stNavigation.cjs): the project's symbols (Ctrl+T), folding, the type hierarchy, the calls
+  // (Shift+Alt+H), Go to Implementation (Ctrl+F12); by name, as Find All References
+  const NAV_KIND = { class: vscode.SymbolKind.Class, function: vscode.SymbolKind.Function, module: vscode.SymbolKind.Module, interface: vscode.SymbolKind.Interface, struct: vscode.SymbolKind.Struct, enum: vscode.SymbolKind.Enum, typeParameter: vscode.SymbolKind.TypeParameter, method: vscode.SymbolKind.Method, property: vscode.SymbolKind.Property, event: vscode.SymbolKind.Event, variable: vscode.SymbolKind.Variable, enumMember: vscode.SymbolKind.EnumMember };
+  const TYPE_KIND = { FUNCTION_BLOCK: 'class', FUNCTION: 'function', PROGRAM: 'module', INTERFACE: 'interface', STRUCT: 'struct', UNION: 'struct', ENUM: 'enum', ALIAS: 'typeParameter' };
+  const CALL_KIND = { method: vscode.SymbolKind.Method, action: vscode.SymbolKind.Event, function: vscode.SymbolKind.Function, program: vscode.SymbolKind.Module, functionBlock: vscode.SymbolKind.Class };
+  const navLocation = (files, l) => locationOf(files, { ...l, length: l.length ?? 0 });
+  // (the projects searched without a document: those of the open sections, else the workspace's TwinCAT projects)
+  const symbolRoots = () => {
+    const roots = new Set();
+    for (const d of vscode.workspace.textDocuments) {
+      if (d.uri.scheme !== SCHEME) continue;
+      try {
+        const file = addressOf(d.uri.query).file;
+        roots.add(projectRootOf(file) ?? path.dirname(file));
+      } catch {
+        // (not a section)
+      }
+    }
+    if (!roots.size) for (const w of vscode.workspace.workspaceFolders ?? []) for (const p of plcProjectsUnder(w.uri.fsPath)) roots.add(projectRootOf(p) ?? path.dirname(p));
+    return [...roots];
+  };
+  const typeItem = (files, t) => {
+    const loc = navLocation(files, t.location);
+    return new vscode.TypeHierarchyItem(NAV_KIND[TYPE_KIND[t.kind]] ?? vscode.SymbolKind.Class, t.name, t.kind.replace('_', ' ').toLowerCase(), loc.uri, loc.range, loc.range);
+  };
+  // (a call item: at its implementation, where its calls are; an interface's method at its declaration)
+  const callItem = (files, it) => {
+    const f = files.find((x) => x.file === it.file);
+    const impl = f?.sections.some((x) => x.key === it.key && x.section === 'impl');
+    const loc = impl ? new vscode.Location(sectionUri({ file: it.file, key: it.key, section: 'impl' }, f.members), new vscode.Range(0, 0, 0, 0)) : navLocation(files, it.location);
+    return new vscode.CallHierarchyItem(CALL_KIND[it.kind] ?? vscode.SymbolKind.Function, it.name, it.container || it.kind, loc.uri, loc.range, loc.range);
+  };
+  const navOf = (uri) => {
+    const a = addressOf(uri.query);
+    const files = projectFiles(a.file);
+    return { a, files };
+  };
+  const rangesOf = (ranges) => ranges.map((r) => new vscode.Range(r.line, r.column, r.line, r.column + r.length));
+  context.subscriptions.push(
+    vscode.languages.registerWorkspaceSymbolProvider({
+      provideWorkspaceSymbols(query) {
+        const out = [];
+        for (const root of symbolRoots()) {
+          const files = index.project(root, editedNow());
+          for (const sy of nav.workspaceSymbols(files, query, 300)) out.push(new vscode.SymbolInformation(sy.name, NAV_KIND[sy.kind] ?? vscode.SymbolKind.Variable, sy.container, navLocation(files, sy.location)));
+        }
+        return out;
+      },
+    }),
+    vscode.languages.registerFoldingRangeProvider({ scheme: SCHEME }, {
+      provideFoldingRanges(doc) {
+        const KIND = { region: vscode.FoldingRangeKind.Region, comment: vscode.FoldingRangeKind.Comment };
+        return nav.foldingRanges(doc.getText()).map((r) => new vscode.FoldingRange(r.start, r.end, KIND[r.kind]));
+      },
+    }),
+    vscode.languages.registerTypeHierarchyProvider({ scheme: SCHEME }, {
+      prepareTypeHierarchy(doc, pos) {
+        const a = addressOf(doc.uri.query);
+        const files = projectFiles(a.file);
+        const types = nav.typesOf(files);
+        const n = nameAt(doc.getText(), pos.line, pos.character);
+        // (the name at the caret, a type; else the file's own type)
+        const t = (n && types.find((x) => x.name.toLowerCase() === n.name.toLowerCase())) || types.find((x) => path.resolve(x.file).toLowerCase() === path.resolve(a.file).toLowerCase());
+        return t ? [typeItem(files, t)] : [];
+      },
+      provideTypeHierarchySupertypes(item) {
+        const { files } = navOf(item.uri);
+        return nav.supertypes(files, item.name).map((t) => typeItem(files, t));
+      },
+      provideTypeHierarchySubtypes(item) {
+        const { files } = navOf(item.uri);
+        return nav.subtypes(files, item.name).map((t) => typeItem(files, t));
+      },
+    }),
+    vscode.languages.registerCallHierarchyProvider({ scheme: SCHEME }, {
+      prepareCallHierarchy(doc, pos) {
+        const a = addressOf(doc.uri.query);
+        const files = projectFiles(a.file);
+        const n = nameAt(doc.getText(), pos.line, pos.character);
+        // (the callables the name stands for; else the method, action or POU the caret is in)
+        let items = n ? nav.callablesNamed(files, { file: a.file, name: n.name, qualifier: n.qualifier }) : [];
+        if (!items.length) items = [nav.itemOfPlace(files, a.file, a.key)].filter(Boolean);
+        return items.map((it) => callItem(files, it));
+      },
+      provideCallHierarchyIncomingCalls(item) {
+        const { a, files } = navOf(item.uri);
+        const it = nav.itemOfPlace(files, a.file, a.key);
+        return it ? nav.incomingCalls(files, it).map((c) => new vscode.CallHierarchyIncomingCall(callItem(files, c.from), rangesOf(c.ranges))) : [];
+      },
+      provideCallHierarchyOutgoingCalls(item) {
+        const { a, files } = navOf(item.uri);
+        const it = nav.itemOfPlace(files, a.file, a.key);
+        return it ? nav.outgoingCalls(files, it).map((c) => new vscode.CallHierarchyOutgoingCall(callItem(files, c.to), rangesOf(c.ranges))) : [];
+      },
+    }),
+    // Show in statechart: above each state's CASE branch of the POU's state method
+    vscode.languages.registerCodeLensProvider({ scheme: SCHEME }, {
+      provideCodeLenses(doc) {
+        if (!vscode.workspace.getConfiguration('kvalMachineScope.structuredText').get('codeLens', true)) return [];
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return [];
+        }
+        if (a.section !== 'impl' || !/\.tcpou$/i.test(a.file)) return [];
+        let xml;
+        try {
+          xml = fs.readFileSync(a.file, 'utf8');
+        } catch {
+          return [];
+        }
+        const sm = stateMethodName(xml);
+        const pouName = path.basename(a.file).replace(/\.tcpou$/i, '');
+        const isState = a.key ? a.key.toLowerCase() === `method:${sm.toLowerCase()}` : sm.toLowerCase() === pouName.toLowerCase();
+        if (!isState) return [];
+        return implementationOutline(doc.getText()).map((b) => {
+          const line = doc.positionAt(b.start).line;
+          return new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: '$(type-hierarchy-sub) Show in statechart', tooltip: `${b.name}: selected in the POU's statechart`, command: 'kvalMachineScope.showStateInChart', arguments: [a.file, a.key, line] });
+        });
+      },
+    }),
+    vscode.languages.registerImplementationProvider({ scheme: SCHEME }, {
+      provideImplementation(doc, pos) {
+        const h = here(doc, pos);
+        if (!h) return [];
+        const files = projectFiles(h.a.file);
+        return nav.implementations(files, { file: h.a.file, name: h.n.name }).map((l) => navLocation(files, l));
+      },
+    })
+  );
   context.subscriptions.push(
     vscode.languages.registerReferenceProvider({ scheme: SCHEME }, {
       provideReferences(doc, pos, ctx) {

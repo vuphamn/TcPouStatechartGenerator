@@ -270,6 +270,11 @@
         "title": "Compare with Committed (git HEAD)",
         "category": "TwinCAT",
         "icon": "$(git-compare)"
+      },
+      {
+        "command": "kvalMachineScope.showStateInChart",
+        "title": "Show in Statechart",
+        "category": "Kval MachineScope"
       }
     ],
     "keybindings": [
@@ -467,6 +472,10 @@
         {
           "command": "kvalMachineScope.plcActions",
           "when": "kvalMachineScope.twincatProject"
+        },
+        {
+          "command": "kvalMachineScope.showStateInChart",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -565,6 +574,16 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Checks while typing in the Structured Text sections: a method's own variable never used (faded), and a plain name declared nowhere in the project (a typo?). Names of libraries are not known here: ALL_CAPS names, calls and names after a dot are not checked."
+        },
+        "kvalMachineScope.structuredText.codeLens": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**Show in statechart** above each state's `CASE` branch of the POU's state method (`doState()`, `Execute()`, or the POU's body): the POU's statechart beside, that state selected."
+        },
+        "kvalMachineScope.liveValues.activeState": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "While logged in, the `CASE` branch of the state the PLC is in is marked (the line and the overview ruler)."
         }
       }
     },

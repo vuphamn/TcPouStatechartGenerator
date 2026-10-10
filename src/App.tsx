@@ -1858,7 +1858,8 @@ export const App: React.FC = () => {
   const handleEditorCaret = useCallback((m: Extract<HostMessage, { type: 'editorCaret' }>) => {
     // (the state method's editor: doState(), or Execute() in another company's POU)
     const pou = pouContentRef.current;
-    if (!followSelectionRef.current || m.method.toLowerCase() !== stateMethodName(pou).toLowerCase()) return;
+    // (force: asked for, Show in statechart; else only with Follow selection on)
+    if ((!followSelectionRef.current && !m.force) || m.method.toLowerCase() !== stateMethodName(pou).toLowerCase()) return;
     const declLines = declarationLineCount(pou, 'doState');
     const implLines = implementationLineCount(pou, 'doState');
     if (!declLines || !implLines) return;

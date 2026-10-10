@@ -11,6 +11,8 @@ const ads = require('../shared/tcAds.cjs');
 const { parseSource } = require('./tcStSource.cjs');
 const { addressOf, SCHEME } = require('./sectionStore.cjs');
 const { watchNames, valueText, parseValue, ADST } = require('./liveText.cjs');
+const { blankCode } = require('./stReferences.cjs');
+const { implementationOutline } = require('./stOutline.cjs');
 
 const MAX_NAMES = 150;
 
@@ -83,10 +85,52 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     after: { margin: '0 0 0 2px', color: new vscode.ThemeColor('editorInlayHint.foreground'), backgroundColor: new vscode.ThemeColor('editorInlayHint.background'), fontStyle: 'normal' },
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
   });
+  // (the CASE branch of the state the PLC is in: the line, a bar before it, the overview ruler)
+  const activeDeco = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: new vscode.ThemeColor('editor.rangeHighlightBackground'),
+    borderWidth: '0 0 0 3px',
+    borderStyle: 'solid',
+    borderColor: new vscode.ThemeColor('charts.green'),
+    overviewRulerColor: new vscode.ThemeColor('charts.green'),
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+  });
+  // (the line marked per section: for the tests)
+  const activeNow = new Map();
   const bar = vscode.window.createStatusBarItem('kvalMachineScope.instance', vscode.StatusBarAlignment.Left, 47);
   bar.name = 'TwinCAT instance (live values)';
   bar.command = 'kvalMachineScope.pickInstance';
-  context.subscriptions.push(deco, bar);
+  context.subscriptions.push(deco, activeDeco, bar);
+  const clearActive = (ed) => {
+    ed.setDecorations(activeDeco, []);
+    activeNow.delete(ed.document.uri.toString());
+  };
+  /** The state the PLC is in: its branch of the section's (first) CASE marked */
+  async function markActive(ed, a, text, inst, root, src) {
+    if (a.section !== 'impl' || !vscode.workspace.getConfiguration('kvalMachineScope.liveValues').get('activeState', true)) return clearActive(ed);
+    const m = /\bCASE\s*\(?\s*([A-Za-z_]\w*)\s*\)?\s*OF\b/i.exec(blankCode(text));
+    if (!m) return clearActive(ed);
+    const full = `${inst.path}.${m[1]}`;
+    const k = `${root}|${full}`.toLowerCase();
+    if (!known.has(k)) known.set(k, await src.probe(full).catch(() => null));
+    const sym = known.get(k);
+    if (!sym || sym.simple === false) return clearActive(ed);
+    let value;
+    try {
+      value = await src.read(full, sym);
+    } catch {
+      return clearActive(ed);
+    }
+    const ek = `${root}|${sym.type}`.toLowerCase();
+    if (!enums.has(ek)) enums.set(ek, await src.enumNames(sym.type).catch(() => null));
+    const t = valueText(value, { enumNames: enums.get(ek) });
+    const want = String(t).split('.').pop().trim().toLowerCase();
+    const branch = implementationOutline(text).find((b) => b.name.split(',').some((n) => n.trim().toLowerCase() === want));
+    if (!branch) return clearActive(ed);
+    const line = ed.document.positionAt(branch.start).line;
+    ed.setDecorations(activeDeco, [{ range: new vscode.Range(line, 0, line, 0), hoverMessage: `The PLC is in this state: ${full} = ${t}` }]);
+    activeNow.set(ed.document.uri.toString(), { line, state: branch.name });
+  }
 
   // (what each symbol is, per instance: its info, or null when the PLC has none; enum names per type)
   const known = new Map();
@@ -144,6 +188,7 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
         const p = projectOf(a.file);
         if (!p || !online.isOnline(p.root)) {
           ed.setDecorations(deco, []);
+          clearActive(ed);
           shownNow.delete(ed.document.uri.toString());
           continue;
         }
@@ -165,6 +210,7 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
         }
         if (!inst.path) {
           ed.setDecorations(deco, []);
+          clearActive(ed);
           continue;
         }
         const text = ed.document.getText();
@@ -202,6 +248,7 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
           }
         }
         ed.setDecorations(deco, list);
+        if (info.kind === 'POU') await markActive(ed, a, text, inst, p.root, src);
         shownNow.set(ed.document.uri.toString(), shown);
         metaNow.set(ed.document.uri.toString(), meta);
       }
@@ -307,6 +354,8 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     }),
     // (what is shown now in a section: { name: value text }; the tests)
     vscode.commands.registerCommand('kvalMachineScope.liveValuesShown', (uri) => shownNow.get(String(uri)) ?? null),
+    // (for the tests: the branch marked as the PLC's state, { line, state })
+    vscode.commands.registerCommand('kvalMachineScope.activeStateShown', (uri) => activeNow.get(String(uri)) ?? null),
     // Prepare Value… (the variable at the caret): its new value, typed or picked, shown after the current one
     vscode.commands.registerCommand('kvalMachineScope.prepareValue', async (given) => {
       const ed = vscode.window.activeTextEditor;
@@ -413,7 +462,7 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     /** Online state or the project changed: what was known is read again */
     refresh(root) {
       for (const m of [known, enums, instancesOf]) for (const k of [...m.keys()]) if (!root || k.startsWith(root.toLowerCase())) m.delete(k);
-      if (!online.isOnline(root ?? '')) for (const ed of vscode.window.visibleTextEditors) if (ed.document.uri.scheme === SCHEME) ed.setDecorations(deco, []);
+      if (!online.isOnline(root ?? '')) for (const ed of vscode.window.visibleTextEditors) if (ed.document.uri.scheme === SCHEME) { ed.setDecorations(deco, []); clearActive(ed); }
       void tick();
     },
   };

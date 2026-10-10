@@ -160,6 +160,8 @@ exports.run = async function run() {
     fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(standIn));
     const v2 = await waitFor(async () => (await shownOf())?.State === 'ComputeResult', 8000);
     expect(v2, `a value changed on the PLC: shown (${JSON.stringify(await shownOf())})`);
+    const marked = await waitFor(async () => { const x = await vscode.commands.executeCommand('kvalMachineScope.activeStateShown', exDoc.uri.toString()); return x?.state === 'ComputeResult' ? x : null; }, 8000);
+    expect(marked && /ComputeResult\s*:/.test(exDoc.lineAt(marked.line).text), `the PLC's state marked: its CASE branch (${JSON.stringify(marked)})`);
     // Write Values: Busy prepared FALSE (the caret on it), written: the PLC's value changes
     const busyLine = exText.findIndex((l) => /\bBusy\b/.test(l));
     const exEd = await vscode.window.showTextDocument(exDoc);
@@ -219,6 +221,27 @@ exports.run = async function run() {
     const newFile = await vscode.commands.executeCommand('kvalMachineScope.addPou', undefined, { kind: 'Function Block', name: 'FB_Added' });
     const plcprojText = fs.readFileSync(path.join(proj, 'Robot', 'Robot.plcproj'), 'utf8');
     expect(newFile && fs.existsSync(newFile) && /<Compile Include="POUs\\FB_Added\.TcPOU">/.test(plcprojText), `Add POU: FB_Added.TcPOU and the .plcproj (${newFile})`);
+
+    // 19a. Show in statechart: a lens over each state's branch of Execute() (the state method); one opens the chart
+    const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', exDoc.uri);
+    const stateLenses = (lenses ?? []).filter((l) => l.command?.command === 'kvalMachineScope.showStateInChart');
+    expect(stateLenses.length >= 5 && /InitializeScan/.test(exDoc.lineAt(stateLenses[0].range.start.line).text), `Show in statechart: ${stateLenses.length} lenses, the first on InitializeScan`);
+    const shownChart = stateLenses[0] ? await vscode.commands.executeCommand(stateLenses[0].command.command, ...stateLenses[0].command.arguments) : false;
+    const chartTab = await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => /statechart/.test(t.label)), 8000);
+    expect(shownChart === true && chartTab, `Show in statechart: the chart opened (${chartTab?.label ?? 'none'})`);
+    if (chartTab) await vscode.window.tabGroups.close(chartTab);
+    await vscode.window.showTextDocument(exDoc);
+
+    // 19b. Navigation: the project's symbols (Ctrl+T), the calls of MoveAndAdvance (Shift+Alt+H), the type hierarchy
+    const syms = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', 'MoveAndAdv');
+    expect((syms ?? []).some((x) => x.name === 'MoveAndAdvance' && x.containerName === 'FB_ScanSequencer'), `workspace symbols: MoveAndAdvance in FB_ScanSequencer (${(syms ?? []).map((x) => `${x.containerName}.${x.name}`).slice(0, 5).join(', ')})`);
+    const callNow = exDoc.getText().split(/\r?\n/);
+    const cL = callNow.findIndex((l) => /MoveAndAdvance\(/.test(l));
+    const callItems = await vscode.commands.executeCommand('vscode.prepareCallHierarchy', exDoc.uri, new vscode.Position(cL, callNow[cL].indexOf('MoveAndAdvance') + 2));
+    const incoming = callItems?.[0] ? await vscode.commands.executeCommand('vscode.provideIncomingCalls', callItems[0]) : [];
+    expect(callItems?.[0]?.name === 'MoveAndAdvance' && (incoming ?? []).some((c) => c.from.name === 'Execute'), `call hierarchy: MoveAndAdvance called from Execute (${(incoming ?? []).map((c) => c.from.name).join(', ') || 'none'})`);
+    const typeItems = await vscode.commands.executeCommand('vscode.prepareTypeHierarchy', exDoc.uri, new vscode.Position(0, 0));
+    expect(typeItems?.[0]?.name === 'FB_ScanSequencer', `type hierarchy: the POU (${typeItems?.[0]?.name ?? 'none'})`);
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);

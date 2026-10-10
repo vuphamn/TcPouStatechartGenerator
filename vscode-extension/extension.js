@@ -25,6 +25,8 @@ function activate(context) {
   // Follow selection: the caret in a POU's state method (its implementation section) selects that state in the POU's
   // open statecharts; the message XAE sends (editorCaret: its line counted after the declaration's, as XAE's editor)
   const charts = new Map();
+  // (a state to select in a chart being opened: posted once its app is ready)
+  const pendingSelect = new Map();
   let caretTimer = null;
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((e) => {
@@ -102,7 +104,18 @@ function activate(context) {
     webviewPanel.title = `${path.basename(pouPath)} · statechart`;
     const index = fs.readFileSync(path.join(appDir.fsPath, 'index.html'), 'utf8');
     webview.html = webviewHtml(index, { base: webview.asWebviewUri(appDir).toString(), cspSource: webview.cspSource, nonce: crypto.randomBytes(16).toString('base64') });
-    const subs = [webview.onDidReceiveMessage((m) => host.handle(m))];
+    const subs = [
+      webview.onDidReceiveMessage((m) => {
+        const r = host.handle(m);
+        // (the app ready, its POU loaded: a state asked for meanwhile, selected)
+        if (m?.type === 'ready' && pendingSelect.has(key)) {
+          const sel = pendingSelect.get(key);
+          pendingSelect.delete(key);
+          setTimeout(() => post(sel), 2500);
+        }
+        return r;
+      }),
+    ];
     // (a loaded file changed on disk: TwinCAT, git, another editor)
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(pouPath)), '**/*.{TcPOU,TcDUT,tcpou,tcdut}'));
     const timers = new Map();
@@ -129,6 +142,25 @@ function activate(context) {
       },
       { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }
     )
+  );
+  // Show in statechart (the CodeLens above a state's CASE branch): the POU's chart beside, that state selected
+  context.subscriptions.push(
+    vscode.commands.registerCommand('kvalMachineScope.showStateInChart', async (file, memberKey, line) => {
+      let declLines = 0;
+      try {
+        declLines = (parseSource(fs.readFileSync(file, 'utf8')).members.find((m) => m.key === (memberKey ?? ''))?.decl?.text ?? '').split(/\r?\n/).length;
+      } catch {
+        return false;
+      }
+      const method = memberKey ? memberKey.replace(/^Method:/, '') : path.basename(file).replace(/\.tcpou$/i, '');
+      const sel = { type: 'editorCaret', method, line: declLines + line + 1, lineCount: declLines + line + 1, force: true };
+      const k = normalPath(file).toLowerCase();
+      const open = charts.get(k);
+      if (!open?.size) pendingSelect.set(k, sel);
+      await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), VIEW_TYPE, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true });
+      if (open?.size) for (const p of open) p(sel);
+      return true;
+    })
   );
   // Open in Kval MachineScope (the Explorer's, an editor's menu, the Command Palette): the active / chosen .TcPOU
   context.subscriptions.push(

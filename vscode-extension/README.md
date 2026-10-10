@@ -25,6 +25,15 @@ file access.
   resolution: a local of the same name in another POU is listed too.
 - **Go to code** in the statechart opens the section at that line (the method's implementation), beside the chart, or
   where that section is open already.
+- **Go to Symbol in Workspace** (`Ctrl+T`): the project's POUs, interfaces and DUTs, their methods, properties and
+  actions (`FB_Axis.Move`), the global variables and the enums' members; letters in order are enough (`fbax`).
+- **Folding** as in XAE: `VAR` blocks, `IF` / `CASE` / `FOR` / `WHILE` / `REPEAT`, each `CASE` branch, `STRUCT`,
+  `TYPE`, `{region}` … `{endregion}`, comments over several lines.
+- **Type Hierarchy** (the right-click menu): a POU's or interface's `EXTENDS` and `IMPLEMENTS`, up and down; a struct's
+  `EXTENDS`. **Go to Implementations** (`Ctrl+F12`): an interface's (or a base's) function blocks, a method's
+  implementations and overrides in them.
+- **Call Hierarchy** (`Shift+Alt+H`): who calls a method, an action, a function, a program or a function block's body
+  (`fbAxis()`), and what it calls (`fbAxis.Move()`, `SUPER^.Move()`, an inherited method), each call's line shown.
 - **Rename** (`F2`): by the name's declaration, always shown in the refactor preview first: a method's own variable in
   that method; a POU's variable in the POU and the POUs that extend it, its uses after a dot elsewhere (`fbScan.State`)
   listed apart to check one by one; a global variable, an enum member or a type everywhere. A POU's, method's,
@@ -49,6 +58,9 @@ file access.
   function; struct, enum, alias) and name, then the new file in that folder with new object Ids, added to the
   `.plcproj` (XAE, if it has the project open, asks to reload it). **Add Method… / Add Property…** (the **POU** view):
   into the open POU, its declaration and an empty implementation (a property's Get and Set).
+- **Show in statechart** (above each state's `CASE` branch of the POU's state method: `doState()`, `Execute()`, or the
+  POU's body): the POU's statechart beside, that state selected. `kvalMachineScope.structuredText.codeLens` switches the
+  lenses off.
 - **Outline** (the Outline view, the breadcrumbs): a declaration's object, its VAR blocks and
   variables (an enum's members); an implementation's `CASE` branches, the states (a nested `CASE`'s under its branch).
   With *Structured Text language Support*, its own outline of a declaration is used (the same blocks and variables).
@@ -83,7 +95,8 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   `TRUE` / `FALSE`, strings, enums by their names; a function block's members as `fbAxis.bDone`. Read over ADS twice a
   second, for the visible part of each section. A POU's values are its instance's on the PLC (found in its symbol table;
   with several, the status bar's instance item chooses one); a GVL's are its own. Hovering one shows its symbol and type.
-  Logged out: none.
+  Logged out: none. The `CASE` branch of the state the PLC is in is marked (the line, a green bar, the overview ruler),
+  its variable read even when its line is scrolled away (`kvalMachineScope.liveValues.activeState`).
 - **Write Values** (logged in, as XAE's online view): **Prepare Value…** (`Ctrl+Shift+F7`, the right-click menu) on a
   variable whose value is shown: its new value picked (`TRUE` / `FALSE`, an enum's members) or typed (checked against
   its type: its range, `16#FF`, a string's length), then shown after the current one (`7 ⇒ 9`). **Write Values**

@@ -91,7 +91,7 @@ export type HostMessage =
   | { type: 'projectSymbols'; project?: string; files?: { name: string; path?: string; content: string }[]; error?: string }
   | { type: 'saveDocumentResult'; path?: string; error?: string; canceled?: boolean }
   /** Two-way selection: the caret in TwinCAT's editor of the loaded POU (line of the editor, both parts) */
-  | { type: 'editorCaret'; method: string; line: number; lineCount: number }
+  | { type: 'editorCaret'; method: string; line: number; lineCount: number; force?: boolean }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
