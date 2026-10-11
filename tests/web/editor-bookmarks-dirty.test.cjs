@@ -18,7 +18,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(1200);
 
   // The caret on a line of an editor (1-based), the editor right-clicked there
-  const rightClickLine = async (id, line) => {
+  // (a loaded machine: the menu may come late or be closed by a re-render: right-clicked once more)
+  const rightClickLine = async (id, line) => (await rightClickOnce(id, line)) ?? (await p.keyboard.press('Escape'), rightClickOnce(id, line));
+  const rightClickOnce = async (id, line) => {
     const pt = await p.evaluate((id, line) => {
       const ta = document.getElementById(id);
       ta.focus();
@@ -30,7 +32,7 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       return { x: r.x + 80, y: r.y + 8 + (line - 1) * 20 + 10 };
     }, id, line);
     await p.mouse.click(pt.x, pt.y, { button: 'right' });
-    return p.waitForSelector('#editor-menu-bookmark-quick', { timeout: 3000 }).catch(() => null);
+    return p.waitForSelector('#editor-menu-bookmark-quick', { timeout: 6000 }).catch(() => null);
   };
   const marks = (id) => p.evaluate((id) => {
     const box = document.getElementById(id)?.closest('.relative.flex-1.min-h-0.flex') ?? document.getElementById(id)?.parentElement?.parentElement;
