@@ -119,6 +119,12 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
       return true;
     });
     await h.sleep(300);
+    // (the editor's Diff, as in MachineScope: the edit line by line against the POU)
+    await p.click('#method-diff-btn').catch(() => {});
+    const diff = await h.until(() => p.$eval('[id$="diff-dialog"], [role="dialog"][aria-label*="iff"]', (e) => e.textContent).catch(() => null), 5000);
+    expect(/_Count := _Count \+ 1;/.test(diff ?? '') && /_Count := _Count \+ 2;/.test(diff ?? ''), `Diff: the edit against the POU (${(diff ?? 'no diff').replace(/\s+/g, ' ').slice(0, 120)})`);
+    await p.keyboard.press('Escape');
+    await h.sleep(400);
     await p.click('#method-save-btn').catch(() => {});
     for (let t = 0; t < 5000 && !sent.some((m) => m.type === 'save'); t += 200) await h.sleep(200);
     await h.sleep(500);
