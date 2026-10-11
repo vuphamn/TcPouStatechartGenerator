@@ -63,7 +63,9 @@ export type HostMessage =
   // A POU of the project by type name (a base the loaded POU EXTENDS), read only
   | { type: 'findPouResult'; requestId: number; typeName?: string; source?: PouSource; error?: string }
   // The Live tab's Activate: the loaded POU's TwinCAT project activated on its target
-  | { type: 'activateResult'; requestId: number; ok: boolean; message: string }
+  | { type: 'activateResult'; requestId: number; ok: boolean; message: string; noAutostart?: string[] }
+  /** The project's PLC programs downloaded and started (downloadProject) */
+  | { type: 'downloadResult'; requestId: number; ok: boolean; message: string }
   // The loaded POU's project files' TwinCAT version here and in git
   | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
   /** The coverage counts beside the project (MachineScope.coverage.json): every POU type's */
@@ -198,6 +200,8 @@ export type AppMessage =
   | { type: 'projectPous' }
   | { type: 'findPou'; requestId: number; typeName: string }
   | { type: 'activateProject'; requestId: number }
+  /** The loaded POU's project's PLC programs downloaded and started (XAE's Login with download; answered with downloadResult) */
+  | { type: 'downloadProject'; requestId: number }
   | { type: 'projectVersions'; requestId: number }
   | { type: 'projectBuilds'; requestId: number }
   | { type: 'openXaeFor'; requestId: number; version: string }

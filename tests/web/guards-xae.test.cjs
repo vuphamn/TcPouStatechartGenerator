@@ -83,6 +83,22 @@ const tmFile = path.join(h.REPO, 'src/samples/SM_TableManager.TcPOU');
   expect(wrote && wrote.id === 'cmd_bhome' && wrote.value === false, `liveWrite sent: ${JSON.stringify(wrote)}`);
   const toast = await page.evaluate(() => document.body.innerText.match(/cmd_bHome := FALSE written/)?.[0] ?? '');
   expect(toast, 'the result said');
+  // Prepare (the dialog's second button), then Write all from the Live tab: written together, asked first
+  const writesBefore = sent.filter((m) => m.type === 'liveWrite').length;
+  await (await page.$('#live-guard-list .live-guard-var[data-var="cmd_bHome"]'))?.click();
+  await page.waitForSelector('#live-write-prepare', { timeout: 3000 }).catch(() => {});
+  await page.click('#live-write-prepare').catch(() => {});
+  await sleep(400);
+  const preparedRows = await page.$$eval('#live-prepared .live-prepared-row', (r) => r.map((x) => x.innerText.replace(/\s+/g, ' ').trim())).catch(() => []);
+  const noWriteYet = sent.filter((m) => m.type === 'liveWrite').length === writesBefore;
+  await page.click('#live-write-all').catch(() => {});
+  await page.waitForSelector('#text-prompt-submit', { timeout: 3000 }).catch(() => {});
+  const askedAll = await page.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+  await page.click('#text-prompt-submit').catch(() => {});
+  await sleep(800);
+  const allWrites = sent.filter((m) => m.type === 'liveWrite').slice(writesBefore);
+  const cleared = !(await page.$('#live-prepared'));
+  expect(preparedRows.join() === 'cmd_bHome ⇒ FALSE' && noWriteYet && /cmd_bHome := FALSE/.test(askedAll) && allWrites.length === 1 && allWrites[0].value === false && cleared, `Prepare, then Write all (${preparedRows.join(' | ')}; asked: ${askedAll.split('\n').slice(0, 2).join(' / ')}; sent ${allWrites.length}; cleared ${cleared})`);
   // (a wrong value: said under the field, nothing sent)
   if (varBtn) await (await page.$('#live-guard-list .live-guard-var[data-var="cmd_bHome"]'))?.click();
   await page.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});

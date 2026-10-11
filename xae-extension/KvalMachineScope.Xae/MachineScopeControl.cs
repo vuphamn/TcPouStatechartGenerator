@@ -403,6 +403,9 @@ namespace KvalMachineScope.Xae
                     case "openInXae":
                         HandleOpenInXae(msg);
                         break;
+                    case "downloadProject":
+                        HandleDownloadProject(msg);
+                        break;
                     case "openInstance":
                         HandleOpenInstance(msg);
                         break;
@@ -1684,6 +1687,73 @@ namespace KvalMachineScope.Xae
         /// The Live tab's Activate (asked there first): the TwinCAT project of the loaded POU activated on its target, as
         /// XAE's Activate Configuration (TwinCAT restarted in Run mode). activateResult { requestId, ok, message }
         /// </summary>
+        /// <summary>
+        /// The loaded POU's project's PLC programs downloaded and started, as XAE's Login with download (after an Activate
+        /// whose boot projects do not start by themselves): each PLC project logged in (FORCEDOWNLOAD | SILENT), started,
+        /// its boot project put in, logged off. TwinCAT's own ITcPlcOnline, found at run time (XAE has its assembly loaded)
+        /// </summary>
+        private void HandleDownloadProject(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var project = LoadedProjectOf(_pouPath);
+            if (project == null)
+            {
+                Post(new { type = "downloadResult", requestId, ok = false, message = "The POU is not in a TwinCAT project folder" });
+                return;
+            }
+            EnvDTE.DTE dte = null;
+            try
+            {
+                dte = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE.DTE;
+                if (dte == null) throw new InvalidOperationException("XAE's automation is not available");
+                EnvDTE.Project found = null;
+                foreach (EnvDTE.Project p in dte.Solution.Projects)
+                {
+                    string file = null;
+                    try { file = p.FullName; } catch (System.Runtime.InteropServices.COMException) { }
+                    if (string.Equals(file, project.Value.path, StringComparison.OrdinalIgnoreCase)) { found = p; break; }
+                }
+                if (found == null) throw new InvalidOperationException($"{project.Value.name}.tsproj is not open in XAE");
+                dynamic sysManager = found.Object;
+                var online = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("TCatSysManagerLib.ITcPlcOnline", false)).FirstOrDefault(t => t != null)
+                    ?? throw new InvalidOperationException("TwinCAT's automation assembly (TCatSysManagerLib) is not loaded in XAE");
+                var flagsType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("TCatSysManagerLib.PLC_LOGIN_FLAGS", false)).FirstOrDefault(t => t != null);
+                var done = new List<string>();
+                dte.SuppressUI = true;
+                foreach (var plc in PlcProjectNames(project.Value.path))
+                {
+                    object item = sysManager.LookupTreeItem($"TIPC^{plc}^{plc} Project");
+                    // (FORCEDOWNLOAD 4 | SILENT 256: asking nothing; the application stops, takes the code, waits)
+                    var flags = flagsType != null ? Enum.ToObject(flagsType, 4 + 256) : (object)(4 + 256);
+                    online.GetMethod("Login").Invoke(item, new[] { flags });
+                    var loggedIn = false;
+                    for (var w = 0; w < 60 && !loggedIn; w++)
+                    {
+                        loggedIn = (bool)online.GetProperty("IsLoggedIn").GetValue(item);
+                        if (!loggedIn) System.Threading.Thread.Sleep(500);
+                    }
+                    if (!loggedIn) throw new InvalidOperationException($"XAE did not log in to {plc}'s PLC: nothing was downloaded");
+                    try { online.GetMethod("Start").Invoke(item, null); } catch (System.Reflection.TargetInvocationException) { }
+                    try { ((dynamic)sysManager.LookupTreeItem("TIPC^" + plc)).GenerateBootProject(true); } catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException) { Log.Write($"download: boot project of {plc}: {ex.Message}"); }
+                    try { online.GetMethod("Logoff").Invoke(item, null); } catch (System.Reflection.TargetInvocationException) { }
+                    Log.Write($"download: {plc} downloaded and started");
+                    done.Add(plc);
+                }
+                Post(new { type = "downloadResult", requestId, ok = true, message = done.Count > 0 ? $"{string.Join(", ", done)} downloaded and started" : "No PLC project in the TwinCAT project" });
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                var inner = (ex as System.Reflection.TargetInvocationException)?.InnerException ?? ex;
+                Log.Write("download: " + inner.Message);
+                Post(new { type = "downloadResult", requestId, ok = false, message = "Not downloaded: " + inner.Message });
+            }
+            finally
+            {
+                if (dte != null) dte.SuppressUI = false;
+            }
+        }
+
         /// <summary>The PLC projects a .tsproj holds (its &lt;Plc&gt;&lt;Project Name="…"&gt;)</summary>
         private static List<string> PlcProjectNames(string tsproj)
         {
@@ -1747,7 +1817,7 @@ namespace KvalMachineScope.Xae
                 sysManager.StartRestartTwinCAT();
                 var note = noBoot.Count > 0 ? $" (no boot project for {string.Join(", ", noBoot)}: its program does not start)" : "";
                 if (noAutostart.Count > 0) note += $". {string.Join(", ", noAutostart)}'s boot project does not start by itself (Autostart Boot Project is off in its PLC project's settings): log in to download and start its program";
-                Post(new { type = "activateResult", requestId, ok = true, message = $"{project.Value.name} activated: TwinCAT restarts in Run mode{note}" });
+                Post(new { type = "activateResult", requestId, ok = true, message = $"{project.Value.name} activated: TwinCAT restarts in Run mode{note}", noAutostart });
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {

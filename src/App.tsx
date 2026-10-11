@@ -6486,6 +6486,27 @@ export const App: React.FC = () => {
           if (m.type !== 'activateResult' || m.requestId !== requestId) return;
           off();
           showCopyToast(m.message, m.ok ? 'success' : 'error', 8000);
+          // (a PLC project whose boot project does not start by itself: its program downloaded and started, asked)
+          const pending = m.ok ? m.noAutostart ?? [] : [];
+          if (pending.length) {
+            setPromptRequest({
+              title: `Download ${pending.join(', ')}?`,
+              label: `TwinCAT runs ${name}'s configuration, but ${pending.join(', ')}'s boot project does not start by itself (Autostart Boot Project is off). Download its program and start it now (as XAE's Login with download)?`,
+              confirmOnly: true,
+              danger: true,
+              submitLabel: 'Download and start',
+              onSubmit: () => {
+                const id2 = Date.now() % 1e9;
+                showCopyToast(`Downloading ${pending.join(', ')}…`, 'success', 4000);
+                const off2 = onHostMessage((d) => {
+                  if (d.type !== 'downloadResult' || d.requestId !== id2) return;
+                  off2();
+                  showCopyToast(d.message, d.ok ? 'success' : 'error', 9000);
+                });
+                postToHost({ type: 'downloadProject', requestId: id2 });
+              },
+            });
+          }
         });
         postToHost({ type: 'activateProject', requestId });
       },
@@ -8829,6 +8850,33 @@ export const App: React.FC = () => {
       .map((e) => ({ edgeId: e.edgeId, to: e.to, ...liveGuardViews[e.edgeId] }));
   }, [liveGuardViews, liveGuardEdges]);
 
+  // Prepared values (XAE's Prepare Value, then Write Values: Ctrl+F7): by watch id; written together, asked first
+  const [preparedValues, setPreparedValues] = useState<{ id: string; name: string; symbol?: string; text: string; value: boolean | number | string }[]>([]);
+  useEffect(() => {
+    if (liveStatus.state !== 'connected') setPreparedValues([]);
+  }, [liveStatus.state]);
+  const handleWritePrepared = useCallback(() => {
+    const list = preparedValues;
+    if (!list.length) return;
+    setPromptRequest({
+      title: `Write ${list.length} value${list.length > 1 ? 's' : ''}`,
+      label: `Written at once on ${liveStatus.target ?? 'the PLC'}, one after the other: the machine's program sees them in its next cycles.`,
+      details: list.map((p) => `${p.symbol ?? p.name} := ${p.text}`),
+      confirmOnly: true,
+      submitLabel: 'Write all',
+      onSubmit: () => {
+        void (async () => {
+          const failed: string[] = [];
+          for (const p of list) {
+            const r = await writeLiveVar(liveMode, p.id, p.value);
+            if (!r.ok) failed.push(`${p.name}: ${r.message}`);
+          }
+          setPreparedValues((cur) => cur.filter((p) => failed.some((f) => f.startsWith(`${p.name}:`))));
+          showCopyToast(failed.length ? `Not written: ${failed.join('; ')}` : `${list.length} value${list.length > 1 ? 's' : ''} written`, failed.length ? 'error' : 'success', failed.length ? 9000 : 3000);
+        })();
+      },
+    });
+  }, [preparedValues, liveStatus.target, liveMode, showCopyToast]);
   // Write Values (XAE's online view) from the guard values: the value typed (as its type), asked first, then written
   const handleWriteLiveVar = useCallback(
     (v: { name: string; id: string; symbol?: string; type?: string; text: string }) => {
@@ -8848,6 +8896,17 @@ export const App: React.FC = () => {
           const r = parseLiveValue(text, v.type, liveEnums);
           if ('error' in r) return;
           void writeLiveVar(liveMode, v.id, r.value).then((res) => showCopyToast(res.ok ? `${v.name} := ${text.trim()} written` : `Not written: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 3000 : 8000));
+        },
+        // (Prepare: kept with the others, written together from the Live tab: Write all)
+        secondaryAction: {
+          id: 'live-write-prepare',
+          label: 'Prepare',
+          title: 'Keep the value with the others prepared, and write them together (Write all in the Live tab)',
+          run: (text) => {
+            const r = parseLiveValue(text, v.type, liveEnums);
+            if ('error' in r) return;
+            setPreparedValues((cur) => [...cur.filter((p) => p.id !== v.id), { id: v.id, name: v.name, symbol: v.symbol, text: text.trim(), value: r.value }]);
+          },
         },
       });
     },
@@ -10700,6 +10759,9 @@ export const App: React.FC = () => {
             onGuardScopeChange={setLiveGuardScope}
             guards={liveActiveGuards}
             onWriteVar={liveMode === 'xae' || liveMode === 'desktop' ? handleWriteLiveVar : undefined}
+            prepared={preparedValues}
+            onWritePrepared={handleWritePrepared}
+            onClearPrepared={() => setPreparedValues([])}
             stateTimes={measuredStateTimes}
             showStateTimes={showStateTimes}
             onShowStateTimesChange={setShowStateTimes}

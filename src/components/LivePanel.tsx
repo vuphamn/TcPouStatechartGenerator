@@ -131,6 +131,10 @@ interface LivePanelProps {
   guards?: (EdgeGuardView & { edgeId: string; to: string })[];
   /** A guard variable's value written to the PLC (asked first); absent where values cannot be written */
   onWriteVar?: (v: { name: string; id: string; symbol?: string; type?: string; text: string }) => void;
+  /** Values prepared to write together (the write dialog's Prepare), Write all, Clear */
+  prepared?: { id: string; name: string; symbol?: string; text: string }[];
+  onWritePrepared?: () => void;
+  onClearPrepared?: () => void;
   /** Measured state times of the session (live or a replay), and whether the diagram shows them */
   stateTimes?: StateTime[];
   showStateTimes?: boolean;
@@ -516,6 +520,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onGuardScopeChange,
   guards = [],
   onWriteVar,
+  prepared = [],
+  onWritePrepared,
+  onClearPrepared,
   stateTimes = [],
   showStateTimes = false,
   onShowStateTimesChange,
@@ -1705,6 +1712,32 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Values prepared to write together (XAE's Prepare Value, then Write Values) */}
+      {prepared.length > 0 && status.state === 'connected' && (
+        <div id="live-prepared" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5 bg-amber-950/20">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-[10px] font-semibold text-amber-300 uppercase tracking-wide">Prepared</span>
+            <span className="text-[10px] text-slate-500">{prepared.length}</span>
+            {onWritePrepared && (
+              <button id="live-write-all" type="button" onClick={onWritePrepared} className="ml-auto px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white text-[11px]" title="Write the prepared values (asked first)">
+                Write all
+              </button>
+            )}
+            {onClearPrepared && (
+              <button id="live-clear-prepared" type="button" onClick={onClearPrepared} className="px-2 py-0.5 rounded text-slate-400 hover:bg-slate-800 text-[11px]">
+                Clear
+              </button>
+            )}
+          </div>
+          {prepared.map((p) => (
+            <div key={p.id} className="live-prepared-row flex items-center gap-2 font-mono text-[11px]" data-id={p.id}>
+              <span className="text-slate-300 truncate">{p.name}</span>
+              <span className="ml-auto text-amber-200">⇒ {p.text}</span>
+            </div>
+          ))}
         </div>
       )}
 

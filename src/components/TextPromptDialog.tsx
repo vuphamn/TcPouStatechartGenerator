@@ -45,6 +45,8 @@ export interface TextPromptRequest {
   declareScopes?: NewVariable['scope'][];
   /** A look at something first (the dialog stays open), under the details */
   sideAction?: { id: string; label: string; title?: string; run: () => void };
+  /** A second way to use the value typed (Prepare beside Write): checked as the submit is, then the dialog closes */
+  secondaryAction?: { id: string; label: string; title?: string; run: (value: string) => void };
   /** Another way to go, left of the buttons (the dialog closes first) */
   altAction?: { id: string; label: string; title?: string; run: () => void };
   /** The Cancel button's label, and what closing without a choice does (Cancel, Esc, ×, a click outside) */
@@ -463,6 +465,23 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
               className="mr-auto px-3 py-1 rounded-md text-sky-300 hover:bg-slate-800"
             >
               {request.altAction.label}
+            </button>
+          )}
+          {request.secondaryAction && (
+            <button
+              id={request.secondaryAction.id}
+              onClick={() => {
+                if (error || declaring) return;
+                const run = request.secondaryAction!.run;
+                const typed = text;
+                onClose();
+                setTimeout(() => run(typed), 0);
+              }}
+              disabled={!!error || !!declaring}
+              title={request.secondaryAction.title}
+              className="px-3 py-1 rounded-md border border-slate-600 text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+            >
+              {request.secondaryAction.label}
             </button>
           )}
           <button id="text-prompt-cancel" onClick={cancel} className="px-3 py-1 rounded-md text-slate-300 hover:bg-slate-800">

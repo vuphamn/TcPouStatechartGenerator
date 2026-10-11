@@ -46,7 +46,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
       // (its trial license ran out yesterday)
       await toApp({ type: 'plcLicenseResult', requestId: m.requestId, trial: { expires: new Date(Date.now() - 86400000).toISOString() } });
     } else if (m.type === 'activateProject') {
-      await toApp({ type: 'activateResult', requestId: m.requestId, ok: true, message: 'Line202 activated: TwinCAT restarts in Run mode' });
+      await toApp({ type: 'activateResult', requestId: m.requestId, ok: true, message: 'Line202 activated: TwinCAT restarts in Run mode', noAutostart: ['Line202_PLC'] });
+    } else if (m.type === 'downloadProject') {
+      await toApp({ type: 'downloadResult', requestId: m.requestId, ok: true, message: 'Line202_PLC downloaded and started' });
     } else if (m.type === 'discoverPlcs') {
       setTimeout(() => toApp({ type: 'plcList', requestId: m.requestId, projectTarget: '', errors: [], devices: [{ netId: '5.9.9.9.1.1', ip: '192.168.1.20', name: 'CX-Other', route: true, source: 'network' }] }).catch(() => {}), 300);
     } else if (m.type === 'projectPous') {
@@ -108,6 +110,14 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await page.click('#text-prompt-submit').catch(() => {});
   for (let t = 0; t < 3000 && !sent.some((m) => m.type === 'activateProject'); t += 200) await sleep(200);
   expect(/Activate Line202\? The PLC's trial license ran out/.test(askedActivate) && /would stay stopped/.test(askedActivate) && sent.some((m) => m.type === 'activateProject'), `Activate: asked (the license that ran out said), then XAE asked (${askedActivate.replace(/\s+/g, ' ').slice(0, 160)})`);
+  // (its boot project does not start by itself: the download offered, asked, sent; its result said)
+  await page.waitForSelector('#text-prompt-submit', { timeout: 4000 }).catch(() => {});
+  const askedDownload = await page.evaluate(() => document.getElementById('text-prompt-dialog')?.innerText ?? '');
+  await page.click('#text-prompt-submit').catch(() => {});
+  for (let t = 0; t < 3000 && !sent.some((m) => m.type === 'downloadProject'); t += 200) await sleep(200);
+  await sleep(300);
+  const downloaded = await page.evaluate(() => /Line202_PLC downloaded and started/.test(document.body.innerText));
+  expect(/Download Line202_PLC\?/.test(askedDownload) && /Autostart Boot Project is off/.test(askedDownload) && sent.some((m) => m.type === 'downloadProject') && downloaded, `after Activate: the download offered, sent, said (${askedDownload.replace(/\s+/g, ' ').slice(0, 120)})`);
   await sleep(400);
 
   // Update .TcDUT from the PLC (asked): the enum matches, the warning goes
