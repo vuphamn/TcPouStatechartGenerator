@@ -38,6 +38,12 @@ file access.
 - **Reads and writes**, as XAE's Cross Reference List tells them: the caret on a name highlights its places in the
   section, writes (`x :=`, `x R=` / `S=`, an output bound to it: `Q => x`, a member or an index assigned) apart from
   reads. **Find All Writes** (the right-click menu): every place in the project that sets it.
+- **Bookmarks** (as TwinCAT's and MachineScope's, the same ones): **Toggle Bookmark** (`Ctrl+K Ctrl+K`, the right-click
+  menu) on a line of a member's declaration or implementation; on a `CASE` label it bookmarks that state. **Next** /
+  **Previous** (`Ctrl+K Ctrl+N` / `Ctrl+K Ctrl+P`); a mark in the gutter and the overview ruler; a line's bookmark is found
+  again by its text when lines above it change. The **Bookmarks** view (the TwinCAT view) lists every POU's, a click
+  opens one, **Clear Bookmarks**. They are kept with the workspace and shared with the POU's code tab and statechart:
+  set in one, shown in the others.
 - **Go to Symbol in Workspace** (`Ctrl+T`): the project's POUs, interfaces and DUTs, their methods, properties and
   actions (`FB_Axis.Move`), the global variables and the enums' members; letters in order are enough (`fbax`).
 - **Folding** as in XAE: `VAR` blocks, `IF` / `CASE` / `FOR` / `WHILE` / `REPEAT`, each `CASE` branch, `STRUCT`,

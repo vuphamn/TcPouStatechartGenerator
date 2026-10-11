@@ -11,7 +11,8 @@ const stEditor = require('./stEditor.cjs');
 const twincat = require('./twincat.cjs');
 const { registerCreate } = require('./createCommands.cjs');
 const { parseSource } = require('./tcStSource.cjs');
-const { addressOf, normalPath } = require('./sectionStore.cjs');
+const { addressOf, normalPath, SCHEME } = require('./sectionStore.cjs');
+const { registerBookmarks } = require('./bookmarks.cjs');
 
 const VIEW_TYPE = 'kvalMachineScope.statechart';
 
@@ -25,6 +26,8 @@ function activate(context) {
   // Follow selection: the caret in a POU's state method (its implementation section) selects that state in the POU's
   // open statecharts; the message XAE sends (editorCaret: its line counted after the declaration's, as XAE's editor)
   const charts = new Map();
+  // (the bookmarks' store: set once registered, below)
+  let bookmarks = null;
   // (a state to select in a chart being opened: posted once its app is ready)
   const pendingSelect = new Map();
   let caretTimer = null;
@@ -95,6 +98,11 @@ function activate(context) {
       },
       open(file) {
         void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
+      },
+      // (bookmarks: this POU's from the extension's store; the app's changes kept there, the other panels told)
+      bookmarks: {
+        get: (file) => bookmarks?.get(file) ?? { states: [], lines: [] },
+        changed: (file, b) => bookmarks?.set(file, b, post),
       },
       // (live view: the target picked for the project in the TwinCAT view; Build…: its build)
       target: (file) => tc?.targetFor(file) ?? null,
@@ -229,6 +237,16 @@ function activate(context) {
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
   tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
+  // Bookmarks (TwinCAT's, MachineScope's): kept here, the POU's app panels told and telling
+  bookmarks = registerBookmarks(context, {
+    vscode,
+    SCHEME,
+    addressOf,
+    parseSource,
+    readText: (f) => fs.readFileSync(f, 'utf8'),
+    openMember: st.openMember,
+    apps: { postsOf: (file) => [...(charts.get(normalPath(file).toLowerCase()) ?? [])] },
+  });
   registerCreate(context, { activeFile: st.activeFile, projectOf: twincat.projectOf, currentProject: () => tc.currentProject(), openMember: st.openMember, refreshSolution: () => vscode.commands.executeCommand('kvalMachineScope.refreshSolution') });
 }
 

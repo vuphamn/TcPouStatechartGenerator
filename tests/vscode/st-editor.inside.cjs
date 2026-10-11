@@ -308,6 +308,24 @@ exports.run = async function run() {
     const typeItems = await vscode.commands.executeCommand('vscode.prepareTypeHierarchy', exDoc.uri, new vscode.Position(0, 0));
     expect(typeItems?.[0]?.name === 'FB_ScanSequencer', `type hierarchy: the POU (${typeItems?.[0]?.name ?? 'none'})`);
 
+    // 19c2. Bookmarks (the sections): a line of Execute() and a CASE label (its state) toggled, marked; Next; kept as
+    // MachineScope's (the statechart and the code tab get them)
+    const bmEd = await vscode.window.showTextDocument(exDoc);
+    const bmLines = exDoc.getText().split(/\r?\n/);
+    const plainLine = bmLines.findIndex((l) => /_Count\s*:=\s*_Count/.test(l));
+    const labelLine = bmLines.findIndex((l) => /E_ScanState\.FastScan\s*:/.test(l));
+    bmEd.selection = new vscode.Selection(new vscode.Position(plainLine, 0), new vscode.Position(plainLine, 0));
+    const t1 = await vscode.commands.executeCommand('kvalMachineScope.toggleBookmark');
+    bmEd.selection = new vscode.Selection(new vscode.Position(labelLine, 0), new vscode.Position(labelLine, 0));
+    const t2 = await vscode.commands.executeCommand('kvalMachineScope.toggleBookmark');
+    await sleep(300);
+    const marks = await vscode.commands.executeCommand('kvalMachineScope.bookmarksShown', exDoc.uri.toString());
+    const stored = await vscode.commands.executeCommand('kvalMachineScope.bookmarksOf', pou);
+    expect(t1?.on && t2?.state === 'FastScan' && (marks ?? []).includes(plainLine + 1) && (marks ?? []).includes(labelLine + 1) && stored.states.includes('FastScan') && stored.lines.some((l) => l.method === 'Execute'), `bookmarks: a line and FastScan's label marked (${JSON.stringify(marks)}; ${JSON.stringify(stored)})`);
+    bmEd.selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(0, 0));
+    const n1 = await vscode.commands.executeCommand('kvalMachineScope.nextBookmark');
+    expect(n1 === Math.min(plainLine, labelLine) + 1 && bmEd.selection.active.line === n1 - 1, `Next Bookmark: line ${n1}`);
+
     // 19d. The code tab (pouOpensAs: tab, the default): the POU in one tab (MachineScope's code editors); a member
     // from the POU list shown in that same tab
     await vscode.workspace.getConfiguration('kvalMachineScope.structuredText').update('pouOpensAs', 'tab', vscode.ConfigurationTarget.Global);

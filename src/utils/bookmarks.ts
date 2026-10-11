@@ -42,9 +42,26 @@ export function getBookmarks(pou: string): PouBookmarks {
   return value;
 }
 
-function setBookmarks(pou: string, next: PouBookmarks): void {
+// A host keeping the bookmarks (the VS Code extension: its editors, the POU's other panels): told each change made here
+let hostSink: ((pou: string, b: PouBookmarks) => void) | null = null;
+export function setBookmarksHost(sink: ((pou: string, b: PouBookmarks) => void) | null): void {
+  hostSink = sink;
+}
+/** The host's bookmarks for a POU (its store's): taken as they are, not told back */
+export function applyHostBookmarks(pou: string, raw: unknown): void {
+  const r = (raw ?? {}) as Partial<PouBookmarks>;
+  const next: PouBookmarks = {
+    states: Array.isArray(r.states) ? r.states.filter((s): s is string => typeof s === 'string') : [],
+    lines: Array.isArray(r.lines) ? r.lines.filter((l): l is LineBookmark => !!l && typeof l.method === 'string' && typeof l.line === 'number') : [],
+    ...(r.notes && typeof r.notes === 'object' ? { notes: r.notes as Record<string, string> } : {}),
+  };
+  setBookmarks(pou, next, true);
+}
+
+function setBookmarks(pou: string, next: PouBookmarks, fromHost = false): void {
   const key = keyOf(pou);
   cache.set(key, next);
+  if (!fromHost) hostSink?.(pou, next);
   try {
     if (!next.states.length && !next.lines.length && !Object.keys(next.notes ?? {}).length) localStorage.removeItem(key);
     else localStorage.setItem(key, JSON.stringify(next));

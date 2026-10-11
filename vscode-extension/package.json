@@ -326,6 +326,39 @@
         "command": "kvalMachineScope.openSections",
         "title": "Open as Sections (VS Code editors)",
         "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.toggleBookmark",
+        "title": "Toggle Bookmark",
+        "category": "TwinCAT",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "kvalMachineScope.nextBookmark",
+        "title": "Next Bookmark",
+        "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.previousBookmark",
+        "title": "Previous Bookmark",
+        "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.clearBookmarks",
+        "title": "Clear Bookmarks",
+        "category": "TwinCAT",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "kvalMachineScope.removeBookmark",
+        "title": "Remove Bookmark",
+        "category": "TwinCAT",
+        "icon": "$(close)"
+      },
+      {
+        "command": "kvalMachineScope.openBookmark",
+        "title": "Open Bookmark",
+        "category": "TwinCAT"
       }
     ],
     "keybindings": [
@@ -362,6 +395,21 @@
       {
         "command": "kvalMachineScope.autoDeclare",
         "key": "shift+f2",
+        "when": "editorTextFocus && resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.toggleBookmark",
+        "key": "ctrl+k ctrl+k",
+        "when": "editorTextFocus && resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.nextBookmark",
+        "key": "ctrl+k ctrl+n",
+        "when": "editorTextFocus && resourceScheme == twincat-st"
+      },
+      {
+        "command": "kvalMachineScope.previousBookmark",
+        "key": "ctrl+k ctrl+p",
         "when": "editorTextFocus && resourceScheme == twincat-st"
       }
     ],
@@ -532,6 +580,11 @@
           "command": "kvalMachineScope.clearWatch",
           "when": "view == kvalMachineScope.watch",
           "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.clearBookmarks",
+          "when": "view == kvalMachineScope.bookmarks",
+          "group": "navigation@1"
         }
       ],
       "commandPalette": [
@@ -553,6 +606,14 @@
         },
         {
           "command": "kvalMachineScope.taskTrend",
+          "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.removeBookmark",
+          "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.openBookmark",
           "when": "false"
         }
       ],
@@ -601,6 +662,11 @@
           "command": "kvalMachineScope.notifyWhenTrue",
           "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
           "group": "twincat@7"
+        },
+        {
+          "command": "kvalMachineScope.toggleBookmark",
+          "when": "resourceScheme == twincat-st",
+          "group": "twincat@8"
         }
       ],
       "view/item/context": [
@@ -627,6 +693,11 @@
         {
           "command": "kvalMachineScope.taskTrend",
           "when": "view == kvalMachineScope.solution && viewItem == plcTaskOnline",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.removeBookmark",
+          "when": "view == kvalMachineScope.bookmarks && viewItem == kssBookmark",
           "group": "inline@1"
         }
       ]
@@ -657,6 +728,10 @@
         {
           "id": "kvalMachineScope.watch",
           "name": "Watch"
+        },
+        {
+          "id": "kvalMachineScope.bookmarks",
+          "name": "Bookmarks"
         }
       ]
     },

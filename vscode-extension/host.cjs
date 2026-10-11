@@ -111,7 +111,12 @@ function createHost({ pouPath, post, ui }) {
     return t?.netId ? { netId: t.netId, ip: t.local ? '127.0.0.1' : t.address || undefined } : {};
   };
   const handlers = {
-    ready: () => load(pou),
+    ready: () => {
+      load(pou);
+      // (the POU's bookmarks, kept by the extension: shared with its editors and its other panels)
+      if (ui.bookmarks) post({ type: 'bookmarks', pou: path.basename(pou), bookmarks: ui.bookmarks.get(pou) });
+    },
+    bookmarksChanged: ({ bookmarks }) => ui.bookmarks?.changed(pou, bookmarks),
     save: ({ files = [] }) => {
       const known = files.filter((f) => lastSeen.has(f.path));
       // (all checked before any is written: changed on disk since it was loaded, unless kept anyway)

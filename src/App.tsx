@@ -175,7 +175,7 @@ import { blankComments } from './utils/stateMachineLint.ts';
 import { caseBranchRange } from './utils/stateEdits.ts';
 import { extractPouDeclaration } from './utils/stSymbolDefinition.ts';
 import { stateQualifier } from './utils/stateNames.ts';
-import { BODY, ENUM_KEY, bookmarkStateName, scopedStateKey, clearBookmarks, declarationOf, enumMemberOnLine, hasStateLabel, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
+import { BODY, ENUM_KEY, applyHostBookmarks, setBookmarksHost, bookmarkStateName, scopedStateKey, clearBookmarks, declarationOf, enumMemberOnLine, hasStateLabel, exportBookmarks, importBookmarks, isDeclarationKey, listBookmarks, setBookmarkNote, toggleStateBookmark, useBookmarks, type BookmarkEntry } from './utils/bookmarks.ts';
 import { parseDutContent, updateDutDeclaration } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
@@ -1890,8 +1890,18 @@ export const App: React.FC = () => {
   // (the code tab: a member shown; set further down, where the code editors' jumps are)
   const showMemberRef = useRef<(m: { member: string; line?: number; part?: 'declaration' }) => void>(() => {});
   const showMember = useCallback((m: { member: string; line?: number; part?: 'declaration' }) => showMemberRef.current(m), []);
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember };
+  // (the host's bookmarks, under this POU's file name; changes made here told to it)
+  const bookmarksPouRef = useRef(pouFileName);
+  bookmarksPouRef.current = pouFileName;
+  const applyBookmarks = useCallback((raw: unknown, pou?: string) => {
+    // (the POU named by the host: its loadPou may not be in yet)
+    applyHostBookmarks(pou || bookmarksPouRef.current, raw);
+    setBookmarksHost((pou, b) => {
+      if (pou === bookmarksPouRef.current) postToHost({ type: 'bookmarksChanged', bookmarks: b });
+    });
+  }, []);
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1945,6 +1955,9 @@ export const App: React.FC = () => {
         h.handleEditorCaret(m);
       } else if (m.type === 'showMember') {
         h.showMember(m);
+      } else if (m.type === 'bookmarks') {
+        // (the host keeps them: its copy taken, and this window's changes told to it from now on)
+        h.applyBookmarks(m.bookmarks, m.pou);
       } else if (m.type === 'error') {
         h.showCopyToast(m.message, 'error', 7000);
       }

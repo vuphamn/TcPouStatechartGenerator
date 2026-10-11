@@ -54,7 +54,14 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     p.on('pageerror', (e) => errors.push(e.message));
     const sent = [];
     const post = (m) => p.evaluate((m) => window.postMessage(m, '*'), m).catch(() => {});
-    const host = createHost({ pouPath, post, ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {} } });
+    // (the extension's bookmarks store: Execute's line "CASE State OF" bookmarked; the app's changes kept)
+    let stored = { states: [], lines: [{ method: 'Execute', line: 5, text: 'CASE State OF' }] };
+    const told = [];
+    const host = createHost({
+      pouPath,
+      post,
+      ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, bookmarks: { get: () => stored, changed: (file, b) => { stored = b; told.push(b); } } },
+    });
     await p.exposeFunction('__toHost', (m) => {
       sent.push(m);
       return host.handle(m);
@@ -78,6 +85,20 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     expect(!shown.header && !shown.canvas && shown.decl && shown.splitter && shown.method === 'Execute()', `the code tab: the Method Editor alone on Execute() (${JSON.stringify(shown)})`);
 
     await p.screenshot({ path: path.join(h.OUT, 'code-tab.png') }).catch(() => {});
+    // Bookmarks from the host: Execute's CASE line marked; one set here told to the host
+    const caseLine = (await p.$eval('#method-implementation-editor', (e) => e.value)).split('\n').findIndex((l) => /CASE State OF/.test(l)) + 1;
+    const marked = await p.$$eval('#method-bottom-panel [data-bookmark-line]', (r) => r.map((x) => Number(x.getAttribute('data-bookmark-line'))));
+    expect(marked.includes(caseLine), `the host's bookmark: line ${caseLine} marked (${marked.join(', ')})`);
+    const addAt = caseLine + 2;
+    await p.evaluate((n) => document.querySelector(`#method-bottom-panel [data-bookmark-add-line="${n}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), addAt);
+    await h.sleep(500);
+    const last = told[told.length - 1];
+    expect(last && last.lines.some((l) => l.method === 'Execute' && l.line === addAt) && last.lines.some((l) => l.text === 'CASE State OF'), `a bookmark set here: told to the host (${JSON.stringify(last?.lines)})`);
+    // (changed by the host meanwhile, the VS Code editors: taken)
+    await post({ type: 'bookmarks', pou: 'FB_ScanSequencer.TcPOU', bookmarks: { states: [], lines: [] } });
+    await h.sleep(500);
+    expect((await p.$$eval('#method-bottom-panel [data-bookmark-line]', (r) => r.length)) === 0, 'the host\'s change (none): taken');
+
     // showMember: another method; '' the POU Editor
     await post({ type: 'showMember', member: 'MoveAndAdvance' });
     await h.sleep(600);

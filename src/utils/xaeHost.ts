@@ -98,6 +98,8 @@ export type HostMessage =
   | { type: 'editorCaret'; method: string; line: number; lineCount: number; force?: boolean }
   /** The code tab (VS Code): a member shown (a method's name, '' for the POU itself), at a line when given */
   | { type: 'showMember'; member: string; line?: number; part?: 'declaration' }
+  /** The POU's bookmarks, as the host keeps them (VS Code: shared with its editors and the POU's other panels) */
+  | { type: 'bookmarks'; pou?: string; bookmarks: unknown }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
@@ -179,6 +181,8 @@ export type AppMessage =
   | { type: 'liveStop' }
   /** Guard variables to follow (replaces the previous set): the first candidate path the PLC has is used */
   | { type: 'liveWatch'; vars: LiveWatchVar[] }
+  /** The POU's bookmarks changed here (the host keeps them) */
+  | { type: 'bookmarksChanged'; bookmarks: unknown }
   /** A watched variable's value written to the PLC (its watch id; answered with liveWriteResult) */
   | { type: 'liveWrite'; requestId: number; id: string; value: boolean | number | string }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
