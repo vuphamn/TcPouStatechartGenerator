@@ -60,6 +60,7 @@ function client(boot: Record<string, Buffer>, calls: string[] = []) {
   const c = client({ 'CurrentProjectInfo.json': Buffer.from('﻿' + JSON.stringify(info)), 'CurrentConfig/PlantPlc.tpzip': big });
   const r = await readPlcSources(c, 851);
   expect(!r.error && r.project === 'Plant' && r.plcProject === 'PlantPlc' && r.files.map((f: { path: string }) => f.path).sort().join() === 'GVLs/GVL_IO.TcGVL,POUs/Line/E_Line_States.TcDUT,POUs/Line/SM_Line.TcPOU', `readPlcSources: ${r.error ?? `${r.plcProject}: ${r.files.map((f: { path: string }) => f.path).join(', ')}`}`);
+  expect(r.projectFiles?.map((f: { path: string }) => f.path).join() === 'Plant.plcproj' && r.projectFiles[0].content === '<Project/>', `its .plcproj too, apart (for the online change check): ${r.projectFiles?.map((f: { path: string }) => f.path).join()}`);
   expect(c.open.size === 0 && c.calls.every((x) => x.endsWith('@10000')), `each file closed again, all on the system service (${c.calls.length} calls)`);
 
   // 3. The PLC keeps no sources (downloaded without them) / no project information

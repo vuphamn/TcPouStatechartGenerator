@@ -239,13 +239,15 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
     const code = err?.adsError?.errorCode;
     return { error: code === 0x70c || code === 1804 ? `The PLC keeps no sources of ${name} (download the project with its sources: PLC project > Settings > Source download)` : `Could not read ${name}'s sources: ${err?.adsError?.errorStr ?? err?.message ?? err}`, projects };
   }
-  const unpacked = unzip(zip, (p) => SOURCE_FILE.test(p) || /^[^/]+\.tmc$/i.test(p));
+  const unpacked = unzip(zip, (p) => SOURCE_FILE.test(p) || /^[^/]+\.tmc$/i.test(p) || /\.(plcproj|TcTTO)$/i.test(p));
   const files = unpacked.filter((f) => SOURCE_FILE.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
   const tmc = unpacked.find((f) => /\.tmc$/i.test(f.path));
   // (only the port's own project runs where this connection reads types)
   const stale = sub.port === adsPort || projects.length === 1 ? await staleCheck(client, tmc ? text(tmc.data) : '', files) : null;
   const libraryTypes = tmc ? libraryTypesOf(text(tmc.data)) : {};
-  return { project: info?.project?.name ?? name, plcProject: name, projects, files, libraryTypes, ...(stale ? { stale } : {}) };
+  // (its .plcproj and task objects: what an online change would change, shared/onlineChangeCheck.cjs)
+  const projectFiles = unpacked.filter((f) => /\.(plcproj|TcTTO)$/i.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
+  return { project: info?.project?.name ?? name, plcProject: name, projects, files, projectFiles, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
 module.exports = { activeProjectOf, readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };

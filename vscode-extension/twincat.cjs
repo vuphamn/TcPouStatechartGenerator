@@ -24,6 +24,8 @@ const { registerLiveValues, adsSource, standInSource } = require('./liveValues.c
 const STAND_IN = process.env.KSS_LIVE_STANDIN || null;
 const ads = require('../shared/tcAds.cjs');
 const { parseSource } = require('./tcStSource.cjs');
+const { readPlcSources } = require('../shared/tcSources.cjs');
+const { onlineChangeRisks, riskLines, localProjectFiles } = require('../shared/onlineChangeCheck.cjs');
 
 const SOURCE_RX = /\.(tcpou|tcdut|tcgvl|tcio)$/i;
 const LOCAL = 'Local';
@@ -325,11 +327,28 @@ function register(context, { activeFile, sectionUriOf }) {
     void poll();
   }
 
+  /** What the online change would change (as XAE's Online Change dialog's details): the PLC's project (its sources in
+   * its boot folder) compared with the local one → lines for the confirmation, or null when it can't be read */
+  async function onlineChangePreview(p, t) {
+    if (STAND_IN || !p.plcproj) return null;
+    const client = await plcClient(t);
+    const plcName = path.basename(p.plcproj, path.extname(p.plcproj));
+    const within = (pr) => Promise.race([pr, new Promise((_, no) => setTimeout(() => no(new Error('the PLC did not answer in time')), 8000))]);
+    let r = await within(readPlcSources(client, 851, { plcProject: plcName }));
+    // (the PLC project's name on the PLC is not the .plcproj's: the one of port 851)
+    if (r.error && /has no PLC project/.test(r.error)) r = await within(readPlcSources(client, 851));
+    if (r.error) return [`(Not compared with the PLC's project: ${r.error})`];
+    const lines = riskLines(onlineChangeRisks([...r.files, ...(r.projectFiles ?? [])], localProjectFiles(p.plcproj)));
+    return lines.length ? lines : ['No declarations, RETAIN / PERSISTENT variables, tasks or libraries changed: only code.'];
+  }
+
   async function buildOnlineChange() {
     const p = needProject();
     const s = stateOf(p.root);
     const t = targetOf(p);
-    const ok = await vscode.window.showWarningMessage(`Build ${p.name} and write it to the PLC on ${t.name} as an online change?`, { modal: true, detail: 'The PLC takes the new code while it keeps running; the boot project is updated too. When an online change is not possible, nothing is written (Login offers a download).' }, 'Build and Online Change');
+    const preview = await onlineChangePreview(p, t).catch((err) => [`(Not compared with the PLC's project: ${err?.message ?? err})`]);
+    if (preview) log(`Online change on ${t.name}, compared with the PLC's project:\n  ${preview.join('\n  ')}`);
+    const ok = await vscode.window.showWarningMessage(`Build ${p.name} and write it to the PLC on ${t.name} as an online change?`, { modal: true, detail: `${preview ? `${preview.join('\n')}\n\n` : ''}The PLC takes the new code while it keeps running; the boot project is updated too. When an online change is not possible, nothing is written (Login offers a download).` }, 'Build and Online Change');
     if (!ok) return;
     if (STAND_IN) {
       s.loggedIn = true;

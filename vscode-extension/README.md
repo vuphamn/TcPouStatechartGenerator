@@ -141,6 +141,10 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   **Build and Online Change** and **Logout**, since the live values may no longer match the code.
 - **Build and Online Change:** the project built and written to the PLC as an online change (it keeps running), asked
   first; logged in afterwards. Nothing is written when an online change is not possible (Login offers a download).
+  The confirmation says what would change, as XAE's Online Change details: the project the PLC runs (its sources in
+  its boot folder) compared with yours: tasks changed (a download, not an online change), libraries at another
+  version, RETAIN / PERSISTENT variables added, removed or retyped (their values lost), the POUs, DUTs and GVLs whose
+  declarations changed (pointers and references to their instances become invalid), and those added or removed.
 - **Solution** view (the TwinCAT view): the PLC project as XAE's Solution Explorer shows it (its `.plcproj`'s folders,
   POUs, DUTs, GVLs, visualizations, task, and its libraries under **References**); a click opens a source as Structured
   Text.
