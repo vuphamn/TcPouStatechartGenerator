@@ -249,6 +249,15 @@ exports.run = async function run() {
     for (const l of writes ?? []) writeLines.push((await vscode.workspace.openTextDocument(l.uri)).lineAt(l.range.start.line).text.trim());
     expect(writeLines.length > 0 && writeLines.every((x) => /State\s*:=|=>\s*State/.test(x)), `Find All Writes: ${writeLines.length} (${writeLines.slice(0, 3).join(' | ')})`);
 
+    // The Cross Reference List: every place of State by POU and member, each declaration / write / read; Writes only
+    const xr = await vscode.commands.executeCommand('kvalMachineScope.crossReference', exDoc.uri, statePos);
+    const xrRefs = (xr?.groups ?? []).flatMap((g) => g.members.flatMap((m) => m.refs));
+    expect(xr?.name === 'State' && xrRefs.some((r) => /:declaration$/.test(r)) && xrRefs.filter((r) => /:write$/.test(r)).length === writeLines.length && xrRefs.some((r) => /:read$/.test(r)), `Cross Reference: ${xrRefs.length} places of State (${JSON.stringify(xr?.groups?.[0]?.members?.map((m) => m.label))})`);
+    const xw = await vscode.commands.executeCommand('kvalMachineScope.crossReferenceFilter', 'writes');
+    const xwRefs = (xw?.groups ?? []).flatMap((g) => g.members.flatMap((m) => m.refs));
+    expect(xwRefs.length === writeLines.length && xwRefs.every((r) => /:write$/.test(r)), `Cross Reference, Writes: ${xwRefs.join(', ')}`);
+    await vscode.commands.executeCommand('kvalMachineScope.crossReferenceFilter', 'all');
+
     // 16. IntelliSense: after "E_ScanState." the enum's members; in MoveAndAdvance( its parameters
     const now = exDoc.getText().split(/\r?\n/);
     const qL = now.findIndex((l) => /E_ScanState\.\w+/.test(l));
@@ -378,7 +387,7 @@ exports.run = async function run() {
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

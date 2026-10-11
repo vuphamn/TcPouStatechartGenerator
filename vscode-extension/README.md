@@ -39,6 +39,9 @@ file access.
 - **Reads and writes**, as XAE's Cross Reference List tells them: the caret on a name highlights its places in the
   section, writes (`x :=`, `x R=` / `S=`, an output bound to it: `Q => x`, a member or an index assigned) apart from
   reads. **Find All Writes** (the right-click menu): every place in the project that sets it.
+  **Cross Reference List** (the right-click menu), as XAE's: every place of the name in the project in the **Cross
+  Reference** view (the TwinCAT view), by POU and member, each a declaration, a write, a call or a read with its line;
+  its filter shows the writes or the reads only; a click opens it.
 - **Bookmarks** (as TwinCAT's and MachineScope's, the same ones): **Toggle Bookmark** (`Ctrl+K Ctrl+K`, the right-click
   menu) on a line of a member's declaration or implementation; on a `CASE` label it bookmarks that state. **Next** /
   **Previous** (`Ctrl+K Ctrl+N` / `Ctrl+K Ctrl+P`); a mark in the gutter and the overview ruler; a line's bookmark is found

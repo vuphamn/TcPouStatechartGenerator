@@ -469,6 +469,106 @@ function register(context) {
     })
   );
 
+  // The Cross Reference List (XAE's): every place of a name in the project, by POU and member, each a declaration,
+  // a write, a call or a read with its line; a click opens it. A filter: all, writes, reads
+  const xref = (() => {
+    const changed = new vscode.EventEmitter();
+    let shown = null; // { name, groups: [{ file, pou, members: [{ label, refs: [{ loc, access, line, text }] }] }] }
+    let filter = 'all';
+    const ICON = { declaration: 'symbol-field', write: 'edit', read: 'eye', call: 'symbol-method' };
+    const COLOR = { write: 'charts.red', declaration: 'charts.blue' };
+    const keep = (r) => filter === 'all' || (filter === 'writes' ? r.access === 'write' : filter === 'reads' ? r.access === 'read' || r.access === 'call' : true);
+    const provider = {
+      onDidChangeTreeData: changed.event,
+      getChildren(el) {
+        if (!shown) return [];
+        if (!el) return shown.groups.map((g) => ({ g })).filter((x) => x.g.members.some((m) => m.refs.some(keep)));
+        if (el.g) return el.g.members.filter((m) => m.refs.some(keep)).map((m) => ({ m }));
+        if (el.m) return el.m.refs.filter(keep).map((r) => ({ r }));
+        return [];
+      },
+      getTreeItem(el) {
+        if (el.g) {
+          const refs = el.g.members.flatMap((m) => m.refs).filter(keep);
+          const it = new vscode.TreeItem(el.g.pou, vscode.TreeItemCollapsibleState.Expanded);
+          const w = refs.filter((r) => r.access === 'write').length;
+          it.description = `${refs.length}${w ? ` · ${w} written` : ''}`;
+          it.iconPath = new vscode.ThemeIcon('symbol-class');
+          it.tooltip = el.g.file;
+          return it;
+        }
+        if (el.m) {
+          const it = new vscode.TreeItem(el.m.label, vscode.TreeItemCollapsibleState.Expanded);
+          it.description = String(el.m.refs.filter(keep).length);
+          it.iconPath = new vscode.ThemeIcon('symbol-method');
+          return it;
+        }
+        const r = el.r;
+        const it = new vscode.TreeItem(`${r.line + 1}  ${r.text}`, vscode.TreeItemCollapsibleState.None);
+        it.description = r.access;
+        it.iconPath = new vscode.ThemeIcon(ICON[r.access] ?? 'circle-small', COLOR[r.access] ? new vscode.ThemeColor(COLOR[r.access]) : undefined);
+        it.command = { command: 'vscode.open', title: 'Open', arguments: [r.loc.uri, { selection: r.loc.range }] };
+        it.contextValue = 'xrefItem';
+        return it;
+      },
+    };
+    const view = vscode.window.createTreeView('kvalMachineScope.crossReference', { treeDataProvider: provider });
+    view.message = 'Cross Reference List (right-click a name in Structured Text) lists every place of it in the project.';
+    context.subscriptions.push(view, changed);
+    const refresh = () => {
+      if (!shown) return;
+      const all = shown.groups.flatMap((g) => g.members.flatMap((m) => m.refs));
+      const n = (a) => all.filter((r) => r.access === a).length;
+      view.title = `Cross Reference: ${shown.name}`;
+      view.description = `${all.length} · ${n('write')} write · ${n('read') + n('call')} read${filter === 'all' ? '' : ` · showing ${filter}`}`;
+      view.message = all.some(keep) ? undefined : `No ${filter === 'all' ? 'places' : filter} of ${shown.name} in the project (by name).`;
+      changed.fire(undefined);
+    };
+    return {
+      show(name, files, refs) {
+        const groups = [];
+        for (const r of refs) {
+          const f = files.find((x) => x.file === r.file);
+          const mb = f?.members.find((m) => m.key === r.key);
+          const text = (mb?.[r.section]?.text ?? '').split(/\r?\n/)[r.line]?.trim() ?? '';
+          let g = groups.find((x) => x.file === r.file);
+          if (!g) groups.push((g = { file: r.file, pou: f?.name ?? path.basename(r.file), members: [] }));
+          const label = `${r.key ? mb?.name ?? r.key : g.pou} (${r.section === 'decl' ? 'Decl' : 'Impl'})`;
+          let m = g.members.find((x) => x.label === label);
+          if (!m) g.members.push((m = { label, refs: [] }));
+          m.refs.push({ loc: locationOf(files, r), access: r.access, line: r.line, text });
+        }
+        shown = { name, groups };
+        refresh();
+      },
+      setFilter(f) {
+        filter = f;
+        refresh();
+      },
+      summary: () => (shown ? { name: shown.name, filter, groups: shown.groups.map((g) => ({ pou: g.pou, members: g.members.map((m) => ({ label: m.label, refs: m.refs.filter(keep).map((r) => `${r.line + 1}:${r.access}`) })).filter((m) => m.refs.length) })).filter((g) => g.members.length) } : null),
+    };
+  })();
+  context.subscriptions.push(
+    vscode.commands.registerCommand('kvalMachineScope.crossReference', async (uriArg, posArg) => {
+      const ed = vscode.window.activeTextEditor;
+      const uri = uriArg instanceof vscode.Uri ? uriArg : ed?.document.uri;
+      if (!uri || uri.scheme !== SCHEME) return null;
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const pos = posArg instanceof vscode.Position ? posArg : ed?.selection.active;
+      const h = pos ? here(doc, pos) : null;
+      if (!h) return null;
+      const files = projectFiles(h.a.file);
+      xref.show(h.n.name, files, findReferences(files, h.n.name));
+      await vscode.commands.executeCommand('kvalMachineScope.crossReference.focus');
+      return xref.summary();
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.crossReferenceFilter', async (choice) => {
+      const pick = typeof choice === 'string' ? { f: choice } : await vscode.window.showQuickPick([{ label: 'All', f: 'all' }, { label: 'Writes', description: ':=, R= / S=, an output bound to it', f: 'writes' }, { label: 'Reads', description: 'reads and calls', f: 'reads' }], { title: 'Cross Reference: show' });
+      if (pick) xref.setFilter(pick.f);
+      return xref.summary();
+    })
+  );
+
   // Navigation as in XAE (stNavigation.cjs): the project's symbols (Ctrl+T), folding, the type hierarchy, the calls
   // (Shift+Alt+H), Go to Implementation (Ctrl+F12); by name, as Find All References
   const NAV_KIND = { class: vscode.SymbolKind.Class, function: vscode.SymbolKind.Function, module: vscode.SymbolKind.Module, interface: vscode.SymbolKind.Interface, struct: vscode.SymbolKind.Struct, enum: vscode.SymbolKind.Enum, typeParameter: vscode.SymbolKind.TypeParameter, method: vscode.SymbolKind.Method, property: vscode.SymbolKind.Property, event: vscode.SymbolKind.Event, variable: vscode.SymbolKind.Variable, enumMember: vscode.SymbolKind.EnumMember };

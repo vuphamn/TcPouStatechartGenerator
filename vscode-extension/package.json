@@ -383,6 +383,18 @@
         "title": "Online Change Details",
         "category": "TwinCAT",
         "icon": "$(diff)"
+      },
+      {
+        "command": "kvalMachineScope.crossReference",
+        "title": "Cross Reference List",
+        "category": "TwinCAT",
+        "icon": "$(references)"
+      },
+      {
+        "command": "kvalMachineScope.crossReferenceFilter",
+        "title": "Show Writes / Reads…",
+        "category": "TwinCAT",
+        "icon": "$(filter)"
       }
     ],
     "keybindings": [
@@ -614,6 +626,11 @@
           "command": "kvalMachineScope.onlineChangeDetails",
           "when": "view == kvalMachineScope.onlineChange",
           "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.crossReferenceFilter",
+          "when": "view == kvalMachineScope.crossReference",
+          "group": "navigation@1"
         }
       ],
       "commandPalette": [
@@ -652,6 +669,10 @@
         {
           "command": "kvalMachineScope.removeLibrary",
           "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.crossReferenceFilter",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -689,6 +710,11 @@
           "command": "kvalMachineScope.findWrites",
           "when": "resourceScheme == twincat-st",
           "group": "0_navigation@9"
+        },
+        {
+          "command": "kvalMachineScope.crossReference",
+          "when": "resourceScheme == twincat-st",
+          "group": "0_navigation@10"
         },
         {
           "command": "kvalMachineScope.notifyOnState",
@@ -795,6 +821,11 @@
         {
           "id": "kvalMachineScope.onlineChange",
           "name": "Online Change",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "kvalMachineScope.crossReference",
+          "name": "Cross Reference",
           "visibility": "collapsed"
         },
         {
