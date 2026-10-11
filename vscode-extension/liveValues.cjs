@@ -47,6 +47,15 @@ function adsSource(client) {
       const dt = await ads.dataTypeInfo(client, type, types);
       return dt?.enumValues ?? null;
     },
+    /** Every change of a value (an ADS notification, 10 ms cycle): onValue(value, t); → its stop */
+    async subscribe(p, info, onValue) {
+      const h = await ads.createHandle(client, p);
+      const sub = await ads.subscribeTyped(client, h, info, (s) => onValue(s.v, s.t));
+      return async () => {
+        await client.unsubscribe(sub).catch(() => {});
+        await ads.releaseHandle(client, h).catch(() => {});
+      };
+    },
     async dispose() {
       for (const h of handles.values()) await ads.releaseHandle(client, h).catch(() => {});
       handles.clear();
@@ -73,6 +82,20 @@ function standInSource(file) {
       fs.writeFileSync(file, JSON.stringify(all, null, 1));
     },
     enumNames: async (type) => Object.values(read().symbols ?? {}).find((s) => s.type === type && s.enum)?.enum ?? null,
+    // (every change: the file read every 50 ms)
+    subscribe: async (p, info, onValue) => {
+      let last;
+      const look = () => {
+        const v = sym(p)?.value;
+        if (v !== last) {
+          last = v;
+          onValue(v, Date.now());
+        }
+      };
+      look();
+      const timer = setInterval(look, 50);
+      return async () => clearInterval(timer);
+    },
     dispose: async () => {},
   };
 }
@@ -103,8 +126,89 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
   context.subscriptions.push(deco, activeDeco, bar);
   const clearActive = (ed) => {
     ed.setDecorations(activeDeco, []);
+    ed.setDecorations(statsDeco, []);
     activeNow.delete(ed.document.uri.toString());
   };
+  // Each CASE variable followed while logged in (an ADS subscription: every change): per state its entries, time in it,
+  // last entry; notifications asked for (the PLC entering a state, a BOOL becoming TRUE)
+  const statsDeco = vscode.window.createTextEditorDecorationType({
+    after: { margin: '0 0 0 1.5em', color: new vscode.ThemeColor('editorCodeLens.foreground'), fontStyle: 'italic' },
+  });
+  context.subscriptions.push(statsDeco);
+  const trackers = new Map(); // "<root>|<full>" (lower) → { root, full, stop, current, since, stats: Map<state, { n, ms, last }>, notify: Set<state> }
+  const conditions = new Map(); // "<root>|<full>" → { root, full, stop, last }: Notify When TRUE
+  const notified = []; // (the notifications shown: for the tests)
+  const bell = vscode.window.createStatusBarItem('kvalMachineScope.notify', vscode.StatusBarAlignment.Left, 46);
+  bell.name = 'TwinCAT notifications';
+  bell.command = 'kvalMachineScope.clearNotifications';
+  context.subscriptions.push(bell);
+  const renderBell = () => {
+    const n = [...trackers.values()].reduce((s, t) => s + t.notify.size, 0) + conditions.size;
+    bell.text = `$(bell) ${n}`;
+    bell.tooltip = n ? `Notified when: ${[...[...trackers.values()].flatMap((t) => [...t.notify].map((s) => `${t.full} = ${s}`)), ...[...conditions.values()].map((c) => `${c.full} = TRUE`)].join(', ')} (click: none any more)` : '';
+    if (n) bell.show();
+    else bell.hide();
+  };
+  const notify = (text) => {
+    notified.push(text);
+    void vscode.window.showInformationMessage(text);
+  };
+  const clock = (t) => new Date(t).toLocaleTimeString();
+  async function track(root, full, sym, src, enumNames) {
+    const k = `${root}|${full}`.toLowerCase();
+    if (trackers.has(k)) return trackers.get(k);
+    const tr = { root, full, stop: null, current: null, since: 0, stats: new Map(), notify: new Set() };
+    trackers.set(k, tr);
+    if (!src.subscribe) return tr;
+    try {
+      tr.stop = await src.subscribe(full, sym, (v, t) => {
+        const name = String(valueText(v, { enumNames })).split('.').pop().trim();
+        if (name === tr.current) return;
+        const now = Number.isFinite(t) ? t : Date.now();
+        if (tr.current) {
+          const prev = tr.stats.get(tr.current.toLowerCase());
+          if (prev) prev.ms += now - tr.since;
+        }
+        const s = tr.stats.get(name.toLowerCase()) ?? { n: 0, ms: 0, last: 0 };
+        // (the first value seen is where it is, not an entry)
+        if (tr.current !== null) s.n++;
+        s.last = now;
+        tr.stats.set(name.toLowerCase(), s);
+        const first = tr.current === null;
+        tr.current = name;
+        tr.since = now;
+        if (!first && tr.notify.has(name.toLowerCase())) notify(`The PLC entered ${name} at ${clock(now)} (${full})`);
+      });
+    } catch {
+      // (no subscription: counts not shown)
+    }
+    return tr;
+  }
+  async function dropTrackers(root) {
+    for (const m of [trackers, conditions]) for (const [k, t] of [...m]) if (!root || t.root.toLowerCase() === root.toLowerCase()) {
+      m.delete(k);
+      await t.stop?.().catch(() => {});
+    }
+    renderBell();
+  }
+  const fmtMs = (ms) => (ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`);
+  /** Each branch's counts after its label: "12× · Ø 2.0 s · last 10:42:01" */
+  function showStats(ed, text, tr) {
+    if (!tr?.stats.size) return ed.setDecorations(statsDeco, []);
+    const list = [];
+    for (const b of implementationOutline(text)) {
+      const s = b.name.split(',').map((n) => tr.stats.get(n.trim().toLowerCase())).find(Boolean);
+      if (!s) continue;
+      const open = tr.current && b.name.split(',').some((n) => n.trim().toLowerCase() === tr.current.toLowerCase()) ? Date.now() - tr.since : 0;
+      const done = s.n > 0 ? s.ms / s.n : 0;
+      const line = ed.document.positionAt(b.start).line;
+      const label = `${s.n}× entered${s.n ? ` · Ø ${fmtMs(done)}` : ''}${s.last ? ` · last ${clock(s.last)}` : ''}${open ? ` · now ${fmtMs(open)}` : ''}${tr.notify.has(b.name.split(',')[0].trim().toLowerCase()) ? ' · 🔔' : ''}`;
+      list.push({ range: new vscode.Range(line, Number.MAX_SAFE_INTEGER, line, Number.MAX_SAFE_INTEGER), renderOptions: { after: { contentText: label } } });
+    }
+    ed.setDecorations(statsDeco, list);
+  }
+  const trackerOfDoc = new Map(); // uri → tracker key
+
   /** The state the PLC is in: its branch of the section's (first) CASE marked */
   async function markActive(ed, a, text, inst, root, src) {
     if (a.section !== 'impl' || !vscode.workspace.getConfiguration('kvalMachineScope.liveValues').get('activeState', true)) return clearActive(ed);
@@ -124,6 +228,10 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     const ek = `${root}|${sym.type}`.toLowerCase();
     if (!enums.has(ek)) enums.set(ek, await src.enumNames(sym.type).catch(() => null));
     const t = valueText(value, { enumNames: enums.get(ek) });
+    // (followed for its counts and notifications)
+    const tr = await track(root, full, sym, src, enums.get(ek));
+    trackerOfDoc.set(ed.document.uri.toString(), k);
+    showStats(ed, text, tr);
     const want = String(t).split('.').pop().trim().toLowerCase();
     const branch = implementationOutline(text).find((b) => b.name.split(',').some((n) => n.trim().toLowerCase() === want));
     if (!branch) return clearActive(ed);
@@ -356,6 +464,74 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     vscode.commands.registerCommand('kvalMachineScope.liveValuesShown', (uri) => shownNow.get(String(uri)) ?? null),
     // (for the tests: the branch marked as the PLC's state, { line, state })
     vscode.commands.registerCommand('kvalMachineScope.activeStateShown', (uri) => activeNow.get(String(uri)) ?? null),
+    // (for the tests: a section's state counts { state: { n, ms } }, the notifications shown)
+    vscode.commands.registerCommand('kvalMachineScope.stateStatsShown', (uri) => {
+      const tr = trackers.get(trackerOfDoc.get(String(uri)) ?? '');
+      return tr ? Object.fromEntries([...tr.stats].map(([k, v]) => [k, { n: v.n, ms: v.ms }])) : null;
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.notificationsSeen', () => [...notified]),
+    // Notify When the PLC Enters This State (the right-click menu in a CASE branch, logged in): toggled
+    vscode.commands.registerCommand('kvalMachineScope.notifyOnState', async () => {
+      const ed = vscode.window.activeTextEditor;
+      const tr = ed && trackers.get(trackerOfDoc.get(ed.document.uri.toString()) ?? '');
+      if (!ed || !tr) {
+        void vscode.window.showInformationMessage('Logged in, put the caret in a CASE branch of the state machine (its state is followed then)');
+        return null;
+      }
+      const at = ed.document.offsetAt(ed.selection.active);
+      const flat = (list) => list.flatMap((b) => [b, ...flat(b.children ?? [])]);
+      const branch = flat(implementationOutline(ed.document.getText())).filter((b) => b.start <= at && at < b.end).pop();
+      if (!branch) {
+        void vscode.window.showInformationMessage('Put the caret in a CASE branch: its state is the one notified');
+        return null;
+      }
+      const state = branch.name.split(',')[0].trim();
+      const key = state.toLowerCase();
+      if (tr.notify.has(key)) tr.notify.delete(key);
+      else tr.notify.add(key);
+      renderBell();
+      void tick();
+      return { state, on: tr.notify.has(key) };
+    }),
+    // Notify When TRUE (a BOOL variable at the caret, logged in): its rising edge
+    vscode.commands.registerCommand('kvalMachineScope.notifyWhenTrue', async () => {
+      const ed = vscode.window.activeTextEditor;
+      if (!ed) return null;
+      const at = ed.document.offsetAt(ed.selection.active);
+      const m = (metaNow.get(ed.document.uri.toString()) ?? []).find((x) => x.uses.some((u) => u.start <= at && at <= u.end));
+      if (!m || !/^(BOOL|BIT)$/i.test(m.sym.type ?? '')) {
+        void vscode.window.showInformationMessage('Put the caret on a BOOL variable whose value is shown (logged in)');
+        return null;
+      }
+      const k = `${m.root}|${m.full}`.toLowerCase();
+      if (conditions.has(k)) {
+        const c = conditions.get(k);
+        conditions.delete(k);
+        await c.stop?.().catch(() => {});
+        renderBell();
+        return { full: m.full, on: false };
+      }
+      const src = await online.source(m.root);
+      const c = { root: m.root, full: m.full, stop: null, last: undefined };
+      conditions.set(k, c);
+      c.stop = src.subscribe
+        ? await src.subscribe(m.full, m.sym, (v, t) => {
+            if (v === true && c.last === false) notify(`${m.full} became TRUE at ${clock(Number.isFinite(t) ? t : Date.now())}`);
+            c.last = v;
+          }).catch(() => null)
+        : null;
+      renderBell();
+      return { full: m.full, on: true };
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.clearNotifications', () => {
+      for (const t of trackers.values()) t.notify.clear();
+      for (const [k, c] of [...conditions]) {
+        conditions.delete(k);
+        void c.stop?.().catch(() => {});
+      }
+      renderBell();
+      void tick();
+    }),
     // Prepare Value… (the variable at the caret): its new value, typed or picked, shown after the current one
     vscode.commands.registerCommand('kvalMachineScope.prepareValue', async (given) => {
       const ed = vscode.window.activeTextEditor;
@@ -462,7 +638,10 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
     /** Online state or the project changed: what was known is read again */
     refresh(root) {
       for (const m of [known, enums, instancesOf]) for (const k of [...m.keys()]) if (!root || k.startsWith(root.toLowerCase())) m.delete(k);
-      if (!online.isOnline(root ?? '')) for (const ed of vscode.window.visibleTextEditors) if (ed.document.uri.scheme === SCHEME) { ed.setDecorations(deco, []); clearActive(ed); }
+      if (!online.isOnline(root ?? '')) {
+        for (const ed of vscode.window.visibleTextEditors) if (ed.document.uri.scheme === SCHEME) { ed.setDecorations(deco, []); clearActive(ed); }
+        void dropTrackers(root);
+      }
       void tick();
     },
   };

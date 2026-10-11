@@ -611,7 +611,7 @@ function register(context, { activeFile, sectionUriOf }) {
           const it = new vscode.TreeItem(t.name, t.calls.length ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
           it.id = `task|${el.root}|${t.name}`;
           const plan = [t.cycleMs !== undefined ? `${t.cycleMs} ms` : null, t.priority !== undefined ? `priority ${t.priority}` : null].filter(Boolean).join(' · ');
-          it.description = on ? `${plan} · exec ${on.execMs.toFixed(3)} ms${on.exceeded ? ' · OVERRUN' : ''}` : plan;
+          it.description = on ? `${plan} · exec ${on.execMs.toFixed(3)} ms (max ${on.maxMs.toFixed(3)})${on.exceeded ? ' · OVERRUN' : ''}` : plan;
           it.iconPath = new vscode.ThemeIcon(on?.exceeded ? 'warning' : 'watch', on?.exceeded ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined);
           it.tooltip = new vscode.MarkdownString([
             `**${t.name}**${t.plc ? ` (${t.plc})` : ''}`,
@@ -623,7 +623,8 @@ function register(context, { activeFile, sectionUriOf }) {
           ].filter(Boolean).join('  \n'));
           const file = t.ttoFile ?? t.tsproj;
           if (file) it.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.file(file)] };
-          it.contextValue = 'plcTask';
+          it.contextValue = on ? 'plcTaskOnline' : 'plcTask';
+          if (on) el.trendPath = `TwinCAT_SystemInfoVarList._TaskInfo[${on.index}].LastExecTime`;
           return it;
         }
         if (el.call) {
@@ -662,6 +663,13 @@ function register(context, { activeFile, sectionUriOf }) {
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+  // A task's trend: its LastExecTime (100 ns units) watched, the trend panel opened
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.taskTrend', async (el) => {
+    if (!el?.trendPath) return false;
+    await vscode.commands.executeCommand('kvalMachineScope.addWatch', el.trendPath);
+    await vscode.commands.executeCommand('kvalMachineScope.showTrend');
+    return true;
+  }));
   // Logged in: the tasks' online values every 2 s (TwinCAT_SystemInfoVarList._TaskInfo[i], matched by TaskName)
   const TASK_INFO = 'TwinCAT_SystemInfoVarList._TaskInfo';
   let taskBusy = false;
@@ -697,9 +705,13 @@ function register(context, { activeFile, sectionUriOf }) {
         if (typeof raw !== 'string' || !raw) break;
         const name = taskName(raw);
         const exec = await value(`${TASK_INFO}[${i}].LastExecTime`);
+        const execMs = typeof exec === 'number' ? exec / 10000 : 0;
+        const prevMax = taskOnline.get(`${root}|${name}`.toLowerCase())?.maxMs ?? 0;
         seen.set(`${root}|${name}`.toLowerCase(), {
           // (100 ns units)
-          execMs: typeof exec === 'number' ? exec / 10000 : 0,
+          execMs,
+          maxMs: Math.max(prevMax, execMs),
+          index: i,
           exceeded: (await value(`${TASK_INFO}[${i}].CycleTimeExceeded`)) === true,
           cycles: await value(`${TASK_INFO}[${i}].CycleCount`),
         });
@@ -727,7 +739,7 @@ function register(context, { activeFile, sectionUriOf }) {
     }
     return Object.fromEntries(tasks.map((t) => {
       const on = taskOnline.get(`${project.root}|${t.name}`.toLowerCase());
-      return [t.name, { cycleMs: t.cycleMs, priority: t.priority, calls: t.calls, execMs: on?.execMs, exceeded: on?.exceeded }];
+      return [t.name, { cycleMs: t.cycleMs, priority: t.priority, calls: t.calls, execMs: on?.execMs, maxMs: on?.maxMs, exceeded: on?.exceeded, index: on?.index }];
     }));
   }));
   const renderAll = render;

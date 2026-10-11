@@ -111,7 +111,13 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   second, for the visible part of each section. A POU's values are its instance's on the PLC (found in its symbol table;
   with several, the status bar's instance item chooses one); a GVL's are its own. Hovering one shows its symbol and type.
   Logged out: none. The `CASE` branch of the state the PLC is in is marked (the line, a green bar, the overview ruler),
-  its variable read even when its line is scrolled away (`kvalMachineScope.liveValues.activeState`).
+  its variable read even when its line is scrolled away (`kvalMachineScope.liveValues.activeState`). The variable is
+  followed by an ADS subscription (every change): after each state's label, how often the PLC entered it, its average
+  time there, its last entry and, for the current one, its time so far (`12× entered · Ø 2.0 s · last 10:42:01`).
+- **Notify When the PLC Enters This State** (the right-click menu, the caret in a `CASE` branch) and **Notify When
+  TRUE** (the caret on a BOOL variable whose value is shown): a notification when it happens, with the PLC's time; the
+  bell in the status bar lists them, a click clears them. XAE's breakpoints are not reachable from outside XAE: this is
+  the nearest, without stopping the machine.
 - **Write Values** (logged in, as XAE's online view): **Prepare Value…** (`Ctrl+Shift+F7`, the right-click menu) on a
   variable whose value is shown: its new value picked (`TRUE` / `FALSE`, an enum's members) or typed (checked against
   its type: its range, `16#FF`, a string's length), then shown after the current one (`7 ⇒ 9`). **Write Values**
@@ -129,7 +135,8 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   Text.
 - **Tasks** (the Solution view, as XAE's SYSTEM > Tasks): each task's cycle, priority and AMS port (the `.tsproj`) and
   the programs it calls (its `.TcTTO`; a click opens one). Logged in, its online values beside it, read from the PLC's
-  `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time, and a warning when it overran its cycle.
+  `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time and the longest since logged in, and a warning
+  when it overran its cycle; **Show Trend** (its button) watches its execution time (in 100 ns) and opens the trend.
 - **Start / Stop:** the PLC application, over ADS, while logged in. Asked first (they run or stop the machine's
   program); `kvalMachineScope.twincat.confirmStartStop` switches that off.
 - Needs TwinCAT XAE on this computer for Build and Login (its Automation Interface); Start, Stop and the PLC's state need

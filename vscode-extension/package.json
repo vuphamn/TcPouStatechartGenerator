@@ -285,6 +285,29 @@
         "command": "kvalMachineScope.findWrites",
         "title": "Find All Writes",
         "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.notifyOnState",
+        "title": "Notify When the PLC Enters This State",
+        "category": "TwinCAT",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "kvalMachineScope.notifyWhenTrue",
+        "title": "Notify When TRUE",
+        "category": "TwinCAT",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "kvalMachineScope.clearNotifications",
+        "title": "Clear Notifications",
+        "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.taskTrend",
+        "title": "Show Trend",
+        "category": "TwinCAT",
+        "icon": "$(graph-line)"
       }
     ],
     "keybindings": [
@@ -499,6 +522,10 @@
         {
           "command": "kvalMachineScope.findWrites",
           "when": "resourceScheme == twincat-st"
+        },
+        {
+          "command": "kvalMachineScope.taskTrend",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -536,6 +563,16 @@
           "command": "kvalMachineScope.findWrites",
           "when": "resourceScheme == twincat-st",
           "group": "0_navigation@9"
+        },
+        {
+          "command": "kvalMachineScope.notifyOnState",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
+          "group": "twincat@6"
+        },
+        {
+          "command": "kvalMachineScope.notifyWhenTrue",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
+          "group": "twincat@7"
         }
       ],
       "view/item/context": [
@@ -558,6 +595,11 @@
           "command": "kvalMachineScope.removeWatch",
           "when": "view == kvalMachineScope.watch && viewItem == watchItem",
           "group": "inline@2"
+        },
+        {
+          "command": "kvalMachineScope.taskTrend",
+          "when": "view == kvalMachineScope.solution && viewItem == plcTaskOnline",
+          "group": "inline@1"
         }
       ]
     },

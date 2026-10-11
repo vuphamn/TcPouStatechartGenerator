@@ -160,9 +160,40 @@ exports.run = async function run() {
     fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(standIn));
     const v2 = await waitFor(async () => (await shownOf())?.State === 'ComputeResult', 8000);
     expect(v2, `a value changed on the PLC: shown (${JSON.stringify(await shownOf())})`);
+    // Counts per state (every change followed), Notify When the PLC Enters This State (the caret in FastScan's branch)
+    const fastLine = exDoc.getText().split(/\r?\n/).findIndex((l) => /E_ScanState\.FastScan\s*:/.test(l));
+    const exEd2 = await vscode.window.showTextDocument(exDoc);
+    exEd2.selection = new vscode.Selection(new vscode.Position(fastLine + 1, 2), new vscode.Position(fastLine + 1, 2));
+    await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.stateStatsShown', exDoc.uri.toString())) !== null, 8000);
+    const on = await vscode.commands.executeCommand('kvalMachineScope.notifyOnState');
+    const setState = (v) => { const s = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')); s.symbols['MAIN.fbScan.State'].value = v; fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(s)); };
+    setState(3);
+    await sleep(400);
+    setState(5);
+    await sleep(400);
+    setState(3);
+    const counted = await waitFor(async () => { const st = await vscode.commands.executeCommand('kvalMachineScope.stateStatsShown', exDoc.uri.toString()); return st?.fastscan?.n >= 1 && st?.computeresult?.n >= 1 ? st : null; }, 8000);
+    const seen = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.notificationsSeen')).find((x) => /entered FastScan/.test(x)), 5000);
+    expect(on?.state === 'FastScan' && on.on && counted && seen, `counts per state (${JSON.stringify(counted)}), notified: ${seen ?? 'nothing'}`);
+    setState(5);
+    // Notify When TRUE: Busy (the caret on it): FALSE, then TRUE again, notified
+    const busyAt = exDoc.getText().split(/\r?\n/).findIndex((l) => /\bBusy\b/.test(l));
+    const exEd3 = await vscode.window.showTextDocument(exDoc);
+    const bCol = exDoc.lineAt(busyAt).text.indexOf('Busy') + 1;
+    exEd3.selection = new vscode.Selection(new vscode.Position(busyAt, bCol), new vscode.Position(busyAt, bCol));
+    await sleep(800);
+    const onTrue = await vscode.commands.executeCommand('kvalMachineScope.notifyWhenTrue');
+    const setSym = (k, v) => { const s = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')); s.symbols[k].value = v; fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(s)); };
+    setSym('MAIN.fbScan.Busy', false);
+    await sleep(400);
+    setSym('MAIN.fbScan.Busy', true);
+    const becameTrue = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.notificationsSeen')).find((x) => /Busy became TRUE/.test(x)), 5000);
+    expect(onTrue?.on && becameTrue, `Notify When TRUE: ${becameTrue ?? JSON.stringify(onTrue)}`);
+    await vscode.commands.executeCommand('kvalMachineScope.clearNotifications');
+
     // The Solution view's tasks: PlcTask (10 ms, priority 20, calls MAIN), logged in: its last cycle's time
     const tk = await waitFor(async () => { const t = await vscode.commands.executeCommand('kvalMachineScope.tasksShown'); return t?.PlcTask?.execMs !== undefined ? t : null; }, 8000);
-    expect(tk && tk.PlcTask.cycleMs === 10 && tk.PlcTask.priority === 20 && tk.PlcTask.calls.join() === 'MAIN' && Math.abs(tk.PlcTask.execMs - 0.0523) < 1e-9 && tk.PlcTask.exceeded === false, `tasks: ${JSON.stringify(tk ?? (await vscode.commands.executeCommand('kvalMachineScope.tasksShown')))}`);
+    expect(tk && tk.PlcTask.cycleMs === 10 && tk.PlcTask.priority === 20 && tk.PlcTask.calls.join() === 'MAIN' && Math.abs(tk.PlcTask.execMs - 0.0523) < 1e-9 && Math.abs(tk.PlcTask.maxMs - 0.0523) < 1e-9 && tk.PlcTask.index === 1 && tk.PlcTask.exceeded === false, `tasks: ${JSON.stringify(tk ?? (await vscode.commands.executeCommand('kvalMachineScope.tasksShown')))}`);
     const marked = await waitFor(async () => { const x = await vscode.commands.executeCommand('kvalMachineScope.activeStateShown', exDoc.uri.toString()); return x?.state === 'ComputeResult' ? x : null; }, 8000);
     expect(marked && /ComputeResult\s*:/.test(exDoc.lineAt(marked.line).text), `the PLC's state marked: its CASE branch (${JSON.stringify(marked)})`);
     // Write Values: Busy prepared FALSE (the caret on it), written: the PLC's value changes
