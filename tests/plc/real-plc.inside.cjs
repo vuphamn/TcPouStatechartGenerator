@@ -19,6 +19,8 @@ exports.run = async () => {
   try {
     const pou = path.join(process.env.KSS_TEST_PROJECT, 'KssLocalTest', 'KssPlc', 'POUs', 'FB_TestCycle.TcPOU');
     await vscode.extensions.all.find((e) => e.id === 'kval.kval-machinescope-vscode')?.activate();
+    // (the POU as Structured Text sections: a .TcPOU opens in the code tab otherwise)
+    await vscode.workspace.getConfiguration('kvalMachineScope.structuredText').update('pouOpensAs', 'sections', vscode.ConfigurationTarget.Global);
     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(pou));
     const impl = await waitFor(() => vscode.window.visibleTextEditors.find((e) => e.document.uri.scheme === 'twincat-st' && /FB_TestCycle \(Impl\)\.st$/.test(e.document.uri.path)));
     expect(impl, 'FB_TestCycle opened as Structured Text');
@@ -48,6 +50,9 @@ exports.run = async () => {
     await vscode.commands.executeCommand('kvalMachineScope.addWatch', 'MAIN.fbTest.nCycles');
     const wv = await waitFor(async () => /^\d+$/.test((await vscode.commands.executeCommand('kvalMachineScope.watchShown'))?.['MAIN.fbTest.nCycles'] ?? ''), 8000);
     expect(wv, `Watch: MAIN.fbTest.nCycles shown (${JSON.stringify(await vscode.commands.executeCommand('kvalMachineScope.watchShown'))})`);
+    // Online Change Details against the real PLC: its project as the local one (only code), or its sources not kept
+    const oc = await vscode.commands.executeCommand('kvalMachineScope.onlineChangeDetails');
+    expect(Array.isArray(oc) && oc.length > 0 && oc.every((l) => /only code|Not compared with the PLC's project: The PLC keeps no sources/.test(l)), `Online Change Details: ${JSON.stringify(oc)}`);
     await vscode.commands.executeCommand('kvalMachineScope.logout');
     const v5 = await waitFor(async () => (await shown()) === null, 8000);
     expect(v5, 'logged out: no values');

@@ -68,7 +68,8 @@ function register(context, { activeFile, sectionUriOf }) {
     if (conn && conn.netId === target.netId) return conn.client;
     if (conn) await conn.client.disconnect().catch(() => {});
     conn = null;
-    const client = await systemClient({ netId: target.netId, ip: target.local ? '127.0.0.1' : target.address || '' }, 851);
+    // (TwinCAT in Config mode, no PLC yet: connected all the same, Login activates and downloads)
+    const client = await systemClient({ netId: target.netId, ip: target.local ? '127.0.0.1' : target.address || '' }, 851, { allowNoPlc: true });
     conn = { netId: target.netId, client };
     return client;
   }

@@ -106,7 +106,7 @@ function defaultLocalNetId(localIp) {
  * (its PLC's: 851 …) → a connected client
  * (the caller disconnects it)
  */
-async function systemClient(options, port = 10000) {
+async function systemClient(options, port = 10000, { allowNoPlc = false } = {}) {
   const netId = String(options?.netId ?? '').trim();
   if (!/^\d+\.\d+\.\d+\.\d+\.\d+\.\d+$/.test(netId)) throw new Error("Enter the PLC's AMS NetId (e.g. 192.168.1.20.1.1)");
   const [host, tcp] = (String(options.ip ?? '').trim() || netId.split('.').slice(0, 4).join('.')).split(':');
@@ -126,11 +126,22 @@ async function systemClient(options, port = 10000) {
       timeoutDelay: 5000,
       hideConsoleWarnings: true,
     });
+  // (it answers: its port's state; allowNoPlc: the PLC's port not there yet (TwinCAT in Config mode, no PLC program:
+  // "target port not found") while its system service answers: connected all the same, so it can be activated and
+  // downloaded (Login, Build and Online Change); else that fails, for the callers that say Config mode)
+  const answers = async (c) => {
+    try {
+      await c.readState();
+    } catch (err) {
+      if (!allowNoPlc || port === 10000 || (err?.adsError?.errorCode ?? err?.errorCode) !== 6) throw err;
+      await c.readState({ adsPort: 10000 });
+    }
+  };
   if (!viaLocalRouter && tcpPort === 48898 && !given && localTwinCatNetId()) {
     const c = make(true);
     try {
       await c.connect();
-      await c.readState();
+      await answers(c);
       return c;
     } catch {
       await c.disconnect().catch(() => {});
@@ -139,7 +150,7 @@ async function systemClient(options, port = 10000) {
   const c = make(viaLocalRouter);
   try {
     await c.connect();
-    await c.readState();
+    await answers(c);
     return c;
   } catch (err) {
     await c.disconnect().catch(() => {});

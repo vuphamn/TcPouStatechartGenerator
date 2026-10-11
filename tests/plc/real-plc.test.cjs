@@ -7,6 +7,8 @@
 //  3. the extension's PLC parts against it: Login's check (the compile IDs), the instance, live values (an enum by
 //     its name), Write Values (bStart := TRUE: Running, then Done), Stop and Start
 //  4. the same through VS Code itself (real-plc.inside.cjs; this computer's VS Code, a profile of its own)
+//  3b. the online change check: the project the PLC runs (its sources in its boot folder) compared with the local one,
+//      only code; a declaration changed and a RETAIN variable added here: said; the libraries' versions (none missing)
 //  5. the PLC stopped at the end (its configuration stays active)
 //   KSS_REAL_PLC=1 node tests/run.cjs plc
 const h = require('../lib/harness.cjs');
@@ -121,12 +123,12 @@ END_CASE
   const onStep = (s) => console.log(`   ${((Date.now() - t0) / 1000).toFixed(0)}s ${s}`);
   const built = await b.buildFromProject(null, { file: plcproj, onStep });
   expect(built.ok && built.errors === 0, `built (${built.fatal ?? `${built.errors} errors`})`);
-  let c = await systemClient({ netId, ip: '127.0.0.1' }, 851);
+  let c = await systemClient({ netId, ip: '127.0.0.1' }, 851, { allowNoPlc: true });
   const act = await b.buildFromProject(c, { file: plcproj, write: 'activate', netId, onStep });
   expect(act.ok && act.written === 'activate', `activated on this computer (${act.fatal ?? act.written})`);
   await c.disconnect().catch(() => {});
   await sleep(3000);
-  c = await systemClient({ netId, ip: '127.0.0.1' }, 851);
+  c = await systemClient({ netId, ip: '127.0.0.1' }, 851, { allowNoPlc: true });
   const dl = await b.buildFromProject(c, { file: plcproj, write: 'download', netId, onStep });
   expect(dl.ok && dl.plcRun?.state === 'Run', `downloaded, the PLC runs (${dl.fatal ?? JSON.stringify(dl.plcRun)})`);
   b.closeXae();
@@ -167,6 +169,25 @@ END_CASE
   const st = await stopPlc(c);
   const go = await startPlc(c);
   expect(st.state === 'Stop' && go.state === 'Run', `Stop (${st.state}), Start (${go.state})`);
+
+  // 3b. The online change check and the libraries
+  const { readPlcSources } = require(path.join(R, 'shared', 'tcSources.cjs'));
+  const { onlineChangeRisks, riskLines, localProjectFiles } = require(path.join(R, 'shared', 'onlineChangeCheck.cjs'));
+  const plcSide = await readPlcSources(c, 851, { plcProject: 'KssPlc' }).catch((e) => ({ error: e.message }));
+  if (plcSide.error) {
+    // (a project downloaded without its sources: said so, not compared)
+    expect(/keeps no sources|Source download/i.test(plcSide.error), `the PLC's sources: ${plcSide.error}`);
+  } else {
+    const plcFiles = [...plcSide.files, ...(plcSide.projectFiles ?? [])];
+    const same = onlineChangeRisks(plcFiles, localProjectFiles(plcproj));
+    expect(riskLines(same).length === 0 && plcSide.files.some((f) => /FB_TestCycle\.TcPOU$/i.test(f.path)), `the PLC's project against the local one: only code (${riskLines(same).join(' | ') || 'nothing said'}; ${plcSide.files.length} sources, ${(plcSide.projectFiles ?? []).map((f) => f.path).join(', ')})`);
+    const local = localProjectFiles(plcproj).map((f) => (/FB_TestCycle\.TcPOU$/i.test(f.path) ? { ...f, content: f.content.replace('\tfSpeed : LREAL := 1.5;', '\tfSpeed : LREAL := 1.5;\r\n\tnExtra : INT;\r\nEND_VAR\r\nVAR RETAIN\r\n\tnKept : DINT;') } : f));
+    const changed = onlineChangeRisks(plcFiles, local);
+    expect(changed.interfaces.includes('FB_TestCycle') && changed.retain.some((v) => v.name === 'nKept' && /RETAIN added/.test(v.change)) && changed.tasks.length === 0 && changed.libraries.length === 0, `a declaration changed here, a RETAIN added: said (${riskLines(changed).join(' | ')})`);
+  }
+  const { readLibraries } = require(path.join(R, 'vscode-extension', 'plcTree.cjs'));
+  const libs = readLibraries(plcproj);
+  expect(libs.length > 0 && libs.every((l) => !l.missing) && libs.some((l) => l.name === 'Tc2_Standard' && l.used), `the libraries, each installed here: ${libs.map((l) => `${l.name} ${l.used}${l.pinned ? '' : ' (*)'}`).join(', ')}`);
 
   // 4. Through VS Code itself (no stand-in)
   const codeExe = process.env.KSS_VSCODE || path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Microsoft VS Code', 'Code.exe');
