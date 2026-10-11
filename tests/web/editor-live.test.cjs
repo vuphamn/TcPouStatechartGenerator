@@ -34,6 +34,8 @@ const ID = 'method-implementation-editor';
       const vars = m.vars.filter((v) => !/^(sym|ov):/.test(v.id));
       await toApp({ type: 'liveWatchResult', vars: vars.map((v) => ({ id: v.id, symbol: v.candidates[0], type: valueOf(v.id) === true ? 'BOOL' : 'INT' })) });
       await toApp({ type: 'liveVars', values: vars.map((v) => ({ id: v.id, t: Date.now(), v: valueOf(v.id) })) });
+    } else if (m.type === 'liveWrite') {
+      await toApp({ type: 'liveWriteResult', requestId: m.requestId, ok: true, message: `${m.id} := ${m.value}` });
     } else if (m.type === 'projectPous') {
       await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
     }
@@ -93,6 +95,14 @@ const ID = 'method-implementation-editor';
   const row = await page.$eval('#live-watch-list .live-watch-row[data-name="cmd_bHome"]', (e) => e.querySelector('.live-watch-value')?.textContent.trim()).catch(() => null);
   const kept = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kss.live.watch.')).map((k) => `${k}=${localStorage.getItem(k)}`).join(' '));
   expect(row === 'TRUE' && /cmd_bHome/.test(kept), `the Live tab lists it: cmd_bHome = ${row} (kept: ${kept})`);
+  // Its value written from there (the same dialog: FALSE proposed)
+  await page.click('#live-watch-list .live-watch-row[data-name="cmd_bHome"] .live-watch-write').catch(() => {});
+  await page.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const proposed = await page.$eval('#text-prompt-input', (i) => i.value).catch(() => null);
+  await page.click('#text-prompt-submit').catch(() => {});
+  await sleep(600);
+  const wrote = sent.find((m) => m.type === 'liveWrite');
+  expect(proposed === 'FALSE' && wrote?.id === 'cmd_bhome' && wrote.value === false, `the watched value written: ${JSON.stringify(wrote)} (proposed ${proposed})`);
   // The menu now says Stop watching; that takes it out
   await page.evaluate(() => document.getElementById('dock-tab-method')?.click());
   await sleep(500);

@@ -10674,7 +10674,7 @@ export const App: React.FC = () => {
               showCopyToast(`${instance} live on ${plc.name || plc.netId} too: in a new ${isXaeHost() ? 'tab' : 'window'}`, 'success', 5000);
             }}
             onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
-            watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()] }))}
+            watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type }))}
             onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}
             gatewayOrigin={gatewayOrigin}

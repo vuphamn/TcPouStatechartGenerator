@@ -95,7 +95,7 @@ interface LivePanelProps {
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
-  watchList?: { name: string; value?: boolean | number | string }[];
+  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string }[];
   onUnwatch?: (name: string) => void;
   /**
    * xae: TwinCAT XAE with a POU from an open TwinCAT project; desktop: the desktop app (ADS straight to the PLC);
@@ -1715,7 +1715,18 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           {watchList.map((w) => (
             <div key={w.name} className="live-watch-row flex items-center gap-2 font-mono text-[11px]" data-name={w.name}>
               <span className="text-slate-300 truncate">{w.name}</span>
-              <span className="live-watch-value ml-auto text-emerald-300">{w.value === undefined ? '…' : typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : String(w.value)}</span>
+              {onWriteVar && w.value !== undefined ? (
+                <button
+                  type="button"
+                  className="live-watch-value live-watch-write ml-auto text-emerald-300 underline decoration-dotted decoration-slate-600 hover:text-sky-300"
+                  title={`Write a value to ${w.symbol ?? w.name}${w.type ? ` (${w.type})` : ''}…`}
+                  onClick={() => onWriteVar({ name: w.name, id: w.name.toLowerCase(), symbol: w.symbol, type: w.type, text: typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : typeof w.value === 'string' ? `'${w.value}'` : String(w.value) })}
+                >
+                  {typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : String(w.value)}
+                </button>
+              ) : (
+                <span className="live-watch-value ml-auto text-emerald-300">{w.value === undefined ? '…' : typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : String(w.value)}</span>
+              )}
               {onUnwatch && (
                 <button type="button" onClick={() => onUnwatch(w.name)} className="text-slate-500 hover:text-white" title="Stop watching it">
                   ×
