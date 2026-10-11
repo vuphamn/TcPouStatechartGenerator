@@ -1,3 +1,4 @@
+import { isWriteAt } from './renameVariable.ts';
 /**
  * Structured Text Find & Highlighting Utility
  * Provides fast, safe string and variable search and highlighting for
@@ -247,7 +248,7 @@ export function wordAtCaret(text: string, start: number, end: number): string {
  * The uses of the word under the caret marked (whole word, any case: ST is case-insensitive), when it occurs more than
  * once; in the text of Prism's HTML only, as Find's marks are
  */
-export function highlightWordOccurrences(prismHtml: string, word: string): { html: string; count: number } {
+export function highlightWordOccurrences(prismHtml: string, word: string, code?: string): { html: string; count: number } {
   const rx = word ? buildSearchRegex(word, false, true) : null;
   if (!prismHtml || !rx) return { html: prismHtml, count: 0 };
   let count = 0;
@@ -257,10 +258,34 @@ export function highlightWordOccurrences(prismHtml: string, word: string): { htm
   });
   if (count < 2) return { html: prismHtml, count };
   // (its look: mark.word-occurrence in index.css, the word in its own colour)
+  // (with the code: each use's place in it, a write marked apart: x :=, R= / S=, => x)
+  const lines = code ? code.split('\n') : null;
+  const starts: number[] = [];
+  if (lines) {
+    let n = 0;
+    for (const l of lines) {
+      starts.push(n);
+      n += l.length + 1;
+    }
+  }
+  const isWrite = (offset: number, length: number) => {
+    if (!lines) return false;
+    let li = starts.length - 1;
+    while (li > 0 && starts[li] > offset) li--;
+    return isWriteAt(lines[li], offset - starts[li], length);
+  };
+  const plainLength = (raw: string) => raw.replace(/&(?:lt|gt|amp|quot|#39|#x27|apos);/g, 'x').length;
+  let pos = 0;
   const html = prismHtml.replace(/(<[^>]+>)|([^<]+)/g, (_full, tag, textNode) => {
     if (tag) return tag;
     rx.lastIndex = 0;
-    return textNode.replace(rx, (m: string) => `<mark class="word-occurrence">${m}</mark>`);
+    const out = textNode.replace(rx, (m: string, ...args: unknown[]) => {
+      const at = args[args.length - 2] as number;
+      const write = isWrite(pos + plainLength(textNode.slice(0, at)), m.length);
+      return `<mark class="word-occurrence${write ? ' word-write' : ''}">${m}</mark>`;
+    });
+    pos += plainLength(textNode);
+    return out;
   });
   return { html, count };
 }

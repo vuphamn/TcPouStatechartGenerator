@@ -1,9 +1,13 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Search } from 'lucide-react';
 import type { Reference } from '../utils/renameVariable.ts';
 
 /** Find All References: every use of a name in the POU, by method; a click opens it at the line */
-export const ReferencesDialog: React.FC<{ name: string; refs: Reference[]; onOpen: (ref: Reference) => void; onClose: () => void }> = ({ name, refs, onOpen, onClose }) => {
+export const ReferencesDialog: React.FC<{ name: string; refs: Reference[]; onOpen: (ref: Reference) => void; onClose: () => void; writesOnly?: boolean }> = ({ name, refs: allRefs, onOpen, onClose, writesOnly = false }) => {
+  // (Find All Writes: the writes only; the filter switched here)
+  const [onlyWrites, setOnlyWrites] = useState(writesOnly);
+  useEffect(() => setOnlyWrites(writesOnly), [writesOnly, name]);
+  const refs = onlyWrites ? allRefs.filter((r) => r.kind === 'write') : allRefs;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -30,25 +34,33 @@ export const ReferencesDialog: React.FC<{ name: string; refs: Reference[]; onOpe
       </>
     );
   };
-  const writes = refs.filter((r) => r.kind === 'write').length;
+  const writes = allRefs.filter((r) => r.kind === 'write').length;
   return (
     <div id="references-dialog" role="dialog" aria-label={`References to ${name}`} className="fixed right-4 top-20 z-[70] w-[560px] max-w-[92vw] max-h-[70vh] flex flex-col rounded-xl bg-slate-900 border border-slate-700 shadow-2xl text-xs">
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-800">
         <span className="flex items-center gap-2 font-semibold text-slate-100 min-w-0">
           <Search className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span className="truncate">
-            References to <span className="font-mono text-amber-200">{name}</span>
+            {onlyWrites ? 'Writes of' : 'References to'} <span className="font-mono text-amber-200">{name}</span>
           </span>
           <span id="references-count" className="text-[10px] font-normal text-slate-400 shrink-0">
             {refs.length} in {groups.length} place{groups.length === 1 ? '' : 's'}{writes ? ` · ${writes} written` : ''}
           </span>
         </span>
+        <div className="flex rounded-md border border-slate-700 overflow-hidden text-[10px] shrink-0" role="radiogroup" aria-label="Which uses">
+          <button id="references-all" role="radio" aria-checked={!onlyWrites} onClick={() => setOnlyWrites(false)} className={`px-1.5 py-0.5 ${!onlyWrites ? 'bg-sky-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+            All
+          </button>
+          <button id="references-writes" role="radio" aria-checked={onlyWrites} onClick={() => setOnlyWrites(true)} className={`px-1.5 py-0.5 ${onlyWrites ? 'bg-rose-800 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Only where it is set (:=, R= / S=, an output bound to it)">
+            Writes
+          </button>
+        </div>
         <button onClick={onClose} className="p-0.5 text-slate-400 hover:text-white rounded" title="Close (Esc)">
           <X className="w-4 h-4" />
         </button>
       </div>
       <div className="overflow-y-auto p-2 space-y-2">
-        {refs.length === 0 && <div className="text-slate-500 px-1">No uses of {name} in the POU.</div>}
+        {refs.length === 0 && <div className="text-slate-500 px-1">{onlyWrites ? `${name} is written nowhere in the POU.` : `No uses of ${name} in the POU.`}</div>}
         {groups.map((g) => (
           <div key={g.where}>
             <div className="px-1 pb-0.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{g.where}</div>

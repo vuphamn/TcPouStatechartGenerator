@@ -336,6 +336,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     if (r) items.push(r);
     const services = editorServices();
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
+    if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-writes', label: `Find All Writes to ${sym}`, title: 'Where it is set in the POU (:=, R= / S=, an output bound to it): who sets this?', onSelect: () => services.findReferences!(sym, { writesOnly: true }) });
     const asMethod = !memberOf && methods.find((m) => m.toLowerCase() === sym.toLowerCase());
     if (asMethod && services?.renameMethod)
       items.push({ id: 'editor-menu-rename-method', label: `Rename ${new RegExp(`<Action\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'action' : new RegExp(`<Property\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'property' : 'method'} ${asMethod}…`, title: 'Its declaration and every call (a preview first)', onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.renameMethod!(asMethod)) });

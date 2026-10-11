@@ -18,6 +18,14 @@ const html = '<span class="token keyword">IF</span> bStart <span class="token ke
 const r = highlightWordOccurrences(html, 'nCount');
 expect(r.count === 2 && (r.html.match(/class="word-occurrence"/g) ?? []).length === 2 && /nCountX/.test(r.html) && !/<mark[^>]*>nCountX/.test(r.html), `two uses (any case, whole words): ${r.count}`);
 expect(highlightWordOccurrences('<span class="token keyword">IF</span> bStart', 'bStart').html === '<span class="token keyword">IF</span> bStart', 'one use only: nothing marked');
+// With the code: a write marked apart (x :=, R=, => x), the reads not; entities counted as one character
+{
+  const src = "IF a &lt; b THEN\n\tnX := nX + 1;\n\tfb(Q => nX);\n\tnX R= TRUE;\nEND_IF".replace(/&lt;/g, '<');
+  const htmlW = src.replace(/</g, '&lt;');
+  const w = highlightWordOccurrences(htmlW, 'nX', src);
+  const marks = [...w.html.matchAll(/<mark class="([^"]+)">nX<\/mark>/g)].map((m) => (m[1].includes('word-write') ? 'W' : 'r')).join('');
+  expect(marks === 'WrWW', `writes marked apart: ${marks}`);
+}
 expect(!/class="token (<mark)/.test(highlightWordOccurrences('<span class="token">token</span> token', 'token').html) && highlightWordOccurrences('<span class="token">token</span> token', 'token').count === 2, 'a word that is also in a tag: only the text marked');
 
 console.log(`${fails} failures`);

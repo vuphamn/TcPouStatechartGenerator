@@ -627,6 +627,11 @@ mark.word-occurrence {
   border-radius: 2px;
   display: inline;
 }
+/* A use that writes it (x :=, R= / S=, => x): rose, as the references dialog's write tag */
+mark.word-occurrence.word-write {
+  background-color: rgba(244, 63, 94, 0.12);
+  outline-color: rgba(251, 113, 133, 0.85);
+}
 
 /* Identified States: the state at an editor's caret (a flash, then a clear frame and tint while it stays the caret's:
    with the editor's Follow off the selection stays where it was, this card shows where the caret is) */

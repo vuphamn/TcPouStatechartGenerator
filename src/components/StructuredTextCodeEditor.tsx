@@ -338,7 +338,7 @@ export const StructuredTextCodeEditor = forwardRef<
     const highlightedHtml = useMemo(() => {
       const rawPrism = highlightStructuredText(activeViewCode);
       if (!findQuery || !findQuery.trim()) {
-        return focused && caretWord ? highlightWordOccurrences(rawPrism, caretWord).html : rawPrism;
+        return focused && caretWord ? highlightWordOccurrences(rawPrism, caretWord, activeViewCode).html : rawPrism;
       }
       const { html } = highlightHtmlWithFindMatches(
         rawPrism,

@@ -78,6 +78,13 @@ const STRUCT = `<TcPlcObject><DUT Name="ST_Pos" Id="{3}"><Declaration>${cdata('T
   await p.waitForSelector('#references-dialog', { timeout: 3000 }).catch(() => {});
   let rows = await refs();
   expect(rows.length === 3 && rows.some((r) => /^declaration:8:.*decl/.test(r)) && rows.filter((r) => /^doState\(\):3:/.test(r)).length === 2 && rows.some((r) => /write/.test(r)), `references: ${rows.join(' | ')}`);
+  // (its Writes filter: the write only)
+  await p.click('#references-writes').catch(() => {});
+  await h.sleep(200);
+  const writeRows = await refs();
+  await p.click('#references-all').catch(() => {});
+  await h.sleep(200);
+  expect(writeRows.length === 1 && /write/.test(writeRows[0]) && /Writes of nCycles/.test(await p.$eval('#references-dialog', (e) => e.textContent)) === false, `the Writes filter: ${writeRows.join(' | ')}`);
   // A click: the method at the line
   await p.evaluate(() => [...document.querySelectorAll('#references-dialog .reference-row')].find((r) => r.getAttribute('data-where') === 'declaration')?.click());
   await h.sleep(800);
@@ -91,6 +98,16 @@ const STRUCT = `<TcPlcObject><DUT Name="ST_Pos" Id="{3}"><Declaration>${cdata('T
   rows = await refs();
   expect(rows.length === 2 && /References to cmd_bStart/.test(await p.$eval('#references-dialog', (e) => e.textContent)), `Shift+F12 on cmd_bStart: ${rows.join(' | ')}`);
   await p.keyboard.press('Escape');
+  // Find All Writes (the Method Editor's menu): the dialog on its writes
+  await p.click('#dock-tab-method');
+  await h.sleep(500);
+  expect(await rightClickAt('method-implementation-editor', 'nCycles'), 'the menu on nCycles again');
+  expect(await p.evaluate(() => { const b = document.getElementById('editor-menu-find-writes'); b?.click(); return !!b; }), 'Find All Writes to nCycles');
+  await p.waitForSelector('#references-dialog', { timeout: 3000 }).catch(() => {});
+  const fw = await refs();
+  expect(fw.length === 1 && /write/.test(fw[0]) && /Writes of nCycles/.test(await p.$eval('#references-dialog', (e) => e.textContent)), `Find All Writes: ${fw.join(' | ')}`);
+  await p.keyboard.press('Escape');
+  await h.sleep(200);
   // A state's menu on the canvas
   await p.click('#dock-tab-diagram');
   await h.sleep(600);

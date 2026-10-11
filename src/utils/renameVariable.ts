@@ -206,6 +206,16 @@ export function renameVariable(pouXml: string, oldName: string, newName: string,
   return { pou: out, changes, skipped };
 }
 
+/**
+ * Is a use written (x :=, x.a[i] := writes x, x R= / S=, an output bound to it: Q => x)? As XAE's Cross Reference List
+ * and the VS Code extension's Find All Writes tell one
+ */
+export function isWriteAt(line: string, col: number, length: number): boolean {
+  const rest = line.slice(col + length).replace(/^(?:\s*(?:\.\s*[A-Za-z_]\w*|\[[^\]\n]*\]|\^))*/, '');
+  if (/^\s*(?::=|[RS]=)/.test(rest)) return true;
+  return /=>\s*$/.test(line.slice(0, col));
+}
+
 export interface Reference {
   /** "declaration", "body", "doState()", "doState() declaration", "Prop.Get", ... */
   where: string;
@@ -242,7 +252,7 @@ export function findReferences(pouXml: string, name: string, qualifiers: string[
       const lineText = lines[li];
       const col = at - starts[li];
       const rest = lineText.slice(col + name.length);
-      const kind: Reference['kind'] = s.kind === 'Declaration' && /^\s*(,\s*\w+\s*)*(AT\s+%\S+\s*)?:(?!=)/i.test(rest) ? 'declaration' : /^\s*:=/.test(rest) ? 'write' : 'read';
+      const kind: Reference['kind'] = s.kind === 'Declaration' && /^\s*(,\s*\w+\s*)*(AT\s+%\S+\s*)?:(?!=)/i.test(rest) ? 'declaration' : isWriteAt(lineText, col, name.length) ? 'write' : 'read';
       out.push({ where: s.where, unit: s.unit || undefined, part: s.kind === 'Declaration' ? 'declaration' : 'implementation', line: li + 1, column: col, text: lineText.trim(), kind });
     }
   }

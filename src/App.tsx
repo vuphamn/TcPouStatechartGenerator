@@ -4565,10 +4565,10 @@ export const App: React.FC = () => {
   const [pendingReveal, setPendingReveal] = useState<{ type: string; member: string } | null>(null);
   const [pouReveal, setPouReveal] = useState<{ symbol: string; nonce: number; line?: number; part?: 'declaration' | 'implementation' } | null>(null);
   // Find All References: the uses of a name in the POU, listed; a click opens the method / the POU Editor at the line
-  const [refsView, setRefsView] = useState<{ name: string; refs: Reference[] } | null>(null);
-  const handleFindReferences = useCallback((name: string) => {
+  const [refsView, setRefsView] = useState<{ name: string; refs: Reference[]; writesOnly?: boolean } | null>(null);
+  const handleFindReferences = useCallback((name: string, opts?: { writesOnly?: boolean }) => {
     // (a state is also used as E_States.STATE)
-    if (pouContent) setRefsView({ name, refs: findReferences(pouContent, name, (dutContent.match(/\bTYPE\s+(\w+)/gi) ?? []).map((m) => m.split(/\s+/)[1])) });
+    if (pouContent) setRefsView({ name, refs: findReferences(pouContent, name, (dutContent.match(/\bTYPE\s+(\w+)/gi) ?? []).map((m) => m.split(/\s+/)[1])), writesOnly: !!opts?.writesOnly });
   }, [pouContent, dutContent]);
   const handleOpenReference = useCallback(
     (r: Reference) => {
@@ -11209,7 +11209,7 @@ export const App: React.FC = () => {
       )}
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
-      {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
+      {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
       {updateOffer && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>

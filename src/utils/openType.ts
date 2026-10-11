@@ -37,7 +37,7 @@ export interface OpenTypeHandler {
   /** Declare variables in the POU's declaration (written at once); false: not done (the reason was shown) */
   declare?: (vars: NewVariable[]) => boolean;
   /** Find All References: every use of a name in the POU, listed (a click opens it) */
-  findReferences?: (name: string) => void;
+  findReferences?: (name: string, opts?: { writesOnly?: boolean }) => void;
   /** Live: whether connected, the values (by path, lower case) */
   liveValues?: () => { active: boolean; values: Record<string, boolean | number | string> };
   /** Live: the variables the shown code uses (followed while live, for the values in the code) */
