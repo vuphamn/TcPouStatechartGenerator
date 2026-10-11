@@ -13,7 +13,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const { buildFromProject, remoteManagerBuilds, xaeAvailable, rmCrashesFor } = require('../shared/tcBuild.cjs');
-const { readPlcTree, plcProjectsUnder } = require('./plcTree.cjs');
+const { readPlcTree, plcProjectsUnder, readTasks } = require('./plcTree.cjs');
 const { projectOf, projectTarget, findPlcproj } = require('./twincatProject.cjs');
 const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs');
 const { startPlc, stopPlc } = require('../shared/tcAppInfo.cjs');
@@ -546,6 +546,8 @@ function register(context, { activeFile, sectionUriOf }) {
     currentRoot: () => project?.root ?? null,
   });
   // ---- The Solution view: the PLC projects' trees (their .plcproj), as XAE's Solution Explorer shows them
+  // (each task's online values, by "<root>|<task>": the last cycle's execution time, an overrun, the cycles)
+  const taskOnline = new Map();
   const solution = (() => {
     const changed = new vscode.EventEmitter();
     const ICON = { TcPOU: 'symbol-class', TcDUT: 'symbol-structure', TcGVL: 'symbol-variable', TcIO: 'symbol-interface', TcVIS: 'eye', TcTTO: 'watch' };
@@ -554,14 +556,35 @@ function register(context, { activeFile, sectionUriOf }) {
       getChildren(el) {
         if (!project) return [];
         if (!el) {
-          return plcProjectsUnder(project.root).map((plcproj) => {
+          // (the project's tasks first, as XAE's SYSTEM > Tasks)
+          let tasks = [];
+          try {
+            tasks = readTasks(project.root);
+          } catch {
+            // (an unreadable .tsproj)
+          }
+          const tasksNode = tasks.length ? [{ tasksNode: true, tasks, root: project.root }] : [];
+          return [...tasksNode, ...plcProjectsUnder(project.root).map((plcproj) => {
             try {
               const t = readPlcTree(plcproj);
               return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references }] : [])] };
             } catch {
               return { label: path.basename(plcproj), plc: true, children: [] };
             }
+          })];
+        }
+        if (el.tasksNode) return el.tasks.map((t) => ({ task: t, root: el.root }));
+        if (el.task) {
+          // (the programs it calls: each opens as Structured Text)
+          const files = plcProjectsUnder(el.root).flatMap((p) => {
+            const walk = (n) => (n.children ? n.children.flatMap(walk) : [n]);
+            try {
+              return readPlcTree(p).children.flatMap(walk);
+            } catch {
+              return [];
+            }
           });
+          return el.task.calls.map((c) => ({ call: c, file: files.find((f) => f.ext?.toLowerCase() === 'tcpou' && f.name.toLowerCase() === c.toLowerCase())?.file }));
         }
         if (el.references) return el.references.map((r) => ({ name: r, reference: true }));
         // (each node with its PLC project: Add POU / Add DUT there)
@@ -573,6 +596,41 @@ function register(context, { activeFile, sectionUriOf }) {
           it.iconPath = new vscode.ThemeIcon('project');
           it.description = 'PLC project';
           it.contextValue = 'plcFolder';
+          return it;
+        }
+        if (el.tasksNode) {
+          const it = new vscode.TreeItem('Tasks', vscode.TreeItemCollapsibleState.Expanded);
+          it.iconPath = new vscode.ThemeIcon('clock');
+          it.description = `${el.tasks.length}`;
+          it.id = `tasks|${el.root}`;
+          return it;
+        }
+        if (el.task) {
+          const t = el.task;
+          const on = taskOnline.get(`${el.root}|${t.name}`.toLowerCase());
+          const it = new vscode.TreeItem(t.name, t.calls.length ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+          it.id = `task|${el.root}|${t.name}`;
+          const plan = [t.cycleMs !== undefined ? `${t.cycleMs} ms` : null, t.priority !== undefined ? `priority ${t.priority}` : null].filter(Boolean).join(' · ');
+          it.description = on ? `${plan} · exec ${on.execMs.toFixed(3)} ms${on.exceeded ? ' · OVERRUN' : ''}` : plan;
+          it.iconPath = new vscode.ThemeIcon(on?.exceeded ? 'warning' : 'watch', on?.exceeded ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined);
+          it.tooltip = new vscode.MarkdownString([
+            `**${t.name}**${t.plc ? ` (${t.plc})` : ''}`,
+            t.cycleMs !== undefined ? `Cycle: ${t.cycleMs} ms` : null,
+            t.priority !== undefined ? `Priority: ${t.priority}` : null,
+            t.adsPort !== undefined ? `ADS port: ${t.adsPort}` : null,
+            t.calls.length ? `Calls: ${t.calls.join(', ')}` : null,
+            on ? `Online: last cycle ${on.execMs.toFixed(3)} ms of ${t.cycleMs ?? '?'} ms${on.cycles !== undefined ? `, ${on.cycles} cycles` : ''}${on.exceeded ? ', **cycle time exceeded**' : ''}` : null,
+          ].filter(Boolean).join('  \n'));
+          const file = t.ttoFile ?? t.tsproj;
+          if (file) it.command = { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.file(file)] };
+          it.contextValue = 'plcTask';
+          return it;
+        }
+        if (el.call) {
+          const it = new vscode.TreeItem(el.call, vscode.TreeItemCollapsibleState.None);
+          it.iconPath = new vscode.ThemeIcon('symbol-function');
+          it.description = 'called';
+          if (el.file) it.command = { command: 'kvalMachineScope.openStructuredText', title: 'Open', arguments: [vscode.Uri.file(el.file)] };
           return it;
         }
         if (el.references) return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), { iconPath: new vscode.ThemeIcon('library'), description: `${el.references.length}` });
@@ -604,6 +662,74 @@ function register(context, { activeFile, sectionUriOf }) {
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+  // Logged in: the tasks' online values every 2 s (TwinCAT_SystemInfoVarList._TaskInfo[i], matched by TaskName)
+  const TASK_INFO = 'TwinCAT_SystemInfoVarList._TaskInfo';
+  let taskBusy = false;
+  async function pollTasks() {
+    if (taskBusy || !project) return;
+    const root = project.root;
+    const was = [...taskOnline.keys()].some((k) => k.startsWith(`${root}|`.toLowerCase()));
+    if (!states.get(root)?.loggedIn) {
+      if (was) {
+        for (const k of [...taskOnline.keys()]) if (k.startsWith(`${root}|`.toLowerCase())) taskOnline.delete(k);
+        solution.reload();
+      }
+      return;
+    }
+    taskBusy = true;
+    try {
+      const src = await sourceOf(root);
+      const value = async (p) => {
+        const info = await src.probe(p).catch(() => null);
+        return info ? src.read(p, info).catch(() => undefined) : undefined;
+      };
+      const seen = new Map();
+      // (the PLC names a task "<PLC project>_<task>": KssPlc_PlcTask is PlcTask)
+      let known = [];
+      try {
+        known = readTasks(root);
+      } catch {
+        // (as the PLC names them)
+      }
+      const taskName = (n) => known.find((t) => t.name.toLowerCase() === n.toLowerCase() || n.toLowerCase().endsWith(`_${t.name.toLowerCase()}`))?.name ?? n;
+      for (let i = 1; i <= 8; i++) {
+        const raw = await value(`${TASK_INFO}[${i}].TaskName`);
+        if (typeof raw !== 'string' || !raw) break;
+        const name = taskName(raw);
+        const exec = await value(`${TASK_INFO}[${i}].LastExecTime`);
+        seen.set(`${root}|${name}`.toLowerCase(), {
+          // (100 ns units)
+          execMs: typeof exec === 'number' ? exec / 10000 : 0,
+          exceeded: (await value(`${TASK_INFO}[${i}].CycleTimeExceeded`)) === true,
+          cycles: await value(`${TASK_INFO}[${i}].CycleCount`),
+        });
+      }
+      const before = JSON.stringify([...taskOnline].filter(([k]) => k.startsWith(`${root}|`.toLowerCase())));
+      for (const k of [...taskOnline.keys()]) if (k.startsWith(`${root}|`.toLowerCase())) taskOnline.delete(k);
+      for (const [k, v] of seen) taskOnline.set(k, v);
+      if (JSON.stringify([...seen]) !== before) solution.reload();
+    } catch {
+      // (the PLC not reachable now: tried again)
+    } finally {
+      taskBusy = false;
+    }
+  }
+  const taskTimer = setInterval(() => void pollTasks(), Number(process.env.KSS_LIVE_POLL_MS) > 0 ? Math.max(500, Number(process.env.KSS_LIVE_POLL_MS) * 5) : 2000);
+  context.subscriptions.push({ dispose: () => clearInterval(taskTimer) });
+  // (for the tests: the tasks as shown, { name: description })
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.tasksShown', () => {
+    if (!project) return null;
+    let tasks = [];
+    try {
+      tasks = readTasks(project.root);
+    } catch {
+      return null;
+    }
+    return Object.fromEntries(tasks.map((t) => {
+      const on = taskOnline.get(`${project.root}|${t.name}`.toLowerCase());
+      return [t.name, { cycleMs: t.cycleMs, priority: t.priority, calls: t.calls, execMs: on?.execMs, exceeded: on?.exceeded }];
+    }));
+  }));
   const renderAll = render;
   render = () => {
     renderAll();

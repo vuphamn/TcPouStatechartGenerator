@@ -122,6 +122,9 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
 - **Solution** view (the TwinCAT view): the PLC project as XAE's Solution Explorer shows it (its `.plcproj`'s folders,
   POUs, DUTs, GVLs, visualizations, task, and its libraries under **References**); a click opens a source as Structured
   Text.
+- **Tasks** (the Solution view, as XAE's SYSTEM > Tasks): each task's cycle, priority and AMS port (the `.tsproj`) and
+  the programs it calls (its `.TcTTO`; a click opens one). Logged in, its online values beside it, read from the PLC's
+  `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time, and a warning when it overran its cycle.
 - **Start / Stop:** the PLC application, over ADS, while logged in. Asked first (they run or stop the machine's
   program); `kvalMachineScope.twincat.confirmStartStop` switches that off.
 - Needs TwinCAT XAE on this computer for Build and Login (its Automation Interface); Start, Stop and the PLC's state need

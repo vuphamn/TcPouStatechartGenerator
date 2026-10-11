@@ -160,6 +160,9 @@ exports.run = async function run() {
     fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(standIn));
     const v2 = await waitFor(async () => (await shownOf())?.State === 'ComputeResult', 8000);
     expect(v2, `a value changed on the PLC: shown (${JSON.stringify(await shownOf())})`);
+    // The Solution view's tasks: PlcTask (10 ms, priority 20, calls MAIN), logged in: its last cycle's time
+    const tk = await waitFor(async () => { const t = await vscode.commands.executeCommand('kvalMachineScope.tasksShown'); return t?.PlcTask?.execMs !== undefined ? t : null; }, 8000);
+    expect(tk && tk.PlcTask.cycleMs === 10 && tk.PlcTask.priority === 20 && tk.PlcTask.calls.join() === 'MAIN' && Math.abs(tk.PlcTask.execMs - 0.0523) < 1e-9 && tk.PlcTask.exceeded === false, `tasks: ${JSON.stringify(tk ?? (await vscode.commands.executeCommand('kvalMachineScope.tasksShown')))}`);
     const marked = await waitFor(async () => { const x = await vscode.commands.executeCommand('kvalMachineScope.activeStateShown', exDoc.uri.toString()); return x?.state === 'ComputeResult' ? x : null; }, 8000);
     expect(marked && /ComputeResult\s*:/.test(exDoc.lineAt(marked.line).text), `the PLC's state marked: its CASE branch (${JSON.stringify(marked)})`);
     // Write Values: Busy prepared FALSE (the caret on it), written: the PLC's value changes

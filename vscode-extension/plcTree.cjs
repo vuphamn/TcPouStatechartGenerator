@@ -61,4 +61,77 @@ function plcProjectsUnder(root, depth = 0, out = []) {
   return out;
 }
 
-module.exports = { readPlcTree, plcProjectsUnder };
+const num = (s) => (s === undefined || s === null || s === '' || Number.isNaN(Number(s)) ? undefined : Number(s));
+
+/** The .TcTTO files of a PLC project's folder (a few levels down) */
+function ttoFilesUnder(dir, depth = 0, out = []) {
+  if (depth > 3) return out;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (e.isFile() && /\.tcTTO$/i.test(e.name)) out.push(p);
+    else if (e.isDirectory() && !['.git', '.vs', '_Boot', '_CompileInfo', '_Libraries'].includes(e.name)) ttoFilesUnder(p, depth + 1, out);
+  }
+  return out;
+}
+
+/**
+ * A TwinCAT project's tasks, as XAE's SYSTEM > Tasks and each PLC project's task objects show them: the .tsproj's
+ * real-time tasks (cycle in 100 ns, priority, AMS port) with the PLC task objects (.TcTTO: cycle in µs, priority, the
+ * programs it calls) of the same name → [{ name, cycleMs, priority, adsPort, calls: [names], plc, ttoFile, tsproj }]
+ */
+function readTasks(root) {
+  const tasks = new Map();
+  const entry = (name) => {
+    const k = name.toLowerCase();
+    if (!tasks.has(k)) tasks.set(k, { name, calls: [] });
+    return tasks.get(k);
+  };
+  let tsproj = null;
+  try {
+    tsproj = fs.readdirSync(root).find((f) => /\.tsproj$/i.test(f)) ?? null;
+  } catch {
+    // (no folder)
+  }
+  if (tsproj) {
+    const xml = fs.readFileSync(path.join(root, tsproj), 'utf8');
+    const block = /<Tasks>([\s\S]*?)<\/Tasks>/i.exec(xml)?.[1] ?? '';
+    for (const m of block.matchAll(/<Task\b([^>]*?)(?:\/>|>([\s\S]*?)<\/Task>)/gi)) {
+      const attr = (n) => new RegExp(`\\b${n}="([^"]*)"`, 'i').exec(m[1])?.[1];
+      const name = unescape(/<Name>([^<]*)<\/Name>/i.exec(m[2] ?? '')?.[1] ?? attr('Name') ?? `Task ${attr('Id') ?? ''}`.trim());
+      const t = entry(name);
+      const cycle = num(attr('CycleTime'));
+      if (cycle !== undefined) t.cycleMs = cycle / 10000;
+      t.priority = num(attr('Priority')) ?? t.priority;
+      t.adsPort = num(attr('AmsPort')) ?? t.adsPort;
+      t.tsproj = path.join(root, tsproj);
+    }
+  }
+  for (const plcproj of plcProjectsUnder(root)) {
+    const plc = path.basename(plcproj, path.extname(plcproj));
+    for (const file of ttoFilesUnder(path.dirname(plcproj))) {
+      let xml;
+      try {
+        xml = fs.readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      const m = /<Task\b[^>]*\bName="([^"]+)"/i.exec(xml);
+      const t = entry(unescape(m?.[1] ?? path.basename(file, path.extname(file))));
+      const us = num(/<CycleTime>([^<]*)<\/CycleTime>/i.exec(xml)?.[1]);
+      if (t.cycleMs === undefined && us !== undefined) t.cycleMs = us / 1000;
+      t.priority ??= num(/<Priority>([^<]*)<\/Priority>/i.exec(xml)?.[1]);
+      t.calls = [...xml.matchAll(/<PouCall>\s*<Name>([^<]*)<\/Name>/gi)].map((c) => unescape(c[1]));
+      t.plc = plc;
+      t.ttoFile = file;
+    }
+  }
+  return [...tasks.values()].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99) || a.name.localeCompare(b.name));
+}
+
+module.exports = { readPlcTree, plcProjectsUnder, readTasks };

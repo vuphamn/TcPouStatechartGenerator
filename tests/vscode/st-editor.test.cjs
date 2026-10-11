@@ -32,7 +32,8 @@ const { pou, dut } = require(path.join(REPO, 'tests', 'fixtures', 'third-party-p
 const proj = path.join(OUT, 'Cell');
 fs.mkdirSync(path.join(proj, 'Robot', 'POUs'), { recursive: true });
 fs.mkdirSync(path.join(proj, 'Robot', 'DUTs'), { recursive: true });
-fs.writeFileSync(path.join(proj, 'Cell.tsproj'), '<?xml version="1.0"?>\r\n<TcSmProject TcSmVersion="1.0" TcVersion="3.1.4026.27">\r\n\t<Project ProjectGUID="{00000000-0000-0000-0000-000000000001}" Target64Bit="true"/>\r\n</TcSmProject>\r\n');
+fs.writeFileSync(path.join(proj, 'Cell.tsproj'), '<?xml version="1.0"?>\r\n<TcSmProject TcSmVersion="1.0" TcVersion="3.1.4026.27">\r\n\t<Project ProjectGUID="{00000000-0000-0000-0000-000000000001}" Target64Bit="true">\r\n\t\t<System>\r\n\t\t\t<Tasks>\r\n\t\t\t\t<Task Id="3" Priority="20" CycleTime="100000" AmsPort="350" AdtTasks="true">\r\n\t\t\t\t\t<Name>PlcTask</Name>\r\n\t\t\t\t</Task>\r\n\t\t\t</Tasks>\r\n\t\t</System>\r\n\t</Project>\r\n</TcSmProject>\r\n');
+fs.writeFileSync(path.join(proj, 'Robot', 'PlcTask.TcTTO'), '<?xml version="1.0" encoding="utf-8"?>\r\n<TcPlcObject Version="1.1.0.1">\r\n  <Task Name="PlcTask" Id="{00000000-0000-0000-0000-0000000000a1}">\r\n    <CycleTime>10000</CycleTime>\r\n    <Priority>20</Priority>\r\n    <PouCall>\r\n      <Name>MAIN</Name>\r\n    </PouCall>\r\n  </Task>\r\n</TcPlcObject>\r\n');
 fs.writeFileSync(path.join(proj, 'Robot', 'Robot.plcproj'), '<?xml version="1.0" encoding="utf-8"?>\r\n<Project/>\r\n');
 fs.writeFileSync(path.join(proj, 'Robot', 'POUs', 'FB_ScanSequencer.TcPOU'), '﻿' + pou.replace(/\r?\n/g, '\r\n'));
 fs.writeFileSync(path.join(proj, 'Robot', 'DUTs', 'E_ScanState.TcDUT'), '﻿' + dut.replace(/\r?\n/g, '\r\n'));
@@ -53,6 +54,11 @@ fs.writeFileSync(standIn, JSON.stringify({
     'MAIN.fbScan.State': { type: 'E_ScanState', value: 3, enum: Object.fromEntries(names.map((n, i) => [i, n])) },
     'MAIN.fbScan.Busy': { type: 'BOOL', value: true },
     'MAIN.fbScan._Count': { type: 'INT', value: 7 },
+    // (the PLC's task info: TwinCAT_SystemInfoVarList._TaskInfo[1])
+    'TwinCAT_SystemInfoVarList._TaskInfo[1].TaskName': { type: 'STRING', value: 'Robot_PlcTask' },
+    'TwinCAT_SystemInfoVarList._TaskInfo[1].LastExecTime': { type: 'UDINT', value: 523 },
+    'TwinCAT_SystemInfoVarList._TaskInfo[1].CycleTimeExceeded': { type: 'BOOL', value: false },
+    'TwinCAT_SystemInfoVarList._TaskInfo[1].CycleCount': { type: 'UDINT', value: 123456 },
   },
 }));
 const env = { ...process.env, KSS_TEST_PROJECT: proj, KSS_TEST_RESULT: result, KSS_BUILD_DRYRUN: "1", KSS_LIVE_STANDIN: standIn, KSS_LIVE_POLL_MS: "200" };
