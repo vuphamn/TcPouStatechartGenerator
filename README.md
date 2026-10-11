@@ -598,6 +598,7 @@ Every live session is recorded while it runs: the state variable's changes and t
 - **Keep as a path check** keeps this session's transitions (live or replayed) as a named check for the POU type. Every edit is checked against the kept ones: a transition of a check that the diagram no longer has is a Problem (**Recorded path broken**), and the Live tab lists the checks with ✓ or ✗.
 - **CSV:** the State times table, and the gateway's trends and availability, save as CSV (Excel).
 - **Replay charts:** a recording with variables (a gateway recording with variables, or a saved session with guard values) shows a small chart of each under the slider, the position marked.
+- **Pause on state** (a breakpoint on states): pick states in the Live tab (**Pause on**), or **Pause when entered** in a state's right-click menu on the canvas. Live, the view holds the moment the PLC enters one: the chart, the trail and the values stay as they were then, while the PLC runs on. **Resume** shows what came since and goes on. A replay stops at the entry, and **Play** goes on. The states are kept per POU in this browser.
 - **Seen transitions:** the transitions the PLC took (live, not replays) are counted per POU type and kept in the app. Deleting one of them, or a state the PLC used, says so in the confirmation (how often, when last). Moving a transition's end that the PLC took shows a warning. **Save** asks first when the edit removes transitions the PLC has taken, and lists them.
 
 ## PLC symbols

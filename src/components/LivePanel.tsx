@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope, X, OctagonPause } from 'lucide-react';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import { GatewayPlcOverview, GatewayPlcState, RenewLicenseSteps, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import type { PlcActionEntry } from '../utils/plcActionLog.ts';
@@ -230,7 +230,14 @@ interface LivePanelProps {
   onOpenRecording?: (file: File) => void;
   /** Web edition through a gateway: replay a machine's time window from the gateway's recordings */
   onOpenGatewayRecordings?: () => void;
-  replay?: { file: string; from: number; to: number; pos: number; playing: boolean; speed: number; samples: number };
+  replay?: { file: string; from: number; to: number; pos: number; playing: boolean; speed: number; samples: number; pausedOn?: string };
+  /** Pause on state (a breakpoint on states): the states chosen, the chart's states to choose from */
+  pauseOn?: string[];
+  pauseStates?: string[];
+  onPauseOnChange?: (states: string[]) => void;
+  /** Held at a chosen state's entry (live): the state, its time; Resume shows what came since */
+  liveHold?: { state: string; at: number } | null;
+  onResumeLive?: () => void;
   onReplayPlay?: (playing: boolean) => void;
   onReplaySeek?: (pos: number) => void;
   onReplaySpeed?: (speed: number) => void;
@@ -532,6 +539,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onRemovePathCheck,
   onCompare,
   replayVars = [],
+  pauseOn = [],
+  pauseStates = [],
+  onPauseOnChange,
+  liveHold = null,
+  onResumeLive,
   reachable = {},
   onOpenInstance,
   openTarget = 'window',
@@ -986,6 +998,48 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             )}
           </div>
         )}
+        {onPauseOnChange && (
+          <div id="live-pause-on" className="flex flex-wrap items-center gap-1 text-[11px]">
+            <span className="flex items-center gap-1 text-slate-400" title="A breakpoint on states: when the PLC enters one, a replay stops there and the live view holds that moment (the PLC runs on)">
+              <OctagonPause className="w-3 h-3 text-amber-400" /> Pause on
+            </span>
+            {pauseOn.map((s) => (
+              <span key={s} className="live-pause-chip flex items-center gap-0.5 pl-1.5 pr-0.5 py-0.5 rounded bg-amber-900/50 text-amber-100 font-mono" data-state={s}>
+                {s}
+                <button type="button" className="live-pause-remove p-0.5 text-amber-300 hover:text-white" onClick={() => onPauseOnChange(pauseOn.filter((x) => x !== s))} title={`Do not pause on ${s}`}>
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <select
+              id="live-pause-on-add"
+              value=""
+              onChange={(e) => e.target.value && onPauseOnChange([...pauseOn, e.target.value])}
+              className="max-w-[220px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300"
+              title="Pause when the PLC enters this state"
+            >
+              <option value="">{pauseOn.length ? '+ another state…' : 'a state… (pause when entered)'}</option>
+              {pauseStates
+                .filter((s) => !pauseOn.includes(s))
+                .map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
+        {liveHold && (
+          <div id="live-hold-banner" className="flex items-center gap-2 rounded border border-amber-700 bg-amber-950/50 px-2 py-1.5 text-[11px] text-amber-100">
+            <OctagonPause className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+            <span className="min-w-0">
+              Paused: the PLC entered <span className="font-mono font-semibold">{liveHold.state}</span>. The view holds that moment; the PLC runs on.
+            </span>
+            <button id="live-hold-resume" type="button" onClick={onResumeLive} className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white" title="Show what came since, and go on">
+              <Play className="w-3 h-3" /> Resume
+            </button>
+          </div>
+        )}
         {replay && (
           <div id="live-replay-bar" className="rounded border border-violet-800 bg-violet-950/40 px-2 py-1.5 space-y-1">
             <div className="flex items-center gap-2 min-w-0">
@@ -1013,6 +1067,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <span id="live-replay-time" className="font-mono text-[11px] text-violet-200 whitespace-nowrap">
                 {formatClock(replay.pos)}
               </span>
+              {replay.pausedOn && !replay.playing && (
+                <span id="live-replay-paused-on" className="shrink-0 flex items-center gap-1 px-1.5 rounded bg-amber-900/60 text-amber-100 text-[10px]" title="Stopped where the PLC entered it (Pause on state); Play goes on">
+                  <OctagonPause className="w-3 h-3" /> {replay.pausedOn}
+                </span>
+              )}
               <span className="truncate text-[11px] text-slate-400" title={replay.file}>
                 {replay.file}
               </span>

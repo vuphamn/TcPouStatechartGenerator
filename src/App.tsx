@@ -79,6 +79,7 @@ import {
   AlignHorizontalSpaceAround,
   AlignVerticalSpaceAround,
   Grid3x3,
+  Pause,
 } from 'lucide-react';
 import { generateStatechart, generateStatechartModel, inferredComposites, PriorityFormat, subMachinesOf } from './generator.ts';
 import {
@@ -247,7 +248,8 @@ import { ForkJoinDialog, ForkJoinRequest } from './components/ForkJoinDialog.tsx
 import { SimulationPanel, SimTransition } from './components/SimulationPanel.tsx';
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
-import { EMPTY_LIVE_SESSION, LiveSession, MAX_LIVE_TRANSITIONS, applyLiveSamples, enumValueMap, recheckInModel } from './utils/liveView.ts';
+import { EMPTY_LIVE_SESSION, LiveSession, MAX_LIVE_TRANSITIONS, applyLiveSamples, enumValueMap, liveStateName, recheckInModel } from './utils/liveView.ts';
+import { firstEntryInto, loadPauseOn, replayStopIn, savePauseOn } from './utils/pauseOnState.ts';
 import {
   buildEnumTables,
   buildGuardEdges,
@@ -311,6 +313,8 @@ interface ReplayState {
   pos: number;
   playing: boolean;
   speed: number;
+  /** Stopped by Pause on state: the state entered there */
+  pausedOn?: string;
 }
 
 const DEFAULT_LIVE_SETTINGS: LiveSettings = { instance: '', netId: '', port: '', ip: '', localNetId: '', gateway: '', plc: '', via: '', linkPort: '' };
@@ -1816,11 +1820,33 @@ export const App: React.FC = () => {
       plcs: prev.plcs,
     }));
   }, []);
+  // Pause on state: the states chosen (lower case); a hold: the live view kept at the moment one was entered, the
+  // samples since kept for Resume (the PLC runs on)
+  const pauseOnRef = useRef<Set<string>>(new Set());
+  // (the list and its setter, for the canvas's state menu: set where the list is)
+  const pauseOnListRef = useRef<string[]>([]);
+  const setPauseOnRef = useRef<(states: string[]) => void>(() => {});
+  const holdRef = useRef<{ on: boolean; at: number; values: { t: number; value: number }[]; vars: { id: string; t: number; v: LiveValue | null }[] }>({ on: false, at: 0, values: [], vars: [] });
+  const lastLiveValueRef = useRef<number | null>(null);
+  const [liveHold, setLiveHold] = useState<{ state: string; at: number } | null>(null);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
     // (a live session's samples while a replay shows: recorded, not shown)
     recorderRef.current.addValues(events);
     if (replayingRef.current) return;
-    setLiveSession((prev) => applyLiveSamples(prev, events, liveNamesRef.current, liveEdgesRef.current));
+    const hold = holdRef.current;
+    if (hold.on) {
+      hold.values.push(...events);
+      return;
+    }
+    // (just connected: the state it is in is not an entry)
+    const i = events.length ? firstEntryInto(events, liveNamesRef.current, pauseOnRef.current, lastLiveValueRef.current ?? events[0].value) : -1;
+    const shown = i >= 0 ? events.slice(0, i + 1) : events;
+    if (shown.length) lastLiveValueRef.current = shown[shown.length - 1].value;
+    setLiveSession((prev) => applyLiveSamples(prev, shown, liveNamesRef.current, liveEdgesRef.current));
+    if (i >= 0) {
+      holdRef.current = { on: true, at: events[i].t, values: events.slice(i + 1), vars: [] };
+      setLiveHold({ state: liveStateName(events[i].value, liveNamesRef.current), at: events[i].t });
+    }
   }, []);
   // Guard variables: where the host found each one, and their latest values (by variable, lower case)
   const [liveWatched, setLiveWatched] = useState<Record<string, WatchedVar>>({});
@@ -1841,6 +1867,13 @@ export const App: React.FC = () => {
   const handleLiveVars = useCallback((values: { id: string; t: number; v: LiveValue | null }[]) => {
     recorderRef.current.addVars(values);
     if (replayingRef.current) return;
+    // (held: the values after the moment kept for Resume)
+    if (holdRef.current.on) {
+      const after = values.filter((s) => !(Number.isFinite(s.t) && s.t <= holdRef.current.at));
+      holdRef.current.vars.push(...after);
+      values = values.filter((s) => !after.includes(s));
+      if (!values.length) return;
+    }
     // (when each value last changed, PLC time: a transition right after it has it as a candidate)
     for (const s of values) {
       if (s.v === null || s.v === undefined) continue;
@@ -5641,6 +5674,19 @@ export const App: React.FC = () => {
       // Where the state is used (its CASE label, the transitions to it, ...)
       if (target.type === 'node' && target.id !== '[*]' && knownStates.has(target.id) && pouContent) {
         items.push({ id: 'find-refs-btn', label: 'Find all references', icon: <Search className="w-3.5 h-3.5" />, title: 'Every use of the state in the POU: its CASE label, the transitions to it, …', onSelect: () => handleFindReferences(target.id) });
+        // (Pause on state: a breakpoint on it, as in the Live tab)
+        const pausing = pauseOnRef.current.has(target.id.toLowerCase());
+        items.push({
+          id: 'pause-on-state-btn',
+          label: pausing ? 'Do not pause when entered' : 'Pause when entered',
+          icon: <Pause className="w-3.5 h-3.5" />,
+          title: 'Live: the view holds the moment the PLC enters this state (the PLC runs on); a replay stops there',
+          onSelect: () => {
+            const list = pauseOnListRef.current;
+            setPauseOnRef.current(pausing ? list.filter((s) => s.toLowerCase() !== target.id.toLowerCase()) : [...list, target.id]);
+            showCopyToast(pausing ? `No pause on ${target.id}` : `Pause on ${target.id}: live, the view holds when the PLC enters it`, 'success');
+          },
+        });
       }
       // A bookmark on the state
       // (a sub-machine's state too: by its name)
@@ -7827,7 +7873,10 @@ export const App: React.FC = () => {
       setReplay((r) => {
         if (!r || !r.playing) return r;
         const pos = Math.min(r.to, r.pos + 100 * r.speed);
-        return { ...r, pos, playing: pos < r.to };
+        // (Pause on state: stopped where the chosen state is entered)
+        const stop = replayStopIn(r.rec.values, r.pos, pos, liveNamesRef.current, pauseOnRef.current);
+        if (stop) return { ...r, pos: stop.t, playing: false, pausedOn: stop.state };
+        return { ...r, pos, playing: pos < r.to, pausedOn: undefined };
       });
     }, 100);
     return () => window.clearInterval(t);
@@ -7866,9 +7915,54 @@ export const App: React.FC = () => {
     }
   }, [replay]);
   const replayView = useMemo(
-    () => (replay ? { file: replay.file, from: replay.from, to: replay.to, pos: replay.pos, playing: replay.playing, speed: replay.speed, samples: replay.rec.values.length } : undefined),
+    () => (replay ? { file: replay.file, from: replay.from, to: replay.to, pos: replay.pos, playing: replay.playing, speed: replay.speed, samples: replay.rec.values.length, pausedOn: replay.pausedOn } : undefined),
     [replay]
   );
+  // Pause on state: the states chosen for this POU (kept in this browser); Resume; said when it pauses
+  const pausePou = pouFileName.replace(/\.TcPOU$/i, '') || 'POU';
+  const [pauseOn, setPauseOnState] = useState<string[]>([]);
+  useEffect(() => setPauseOnState(loadPauseOn(pausePou)), [pausePou]);
+  pauseOnRef.current = new Set(pauseOn.map((s) => s.toLowerCase()));
+  pauseOnListRef.current = pauseOn;
+  const setPauseOn = useCallback(
+    (list: string[]) => {
+      setPauseOnState(list);
+      savePauseOn(pausePou, list);
+    },
+    [pausePou]
+  );
+  setPauseOnRef.current = setPauseOn;
+  const resumeLive = useCallback(() => {
+    const hold = holdRef.current;
+    if (!hold.on) return;
+    holdRef.current = { on: false, at: 0, values: [], vars: [] };
+    setLiveHold(null);
+    if (hold.values.length) {
+      lastLiveValueRef.current = hold.values[hold.values.length - 1].value;
+      setLiveSession((prev) => applyLiveSamples(prev, hold.values, liveNamesRef.current, liveEdgesRef.current));
+    }
+    if (hold.vars.length) handleLiveVars(hold.vars);
+  }, [handleLiveVars]);
+  // (not live any more: no hold; the next session starts from its own state)
+  useEffect(() => {
+    if (liveStatus.state === 'connected') return;
+    lastLiveValueRef.current = null;
+    if (holdRef.current.on) {
+      holdRef.current = { on: false, at: 0, values: [], vars: [] };
+      setLiveHold(null);
+    }
+  }, [liveStatus.state]);
+  useEffect(() => {
+    if (!liveHold) return;
+    showCopyToast(`Paused: the PLC entered ${liveHold.state}. The view holds that moment (Resume in the Live tab); the PLC runs on.`, 'success', 8000);
+    if (notifyOn) void notifyStuck(`Kval MachineScope: ${liveHold.state} entered`, 'Paused on this state: the view holds that moment', `kss-pause-${liveHold.state}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveHold]);
+  const replayPausedOn = replay?.pausedOn;
+  useEffect(() => {
+    if (replayPausedOn) showCopyToast(`Replay paused: ${replayPausedOn} entered (Pause on state). Play goes on.`, 'success', 6000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replayPausedOn]);
   // The PLC switcher while live: stop, take the remembered PLC's settings, go live again once they are in state
   const [switchPending, setSwitchPending] = useState(false);
   const handleSwitchPlc = useCallback(
@@ -11065,6 +11159,11 @@ export const App: React.FC = () => {
             onReplayPlay={(playing) => setReplay((r) => (r ? { ...r, playing, pos: playing && r.pos >= r.to ? r.from : r.pos } : r))}
             onReplaySeek={(pos) => setReplay((r) => (r ? { ...r, pos: Math.max(r.from, Math.min(r.to, pos)) } : r))}
             onReplaySpeed={(speed) => setReplay((r) => (r ? { ...r, speed } : r))}
+            pauseOn={pauseOn}
+            pauseStates={identifiedStatesResult.states.map((s) => s.id)}
+            onPauseOnChange={setPauseOn}
+            liveHold={liveHold}
+            onResumeLive={resumeLive}
             notify={notifyOn}
             onNotifyChange={(on) => {
               if (on) requestNotifyPermission();
