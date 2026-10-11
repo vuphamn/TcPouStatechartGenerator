@@ -14,6 +14,11 @@ file access.
 - **Methods, properties, actions:** **Go to Member…** (the editor's title, `Ctrl+Shift+O`), or the **TwinCAT** view's
   **POU** list (the activity bar): each opens as its declaration and implementation (a property's Get / Set too). A
   graphical implementation (SFC, CFC) is said to be one: edit it in XAE.
+- **Semantic colours** from the project, over the grammar's: its types (function blocks, structs, enums, interfaces,
+  functions, programs) and the standard blocks (`TON`, `R_TRIG` …); function blocks' instances (`fbAxis : FB_Axis`,
+  `tonWait : TON`) and their methods and properties after the dot; enum members, qualified or not; constants; the POU's
+  own methods and actions called. The theme colours them (`editor.semanticTokenColorCustomizations`: the instances' type
+  is `fbInstance`); `kvalMachineScope.structuredText.semanticColors` switches them off.
 - **Highlighting:** the Structured Text language of an extension you have (`st`: *Structured Text language Support*),
   else this extension's own grammar. Setting `kvalMachineScope.structuredText.language` chooses another language id
   (`structured-text`, `iec-61131-3`, `kval-st`, …); the open sections change at once.

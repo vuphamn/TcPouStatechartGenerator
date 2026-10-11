@@ -392,4 +392,4 @@ function implementations(files, { file, name }) {
   return out;
 }
 
-module.exports = { typesOf, workspaceSymbols, foldingRanges, supertypes, subtypes, allSubtypes, callablesNamed, itemOfPlace, incomingCalls, outgoingCalls, implementations, lineCol };
+module.exports = { typesOf, workspaceSymbols, foldingRanges, supertypes, subtypes, allSubtypes, callablesNamed, itemOfPlace, incomingCalls, outgoingCalls, implementations, instancesIn, lineCol };

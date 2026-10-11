@@ -617,6 +617,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "While logged in, the `CASE` branch of the state the PLC is in is marked (the line and the overview ruler)."
+        },
+        "kvalMachineScope.structuredText.semanticColors": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Colours from the project in the Structured Text sections: its types, function blocks' instances (`fbAxis`, `tonWait`) and their methods and properties, enum members, constants, the POU's own methods. The theme's colours (`editor.semanticTokenColorCustomizations` changes them; the instances' type is `fbInstance`)."
         }
       }
     },
@@ -628,6 +633,28 @@
       {
         "language": "st",
         "path": "./snippets/twincat.code-snippets"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "fbInstance",
+        "superType": "variable",
+        "description": "A function block's instance (fbAxis : FB_Axis, tonWait : TON)"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "fbInstance": [
+            "entity.name.type.class"
+          ],
+          "enumMember": [
+            "variable.other.enummember"
+          ],
+          "variable.readonly": [
+            "variable.other.constant"
+          ]
+        }
       }
     ]
   }

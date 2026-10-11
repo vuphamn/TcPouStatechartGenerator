@@ -12,6 +12,7 @@ const { createIndex, nameAt, findReferences, findDefinition, renameEdits, blankC
 const { declarationOutline, implementationOutline } = require('./stOutline.cjs');
 const { checkSection, projectNames, extendsUnknown } = require('./stChecks.cjs');
 const { libraryNames } = require('./libraryNames.cjs');
+const { TOKEN_TYPES, TOKEN_MODIFIERS, projectTables, semanticTokensOf } = require('./stSemantic.cjs');
 const { completionsAt, signatureAt } = require('./stCompletion.cjs');
 const { projectRootOf } = require('../shared/tcBuild.cjs');
 const nav = require('./stNavigation.cjs');
@@ -673,6 +674,32 @@ function register(context) {
     return names;
   };
   context.subscriptions.push(checks);
+  // Semantic colours (stSemantic.cjs): types, FB instances and their members, enum members, constants, the POU's
+  // methods; kvalMachineScope.structuredText.semanticColors switches them off
+  const legend = new vscode.SemanticTokensLegend(TOKEN_TYPES, TOKEN_MODIFIERS);
+  context.subscriptions.push(
+    vscode.languages.registerDocumentSemanticTokensProvider({ scheme: SCHEME }, {
+      provideDocumentSemanticTokens(doc) {
+        const builder = new vscode.SemanticTokensBuilder(legend);
+        if (!vscode.workspace.getConfiguration('kvalMachineScope.structuredText').get('semanticColors', true)) return builder.build();
+        let a;
+        try {
+          a = addressOf(doc.uri.query);
+        } catch {
+          return builder.build();
+        }
+        const files = projectFiles(a.file);
+        const root = projectRootOf(a.file) ?? path.dirname(a.file);
+        let l = libraries.get(root);
+        if (!l || Date.now() - l.at > 60000) libraries.set(root, (l = { at: Date.now(), names: libraryNames(root) }));
+        const tables = projectTables(files, new Set([...l.names].map((x) => String(x).toLowerCase())));
+        for (const t of semanticTokensOf({ text: doc.getText(), file: a.file, key: a.key, files, tables })) {
+          builder.push(t.line, t.char, t.length, TOKEN_TYPES.indexOf(t.type), t.modifiers.reduce((bits, m) => bits | (1 << TOKEN_MODIFIERS.indexOf(m)), 0));
+        }
+        return builder.build();
+      },
+    }, legend)
+  );
   const textOf = (file, key, section) => {
     const open = vscode.workspace.textDocuments.find((d) => {
       if (d.uri.scheme !== SCHEME) return false;

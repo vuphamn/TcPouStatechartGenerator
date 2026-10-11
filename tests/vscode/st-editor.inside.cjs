@@ -257,6 +257,13 @@ exports.run = async function run() {
     if (chartTab) await vscode.window.tabGroups.close(chartTab);
     await vscode.window.showTextDocument(exDoc);
 
+    // 19c. Semantic colours: E_ScanState's members in Execute() as enum members
+    const legend = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', exDoc.uri);
+    const sem = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', exDoc.uri);
+    const kindsSeen = new Set();
+    if (sem?.data && legend) for (let i = 0; i + 4 < sem.data.length; i += 5) kindsSeen.add(legend.tokenTypes[sem.data[i + 3]]);
+    expect(kindsSeen.has('enumMember') && kindsSeen.has('enum'), `semantic colours: ${[...kindsSeen].join(', ') || 'none'}`);
+
     // 19b. Navigation: the project's symbols (Ctrl+T), the calls of MoveAndAdvance (Shift+Alt+H), the type hierarchy
     const syms = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', 'MoveAndAdv');
     expect((syms ?? []).some((x) => x.name === 'MoveAndAdvance' && x.containerName === 'FB_ScanSequencer'), `workspace symbols: MoveAndAdvance in FB_ScanSequencer (${(syms ?? []).map((x) => `${x.containerName}.${x.name}`).slice(0, 5).join(', ')})`);
