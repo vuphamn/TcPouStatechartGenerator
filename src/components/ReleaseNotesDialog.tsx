@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { History, Search, X } from 'lucide-react';
+import { History, Search, Sparkles, X } from 'lucide-react';
 import history from 'virtual:kss-release-notes';
 import { EDITION_LABEL, editionVersion, filterReleases, groupChanges, type EditionId, type ReleaseCommit } from '../utils/releaseNotes.ts';
 
@@ -10,7 +10,7 @@ const KIND_CLASS = { feat: 'text-emerald-300', fix: 'text-amber-300', other: 'te
  * The release notes: each edition's releases, newest first, with what changed in each (from the git history at build
  * time); this build's changes after its last release first. This edition's tab first; a filter over the changes
  */
-export const ReleaseNotesDialog: React.FC<{ edition: EditionId; onClose: () => void }> = ({ edition, onClose }) => {
+export const ReleaseNotesDialog: React.FC<{ edition: EditionId; onClose: () => void; onOpenWhatsNew?: () => void }> = ({ edition, onClose, onOpenWhatsNew }) => {
   const [tab, setTab] = useState<EditionId>(edition);
   const [filter, setFilter] = useState('');
   useEffect(() => {
@@ -52,6 +52,11 @@ export const ReleaseNotesDialog: React.FC<{ edition: EditionId; onClose: () => v
         <span className="flex items-center gap-2 font-semibold text-slate-100">
           <History className="w-3.5 h-3.5 text-sky-300" /> Release notes
         </span>
+        {onOpenWhatsNew && (
+          <button id="release-notes-whats-new" type="button" onClick={onOpenWhatsNew} className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-slate-300 hover:bg-slate-800" title="The new features, each with what it does">
+            <Sparkles className="w-3.5 h-3.5 text-amber-300" /> What's new
+          </button>
+        )}
         <button onClick={onClose} className="p-0.5 text-slate-400 hover:text-white rounded" title="Close (Esc)">
           <X className="w-4 h-4" />
         </button>

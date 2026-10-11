@@ -179,6 +179,9 @@ import { BODY, ENUM_KEY, applyHostBookmarks, setBookmarksHost, bookmarkStateName
 import { parseDutContent, updateDutDeclaration } from './utils/dutEnumEditor.ts';
 import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
+import { WhatsNewDialog } from './components/WhatsNewDialog.tsx';
+import releaseHistory from 'virtual:kss-release-notes';
+import { WHATS_NEW_SEEN_KEY, showWhatsNewOnStart, whatsNew } from './utils/whatsNew.ts';
 import { armState } from './utils/choiceArms.ts';
 import { COMPOSITE_PRESETS, normalizeCompositeColor } from './utils/compositeColors.ts';
 import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
@@ -2660,6 +2663,45 @@ export const App: React.FC = () => {
   // The release notes (the status bar's version)
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const appHost: 'XAE' | 'Desktop' | 'Web' = isXaeHost() ? 'XAE' : desktopLive() ? 'Desktop' : 'Web';
+  // What's new: the features since the build last opened here (by itself once after an update; the Help palette's)
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const whatsNewSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    let seen: string | null = null;
+    try {
+      seen = localStorage.getItem(WHATS_NEW_SEEN_KEY);
+    } catch {
+      return;
+    }
+    whatsNewSeenRef.current = seen;
+    const h = releaseHistory[editionOf(appHost)];
+    const newest = whatsNew(h, null, 1).newest;
+    if (!newest) return;
+    // (a first start: nothing to tell, this build seen from now on; VS Code's code tab: never by itself)
+    if (!seen || codeMode) {
+      try {
+        localStorage.setItem(WHATS_NEW_SEEN_KEY, newest);
+      } catch {
+        // (not kept)
+      }
+      return;
+    }
+    if (!showWhatsNewOnStart(h, seen)) return;
+    const t = window.setTimeout(() => setWhatsNewOpen(true), 1200);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const closeWhatsNew = () => {
+    setWhatsNewOpen(false);
+    const newest = whatsNew(releaseHistory[editionOf(appHost)], null, 1).newest;
+    if (!newest) return;
+    whatsNewSeenRef.current = newest;
+    try {
+      localStorage.setItem(WHATS_NEW_SEEN_KEY, newest);
+    } catch {
+      // (not kept)
+    }
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '?' || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -5718,6 +5760,8 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    cmds.push({ id: 'app:whats-new', group: 'Help', label: "What's new", hint: 'the new features, each with what it does', run: () => setWhatsNewOpen(true) });
+    cmds.push({ id: 'app:release-notes', group: 'Help', label: 'Release notes', hint: "every edition's releases", run: () => setReleaseNotesOpen(true) });
     if (isXaeHost()) cmds.push({ id: 'app:xae-checks', group: 'Help', label: 'XAE checks…', hint: "the extension's features checked in one sitting", run: () => setXaeChecksOpen(true) });
     // (the PLC project's: every state machine in it)
     if (isXaeHost() || pouPath) {
@@ -11139,7 +11183,8 @@ export const App: React.FC = () => {
         />
       )}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
-      {releaseNotesOpen && <ReleaseNotesDialog edition={editionOf(appHost)} onClose={() => setReleaseNotesOpen(false)} />}
+      {releaseNotesOpen && <ReleaseNotesDialog edition={editionOf(appHost)} onClose={() => setReleaseNotesOpen(false)} onOpenWhatsNew={() => { setReleaseNotesOpen(false); setWhatsNewOpen(true); }} />}
+      {whatsNewOpen && <WhatsNewDialog edition={editionOf(appHost)} seen={whatsNewSeenRef.current} onClose={closeWhatsNew} onOpenReleaseNotes={() => { closeWhatsNew(); setReleaseNotesOpen(true); }} />}
       {plcBuild && plcBuildShown && (
         <PlcBuildDialog
           state={plcBuild}

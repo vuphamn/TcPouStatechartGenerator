@@ -7,12 +7,16 @@ export type EditionId = 'xae' | 'desktop' | 'web';
 export interface ReleaseChange {
   /** feat, fix, ci, docs, perf, refactor, test, chore, build; change: no prefix */
   kind: string;
+  /** feat(vscode): vscode */
+  scope?: string;
   text: string;
 }
 export interface ReleaseCommit {
   hash: string;
   date: string;
   changes: ReleaseChange[];
+  /** A feature commit's description (its message's first paragraph): What's new */
+  body?: string;
 }
 export interface EditionRelease {
   tag: string;

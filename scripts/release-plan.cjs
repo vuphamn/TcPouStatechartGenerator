@@ -94,13 +94,15 @@ function notes(e) {
 
 // ---- The release notes in the app: each edition's releases (its tags), newest first, with their changes ----
 
-/** A commit subject's changes: "feat: a, b (c, d); fix: e" → [{ kind: 'feat', text: 'a' }, ...] */
+/** A commit subject's changes: "feat(live): a, b (c, d); fix: e" → [{ kind: 'feat', scope: 'live', text: 'a' }, ...] */
 function changesOf(subject) {
   const parts = subject.split(/;\s+(?=(?:feat|fix|ci|docs|perf|refactor|test|tests|chore|build)\b[^:]{0,20}:)/i);
   const out = [];
   for (const part of parts) {
     const m = /^(feat|fix|ci|docs|perf|refactor|test|tests|chore|build)\b[^:]{0,20}:\s*/i.exec(part);
     const kind = m ? m[1].toLowerCase().replace(/^tests$/, 'test') : 'change';
+    const scope = m ? /^\w+\s*\(([^)]*)\)/.exec(m[0])?.[1]?.trim() : undefined;
+    const item = (text) => ({ kind, ...(scope ? { scope } : {}), text });
     const body = m ? part.slice(m[0].length) : part;
     // (items apart at the commas outside brackets)
     let depth = 0;
@@ -109,18 +111,38 @@ function changesOf(subject) {
       if ('([{'.includes(ch)) depth++;
       else if (')]}'.includes(ch)) depth = Math.max(0, depth - 1);
       if (ch === ',' && depth === 0) {
-        if (cur.trim()) out.push({ kind, text: cur.trim().replace(/^and\s+/, '') });
+        if (cur.trim()) out.push(item(cur.trim().replace(/^and\s+/, '')));
         cur = '';
       } else cur += ch;
     }
-    if (cur.trim()) out.push({ kind, text: cur.trim().replace(/^and\s+/, '') });
+    if (cur.trim()) out.push(item(cur.trim().replace(/^and\s+/, '')));
   }
   return out;
 }
 
+/** A feature commit's description for What's new: its message's first paragraph (no trailers), one line, capped */
+function descriptionOf(body) {
+  const para = String(body ?? '').trim().split(/\r?\n\s*\r?\n/)[0] ?? '';
+  if (!para || /^[\w-]+: /.test(para) && /Co-Authored-By|Signed-off-by/i.test(para)) return '';
+  const text = para.replace(/\s*\r?\n\s*/g, ' ').trim();
+  return text.length > 480 ? `${text.slice(0, 477).replace(/\s+\S*$/, '')}…` : text;
+}
+
 function commitsOf(range, e) {
-  const log = git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s', ...range, '--', ...pathspec(e));
-  return log ? log.split('\n').map((l) => { const [hash, date, subject] = l.split('\x1f'); return { hash, date, changes: changesOf(subject ?? '') }; }) : [];
+  // (records apart by \x1e: a body has line breaks)
+  const log = git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s%x1f%b%x1e', ...range, '--', ...pathspec(e));
+  return log
+    ? log
+        .split('\x1e')
+        .map((l) => l.replace(/^\s+/, ''))
+        .filter(Boolean)
+        .map((l) => {
+          const [hash, date, subject, body] = l.split('\x1f');
+          const changes = changesOf(subject ?? '');
+          const description = changes.some((c) => c.kind === 'feat') ? descriptionOf(body) : '';
+          return { hash, date, changes, ...(description ? { body: description } : {}) };
+        })
+    : [];
 }
 
 /** Every edition: its version (in its files), its releases (newest first) and what came after the last one */
@@ -141,7 +163,7 @@ function history() {
 /** The version in each edition's files (stamped by CI before a release build) */
 const versions = () => Object.fromEntries(Object.keys(EDITIONS).map((e) => [e, EDITIONS[e].version()]));
 
-module.exports = { history, versions, changesOf };
+module.exports = { history, versions, changesOf, descriptionOf };
 
 const args = require.main === module ? process.argv.slice(2) : null;
 if (!args) {
