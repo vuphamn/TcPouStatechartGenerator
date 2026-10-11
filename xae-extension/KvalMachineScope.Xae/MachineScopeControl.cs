@@ -1684,6 +1684,19 @@ namespace KvalMachineScope.Xae
         /// The Live tab's Activate (asked there first): the TwinCAT project of the loaded POU activated on its target, as
         /// XAE's Activate Configuration (TwinCAT restarted in Run mode). activateResult { requestId, ok, message }
         /// </summary>
+        /// <summary>The PLC projects a .tsproj holds (its &lt;Plc&gt;&lt;Project Name="…"&gt;)</summary>
+        private static List<string> PlcProjectNames(string tsproj)
+        {
+            try
+            {
+                var xml = File.ReadAllText(tsproj);
+                var plc = System.Text.RegularExpressions.Regex.Match(xml, @"<Plc>([\s\S]*?)</Plc>");
+                return System.Text.RegularExpressions.Regex.Matches(plc.Success ? plc.Groups[1].Value : "", @"<Project\b[^>]*\bName=""([^""]+)""")
+                    .Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value).Distinct().ToList();
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return new List<string>(); }
+        }
+
         private void HandleActivateProject(Dictionary<string, object> msg)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
@@ -1707,9 +1720,34 @@ namespace KvalMachineScope.Xae
                 if (found == null) throw new InvalidOperationException($"{project.Value.name}.tsproj is not open in XAE: open its solution, then activate");
                 dynamic sysManager = found.Object;
                 Log.Write($"activate: {project.Value.path}");
+                // As XAE's Activate Configuration: built, each PLC project's boot project put in, so that its program
+                // runs after the restart (a clone without _Boot, activated alone, leaves the PLC without one: Invalid)
+                dte.Solution.SolutionBuild.Build(true);
+                if (dte.Solution.SolutionBuild.LastBuildInfo > 0) throw new InvalidOperationException("the project has build errors (XAE's Error List): fix them first");
+                var noBoot = new List<string>();
+                var noAutostart = new List<string>();
+                foreach (var plc in PlcProjectNames(project.Value.path))
+                {
+                    try
+                    {
+                        dynamic node = sysManager.LookupTreeItem("TIPC^" + plc);
+                        node.GenerateBootProject(true);
+                        // (its boot project loaded and started after the restart only with Autostart Boot Project on)
+                        bool autostart = node.BootProjectAutostart;
+                        if (!autostart) noAutostart.Add(plc);
+                        Log.Write($"activate: boot project of {plc} (autostart {autostart})");
+                    }
+                    catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException || ex is ArgumentException)
+                    {
+                        Log.Write($"activate: boot project of {plc}: {ex.Message}");
+                        noBoot.Add(plc);
+                    }
+                }
                 sysManager.ActivateConfiguration();
                 sysManager.StartRestartTwinCAT();
-                Post(new { type = "activateResult", requestId, ok = true, message = $"{project.Value.name} activated: TwinCAT restarts in Run mode" });
+                var note = noBoot.Count > 0 ? $" (no boot project for {string.Join(", ", noBoot)}: its program does not start)" : "";
+                if (noAutostart.Count > 0) note += $". {string.Join(", ", noAutostart)}'s boot project does not start by itself (Autostart Boot Project is off in its PLC project's settings): log in to download and start its program";
+                Post(new { type = "activateResult", requestId, ok = true, message = $"{project.Value.name} activated: TwinCAT restarts in Run mode{note}" });
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {

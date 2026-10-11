@@ -391,9 +391,15 @@ function Build-Kss($r) {
       if ($boot) { Say @{ kind = 'item'; level = 'warning'; text = ('The boot project was not updated (a restart brings the old code back): ' + $boot); file = ''; line = 0; column = 0; project = '' } }
       Say @{ kind = 'done'; ok = $true; errors = 0; written = 'download'; plcState = [string]$online.PlcAppState; loggedIn = 'true'; bootProject = ($boot -eq '') }
     } elseif ($r.write -eq 'activate') {
+      # (as XAE's Activate Configuration: the boot project put in first, so that the program runs after the restart)
+      $boot = ''
+      $autostart = $true
+      try { Say @{ kind = 'step'; text = 'Updating the boot project' }; $node = $script:sm.LookupTreeItem('TIPC^' + $r.plcProject); $node.GenerateBootProject($true); $autostart = [bool]$node.BootProjectAutostart } catch { $boot = $_.Exception.Message }
+      if (-not $autostart) { Say @{ kind = 'item'; level = 'warning'; text = ($r.plcProject + "'s boot project does not start by itself (Autostart Boot Project is off in its PLC project's settings): after the restart, log in to download and start its program"); file = ''; line = 0; column = 0; project = '' } }
       $script:sm.ActivateConfiguration()
       $script:sm.StartRestartTwinCAT()
-      Say @{ kind = 'done'; ok = $true; errors = 0; written = 'activate' }
+      if ($boot) { Say @{ kind = 'item'; level = 'warning'; text = ('The boot project was not updated (the PLC may start without its program): ' + $boot); file = ''; line = 0; column = 0; project = '' } }
+      Say @{ kind = 'done'; ok = $true; errors = 0; written = 'activate'; bootProject = ($boot -eq '') }
     }
   } finally {
     $script:dte.SuppressUI = $false
@@ -550,7 +556,7 @@ foreach ($id in ($Pids -split ',' | Where-Object { $_ })) {
     }
     # (the buttons' own labels are no part of the message)
     $texts = @($texts | Where-Object { $buttons -notcontains $_ })
-    $out += @{ title = $title; text = ($texts -join ' ') ; buttons = $buttons; answered = $answered }
+    $out += @{ title = $title; text = ($texts -join ' ') ; buttons = $buttons; answered = $answered; answer = $(if ($answered) { $want } else { $null }) }
   }
 }
 ConvertTo-Json @($out) -Compress -Depth 3
@@ -698,8 +704,8 @@ class XaeWorker {
             logXaeDialog(d);
             const what = `${d.title ? `${d.title}: ` : ''}${d.text}`.trim();
             if (d.answered) {
-              items.push({ level: 'warning', text: `XAE showed (answered OK): ${what}`, file: '', line: 0, column: 0, project: '' });
-              onStep?.(`XAE showed a message (answered OK): ${d.text.slice(0, 160)}`);
+              items.push({ level: 'warning', text: `XAE showed (answered ${d.answer || 'OK'}): ${what}`, file: '', line: 0, column: 0, project: '' });
+              onStep?.(`XAE showed a message (answered ${d.answer || 'OK'}): ${d.text.slice(0, 160)}`);
               continue;
             }
             const k = `${what}|${d.buttons.join('/')}`;
