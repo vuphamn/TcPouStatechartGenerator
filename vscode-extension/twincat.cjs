@@ -13,7 +13,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const { buildFromProject, remoteManagerBuilds, xaeAvailable, rmCrashesFor } = require('../shared/tcBuild.cjs');
-const { readPlcTree, plcProjectsUnder, readTasks } = require('./plcTree.cjs');
+const { readPlcTree, plcProjectsUnder, readTasks, readLibraries } = require('./plcTree.cjs');
 const { projectOf, projectTarget, findPlcproj } = require('./twincatProject.cjs');
 const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs');
 const { startPlc, stopPlc } = require('../shared/tcAppInfo.cjs');
@@ -567,7 +567,7 @@ function register(context, { activeFile, sectionUriOf }) {
           return [...tasksNode, ...plcProjectsUnder(project.root).map((plcproj) => {
             try {
               const t = readPlcTree(plcproj);
-              return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references }] : [])] };
+              return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references, plcproj }] : [])] };
             } catch {
               return { label: path.basename(plcproj), plc: true, children: [] };
             }
@@ -586,7 +586,14 @@ function register(context, { activeFile, sectionUriOf }) {
           });
           return el.task.calls.map((c) => ({ call: c, file: files.find((f) => f.ext?.toLowerCase() === 'tcpou' && f.name.toLowerCase() === c.toLowerCase())?.file }));
         }
-        if (el.references) return el.references.map((r) => ({ name: r, reference: true }));
+        // (the libraries as XAE's Library Manager shows them: their versions, the one used, missing ones)
+        if (el.references) {
+          try {
+            return readLibraries(el.plcproj).map((lib) => ({ name: lib.name, reference: true, lib }));
+          } catch {
+            return el.references.map((r) => ({ name: r, reference: true }));
+          }
+        }
         // (each node with its PLC project: Add POU / Add DUT there)
         return (el.children ?? []).map((c) => ({ ...c, plcproj: el.plcproj }));
       },
@@ -634,7 +641,33 @@ function register(context, { activeFile, sectionUriOf }) {
           if (el.file) it.command = { command: 'kvalMachineScope.openStructuredText', title: 'Open', arguments: [vscode.Uri.file(el.file)] };
           return it;
         }
-        if (el.references) return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), { iconPath: new vscode.ThemeIcon('library'), description: `${el.references.length}` });
+        if (el.references) {
+          let missing = 0;
+          try {
+            missing = readLibraries(el.plcproj).filter((l) => l.missing).length;
+          } catch {
+            // (the names only)
+          }
+          return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), {
+            iconPath: new vscode.ThemeIcon(missing ? 'warning' : 'library', missing ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined),
+            description: `${el.references.length}${missing ? ` · ${missing} missing` : ''}`,
+          });
+        }
+        if (el.reference && el.lib) {
+          const l = el.lib;
+          const it = new vscode.TreeItem(l.name, vscode.TreeItemCollapsibleState.None);
+          it.iconPath = new vscode.ThemeIcon(l.missing ? 'warning' : 'package', l.missing ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined);
+          it.description = l.missing ? `${l.version === '*' ? 'newest' : l.version}: not installed here` : `${l.used}${l.pinned ? '' : ' (newest, *)'}`;
+          it.tooltip = new vscode.MarkdownString([
+            `**${l.name}**${l.vendor ? ` (${l.vendor})` : ''}${l.placeholder ? ` · placeholder ${l.placeholder}` : ''}`,
+            `Asked for: ${l.version === '*' ? 'the newest (*)' : l.version}`,
+            `Used: ${l.used ?? '**none: not in the project\'s cache nor installed on this computer**'}`,
+            `In the project's cache (_Libraries): ${l.cached.join(', ') || 'none'}`,
+            `Installed here: ${l.installed.join(', ') || 'none'}`,
+          ].join('  \n'));
+          it.contextValue = 'plcLibrary';
+          return it;
+        }
         if (el.reference) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None), { iconPath: new vscode.ThemeIcon('package') });
         if (el.children) return Object.assign(new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.Collapsed), { iconPath: vscode.ThemeIcon.Folder, contextValue: 'plcFolder' });
         const it = new vscode.TreeItem(el.name, vscode.TreeItemCollapsibleState.None);

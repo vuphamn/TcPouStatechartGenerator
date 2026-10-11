@@ -134,4 +134,62 @@ function readTasks(root) {
   return [...tasks.values()].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99) || a.name.localeCompare(b.name));
 }
 
-module.exports = { readPlcTree, plcProjectsUnder, readTasks };
+/** The library repositories of this computer: TwinCAT 4026's, 4024's */
+const LIBRARY_REPOSITORIES = [
+  path.join(process.env.ProgramData || 'C:\\ProgramData', 'Beckhoff', 'TwinCAT', 'PlcEngineering', 'Managed Libraries'),
+  'C:\\TwinCAT\\3.1\\Components\\Plc\\Managed Libraries',
+];
+const versionsIn = (dir) => {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && /^\d+(\.\d+)+$/.test(e.name)).map((e) => e.name);
+  } catch {
+    return [];
+  }
+};
+const byVersion = (a, b) => {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+};
+
+/**
+ * The PLC project's libraries, as XAE's Library Manager shows them: each reference (a placeholder or a library) with
+ * its vendor, the version asked for ("*": the newest; else pinned, a placeholder's resolution too), the versions the
+ * project's cache (_Libraries) and this computer's repositories hold, the one used, and whether it is missing →
+ * [{ name, vendor, version, pinned, placeholder, used, cached: [], installed: [], missing }]
+ */
+function readLibraries(plcproj, { repositories = LIBRARY_REPOSITORIES } = {}) {
+  const xml = fs.readFileSync(plcproj, 'utf8');
+  const dir = path.dirname(plcproj);
+  // "Tc2_Standard, 3.3.3.0 (Beckhoff Automation GmbH)" / "Tc2_Standard, * (Beckhoff Automation GmbH)"
+  const parse = (s) => {
+    const m = /^\s*([^,]+?)\s*,\s*([^\s(]+)\s*(?:\(([^)]*)\))?\s*$/.exec(unescape(s ?? ''));
+    return m ? { name: m[1], version: m[2], vendor: m[3] ?? '' } : null;
+  };
+  const resolutions = new Map();
+  for (const m of xml.matchAll(/<PlaceholderResolution\s+Include="([^"]+)"[^>]*>[\s\S]*?<Resolution>([^<]*)<\/Resolution>/gi)) resolutions.set(unescape(m[1]).toLowerCase(), parse(m[2]));
+  const out = [];
+  for (const m of xml.matchAll(/<PlaceholderReference\s+Include="([^"]+)"[^>]*>([\s\S]*?)<\/PlaceholderReference>/gi)) {
+    const include = unescape(m[1]);
+    const def = parse(/<DefaultResolution>([^<]*)<\/DefaultResolution>/i.exec(m[2])?.[1]);
+    const res = resolutions.get(include.toLowerCase()) ?? def;
+    if (res) out.push({ name: res.name, vendor: res.vendor, version: res.version, placeholder: include });
+  }
+  for (const m of xml.matchAll(/<LibraryReference\s+Include="([^"]+)"/gi)) {
+    const r = parse(m[1]);
+    if (r && !out.some((x) => x.name.toLowerCase() === r.name.toLowerCase())) out.push({ name: r.name, vendor: r.vendor, version: r.version, placeholder: null });
+  }
+  return out
+    .map((l) => {
+      const cached = versionsIn(path.join(dir, '_Libraries', l.vendor, l.name)).sort(byVersion);
+      const installed = [...new Set(repositories.flatMap((r) => versionsIn(path.join(r, l.vendor, l.name))))].sort(byVersion);
+      const pinned = l.version !== '*';
+      const all = [...new Set([...cached, ...installed])].sort(byVersion);
+      const used = pinned ? (all.includes(l.version) ? l.version : null) : all[all.length - 1] ?? null;
+      return { ...l, pinned, used, cached, installed, missing: !used };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+module.exports = { readPlcTree, plcProjectsUnder, readTasks, readLibraries, LIBRARY_REPOSITORIES };

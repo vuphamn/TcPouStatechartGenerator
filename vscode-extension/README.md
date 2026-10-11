@@ -144,6 +144,10 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
 - **Solution** view (the TwinCAT view): the PLC project as XAE's Solution Explorer shows it (its `.plcproj`'s folders,
   POUs, DUTs, GVLs, visualizations, task, and its libraries under **References**); a click opens a source as Structured
   Text.
+- **References** (the Solution view, as XAE's Library Manager): each library with the version used, `(newest, *)`
+  for a placeholder left on the newest; its tooltip has the version asked for, the versions in the project's cache
+  (`_Libraries`) and installed on this computer. A library installed nowhere is marked missing (the count beside
+  References too), since the project would not build here.
 - **Tasks** (the Solution view, as XAE's SYSTEM > Tasks): each task's cycle, priority and AMS port (the `.tsproj`) and
   the programs it calls (its `.TcTTO`; a click opens one). Logged in, its online values beside it, read from the PLC's
   `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time and the longest since logged in, and a warning
