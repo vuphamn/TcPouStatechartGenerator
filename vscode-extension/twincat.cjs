@@ -330,7 +330,8 @@ function register(context, { activeFile, sectionUriOf }) {
 
   /** What the online change would change (as XAE's Online Change dialog's details): the PLC's project (its sources in
    * its boot folder) compared with the local one → lines for the confirmation, or null when it can't be read */
-  async function onlineChangePreview(p, t) {
+  async function onlineChangePreview(p, t, given) {
+    if (given && p.plcproj) return showOnlineChange(p, onlineChangeRisks(given, localProjectFiles(p.plcproj)));
     if (STAND_IN || !p.plcproj) return null;
     const client = await plcClient(t);
     const plcName = path.basename(p.plcproj, path.extname(p.plcproj));
@@ -338,9 +339,30 @@ function register(context, { activeFile, sectionUriOf }) {
     let r = await within(readPlcSources(client, 851, { plcProject: plcName }));
     // (the PLC project's name on the PLC is not the .plcproj's: the one of port 851)
     if (r.error && /has no PLC project/.test(r.error)) r = await within(readPlcSources(client, 851));
-    if (r.error) return [`(Not compared with the PLC's project: ${r.error})`];
-    const lines = riskLines(onlineChangeRisks([...r.files, ...(r.projectFiles ?? [])], localProjectFiles(p.plcproj)));
+    if (r.error) {
+      onlineChangeView.show(null, `Not compared with the PLC's project: ${r.error}`);
+      return [`(Not compared with the PLC's project: ${r.error})`];
+    }
+    return showOnlineChange(p, onlineChangeRisks([...r.files, ...(r.projectFiles ?? [])], localProjectFiles(p.plcproj)));
+  }
+  /** The comparison in the Online Change view; its lines for a confirmation */
+  function showOnlineChange(p, risks) {
+    onlineChangeView.show({ risks, dir: path.dirname(p.plcproj), at: new Date(), target: targetOf(p)?.name ?? 'the PLC' });
+    const lines = riskLines(risks);
     return lines.length ? lines : ['No declarations, RETAIN / PERSISTENT variables, tasks or libraries changed: only code.'];
+  }
+
+  /** Online Change Details: the comparison alone, in its view (given: the PLC's files, a test's) */
+  async function onlineChangeDetails(given) {
+    const p = needProject();
+    const t = targetOf(p);
+    const lines = await onlineChangePreview(p, t, Array.isArray(given) ? given : undefined);
+    if (!lines) {
+      void vscode.window.showInformationMessage('Online Change Details: not with a stand-in PLC (log in to a real one).');
+      return null;
+    }
+    await vscode.commands.executeCommand('kvalMachineScope.onlineChange.focus');
+    return lines;
   }
 
   async function buildOnlineChange() {
@@ -349,7 +371,13 @@ function register(context, { activeFile, sectionUriOf }) {
     const t = targetOf(p);
     const preview = await onlineChangePreview(p, t).catch((err) => [`(Not compared with the PLC's project: ${err?.message ?? err})`]);
     if (preview) log(`Online change on ${t.name}, compared with the PLC's project:\n  ${preview.join('\n  ')}`);
-    const ok = await vscode.window.showWarningMessage(`Build ${p.name} and write it to the PLC on ${t.name} as an online change?`, { modal: true, detail: `${preview ? `${preview.join('\n')}\n\n` : ''}The PLC takes the new code while it keeps running; the boot project is updated too. When an online change is not possible, nothing is written (Login offers a download).` }, 'Build and Online Change');
+    const DETAILS = 'Show Details';
+    const ok = await vscode.window.showWarningMessage(`Build ${p.name} and write it to the PLC on ${t.name} as an online change?`, { modal: true, detail: `${preview ? `${preview.join('\n')}\n\n` : ''}The PLC takes the new code while it keeps running; the boot project is updated too. When an online change is not possible, nothing is written (Login offers a download).` }, 'Build and Online Change', ...(preview ? [DETAILS] : []));
+    if (ok === DETAILS) {
+      // (each change to look at, one click from its code: nothing written)
+      await vscode.commands.executeCommand('kvalMachineScope.onlineChange.focus');
+      return;
+    }
     if (!ok) return;
     if (STAND_IN) {
       s.loggedIn = true;
@@ -718,6 +746,76 @@ function register(context, { activeFile, sectionUriOf }) {
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+
+  // ---- The Online Change view: what an online change would change (as XAE's Online Change details), by kind, each a
+  // click from its code; the warnings first
+  const onlineChangeView = (() => {
+    const changed = new vscode.EventEmitter();
+    let shown = null;
+    const warn = () => new vscode.ThemeIcon('warning', new vscode.ThemeColor('problemsWarningIcon.foreground'));
+    const openOf = (name) => {
+      const rel = shown?.risks.files?.[String(name).toLowerCase()];
+      if (!rel) return undefined;
+      const file = path.join(shown.dir, ...rel.split('/'));
+      return /\.(TcPOU|TcDUT|TcGVL|TcIO)$/i.test(file) ? { command: 'kvalMachineScope.openStructuredText', title: 'Open', arguments: [vscode.Uri.file(file)] } : { command: 'vscode.open', title: 'Open', arguments: [vscode.Uri.file(file)] };
+    };
+    const groups = () => {
+      if (!shown?.risks) return [];
+      const r = shown.risks;
+      return [
+        { kind: 'tasks', label: 'Tasks changed', why: 'The task configuration changed: a download, not an online change.', warn: true, items: r.tasks.map((x) => ({ label: x.name, description: x.change, open: x.name })) },
+        { kind: 'libraries', label: 'Libraries changed', why: 'An online change may not be possible, or reinitializes their instances.', warn: true, items: r.libraries.map((x) => ({ label: x.name, description: `${x.from ?? '(new)'} → ${x.to ?? '(removed)'}` })) },
+        { kind: 'retain', label: 'RETAIN / PERSISTENT changed', why: 'Their values are lost or reinitialized.', warn: true, items: r.retain.map((x) => ({ label: `${x.object}.${x.name}`, description: x.change, open: x.object })) },
+        { kind: 'interfaces', label: 'Declarations changed', why: 'Their instances move: pointers and references to them are invalid until assigned again.', items: r.interfaces.map((x) => ({ label: x, open: x })) },
+        { kind: 'added', label: 'Added', items: r.added.map((x) => ({ label: x, open: x })) },
+        { kind: 'removed', label: 'Removed', items: r.removed.map((x) => ({ label: x })) },
+      ].filter((g) => g.items.length);
+    };
+    const provider = {
+      onDidChangeTreeData: changed.event,
+      getChildren: (el) => (el ? el.items.map((it) => ({ ...it, group: el })) : groups()),
+      getTreeItem: (el) => {
+        if (el.items) {
+          const it = new vscode.TreeItem(el.label, vscode.TreeItemCollapsibleState.Expanded);
+          it.description = String(el.items.length);
+          it.iconPath = el.warn ? warn() : new vscode.ThemeIcon(el.kind === 'added' ? 'diff-added' : el.kind === 'removed' ? 'diff-removed' : 'symbol-interface');
+          if (el.why) it.tooltip = el.why;
+          it.contextValue = 'onlineChangeGroup';
+          return it;
+        }
+        const it = new vscode.TreeItem(el.label, vscode.TreeItemCollapsibleState.None);
+        it.description = el.description;
+        it.tooltip = [el.label, el.description, el.group.why].filter(Boolean).join('\n');
+        it.iconPath = new vscode.ThemeIcon(el.group.kind === 'tasks' ? 'watch' : el.group.kind === 'libraries' ? 'package' : el.group.kind === 'retain' ? 'database' : 'symbol-class');
+        const cmd = el.open ? openOf(el.open) : undefined;
+        if (cmd) it.command = cmd;
+        return it;
+      },
+    };
+    const view = vscode.window.createTreeView('kvalMachineScope.onlineChange', { treeDataProvider: provider });
+    view.message = 'Online Change Details (or Build and Online Change) compares the project the PLC runs with yours.';
+    context.subscriptions.push(view, changed);
+    return {
+      show(next, error) {
+        shown = next;
+        const n = next ? groups().reduce((a, g) => a + g.items.length, 0) : 0;
+        view.message = error ?? (next && !n ? `Compared with the PLC on ${next.target} (${next.at.toLocaleTimeString()}): only code changed.` : next ? undefined : view.message);
+        view.description = next ? `${next.target} · ${next.at.toLocaleTimeString()}` : '';
+        changed.fire(undefined);
+      },
+      groups,
+    };
+  })();
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.onlineChangeDetails', async (given) => {
+    try {
+      return await onlineChangeDetails(given);
+    } catch (err) {
+      log(`Failed: ${err?.message ?? err}`);
+      void vscode.window.showErrorMessage(`TwinCAT: ${err?.message ?? err}`);
+      return null;
+    }
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.onlineChangeShown', () => onlineChangeView.groups().map((g) => ({ label: g.label, items: g.items.map((i) => ({ label: i.label, description: i.description, opens: !!(i.open && i.open) })) }))));
 
   // ---- The Library Manager (the Solution view's References, as XAE's): a library's version, one added, one removed.
   // The .plcproj edited: XAE, when it has the project open, asks to reload it

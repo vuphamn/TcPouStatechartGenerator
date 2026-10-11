@@ -83,7 +83,7 @@ const isSource = (p) => /\.(TcPOU|TcDUT|TcGVL|TcIO)$/i.test(p);
 /**
  * plc / local: [{ path, content }] (the sources, the .plcproj, the .TcTTO files) →
  * { libraries: [{ name, from, to }], tasks: [{ name, change }], retain: [{ object, name, change }],
- *   interfaces: [names], added: [names], removed: [names] }
+ *   interfaces: [names], added: [names], removed: [names], files: { name lower → local path (relative) } }
  */
 function onlineChangeRisks(plc, local) {
   const objects = (files) => {
@@ -91,7 +91,7 @@ function onlineChangeRisks(plc, local) {
     for (const f of files.filter((x) => isSource(x.path))) {
       const d = declarationOf(f.content);
       const name = d.name ?? baseName(f.path).replace(/\.\w+$/, '');
-      m.set(lower(name), { name, decl: d.decl });
+      m.set(lower(name), { name, decl: d.decl, path: f.path });
     }
     return m;
   };
@@ -156,7 +156,11 @@ function onlineChangeRisks(plc, local) {
     for (const [k, b] of tb) if (!ta.has(k)) tasks.push({ name: b.name, change: 'removed' });
   }
   const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
-  return { libraries, tasks, retain, interfaces: interfaces.sort(byName), added: added.sort(byName), removed: removed.sort(byName) };
+  // (where each object and task is here: the details open it)
+  const files = {};
+  for (const [k, a] of after) files[k] = a.path;
+  for (const f of local.filter((x) => /\.TcTTO$/i.test(x.path))) files[lower(taskOf(f.content, f.path).name)] = f.path;
+  return { libraries, tasks, retain, interfaces: interfaces.sort(byName), added: added.sort(byName), removed: removed.sort(byName), files };
 }
 
 /** The risks as lines for a confirmation's detail ([] when there is nothing to say) */

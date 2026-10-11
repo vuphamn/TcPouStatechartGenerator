@@ -377,6 +377,12 @@
         "title": "Add Library…",
         "category": "TwinCAT",
         "icon": "$(add)"
+      },
+      {
+        "command": "kvalMachineScope.onlineChangeDetails",
+        "title": "Online Change Details",
+        "category": "TwinCAT",
+        "icon": "$(diff)"
       }
     ],
     "keybindings": [
@@ -603,6 +609,11 @@
           "command": "kvalMachineScope.clearBookmarks",
           "when": "view == kvalMachineScope.bookmarks",
           "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.onlineChangeDetails",
+          "when": "view == kvalMachineScope.onlineChange",
+          "group": "navigation@1"
         }
       ],
       "commandPalette": [
@@ -780,6 +791,11 @@
         {
           "id": "kvalMachineScope.solution",
           "name": "Solution"
+        },
+        {
+          "id": "kvalMachineScope.onlineChange",
+          "name": "Online Change",
+          "visibility": "collapsed"
         },
         {
           "id": "kvalMachineScope.watch",

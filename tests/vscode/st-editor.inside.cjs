@@ -298,6 +298,22 @@ exports.run = async function run() {
     delete process.env.KSS_LIBRARY_REPOSITORIES;
     fs.rmSync(repo, { recursive: true, force: true });
 
+    // 19-oc. Online Change Details: the PLC's project (a test's: this one with the POU's declaration as it was, and a
+    // POU only on the PLC) compared with this one: in the Online Change view, by kind, each a click from its code
+    const { localProjectFiles } = require(path.join(__dirname, '..', '..', 'shared', 'onlineChangeCheck.cjs'));
+    const pouName = path.basename(pou, '.TcPOU');
+    const plcSide = localProjectFiles(robotProj).map((x) => {
+      if (path.basename(x.path).toLowerCase() !== path.basename(pou).toLowerCase()) return x;
+      const end = x.content.indexOf(']]>');
+      return { ...x, content: `${x.content.slice(0, end)}\nVAR\n\tnOld : INT;\nEND_VAR\n${x.content.slice(end)}` };
+    });
+    plcSide.push({ path: 'POUs/FB_Gone.TcPOU', content: '<TcPlcObject><POU Name="FB_Gone"><Declaration><![CDATA[FUNCTION_BLOCK FB_Gone]]></Declaration></POU></TcPlcObject>' });
+    const ocLines = await vscode.commands.executeCommand('kvalMachineScope.onlineChangeDetails', plcSide);
+    const oc = (await vscode.commands.executeCommand('kvalMachineScope.onlineChangeShown')) ?? [];
+    const ocDecl = oc.find((g) => g.label === 'Declarations changed');
+    expect(!!ocDecl && ocDecl.items.some((i) => i.label === pouName && i.opens) && oc.find((g) => g.label === 'Removed')?.items.some((i) => i.label === 'FB_Gone'), `Online Change Details: ${pouName}'s declaration changed (opens it), FB_Gone removed (${JSON.stringify(oc)})`);
+    expect(Array.isArray(ocLines) && ocLines.some((l) => /^Declarations changed/.test(l)), `its lines for the confirmation (${(ocLines ?? []).join(' | ')})`);
+
     // 19a. Show in statechart: a lens over each state's branch of Execute() (the state method); one opens the chart
     const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', exDoc.uri);
     const stateLenses = (lenses ?? []).filter((l) => l.command?.command === 'kvalMachineScope.showStateInChart');
@@ -362,7 +378,7 @@ exports.run = async function run() {
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);
