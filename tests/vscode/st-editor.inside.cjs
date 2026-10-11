@@ -280,6 +280,24 @@ exports.run = async function run() {
     const plcprojText = fs.readFileSync(path.join(proj, 'Robot', 'Robot.plcproj'), 'utf8');
     expect(newFile && fs.existsSync(newFile) && /<Compile Include="POUs\\FB_Added\.TcPOU">/.test(plcprojText), `Add POU: FB_Added.TcPOU and the .plcproj (${newFile})`);
 
+    // 19-lib. The Library Manager (References): a library added from a repository, its version set, removed
+    const repo = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kss-repo-'));
+    const vendor = 'Beckhoff Automation GmbH';
+    for (const v of ['3.3.59.0', '3.3.100.0']) fs.mkdirSync(path.join(repo, vendor, 'Tc2_Utilities', v), { recursive: true });
+    process.env.KSS_LIBRARY_REPOSITORIES = repo;
+    const robotProj = path.join(proj, 'Robot', 'Robot.plcproj');
+    const libsNow = () => require(path.join(__dirname, '..', '..', 'vscode-extension', 'plcTree.cjs')).readLibraries(robotProj);
+    await vscode.commands.executeCommand('kvalMachineScope.addLibrary', { plcproj: robotProj }, { name: 'Tc2_Utilities' , version: '*' });
+    let util = libsNow().find((l) => l.name === 'Tc2_Utilities');
+    expect(util && util.version === '*' && util.used === '3.3.100.0' && /<PlaceholderReference Include="Tc2_Utilities">/.test(fs.readFileSync(robotProj, 'utf8')), `Add Library: Tc2_Utilities, the newest (${JSON.stringify(util)})`);
+    await vscode.commands.executeCommand('kvalMachineScope.setLibraryVersion', { lib: util, plcproj: robotProj }, '3.3.59.0');
+    util = libsNow().find((l) => l.name === 'Tc2_Utilities');
+    expect(util && util.version === '3.3.59.0' && util.used === '3.3.59.0', `Set Version: 3.3.59.0 (${util?.version})`);
+    await vscode.commands.executeCommand('kvalMachineScope.removeLibrary', { lib: util, plcproj: robotProj }, true);
+    expect(!libsNow().some((l) => l.name === 'Tc2_Utilities') && /<Compile Include="POUs\\FB_Added\.TcPOU">/.test(fs.readFileSync(robotProj, 'utf8')), 'Remove Library: gone, the rest of the .plcproj kept');
+    delete process.env.KSS_LIBRARY_REPOSITORIES;
+    fs.rmSync(repo, { recursive: true, force: true });
+
     // 19a. Show in statechart: a lens over each state's branch of Execute() (the state method); one opens the chart
     const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', exDoc.uri);
     const stateLenses = (lenses ?? []).filter((l) => l.command?.command === 'kvalMachineScope.showStateInChart');
@@ -344,7 +362,7 @@ exports.run = async function run() {
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

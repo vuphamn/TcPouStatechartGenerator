@@ -155,6 +155,10 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   for a placeholder left on the newest; its tooltip has the version asked for, the versions in the project's cache
   (`_Libraries`) and installed on this computer. A library installed nowhere is marked missing (the count beside
   References too), since the project would not build here.
+  **Add Library…** (References' button) adds one installed on this computer (a placeholder on the newest, as XAE
+  adds it, or a version); **Set Version…** (a library's button) picks the newest (`*`) or a version installed or in the
+  cache; **Remove Library** removes it (asked first). The `.plcproj` is edited as XAE writes it; XAE, with the project
+  open, asks to reload it.
 - **Tasks** (the Solution view, as XAE's SYSTEM > Tasks): each task's cycle, priority and AMS port (the `.tsproj`) and
   the programs it calls (its `.TcTTO`; a click opens one). Logged in, its online values beside it, read from the PLC's
   `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time and the longest since logged in, and a warning

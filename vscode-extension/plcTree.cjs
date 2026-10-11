@@ -139,6 +139,8 @@ const LIBRARY_REPOSITORIES = [
   path.join(process.env.ProgramData || 'C:\\ProgramData', 'Beckhoff', 'TwinCAT', 'PlcEngineering', 'Managed Libraries'),
   'C:\\TwinCAT\\3.1\\Components\\Plc\\Managed Libraries',
 ];
+/** The repositories looked in: KSS_LIBRARY_REPOSITORIES (paths apart by ;) when set (the tests), else this computer's */
+const libraryRepositories = () => (process.env.KSS_LIBRARY_REPOSITORIES ? process.env.KSS_LIBRARY_REPOSITORIES.split(';').filter(Boolean) : LIBRARY_REPOSITORIES);
 const versionsIn = (dir) => {
   try {
     return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory() && /^\d+(\.\d+)+$/.test(e.name)).map((e) => e.name);
@@ -159,7 +161,7 @@ const byVersion = (a, b) => {
  * project's cache (_Libraries) and this computer's repositories hold, the one used, and whether it is missing →
  * [{ name, vendor, version, pinned, placeholder, used, cached: [], installed: [], missing }]
  */
-function readLibraries(plcproj, { repositories = LIBRARY_REPOSITORIES } = {}) {
+function readLibraries(plcproj, { repositories = libraryRepositories() } = {}) {
   const xml = fs.readFileSync(plcproj, 'utf8');
   const dir = path.dirname(plcproj);
   // "Tc2_Standard, 3.3.3.0 (Beckhoff Automation GmbH)" / "Tc2_Standard, * (Beckhoff Automation GmbH)"
@@ -192,4 +194,4 @@ function readLibraries(plcproj, { repositories = LIBRARY_REPOSITORIES } = {}) {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 }
 
-module.exports = { readPlcTree, plcProjectsUnder, readTasks, readLibraries, LIBRARY_REPOSITORIES };
+module.exports = { readPlcTree, plcProjectsUnder, readTasks, readLibraries, LIBRARY_REPOSITORIES, libraryRepositories };

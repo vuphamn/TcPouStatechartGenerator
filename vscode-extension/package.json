@@ -359,6 +359,24 @@
         "command": "kvalMachineScope.openBookmark",
         "title": "Open Bookmark",
         "category": "TwinCAT"
+      },
+      {
+        "command": "kvalMachineScope.setLibraryVersion",
+        "title": "Set Version…",
+        "category": "TwinCAT",
+        "icon": "$(versions)"
+      },
+      {
+        "command": "kvalMachineScope.removeLibrary",
+        "title": "Remove Library",
+        "category": "TwinCAT",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "kvalMachineScope.addLibrary",
+        "title": "Add Library…",
+        "category": "TwinCAT",
+        "icon": "$(add)"
       }
     ],
     "keybindings": [
@@ -615,6 +633,14 @@
         {
           "command": "kvalMachineScope.openBookmark",
           "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.setLibraryVersion",
+          "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.removeLibrary",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -699,6 +725,36 @@
           "command": "kvalMachineScope.removeBookmark",
           "when": "view == kvalMachineScope.bookmarks && viewItem == kssBookmark",
           "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.setLibraryVersion",
+          "when": "view == kvalMachineScope.solution && viewItem == plcLibrary",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.removeLibrary",
+          "when": "view == kvalMachineScope.solution && viewItem == plcLibrary",
+          "group": "inline@2"
+        },
+        {
+          "command": "kvalMachineScope.setLibraryVersion",
+          "when": "view == kvalMachineScope.solution && viewItem == plcLibrary",
+          "group": "library@1"
+        },
+        {
+          "command": "kvalMachineScope.removeLibrary",
+          "when": "view == kvalMachineScope.solution && viewItem == plcLibrary",
+          "group": "library@2"
+        },
+        {
+          "command": "kvalMachineScope.addLibrary",
+          "when": "view == kvalMachineScope.solution && viewItem == plcReferences",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.addLibrary",
+          "when": "view == kvalMachineScope.solution && viewItem == plcReferences",
+          "group": "library@1"
         }
       ]
     },

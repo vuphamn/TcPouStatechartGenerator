@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildFromProject, remoteManagerBuilds, xaeAvailable, rmCrashesFor } = require('../shared/tcBuild.cjs');
 const { readPlcTree, plcProjectsUnder, readTasks, readLibraries } = require('./plcTree.cjs');
+const { installedLibraries, setLibraryVersion, removeLibrary, addLibrary, editPlcproj, compareVersions } = require('./libraryEdit.cjs');
 const { projectOf, projectTarget, findPlcproj } = require('./twincatProject.cjs');
 const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs');
 const { startPlc, stopPlc } = require('../shared/tcAppInfo.cjs');
@@ -586,7 +587,8 @@ function register(context, { activeFile, sectionUriOf }) {
           return [...tasksNode, ...plcProjectsUnder(project.root).map((plcproj) => {
             try {
               const t = readPlcTree(plcproj);
-              return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, ...(t.references.length ? [{ name: 'References', references: t.references, plcproj }] : [])] };
+              // (References always: Add Library there)
+              return { label: t.name, plc: true, plcproj, path: '', children: [...t.children, { name: 'References', references: t.references, plcproj }] };
             } catch {
               return { label: path.basename(plcproj), plc: true, children: [] };
             }
@@ -608,7 +610,7 @@ function register(context, { activeFile, sectionUriOf }) {
         // (the libraries as XAE's Library Manager shows them: their versions, the one used, missing ones)
         if (el.references) {
           try {
-            return readLibraries(el.plcproj).map((lib) => ({ name: lib.name, reference: true, lib }));
+            return readLibraries(el.plcproj).map((lib) => ({ name: lib.name, reference: true, lib, plcproj: el.plcproj }));
           } catch {
             return el.references.map((r) => ({ name: r, reference: true }));
           }
@@ -670,6 +672,7 @@ function register(context, { activeFile, sectionUriOf }) {
           return Object.assign(new vscode.TreeItem('References', vscode.TreeItemCollapsibleState.Collapsed), {
             iconPath: new vscode.ThemeIcon(missing ? 'warning' : 'library', missing ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined),
             description: `${el.references.length}${missing ? ` · ${missing} missing` : ''}`,
+            contextValue: 'plcReferences',
           });
         }
         if (el.reference && el.lib) {
@@ -715,6 +718,61 @@ function register(context, { activeFile, sectionUriOf }) {
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+
+  // ---- The Library Manager (the Solution view's References, as XAE's): a library's version, one added, one removed.
+  // The .plcproj edited: XAE, when it has the project open, asks to reload it
+  const libraryChanged = (plcproj, what) => {
+    log(`${what} (${path.basename(plcproj)})`);
+    solution.reload();
+    vscode.window.setStatusBarMessage(`$(library) ${what}. Build to use it; XAE asks to reload the project if it has it open.`, 8000);
+  };
+  const libraryCommand = (id, run) => context.subscriptions.push(vscode.commands.registerCommand(id, guard(run)));
+  libraryCommand('kvalMachineScope.setLibraryVersion', async (el, choice) => {
+    const l = el?.lib;
+    if (!l || !el.plcproj) return false;
+    const versions = [...new Set([...l.installed, ...l.cached])].sort(compareVersions).reverse();
+    const picks = [
+      { label: '$(arrow-up) The newest (*)', description: versions[0] ? `now ${versions[0]}` : 'none installed here', version: '*' },
+      ...versions.map((v) => ({ label: v, description: [l.used === v ? 'used now' : '', l.cached.includes(v) ? "in the project's cache" : '', l.installed.includes(v) ? 'installed here' : ''].filter(Boolean).join(' · '), version: v })),
+    ];
+    const pick = choice ? picks.find((x) => x.version === choice) : await vscode.window.showQuickPick(picks, { title: `${l.name}: its version`, placeHolder: `Asked for now: ${l.version === '*' ? 'the newest (*)' : l.version}` });
+    if (!pick || pick.version === l.version) return false;
+    editPlcproj(el.plcproj, (x) => setLibraryVersion(x, l, pick.version));
+    libraryChanged(el.plcproj, `${l.name} set to ${pick.version === '*' ? 'the newest (*)' : pick.version}`);
+    return true;
+  });
+  libraryCommand('kvalMachineScope.removeLibrary', async (el, sure) => {
+    const l = el?.lib;
+    if (!l || !el.plcproj) return false;
+    if (!sure) {
+      const ok = await vscode.window.showWarningMessage(`Remove ${l.name} from ${path.basename(el.plcproj, '.plcproj')}?`, { modal: true, detail: 'Code that uses its blocks, types or functions no longer builds.' }, 'Remove');
+      if (ok !== 'Remove') return false;
+    }
+    editPlcproj(el.plcproj, (x) => removeLibrary(x, l));
+    libraryChanged(el.plcproj, `${l.name} removed`);
+    return true;
+  });
+  libraryCommand('kvalMachineScope.addLibrary', async (el, choice) => {
+    const plcproj = el?.plcproj ?? (project ? plcProjectsUnder(project.root)[0] : null);
+    if (!plcproj) return false;
+    const have = new Set(readLibraries(plcproj, { repositories: [] }).map((l) => l.name.toLowerCase()));
+    const all = installedLibraries().filter((l) => !have.has(l.name.toLowerCase()));
+    let lib = choice ? all.find((l) => l.name.toLowerCase() === String(choice.name).toLowerCase()) : null;
+    if (!choice) {
+      const pick = await vscode.window.showQuickPick(all.map((l) => ({ label: l.name, description: l.vendor, detail: `Installed: ${[...l.versions].reverse().slice(0, 4).join(', ')}${l.versions.length > 4 ? ', …' : ''}`, lib: l })), { title: `Add a library to ${path.basename(plcproj, '.plcproj')}`, placeHolder: all.length ? 'The libraries installed on this computer' : 'No other library installed on this computer', matchOnDescription: true });
+      lib = pick?.lib ?? null;
+    }
+    if (!lib) return false;
+    let version = choice?.version;
+    if (!version) {
+      const v = await vscode.window.showQuickPick([{ label: '$(arrow-up) The newest (*)', description: 'as XAE adds a library: a placeholder on the newest', version: '*' }, ...[...lib.versions].reverse().map((x) => ({ label: x, version: x }))], { title: `${lib.name}: its version` });
+      version = v?.version;
+    }
+    if (!version) return false;
+    editPlcproj(plcproj, (x) => addLibrary(x, { name: lib.name, vendor: lib.vendor, version }));
+    libraryChanged(plcproj, `${lib.name} added (${version === '*' ? 'the newest' : version})`);
+    return true;
+  });
   // A task's trend: its LastExecTime (100 ns units) watched, the trend panel opened
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.taskTrend', async (el) => {
     if (!el?.trendPath) return false;
