@@ -47,7 +47,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const hasNode = (id) => p.evaluate((id) => !!document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`), id);
   const hasEdge = (from, to) => p.evaluate((from, to) => !!document.querySelector(`#mermaid-canvas-area path.tc-edge-path[data-edge-key="${from}->${to}"]`), from, to);
   const menuClick = (id) => p.evaluate((id) => { const b = document.getElementById(id); b?.click(); return !!b; }, id);
-  const waitFor = async (fn, ms = 6000) => { for (let t = 0; t < ms; t += 200) { if (await fn()) return true; await h.sleep(200); } return false; };
+  const waitFor = async (fn, ms = 15000) => { for (let t = 0; t < ms; t += 200) { if (await fn()) return true; await h.sleep(200); } return false; };
 
   // 1. Copy CLAMPED, paste: the rename prompt for the copy
   await clickNode(S('CLAMPED'));
@@ -57,7 +57,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.keyboard.down('Control'); await p.keyboard.press('v'); await p.keyboard.up('Control');
   const prompt = await waitFor(async () => (await p.$('#text-prompt-input')) && /TABLEMANAGER_CLAMPED_COPY/.test(await p.$eval('#text-prompt-input', (e) => e.value)));
   expect(prompt, 'Ctrl+V: a new state, its name asked for (TABLEMANAGER_CLAMPED_COPY)');
-  expect(await hasNode(S('CLAMPED_COPY')), 'the copy is on the canvas');
+  expect(await waitFor(() => hasNode(S('CLAMPED_COPY'))), 'the copy is on the canvas');
   const NEW = S('CLAMPED_TWO');
   await p.evaluate(() => document.getElementById('text-prompt-input').select());
   await p.keyboard.press('Backspace');

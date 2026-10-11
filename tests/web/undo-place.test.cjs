@@ -26,8 +26,9 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.mouse.down();
   await p.mouse.move(a0.x + 90, a0.y + 50, { steps: 8 });
   await p.mouse.up();
+  // (drawn anew after the drop: its place once it no longer changes; a loaded machine takes its time)
   await h.sleep(600);
-  const a1 = await at();
+  const a1 = await h.settled(at);
   expect(Math.hypot(a1.x - a0.x, a1.y - a0.y) > 40, `${S} moved (${(a1.x - a0.x).toFixed(0)},${(a1.y - a0.y).toFixed(0)})`);
 
   // Deleted (Delete, confirmed)
@@ -50,9 +51,17 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const empty = await p.evaluate(() => { const r = document.getElementById('mermaid-canvas-area').getBoundingClientRect(); return { x: r.x + r.width - 30, y: r.y + r.height - 30 }; });
   await p.mouse.click(empty.x, empty.y);
   await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
-  await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control');
-  await h.sleep(1800);
-  const a2 = await at();
+  const undo = async () => { await p.keyboard.down('Control'); await p.keyboard.press('z'); await p.keyboard.up('Control'); };
+  await undo();
+  // (back once the chart is drawn again; a Ctrl+Z lost while the page was busy (the canvas not focused yet): once more)
+  let back = await h.until(at, 12000);
+  if (!back) {
+    await p.mouse.click(empty.x, empty.y);
+    await p.evaluate(() => document.getElementById('mermaid-canvas-area')?.focus());
+    await undo();
+    back = await h.until(at, 12000);
+  }
+  const a2 = back ? await h.settled(at) : null;
   expect(!!a2 && Math.hypot(a2.x - a1.x, a2.y - a1.y) < 4, `Ctrl+Z: ${S} back where it was moved to (${a2 ? `${(a2.x - a1.x).toFixed(1)},${(a2.y - a1.y).toFixed(1)} off` : 'not back'})`);
 
   // (every edge moved on the canvas still orthogonal, as ELK draws it: not only the ones checked above)

@@ -7,7 +7,7 @@
 //   --look: a screenshot of the app as the scenes start (layout check), no recording
 //   --check: each scene played to the end even when another fails; a scene that fails (something it clicks is gone:
 //            the app changed), has page errors, or whose clip runs much longer or shorter than the one in docs/demo
-//            (more than 35%) is flagged: listed (Markdown, for a CI run's summary: --summary <file>), exit code 1
+//            (more than 35%; longer on CI: more than 60%) is flagged: listed (Markdown, for a CI run's summary: --summary <file>), exit code 1
 const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
@@ -105,7 +105,9 @@ async function devServer() {
         const was = fs.existsSync(path.join(COMMITTED, `${name}.gif`)) ? gifInfo(fs.readFileSync(path.join(COMMITTED, `${name}.gif`))) : null;
         const change = now && was && was.ms ? (now.ms - was.ms) / was.ms : 0;
         if (errors.length) flagged.push({ name, why: `page errors: ${errors.slice(0, 2).join(' | ')}` });
-        else if (Math.abs(change) > 0.35) flagged.push({ name, why: `${(now.ms / 1000).toFixed(1)} s, the committed clip ${(was.ms / 1000).toFixed(1)} s (${change > 0 ? '+' : ''}${Math.round(change * 100)}%)` });
+        // (longer allows more on CI: its runner plays the same scene 35-45% slower than the machine the clips were made
+        // on; shorter is a step gone, the same anywhere)
+        else if (change > (process.env.GITHUB_ACTIONS ? 0.6 : 0.35) || change < -0.35) flagged.push({ name, why: `${(now.ms / 1000).toFixed(1)} s, the committed clip ${(was.ms / 1000).toFixed(1)} s (${change > 0 ? '+' : ''}${Math.round(change * 100)}%)` });
         results[results.length - 1].committed = was ? (was.ms / 1000).toFixed(1) : null;
       }
       } catch (e) {

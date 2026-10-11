@@ -2,7 +2,8 @@
 // moved (the status says so; the chart has the edge from the new state), every state where it was on the canvas
 // (locked or not), every other transition drawn as it was (its route, its label), the moved one still into its state
 // at the same spot and its label on it, Ctrl+Z puts the code back (the others still as they were)
-// runner-timeout: 600 (5 drops in each of the samples, each undone)
+// Run by endpoint-start-samples-1 / -2.test.cjs (each every other sample: KSS_ENDPOINT_PART "1/2", "2/2"; unset: all
+// of them), so each half runs in its own test, beside the other with --jobs
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -18,7 +19,9 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
   await p.evaluate(() => localStorage.clear());
   await p.reload({ waitUntil: 'load' });
   await p.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 });
-  const samples = await p.$$eval('#sample-selector option', (o) => o.map((x) => x.value).filter(Boolean));
+  const [part, parts] = (process.env.KSS_ENDPOINT_PART || '1/1').split('/').map(Number);
+  const samples = (await p.$$eval('#sample-selector option', (o) => o.map((x) => x.value).filter(Boolean))).filter((_, i) => i % parts === part - 1);
+  console.log(`samples ${part}/${parts}: ${samples.join(', ')}`);
   // (the minimap closed: it covers a corner of the canvas)
   await p.evaluate(() => document.querySelector('#diagram-minimap-container button[title^="Close Minimap"]')?.click());
 
@@ -217,6 +220,15 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       const routesBefore = await routes();
       const endsBefore = await endsOf(from, to);
       const statusBefore = await status();
+      // (every text the status takes from here: under load its message may come and go between two looks)
+      await p.evaluate(() => {
+        window.__kssStatus = [];
+        window.__kssStatusObs?.disconnect();
+        const el = document.getElementById('status-message');
+        if (!el) return;
+        window.__kssStatusObs = new MutationObserver(() => window.__kssStatus.push(el.textContent.trim()));
+        window.__kssStatusObs.observe(el, { childList: true, characterData: true, subtree: true });
+      });
       await p.mouse.move(hd.x, hd.y);
       await p.mouse.down();
       for (let i = 1; i <= 16; i++) await p.mouse.move(hd.x + ((pl.tgt.x - hd.x) * i) / 16, hd.y + ((pl.tgt.y - hd.y) * i) / 16);
@@ -227,12 +239,16 @@ const PER_SAMPLE = Number(process.env.KSS_ENDPOINT_PER_SAMPLE) || 5;
       let msg = '';
       // (its message, not the status going back to "Ready" meanwhile: under load, a large sample's chart is redrawn
       // after the earlier message's time is up)
-      for (let i = 0; i < 40 && (msg === statusBefore || !msg || /^Ready\b/.test(msg)); i++) { await h.sleep(250); msg = await status(); }
+      const movedRx = new RegExp(`\\(was ${from} →\\)`);
+      const seenMoved = async () => (await p.evaluate(() => window.__kssStatus ?? [])).find((x) => movedRx.test(x));
+      for (let i = 0; i < 60 && (msg === statusBefore || !msg || /^Ready\b/.test(msg)) && !(await seenMoved()); i++) { await h.sleep(250); msg = await status(); }
+      if (!movedRx.test(msg)) msg = (await seenMoved()) ?? msg;
+      await p.evaluate(() => window.__kssStatusObs?.disconnect());
       await h.sleep(600);
       await settle();
       const after = await places();
       const nowKeys = await keys();
-      const moved = new RegExp(`\\(was ${from} →\\)`).test(msg);
+      const moved = movedRx.test(msg);
       const drawn = nowKeys.some((k) => k.startsWith(`${pl.target}->`)) && (nowKeys.includes(`${pl.target}->${to}`) || nowKeys.some((k) => k.startsWith(`${pl.target}->`)));
       expect(drop === pl.target && moved && drawn, `${sample} ${key}: dropped on ${pl.target} (${drop}): ${msg.slice(0, 160)}`);
       // (every state where it was: the drop's place seen)

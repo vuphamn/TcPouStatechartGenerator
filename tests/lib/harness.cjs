@@ -162,6 +162,34 @@ async function waitForText(file, rx, ms = 20000) {
 }
 
 /**
+ * Waits until fn() gives something truthy (a canvas redrawn, a status said: on a loaded machine that takes longer than
+ * a fixed sleep allows) → that value, or null after `ms`
+ */
+async function until(fn, ms = 15000, every = 200) {
+  for (const end = Date.now() + ms; ; await sleep(every)) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() >= end) return null;
+  }
+}
+
+/**
+ * Waits until fn() gives the same value twice in a row, `every` ms apart (a node done moving: drawn anew after a
+ * drop) → that value (the last one after `ms`)
+ */
+async function settled(fn, ms = 10000, every = 300) {
+  let last = JSON.stringify(await fn());
+  for (const end = Date.now() + ms; Date.now() < end; ) {
+    await sleep(every);
+    const v = await fn();
+    const now = JSON.stringify(v);
+    if (now === last) return v;
+    last = now;
+  }
+  return fn();
+}
+
+/**
  * The canvas's re-routed edges (moved with a state or a handle: their path is no longer the one Mermaid drew) with a
  * slanted segment: ELK draws orthogonally, and a move must keep that. ['from->to: (x,y)-(x,y)'] (none: [])
  */
@@ -218,4 +246,4 @@ function removeProfiles() {
   }
 }
 
-module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted, reroutedEdges, profileDir };
+module.exports = { REPO, TESTS, OUT, FAKES, FIXTURES, APP_URL, APP_ORIGIN, sleep, until, settled, browserPath, launchBrowser, freePort, waitForText, out, fixture, reroutedSlanted, reroutedEdges, profileDir };
