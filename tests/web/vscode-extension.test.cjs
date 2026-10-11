@@ -81,15 +81,22 @@ fs.writeFileSync(path.join(work, 'POUs', 'DUTs', sample.dutName), sample.dutCont
     expect(csp.length === 0, `no content policy violation (${csp.slice(0, 2).join(' | ')})`);
 
     // Show in TwinCAT editor on CAL_CHECK: that line of the .TcPOU revealed
-    const at = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, CHECK);
-    if (at) {
+    // (a loaded machine: the menu's click may land while the page is busy; nothing revealed then: once more)
+    const showInEditor = async (first) => {
+      const at = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, CHECK);
+      if (!at) return;
+      await p.keyboard.press('Escape');
       await p.mouse.click(at.x, at.y, { button: 'right' });
-      await p.waitForSelector('#context-menu-show-in-xae-btn', { timeout: 4000 }).catch(() => {});
+      await p.waitForSelector('#context-menu-show-in-xae-btn', { visible: true, timeout: 8000 }).catch(() => {});
       const itemText = await p.$eval('#context-menu-show-in-xae-btn', (b) => b.textContent.trim()).catch(() => '');
-      expect(itemText === 'Show in the .TcPOU (VS Code)', `its menu: ${itemText}`);
+      if (first) expect(itemText === 'Show in the .TcPOU (VS Code)', `its menu: ${itemText}`);
       await p.click('#context-menu-show-in-xae-btn').catch(() => {});
+    };
+    await showInEditor(true);
+    if (!(await h.until(() => revealed.length, 10000))) {
+      await showInEditor(false);
+      await h.until(() => revealed.length, 10000);
     }
-    for (let t = 0; t < 5000 && !revealed.length; t += 200) await h.sleep(200);
     const lineText = revealed[0] ? fs.readFileSync(revealed[0].file, 'utf8').replace(/^﻿/, '').split(/\r?\n/)[revealed[0].line]?.trim() : '';
     expect(revealed.length === 1 && revealed[0].file === pouPath && /^CAL_CHECK:/.test(lineText), `Show in TwinCAT editor: the .TcPOU at CAL_CHECK's label (${JSON.stringify(revealed[0])}: "${lineText}")`);
 
@@ -101,11 +108,16 @@ fs.writeFileSync(path.join(work, 'POUs', 'DUTs', sample.dutName), sample.dutCont
       return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null;
     });
     if (label) {
-      await p.mouse.move(label.x, label.y, { steps: 3 });
-      await p.waitForSelector('#guard-popup-edit-condition', { visible: true, timeout: 8000 }).catch(() => {});
+      // (its popup on hover: a loaded machine may miss the first; moved off and on again)
+      let pencil = null;
+      for (let i = 0; i < 3 && !pencil; i++) {
+        if (i) await p.mouse.move(label.x + 300, label.y + 300, { steps: 2 });
+        await p.mouse.move(label.x, label.y, { steps: 3 });
+        pencil = await p.waitForSelector('#guard-popup-edit-condition', { visible: true, timeout: 8000 }).catch(() => null);
+      }
       await h.sleep(300);
       await p.click('#guard-popup-edit-condition').catch(() => {});
-      await p.waitForSelector('#text-prompt-input', { timeout: 4000 }).catch(() => {});
+      await p.waitForSelector('#text-prompt-input', { timeout: 8000 }).catch(() => {});
       await p.evaluate(() => { const i = document.getElementById('text-prompt-input'); i.focus(); i.select(); });
       await p.keyboard.type('rMeasured >= 0.25');
       await p.keyboard.press('Enter');
@@ -113,7 +125,7 @@ fs.writeFileSync(path.join(work, 'POUs', 'DUTs', sample.dutName), sample.dutCont
       await p.click('#header-save-btn').catch(() => {});
     }
     let disk = '';
-    for (let t = 0; t < 8000 && !/rMeasured >= 0\.25/.test(disk); t += 250) {
+    for (let t = 0; t < 15000 && !/rMeasured >= 0\.25/.test(disk); t += 250) {
       await h.sleep(250);
       disk = fs.readFileSync(pouPath, 'utf8');
     }
@@ -124,7 +136,7 @@ fs.writeFileSync(path.join(work, 'POUs', 'DUTs', sample.dutName), sample.dutCont
     host.changed(pouPath);
     const has = async () => p.evaluate(() => [...document.querySelectorAll('#mermaid-canvas-area g.edgeLabel')].some((x) => /rMeasured >= 0\.75/.test(x.textContent)));
     let ok = await has();
-    for (let t = 0; t < 8000 && !ok; t += 250) { await h.sleep(250); ok = await has(); }
+    for (let t = 0; t < 15000 && !ok; t += 250) { await h.sleep(250); ok = await has(); }
     expect(ok, 'changed on disk: the chart shows the new condition');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
