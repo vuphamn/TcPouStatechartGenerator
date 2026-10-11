@@ -270,7 +270,9 @@ function instancesIn(f) {
 
 /**
  * The callables a name stands for at a place: a member of the place's POU (or its bases'), a project function /
- * program / FB, an FB instance there (its type's body), a member of an instance's type (inst.Method) → items
+ * program / FB, an FB instance there (its type's body), a member of an instance's type (inst.Method); through an
+ * interface's variable (itfAxis.Move()), the interface's method and its implementations' (every type implementing it,
+ * or an interface extending it) → items
  */
 function callablesNamed(files, { file, name, qualifier }) {
   const types = typesOf(files);
@@ -294,8 +296,13 @@ function callablesNamed(files, { file, name, qualifier }) {
     const q = lower(qualifier).replace(/\^$/, '');
     const own = typesOf([f])[0];
     const typeName = q === 'this' ? own?.name : q === 'super' ? own?.extends[0] : instancesIn(f).get(q);
-    if (typeName) out.push(...membersOf(typeName, name));
-    return out.filter(Boolean);
+    if (typeName) {
+      out.push(...membersOf(typeName, name));
+      // (an interface: what it refers to at run time is any of its implementations)
+      if (typeNamed(types, typeName)?.kind === 'INTERFACE') for (const sub of allSubtypes(files, typeName)) if (sub.kind === 'FUNCTION_BLOCK') out.push(...membersOf(sub.name, name));
+    }
+    const seen = new Set();
+    return out.filter((x) => x && !seen.has(`${x.file}|${x.key}`) && seen.add(`${x.file}|${x.key}`));
   }
   if (f) {
     const own = typesOf([f])[0];

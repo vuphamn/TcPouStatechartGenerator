@@ -798,6 +798,11 @@
         "id": "fbInstance",
         "superType": "variable",
         "description": "A function block's instance (fbAxis : FB_Axis, tonWait : TON)"
+      },
+      {
+        "id": "itfInstance",
+        "superType": "variable",
+        "description": "An interface's variable (itfAxis : I_Axis): what it refers to is called through it"
       }
     ],
     "semanticTokenScopes": [
@@ -805,6 +810,9 @@
         "scopes": {
           "fbInstance": [
             "entity.name.type.class"
+          ],
+          "itfInstance": [
+            "entity.name.type.interface"
           ],
           "enumMember": [
             "variable.other.enummember"

@@ -49,6 +49,8 @@ END_CASE
 write('FB_Axis.TcPOU', pou('FB_Axis', 'FUNCTION_BLOCK FB_Axis EXTENDS FB_Base\nVAR_INPUT\n\tbGo : BOOL;\nEND_VAR\nVAR\n\tnState : INT;\nEND_VAR\n', axisBody, method('Move', 'METHOD Move : BOOL\nVAR_INPUT\n\tfPos : LREAL;\nEND_VAR\n', 'SUPER^.Move(fPos := fPos);\nReset();\n')));
 write('F_Log.TcPOU', pou('F_Log', 'FUNCTION F_Log : BOOL\nVAR_INPUT\n\tsText : STRING;\nEND_VAR\n', 'F_Log := TRUE;\n'));
 write('MAIN.TcPOU', pou('MAIN', 'PROGRAM MAIN\nVAR\n\tfbAxis : FB_Axis;\n\tbOk : BOOL;\nEND_VAR\n', "fbAxis(bGo := TRUE);\nbOk := fbAxis.Move(fPos := 2.0);\nF_Log('cycle'); // F_Log('not a call')\n"));
+// (a call through an interface's variable: any of its implementations)
+write('PRG_Cell.TcPOU', pou('PRG_Cell', 'PROGRAM PRG_Cell\nVAR\n\titfMover : I_Mover;\nEND_VAR\n', 'itfMover.Move(fPos := 3.0);\n'));
 write('GVL_Main.TcGVL', `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <GVL Name="GVL_Main" Id="${id()}">\n    <Declaration><![CDATA[VAR_GLOBAL\n\tgnCount : INT;\nEND_VAR\n]]></Declaration>\n  </GVL>\n</TcPlcObject>\n`);
 write('E_State.TcDUT', dut('E_State', 'TYPE E_State :\n(\n\tIdle,\n\tBusy\n);\nEND_TYPE\n'));
 write('ST_Pos.TcDUT', dut('ST_Pos', 'TYPE ST_Pos :\nSTRUCT\n\tfX : LREAL;\nEND_STRUCT\nEND_TYPE\n'));
@@ -103,8 +105,11 @@ const item = (file: string, key: string) => nav.itemOfPlace(files, file, key) as
 const incoming = (i: Item) => (nav.incomingCalls(files, i) as { from: Item; ranges: { line: number }[] }[]).map((c) => `${itemName(c.from)}@${c.ranges.map((x) => x.line + 1).join('+')}`).sort().join(', ');
 const outgoing = (i: Item) => (nav.outgoingCalls(files, i) as { to: Item }[]).map((c) => itemName(c.to)).sort().join(', ');
 expect(incoming(item(fileOf('F_Log'), '')) === 'FB_Base.Reset@1, MAIN@3', `F_Log's callers: Reset(), MAIN (not in a comment) (${incoming(item(fileOf('F_Log'), ''))})`);
-expect(incoming(item(fileOf('FB_Axis'), 'Method:Move')) === 'FB_Axis@10, MAIN@2', `FB_Axis.Move's callers: its body, MAIN (fbAxis.Move) (${incoming(item(fileOf('FB_Axis'), 'Method:Move'))})`);
-expect(incoming(item(fileOf('FB_Base'), 'Method:Move')) === 'FB_Axis.Move@1', `FB_Base.Move's caller: SUPER^.Move (${incoming(item(fileOf('FB_Base'), 'Method:Move'))})`);
+expect(incoming(item(fileOf('FB_Axis'), 'Method:Move')) === 'FB_Axis@10, MAIN@2, PRG_Cell@1', `FB_Axis.Move's callers: its body, MAIN (fbAxis.Move), PRG_Cell (itfMover.Move: an implementation of I_Mover) (${incoming(item(fileOf('FB_Axis'), 'Method:Move'))})`);
+expect(incoming(item(fileOf('FB_Base'), 'Method:Move')) === 'FB_Axis.Move@1, PRG_Cell@1', `FB_Base.Move's callers: SUPER^.Move, itfMover.Move (${incoming(item(fileOf('FB_Base'), 'Method:Move'))})`);
+const viaItf = callables(fileOf('PRG_Cell'), 'Move', 'itfMover').split(',').sort().join(',');
+expect(viaItf === 'FB_Axis.Move,FB_Base.Move,I_Mover.Move', `itfMover.Move(): the interface's method and its implementations' (${viaItf})`);
+expect(outgoing(item(fileOf('PRG_Cell'), '')) === 'FB_Axis.Move, FB_Base.Move, I_Mover.Move', `PRG_Cell calls, through the interface (${outgoing(item(fileOf('PRG_Cell'), ''))})`);
 expect(incoming(item(fileOf('FB_Axis'), '')) === 'MAIN@1', `FB_Axis's body: called by MAIN (fbAxis()) (${incoming(item(fileOf('FB_Axis'), ''))})`);
 expect(outgoing(item(fileOf('FB_Axis'), 'Method:Move')) === 'FB_Base.Move, FB_Base.Reset', `FB_Axis.Move calls (${outgoing(item(fileOf('FB_Axis'), 'Method:Move'))})`);
 expect(outgoing(item(fileOf('MAIN'), '')) === 'FB_Axis, FB_Axis.Move, F_Log', `MAIN calls (${outgoing(item(fileOf('MAIN'), ''))})`);

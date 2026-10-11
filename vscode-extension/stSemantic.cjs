@@ -1,14 +1,14 @@
 // Semantic colours for Structured Text, from the project (stReferences' index): the project's types (a function block,
 // a struct, an enum, an interface, a function, a program) and the standard blocks (TON, R_TRIG, CTU …); a function
-// block's instances (fbAxis : FB_Axis, tonWait : TON) and their members after the dot (a method called, else a
-// property); the enums' members (E_State.Idle, Idle); a POU's own methods called; constants (VAR CONSTANT). By name,
+// block's instances (fbAxis : FB_Axis, tonWait : TON), an interface's (itfAxis : I_Axis), and their members after the
+// dot (a method called, else a property); the enums' members (E_State.Idle, Idle); a POU's own methods called; constants (VAR CONSTANT). By name,
 // as the rest of the editor: not a compiler's resolution.
 'use strict';
 const { blankCode, declarationsIn } = require('./stReferences.cjs');
 const { typesOf, instancesIn } = require('./stNavigation.cjs');
 
 /** The token types and modifiers, in the legend's order */
-const TOKEN_TYPES = ['type', 'class', 'struct', 'enum', 'interface', 'function', 'namespace', 'enumMember', 'fbInstance', 'method', 'property', 'variable'];
+const TOKEN_TYPES = ['type', 'class', 'struct', 'enum', 'interface', 'function', 'namespace', 'enumMember', 'fbInstance', 'method', 'property', 'variable', 'itfInstance'];
 const TOKEN_MODIFIERS = ['readonly', 'declaration', 'defaultLibrary'];
 
 /** IEC 61131-3's and Tc2_Standard's function blocks: their instances coloured too */
@@ -32,7 +32,12 @@ function projectTables(files, libraryNames = new Set()) {
     const t = String(type ?? '').split('.').pop().toLowerCase();
     return types.get(t) === 'FUNCTION_BLOCK' || STANDARD_FBS.has(t) || (libraryNames.has(t) && /^(fb|mc)_/.test(t));
   };
-  return { types, enumMembers, isFb, libraryNames };
+  // (an interface: the project's, a library's I_ names: I_TcMessage, ...)
+  const isItf = (type) => {
+    const t = String(type ?? '').split('.').pop().toLowerCase();
+    return types.get(t) === 'INTERFACE' || (libraryNames.has(t) && /^i_/.test(t));
+  };
+  return { types, enumMembers, isFb, isItf, libraryNames };
 }
 
 /**
@@ -51,6 +56,7 @@ function semanticTokensOf({ text, file, key = '', files = [], tables }) {
   while ((m = own.exec(code))) for (const n of m[1].split(',')) inst.set(n.trim().toLowerCase(), m[2].split('.').pop());
   for (const g of files) if (g.kind === 'GVL') for (const [n, ty] of instancesIn(g)) if (!inst.has(n)) inst.set(n, ty);
   const fbInstances = new Set([...inst].filter(([, ty]) => t.isFb(ty)).map(([n]) => n));
+  const itfInstances = new Set([...inst].filter(([, ty]) => t.isItf?.(ty)).map(([n]) => n));
   // (this POU's methods and actions: called by their name)
   const methods = new Set((f?.members ?? []).filter((x) => x.kind === 'Method' || x.kind === 'Action').map((x) => x.name.toLowerCase()));
   // (constants: the names declared in a VAR … CONSTANT block: this section's, its file's declarations', the global lists')
@@ -85,7 +91,7 @@ function semanticTokensOf({ text, file, key = '', files = [], tables }) {
       const q = dot[1].toLowerCase();
       // E_State.Idle: an enum's member; fbAxis.Move() / fbAxis.bDone: an instance's method / property
       if (t.types.get(q) === 'ENUM' || [...t.enumMembers].some(([mem, en]) => mem === lower && en.toLowerCase() === q)) push(m.index, name.length, 'enumMember');
-      else if (fbInstances.has(q) || q === 'this' || q === 'super') push(m.index, name.length, call ? 'method' : 'property');
+      else if (fbInstances.has(q) || itfInstances.has(q) || q === 'this' || q === 'super') push(m.index, name.length, call ? 'method' : 'property');
       continue;
     }
     if (ELEMENTARY.has(lower)) continue;
@@ -100,6 +106,10 @@ function semanticTokensOf({ text, file, key = '', files = [], tables }) {
     }
     if (fbInstances.has(lower)) {
       push(m.index, name.length, 'fbInstance', declAt.has(m.index) ? ['declaration'] : []);
+      continue;
+    }
+    if (itfInstances.has(lower)) {
+      push(m.index, name.length, 'itfInstance', declAt.has(m.index) ? ['declaration'] : []);
       continue;
     }
     if (constants.has(lower)) {

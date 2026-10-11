@@ -21,9 +21,10 @@ file access.
   graphical implementation (SFC, CFC) is said to be one: edit it in XAE.
 - **Semantic colours** from the project, over the grammar's: its types (function blocks, structs, enums, interfaces,
   functions, programs) and the standard blocks (`TON`, `R_TRIG` …); function blocks' instances (`fbAxis : FB_Axis`,
-  `tonWait : TON`) and their methods and properties after the dot; enum members, qualified or not; constants; the POU's
+  `tonWait : TON`) and interfaces' variables (`itfAxis : I_Axis`, a library's `I_` too), and their methods and
+  properties after the dot; enum members, qualified or not; constants; the POU's
   own methods and actions called. The theme colours them (`editor.semanticTokenColorCustomizations`: the instances' type
-  is `fbInstance`); `kvalMachineScope.structuredText.semanticColors` switches them off.
+  is `fbInstance`, the interfaces' variables' `itfInstance`); `kvalMachineScope.structuredText.semanticColors` switches them off.
 - **Highlighting:** the Structured Text language of an extension you have (`st`: *Structured Text language Support*),
   else this extension's own grammar. Setting `kvalMachineScope.structuredText.language` chooses another language id
   (`structured-text`, `iec-61131-3`, `kval-st`, …); the open sections change at once.
@@ -52,7 +53,9 @@ file access.
   `EXTENDS`. **Go to Implementations** (`Ctrl+F12`): an interface's (or a base's) function blocks, a method's
   implementations and overrides in them.
 - **Call Hierarchy** (`Shift+Alt+H`): who calls a method, an action, a function, a program or a function block's body
-  (`fbAxis()`), and what it calls (`fbAxis.Move()`, `SUPER^.Move()`, an inherited method), each call's line shown.
+  (`fbAxis()`), and what it calls (`fbAxis.Move()`, `SUPER^.Move()`, an inherited method), each call's line shown. A
+  call through an interface's variable (`itfAxis.Move()`) is a call of the interface's method and of each
+  implementation's (whichever the variable refers to at run time): it shows among their callers.
 - **Rename** (`F2`): by the name's declaration, always shown in the refactor preview first: a method's own variable in
   that method; a POU's variable in the POU and the POUs that extend it, its uses after a dot elsewhere (`fbScan.State`)
   listed apart to check one by one; a global variable, an enum member or a type everywhere. A POU's, method's,
