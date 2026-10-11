@@ -168,6 +168,8 @@ import { checkMethodRename, checkRename, findReferences, renameMemberInFile, ren
 import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
+import { CallHierarchyDialog } from './components/CallHierarchyDialog.tsx';
+import { PouIndex, implementationsOf, incomingCalls, instancesIn as callInstancesIn, nodeLabel, outgoingCalls, parsePou, type CallNode, type CallSite } from './utils/callHierarchy.ts';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
 import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
 import { checkExtractSubMachine, defaultSubMachineState, extractSubMachine } from './utils/extractSubMachine.ts';
@@ -5237,6 +5239,136 @@ export const App: React.FC = () => {
     },
     [pouContent, handleReplaceSources, showCopyToast]
   );
+  // ---- Call Hierarchy (Shift+Alt+H) and Go to Implementation (Ctrl+F12): from this POU and the project's POUs that
+  // name what is looked for (XAE, the desktop app: read in full; the web edition: its project folder when picked)
+  const [callView, setCallView] = useState<{ target: CallNode; mode: 'calls' | 'implementations'; implementations?: CallNode[]; note?: string } | null>(null);
+  const callFilesRef = useRef<{ pou: string; files: Map<string, { content: string; path?: string }>; fetched: Set<string>; partial: boolean }>({ pou: '', files: new Map(), fetched: new Set(), partial: false });
+  /** The index of this POU (as edited) and the project's POUs naming each of `names` (fetched once per name) */
+  const callIndexFor = useCallback(
+    async (names: string[]): Promise<PouIndex> => {
+      const cache = callFilesRef.current.pou === pouContent ? callFilesRef.current : (callFilesRef.current = { pou: pouContent, files: new Map(), fetched: new Set(), partial: false });
+      for (const n of names.filter(Boolean)) {
+        const k = n.toLowerCase();
+        if (cache.fetched.has(k)) continue;
+        cache.fetched.add(k);
+        const r = await fetchProjectUses(n).catch(() => ({ files: undefined, error: 'none' }));
+        if (!r.files) cache.partial = true;
+        for (const f of r.files ?? []) cache.files.set((f.path || f.name).toLowerCase(), { content: f.content, path: f.path || f.name });
+      }
+      const index = new PouIndex([...cache.files.values()].filter((f) => (f.path ?? '').toLowerCase() !== (pouPath ?? '').toLowerCase()));
+      index.add(pouContent, pouPath || pouFileName);
+      return index;
+    },
+    [pouContent, pouPath, pouFileName, fetchProjectUses]
+  );
+  const callNote = () => (callFilesRef.current.partial ? "This POU only: the project's other POUs are not at hand here (open it from XAE or the desktop app, or pick its project folder)." : undefined);
+  const typeKindOf = (name: string) => getProjectSymbols()?.types.get(name.split('.').pop()!.toLowerCase())?.kind;
+  /** What a name at the caret stands for: { pou, member } (a type of an instance, THIS^ / SUPER^) */
+  const callTargetOf = useCallback(
+    (name: string | null, ctx: { method?: string; memberOf?: string }): { pou: string; member: string } => {
+      const self = parsePou(pouContent);
+      const loaded = self?.name ?? pouTypeNameOf(pouContent);
+      const unit = self?.units.find((u) => u.member.toLowerCase() === (ctx.method ?? '').replace(/\(\)$/, '').toLowerCase());
+      const inst = callInstancesIn(self?.decl ?? '', unit?.decl ?? '');
+      const clean = name?.replace(/\(\)$/, '') ?? null;
+      if (clean && ctx.memberOf) {
+        const q = ctx.memberOf.toLowerCase().replace(/\^$/, '');
+        const type = q === 'this' ? loaded : q === 'super' ? self?.extends ?? loaded : inst.get(q) ?? ctx.memberOf;
+        return { pou: type, member: clean };
+      }
+      if (clean && self?.units.some((u) => u.member.toLowerCase() === clean.toLowerCase())) return { pou: loaded, member: clean };
+      if (clean && inst.has(clean.toLowerCase())) return { pou: inst.get(clean.toLowerCase())!, member: '' };
+      if (clean && /^(FUNCTION|PROGRAM|FUNCTION_BLOCK)$/.test(typeKindOf(clean) ?? '')) return { pou: clean, member: '' };
+      return { pou: loaded, member: (ctx.method ?? '').replace(/\(\)$/, '') };
+    },
+    [pouContent]
+  );
+  const loadCalls = useCallback(
+    async (node: CallNode, dir: 'callers' | 'calls'): Promise<CallNode[]> => {
+      if (dir === 'callers') return incomingCalls(await callIndexFor([node.member || node.pou]), node);
+      // (what it calls: its own file, and the types its calls go through: their members known)
+      let index = await callIndexFor([node.member || node.pou]);
+      const p = index.get(node.pou);
+      const u = p?.units.find((x) => x.member.toLowerCase() === node.member.toLowerCase());
+      if (p && u) {
+        const types = [...new Set([...callInstancesIn(p.decl, u.decl).values()])].filter((t) => !index.get(t)).slice(0, 12);
+        if (types.length) index = await callIndexFor(types);
+      }
+      return outgoingCalls(index, node, typeKindOf);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [callIndexFor]
+  );
+  const handleCallHierarchy = useCallback(
+    (name: string | null, ctx: { method?: string; memberOf?: string }) => {
+      const t = callTargetOf(name, ctx);
+      void callIndexFor([t.member || t.pou]).then((index) => {
+        const unit = index.get(t.pou)?.units.find((u) => u.member.toLowerCase() === t.member.toLowerCase());
+        setCallView({ target: { pou: index.get(t.pou)?.name ?? t.pou, member: unit?.member ?? t.member, kind: unit?.kind ?? (t.member ? 'method' : 'body'), sites: [], path: index.get(t.pou)?.path }, mode: 'calls', note: callNote() });
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [callTargetOf, callIndexFor]
+  );
+  const openCallNode = useCallback(
+    (node: CallNode, site?: CallSite) => {
+      const loaded = parsePou(pouContent)?.name ?? '';
+      if (node.pou.toLowerCase() === loaded.toLowerCase()) {
+        if (!node.member) {
+          setDockLayout((l) => activateDockTab(l, 'pou'));
+          setPouReveal({ symbol: '', nonce: Date.now(), line: site?.line, part: 'implementation' });
+          return;
+        }
+        handleOpenInspectorPanel('method', { method: `${node.member}()` });
+        if (site) setCodeJump({ method: node.member, line: site.line, nonce: Date.now() });
+        return;
+      }
+      const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
+      if (isXaeHost() || Boolean(desktop?.openPouInProject && pouPath)) void handleOpenType(node.pou, 'machinescope', node.member || undefined);
+      else showCopyToast(`${nodeLabel(node)}${site ? ` line ${site.line}` : ''}: open it in the TwinCAT editor`, 'error');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, pouPath, handleOpenType, handleOpenInspectorPanel, showCopyToast]
+  );
+  const handleGoToImplementation = useCallback(
+    (name: string, ctx: { method?: string; memberOf?: string }) => {
+      const self = parsePou(pouContent);
+      const loaded = self?.name ?? '';
+      const clean = name.replace(/\(\)$/, '');
+      const unit = self?.units.find((u) => u.member.toLowerCase() === (ctx.method ?? '').replace(/\(\)$/, '').toLowerCase());
+      const inst = callInstancesIn(self?.decl ?? '', unit?.decl ?? '');
+      // (inst.Method: its type's; a type: its implementations; a variable: its type's; this POU's method: its overrides)
+      let type = '';
+      let member: string | undefined;
+      if (ctx.memberOf) {
+        const q = ctx.memberOf.toLowerCase().replace(/\^$/, '');
+        type = q === 'this' ? loaded : q === 'super' ? self?.extends ?? '' : inst.get(q) ?? '';
+        member = clean;
+      } else if (/^(INTERFACE|FUNCTION_BLOCK)$/.test(typeKindOf(clean) ?? '') || /^I_/i.test(clean)) type = clean;
+      else if (inst.has(clean.toLowerCase())) type = inst.get(clean.toLowerCase())!;
+      else if (self?.units.some((u) => u.member.toLowerCase() === clean.toLowerCase())) {
+        type = loaded;
+        member = clean;
+      }
+      if (!type) {
+        showCopyToast(`Go to Implementation: ${clean} is not an interface, a function block or a method`, 'error');
+        return;
+      }
+      void callIndexFor([type]).then((index) => {
+        const found = implementationsOf(index, type, member);
+        const target: CallNode = { pou: index.get(type)?.name ?? type, member: member ?? '', kind: member ? 'method' : 'body', sites: [] };
+        if (found.length === 1) {
+          openCallNode(found[0]);
+          showCopyToast(`${nodeLabel(found[0])}: the implementation of ${nodeLabel(target)}`, 'success');
+          return;
+        }
+        setCallView({ target, mode: 'implementations', implementations: found, note: callNote() });
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, callIndexFor, openCallNode, showCopyToast]
+  );
+
   useEffect(() => {
     const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
     const canOpen = isXaeHost() || Boolean(desktop?.openPouInProject && pouPath);
@@ -5252,6 +5384,8 @@ export const App: React.FC = () => {
       extractAction: handleExtractAction,
       declare: handleDeclareInPou,
       findReferences: handleFindReferences,
+      callHierarchy: handleCallHierarchy,
+      goToImplementation: handleGoToImplementation,
       problems: () => lintFindingsRef.current,
       liveValues: () => liveValuesRef.current,
       setEditorWatch: (names) => setEditorWatch((cur) => (cur.join('|') === names.join('|') ? cur : names)),
@@ -5260,7 +5394,7 @@ export const App: React.FC = () => {
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction, handleCallHierarchy, handleGoToImplementation]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -11307,6 +11441,7 @@ export const App: React.FC = () => {
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
+      {callView && <CallHierarchyDialog target={callView.target} mode={callView.mode} implementations={callView.implementations} load={loadCalls} note={callView.note} onOpen={openCallNode} onClose={() => setCallView(null)} />}
       {updateOffer && !codeMode && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>

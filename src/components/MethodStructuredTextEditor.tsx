@@ -1068,7 +1068,14 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           editorServices()!.extractProperty!(cleanMethodName, expression.line, expression.from, expression.to);
         },
       });
-    if (!sym) return [...extract, format];
+    const callItems = (s: string | null) => {
+      const sv = editorServices();
+      const out: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
+      if (sv?.callHierarchy) out.push({ id: 'editor-menu-call-hierarchy', label: s ? `Call Hierarchy: ${s}` : `Call Hierarchy: ${cleanMethodName}()`, title: 'Who calls it, what it calls; each caller opens to its own (Shift+Alt+H)', onSelect: () => sv.callHierarchy!(s, { method: cleanMethodName, memberOf }) });
+      if (s && sv?.goToImplementation) out.push({ id: 'editor-menu-go-to-implementation', label: `Go to Implementation of ${s}`, title: "An interface's implementations, a method's overrides (Ctrl+F12)", onSelect: () => sv.goToImplementation!(s, { method: cleanMethodName, memberOf }) });
+      return out;
+    };
+    if (!sym) return [...extract, ...callItems(null), format];
     const services = editorServices();
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
     if (isUndeclared(sym, memberOf)) {
@@ -1095,6 +1102,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-writes', label: `Find All Writes to ${sym}`, title: 'Where it is set in the POU (:=, R= / S=, an output bound to it): who sets this?', onSelect: () => services.findReferences!(sym, { writesOnly: true }) });
+    items.push(...callItems(sym));
     // A method / property of the POU: Rename method…
     // (a property: its accessors are listed, Prop.Get / Prop.Set)
     const asMethod = !memberOf && availableMethods.map((m) => m.replace(/\(\)$/, '').replace(/\.(Get|Set)$/, '')).find((m) => m.toLowerCase() === sym.toLowerCase());
@@ -1304,6 +1312,18 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       const ta = e.currentTarget;
       const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
       if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F12' && (e.ctrlKey || e.metaKey)) {
+      // Go to Implementation
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol) editorServices()?.goToImplementation?.(resolved.symbol, { method: cleanMethodName, memberOf: resolved.memberOf });
+    } else if (e.altKey && e.shiftKey && e.key.toLowerCase() === 'h') {
+      // Call Hierarchy: the name at the caret's, else this method's
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      editorServices()?.callHierarchy?.(resolved?.symbol ?? null, { method: cleanMethodName, memberOf: resolved?.memberOf });
     } else if (e.key === 'F2' && e.ctrlKey && e.currentTarget.id === 'method-declaration-editor') {
       e.preventDefault();
       const ta = e.currentTarget;

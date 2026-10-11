@@ -329,7 +329,15 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   };
   const menuExtras = (sym: string | null, memberOf?: string, scope?: 'declaration' | 'implementation') => {
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declRef : implRef).current?.formatDocument()) };
-    if (!sym) return [format];
+    // (Call Hierarchy: the name's, or the POU body's when on nothing; Go to Implementation: the name's)
+    const callItems = (s: string | null) => {
+      const sv = editorServices();
+      const out: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
+      if (sv?.callHierarchy) out.push({ id: 'editor-menu-call-hierarchy', label: s ? `Call Hierarchy: ${s}` : 'Call Hierarchy: the body', title: 'Who calls it, what it calls; each caller opens to its own (Shift+Alt+H)', onSelect: () => sv.callHierarchy!(s, { memberOf }) });
+      if (s && sv?.goToImplementation) out.push({ id: 'editor-menu-go-to-implementation', label: `Go to Implementation of ${s}`, title: "An interface's implementations, a method's overrides (Ctrl+F12)", onSelect: () => sv.goToImplementation!(s, { memberOf }) });
+      return out;
+    };
+    if (!sym) return scope === 'implementation' ? [...callItems(null), format] : [format];
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
     if (isUndeclared(sym, memberOf)) items.push({ id: 'editor-menu-declare', label: `Declare ${sym}…`, title: 'In the declaration (Shift+F2)', onSelect: () => setDeclaring(sym) });
     const r = renameItem(sym);
@@ -337,6 +345,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
     const services = editorServices();
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-writes', label: `Find All Writes to ${sym}`, title: 'Where it is set in the POU (:=, R= / S=, an output bound to it): who sets this?', onSelect: () => services.findReferences!(sym, { writesOnly: true }) });
+    items.push(...callItems(sym));
     const asMethod = !memberOf && methods.find((m) => m.toLowerCase() === sym.toLowerCase());
     if (asMethod && services?.renameMethod)
       items.push({ id: 'editor-menu-rename-method', label: `Rename ${new RegExp(`<Action\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'action' : new RegExp(`<Property\\b[^>]*\\bName="${asMethod}"`, 'i').test(pouContent) ? 'property' : 'method'} ${asMethod}…`, title: 'Its declaration and every call (a preview first)', onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.renameMethod!(asMethod)) });
@@ -395,6 +404,18 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       const ta = e.currentTarget;
       const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
       if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if (e.key === 'F12' && (e.ctrlKey || e.metaKey)) {
+      // Go to Implementation
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (resolved?.symbol) editorServices()?.goToImplementation?.(resolved.symbol, { memberOf: resolved.memberOf });
+    } else if (e.altKey && e.shiftKey && e.key.toLowerCase() === 'h') {
+      // Call Hierarchy: the name at the caret's, else the body's
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
+      editorServices()?.callHierarchy?.(resolved?.symbol ?? null, { memberOf: resolved?.memberOf });
     } else if (e.key === 'F6' && e.shiftKey) {
       // Rename in place: the field at the name, its uses highlighted (the Find's whole-word match) while it is open
       e.preventDefault();

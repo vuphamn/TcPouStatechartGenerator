@@ -40,6 +40,8 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['Tab', 'After a snippet key (if, case, for, ton, trans, entry, ...): the snippet; else indent'],
       ['F12', 'Go to Definition (another POU: at its member)'],
       ['Shift+F12', 'Find All References'],
+      ['Shift+Alt+H', 'Call Hierarchy: who calls it, what it calls'],
+      ['Ctrl+F12', "Go to Implementation (an interface's implementations, a method's overrides)"],
       ['Shift+F2', 'Declare the name at the caret'],
       ['Shift+F6', 'Rename in place: the name at the caret (its uses highlighted)'],
       ['Ctrl+F2', 'Toggle a bookmark on the line'],

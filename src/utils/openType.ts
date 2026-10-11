@@ -38,6 +38,11 @@ export interface OpenTypeHandler {
   declare?: (vars: NewVariable[]) => boolean;
   /** Find All References: every use of a name in the POU, listed (a click opens it) */
   findReferences?: (name: string, opts?: { writesOnly?: boolean }) => void;
+  /** Call Hierarchy (Shift+Alt+H): who calls the name at the caret (a method, an action, a POU), what it calls; no
+   * callable there: the member the caret is in (method: its name; none: the POU's body). memberOf: inst.Name's inst */
+  callHierarchy?: (name: string | null, ctx: { method?: string; memberOf?: string }) => void;
+  /** Go to Implementation (Ctrl+F12): an interface's implementations, a method's overrides (one: opened at once) */
+  goToImplementation?: (name: string, ctx: { method?: string; memberOf?: string }) => void;
   /** Live: whether connected, the values (by path, lower case) */
   liveValues?: () => { active: boolean; values: Record<string, boolean | number | string> };
   /** Live: the variables the shown code uses (followed while live, for the values in the code) */
