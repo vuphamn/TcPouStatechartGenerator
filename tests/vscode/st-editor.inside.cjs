@@ -34,6 +34,8 @@ exports.run = async function run() {
     await ext?.activate();
     expect(ext?.isActive, `the extension active (${ext?.id ?? 'not found'})`);
     const original = fs.readFileSync(pou, 'utf8');
+    // (the steps below on VS Code's own editors: a .TcPOU as sections; the code tab is looked at at the end)
+    await vscode.workspace.getConfiguration('kvalMachineScope.structuredText').update('pouOpensAs', 'sections', vscode.ConfigurationTarget.Global);
 
     // 1. Opened (the default editor of .TcPOU): its declaration and implementation, in two groups, no XML
     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(pou));
@@ -305,6 +307,22 @@ exports.run = async function run() {
     expect(callItems?.[0]?.name === 'MoveAndAdvance' && (incoming ?? []).some((c) => c.from.name === 'Execute'), `call hierarchy: MoveAndAdvance called from Execute (${(incoming ?? []).map((c) => c.from.name).join(', ') || 'none'})`);
     const typeItems = await vscode.commands.executeCommand('vscode.prepareTypeHierarchy', exDoc.uri, new vscode.Position(0, 0));
     expect(typeItems?.[0]?.name === 'FB_ScanSequencer', `type hierarchy: the POU (${typeItems?.[0]?.name ?? 'none'})`);
+
+    // 19d. The code tab (pouOpensAs: tab, the default): the POU in one tab (MachineScope's code editors); a member
+    // from the POU list shown in that same tab
+    await vscode.workspace.getConfiguration('kvalMachineScope.structuredText').update('pouOpensAs', 'tab', vscode.ConfigurationTarget.Global);
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(pou));
+    const tabbed = await waitFor(async () => { const t = await vscode.commands.executeCommand('kvalMachineScope.codeTabsShown'); return Object.keys(t ?? {}).length ? t : null; }, 10000);
+    const codeTab = vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((x) => x.input instanceof vscode.TabInputCustom && x.input.viewType === 'kvalMachineScope.code');
+    expect(tabbed && tabbed['fb_scansequencer.tcpou'] === '' && codeTab && sections().length === 0, `the code tab: ${JSON.stringify(tabbed)} (${codeTab?.label ?? 'no tab'}; sections ${sections().length})`);
+    await vscode.commands.executeCommand('kvalMachineScope.openMember', pou, 'Method:Execute');
+    const switched = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.codeTabsShown'))?.['fb_scansequencer.tcpou'] === 'Execute', 5000);
+    const codeTabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((x) => x.input instanceof vscode.TabInputCustom && x.input.viewType === 'kvalMachineScope.code');
+    expect(switched && codeTabs.length === 1, `a member: the same tab, Execute shown (${codeTabs.map((x) => x.label).join(', ')}; ${switched})`);
+    await vscode.commands.executeCommand('kvalMachineScope.openSections', vscode.Uri.file(pou));
+    expect(await waitFor(() => sections().length >= 2, 8000), 'Open as Sections: VS Code\'s editors');
+    await vscode.workspace.getConfiguration('kvalMachineScope.structuredText').update('pouOpensAs', undefined, vscode.ConfigurationTarget.Global);
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);

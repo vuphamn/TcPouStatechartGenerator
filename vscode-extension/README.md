@@ -7,10 +7,15 @@ file access.
 
 ## Structured Text, as in XAE
 
-- **Open:** a `.TcPOU` / `.TcDUT` / `.TcGVL` / `.TcIO` opens as Structured Text (double-click, Quick Open): its
-  declaration in the editor group, its implementation in a group below it, without the XML. The next one opens in the
-  same two groups. **Open as XML** (the Explorer's menu, an editor tab's menu) shows the file itself; **Reopen Editor
-  With…** too.
+- **Open:** a `.TcPOU` opens in one tab, as MachineScope's Method Editor (the **code tab**): its header (the POU,
+  its methods, the state at the caret), the declaration above, the implementation below and a splitter between them to
+  drag; MachineScope's own IntelliSense, Find, folding, references, bookmarks and live values; **Save to POU** writes
+  the file. A method (the POU list, Go to Member, Go to code from the statechart) shows in that same tab, at its line.
+  **Open as Sections** (the Explorer's and the tab's menus) opens it as VS Code's own editors instead: the declaration
+  in an editor group, the implementation in a group below it (every VS Code feature: multi-cursor, other extensions,
+  and this extension's TwinCAT ones below); `kvalMachineScope.structuredText.pouOpensAs` makes that the default. A
+  `.TcDUT` / `.TcGVL` / `.TcIO` opens as sections. **Open as XML** (the Explorer's menu, an editor tab's menu) shows
+  the file itself; **Reopen Editor With…** too.
 - **Methods, properties, actions:** **Go to Member…** (the editor's title, `Ctrl+Shift+O`), or the **TwinCAT** view's
   **POU** list (the activity bar): each opens as its declaration and implementation (a property's Get / Set too). A
   graphical implementation (SFC, CFC) is said to be one: edit it in XAE.

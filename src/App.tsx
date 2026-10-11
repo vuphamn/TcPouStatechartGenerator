@@ -201,6 +201,7 @@ import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPro
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
+import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
 import { findPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
@@ -322,6 +323,7 @@ import {
   SIDE_PANEL_MIN_WIDTH,
   activateDockTab,
   closeDockTab,
+  codeModeDockLayout,
   isDockTabOpen,
   isDockTabVisible,
   loadDockLayout,
@@ -578,13 +580,16 @@ export const App: React.FC = () => {
   }, [lockDiagramLayout]);
 
   // Workspace docking layout: LeftPanel (sources), MiddlePanel (documents), RightPanel (tool windows)
-  const [dockLayout, setDockLayout] = useState(() => loadDockLayout());
+  // (the VS Code extension's code tab: only the code editors, the member it was opened on)
+  const codeMode = isCodeMode();
+  const [dockLayout, setDockLayout] = useState(() => (isCodeMode() ? codeModeDockLayout() : loadDockLayout()));
   const dockLayoutRef = useRef(dockLayout);
   dockLayoutRef.current = dockLayout;
   const dockRegistry = useDockHostRegistry();
 
   useEffect(() => {
-    saveDockLayout(dockLayout);
+    // (the code tab's layout is its own: the user's is kept)
+    if (!isCodeMode()) saveDockLayout(dockLayout);
   }, [dockLayout]);
 
   const showDockTab = useCallback((tabId: DockTabId) => {
@@ -1133,6 +1138,8 @@ export const App: React.FC = () => {
       const r = updatePouBody(pouContent, declaration, implementation);
       if (!r.success) return { success: false, error: r.error };
       setPouContent(r.updatedPou);
+      // (the code tab: written to the file once the POU has it)
+      if (isCodeMode()) codeSavePendingRef.current = true;
       return { success: true };
     },
     [pouContent]
@@ -1151,6 +1158,8 @@ export const App: React.FC = () => {
         const updatedPou = updateResult.updatedPou;
         // Update pouContent state (this updates left drawer editor, samples, and downloaded files)
         setPouContent(updatedPou);
+        // (the code tab: written to the file once the POU has it)
+        if (isCodeMode()) codeSavePendingRef.current = true;
 
         // Regenerate the diagram and markdown with the updated POU code immediately
         try {
@@ -1878,8 +1887,11 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult };
+  // (the code tab: a member shown; set further down, where the code editors' jumps are)
+  const showMemberRef = useRef<(m: { member: string; line?: number; part?: 'declaration' }) => void>(() => {});
+  const showMember = useCallback((m: { member: string; line?: number; part?: 'declaration' }) => showMemberRef.current(m), []);
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -1931,6 +1943,8 @@ export const App: React.FC = () => {
         h.handleLiveBrowseResult(m);
       } else if (m.type === 'editorCaret') {
         h.handleEditorCaret(m);
+      } else if (m.type === 'showMember') {
+        h.showMember(m);
       } else if (m.type === 'error') {
         h.showCopyToast(m.message, 'error', 7000);
       }
@@ -2382,6 +2396,12 @@ export const App: React.FC = () => {
   }, [hostDirtyFiles, hostSavedContent, pouPath, dutPath, dutContent, confirmSeenRemovals]);
   const handleSaveToProjectRef = useRef(handleSaveToProject);
   handleSaveToProjectRef.current = handleSaveToProject;
+  const codeSavePendingRef = useRef(false);
+  useEffect(() => {
+    if (!codeSavePendingRef.current || !hostDirtyFiles.length) return;
+    codeSavePendingRef.current = false;
+    handleSaveToProjectRef.current();
+  }, [hostDirtyFiles]);
   // The header's Save / Save All: the editor used last (or every editor) puts its edits into the POU, then the files
   // are written (once the POU has them)
   // What this window has to save (its editors' edits, its edited files): Save All in another window asks
@@ -5760,6 +5780,24 @@ export const App: React.FC = () => {
   };
   // "Open code" outside XAE: the Method Editor opens the method at the line (a new request each click)
   const [codeJump, setCodeJump] = useState<{ method: string; line: number; nonce: number; part?: 'declaration' } | null>(null);
+  // The code tab: a member in the Method Editor (the POU itself: the POU Editor), at a line when given
+  showMemberRef.current = ({ member, line, part }) => {
+    if (!member) {
+      setDockLayout((l) => activateDockTab(l, 'pou'));
+      if (line) setPouReveal({ symbol: '', nonce: Date.now(), line, part: part === 'declaration' ? 'declaration' : 'implementation' });
+      return;
+    }
+    handleOpenInspectorPanel('method', { method: `${member}()` });
+    if (line) setCodeJump({ method: member, line, nonce: Date.now(), ...(part === 'declaration' ? { part } : {}) });
+  };
+  // (its member once the POU is loaded)
+  const codeBootShownRef = useRef(false);
+  useEffect(() => {
+    const boot = codeBoot();
+    if (!boot || codeBootShownRef.current || !pouContent) return;
+    codeBootShownRef.current = true;
+    window.setTimeout(() => showMemberRef.current({ member: boot.member }), 0);
+  }, [pouContent]);
   // The state at the Method or Enum Editor's caret: the other editor and Identified States show it; with the editor's
   // Follow on, the canvas selects it and pans to it too
   const [codeFocus, setCodeFocus] = useState<CodeFocus | null>(null);
@@ -6723,7 +6761,8 @@ export const App: React.FC = () => {
         } catch {
           // (asked again)
         }
-        if (!open.length || notNow || msFilesAskedRef.current.has(s.dir)) return;
+        // (not in the code tab: the statechart's asks)
+        if (!open.length || notNow || msFilesAskedRef.current.has(s.dir) || isCodeMode()) return;
         msFilesAskedRef.current.add(s.dir);
         const act = (action: 'add' | 'ignore') =>
           void machineScopeFilesAct(pouPath, action).then((r) => {
@@ -9821,7 +9860,7 @@ export const App: React.FC = () => {
       )}
       <header
         id="app-header"
-        className={`relative z-40 flex flex-col bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0 ${focusMode ? 'hidden' : ''}`}
+        className={`relative z-40 flex flex-col bg-slate-900/90 border-b border-slate-800 backdrop-blur shrink-0 ${focusMode || codeMode ? 'hidden' : ''}`}
       >
         {/* Row 1: Brand, Title, Sample Selector, Generate, Copy Markdown, Export */}
         <div
@@ -10138,7 +10177,7 @@ export const App: React.FC = () => {
           {/* Options Control Ribbon (diagram generation options, only relevant to the canvas) */}
           <div
             id="options-ribbon"
-            className={`${focusMode ? 'hidden ' : ''}relative z-30 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 shrink-0`}
+            className={`${focusMode || codeMode ? 'hidden ' : ''}relative z-30 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1 bg-slate-900 border-b border-slate-800 text-xs text-slate-300 shrink-0`}
           >
             <div className="contents">
               <div className="flex items-center gap-1.5 text-slate-400 font-medium">
@@ -11210,7 +11249,7 @@ export const App: React.FC = () => {
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
-      {updateOffer && (
+      {updateOffer && !codeMode && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">
           <span>
             Kval MachineScope {updateOffer.edition === 'xae' ? 'for XAE' : 'desktop'} <b>{updateOffer.version}</b> is available (this is {updateOffer.current})

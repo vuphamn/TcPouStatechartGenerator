@@ -148,7 +148,14 @@ function register(context) {
    * A member of a file opened as XAE does: its declaration in the group given (or the active one), its implementation
    * in the group below it. Only one of them: in the group given. A graphical implementation (SFC, CFC): said so
    */
-  async function openMember(file, key = '', { viewColumn, focus } = {}) {
+  async function openMember(file, key = '', { viewColumn, focus, sections } = {}) {
+    // (a .TcPOU: its code tab, as MachineScope's Method Editor; the sections when asked, or set so)
+    if (/\.tcpou$/i.test(file) && !sections && vscode.workspace.getConfiguration('kvalMachineScope.structuredText').get('pouOpensAs', 'tab') !== 'sections') {
+      return vscode.commands.executeCommand('kvalMachineScope.openCode', file, key, {
+        viewColumn,
+        ...(focus ? { line: (focus.line ?? 0) + 1, ...(focus.section === 'decl' ? { part: 'declaration' } : {}) } : {}),
+      });
+    }
     const xml = fs.readFileSync(file, 'utf8');
     const { members } = parseSource(xml);
     const mb = members.find((m) => m.key === key) ?? members[0];
@@ -259,7 +266,12 @@ function register(context) {
       const picked = await vscode.window.showQuickPick(items, { placeHolder: `${path.basename(f)}: open a member (declaration and implementation)`, matchOnDescription: true });
       if (picked) await openMember(f, picked.key);
     }),
-    vscode.commands.registerCommand('kvalMachineScope.openMember', (file, key) => openMember(file, key))
+    vscode.commands.registerCommand('kvalMachineScope.openMember', (file, key) => openMember(file, key)),
+    // Open as Sections: a .TcPOU's members as VS Code's own editors (the declaration's group above the implementation's)
+    vscode.commands.registerCommand('kvalMachineScope.openSections', async (uri, key = '') => {
+      const f = await pickFile(uri);
+      if (f) await openMember(f, typeof key === 'string' ? key : '', { sections: true });
+    })
   );
   const sectionUriOf = (file, key, section, members) => sectionUri({ file, key, section }, members);
 

@@ -80,6 +80,19 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "kvalMachineScope.code",
+        "displayName": "Kval MachineScope Code (Declaration and Implementation, one tab)",
+        "selector": [
+          {
+            "filenamePattern": "*.TcPOU"
+          },
+          {
+            "filenamePattern": "*.tcpou"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
@@ -308,6 +321,11 @@
         "title": "Show Trend",
         "category": "TwinCAT",
         "icon": "$(graph-line)"
+      },
+      {
+        "command": "kvalMachineScope.openSections",
+        "title": "Open as Sections (VS Code editors)",
+        "category": "TwinCAT"
       }
     ],
     "keybindings": [
@@ -363,6 +381,11 @@
           "command": "kvalMachineScope.openXml",
           "when": "resourceExtname =~ /^\\.tc(pou|dut|gvl|io)$/i",
           "group": "navigation@10"
+        },
+        {
+          "command": "kvalMachineScope.openSections",
+          "when": "resourceExtname =~ /\\.tcpou$/i",
+          "group": "navigation@12"
         }
       ],
       "editor/title/context": [
@@ -380,6 +403,11 @@
           "command": "kvalMachineScope.compareCommitted",
           "when": "resourceScheme == twincat-st",
           "group": "navigation@11"
+        },
+        {
+          "command": "kvalMachineScope.openSections",
+          "when": "resourceExtname =~ /\\.tcpou$/i || activeCustomEditorId == kvalMachineScope.code",
+          "group": "navigation@12"
         }
       ],
       "editor/title": [
@@ -664,6 +692,19 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Colours from the project in the Structured Text sections: its types, function blocks' instances (`fbAxis`, `tonWait`) and their methods and properties, enum members, constants, the POU's own methods. The theme's colours (`editor.semanticTokenColorCustomizations` changes them; the instances' type is `fbInstance`)."
+        },
+        "kvalMachineScope.structuredText.pouOpensAs": {
+          "type": "string",
+          "enum": [
+            "tab",
+            "sections"
+          ],
+          "enumDescriptions": [
+            "One tab per POU, as MachineScope's Method Editor: its header, the declaration above, the implementation below, a splitter to drag; MachineScope's own IntelliSense, Find, folding, bookmarks",
+            "VS Code's own editors: the declaration's and the implementation's in two editor groups (every VS Code feature, the TwinCAT ones of this extension)"
+          ],
+          "default": "tab",
+          "markdownDescription": "How a `.TcPOU` (and its methods, from the POU list) opens. **Open as Sections** opens the other way once."
         }
       }
     },

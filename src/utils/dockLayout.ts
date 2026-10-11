@@ -204,6 +204,18 @@ export function createDefaultDockLayout(host: DockHost = currentHost()): DockLay
   };
 }
 
+/** The code tab's (VS Code): the Method Editor and the POU Editor only, no side panels; never saved */
+export function codeModeDockLayout(): DockLayout {
+  const l = createDefaultDockLayout('default');
+  return {
+    ...l,
+    middle: { groups: [{ ...l.middle.groups[0], tabs: ['method', 'pou'], active: 'method' }], floating: [] },
+    right: { groups: [{ ...l.right.groups[0], tabs: ['problems'], active: 'problems' }], floating: [] },
+    leftVisible: false,
+    rightVisible: false,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Queries
 // ---------------------------------------------------------------------------

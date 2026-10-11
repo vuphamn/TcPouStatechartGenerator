@@ -364,7 +364,7 @@ const SHIM = `(function () {
  * The app's page for a webview: its files under base (the app's folder as the webview sees it), a content policy
  * allowing them (and the styles the charts make), the shim before the app's script
  */
-function webviewHtml(indexHtml, { base, cspSource, nonce }) {
+function webviewHtml(indexHtml, { base, cspSource, nonce, boot }) {
   const csp = [
     "default-src 'none'",
     `script-src ${cspSource} 'nonce-${nonce}'`,
@@ -374,7 +374,9 @@ function webviewHtml(indexHtml, { base, cspSource, nonce }) {
     `connect-src ${cspSource}`,
     `worker-src ${cspSource} blob:`,
   ].join('; ');
-  const head = `<base href="${base.replace(/\/?$/, '/')}">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n<script nonce="${nonce}">${SHIM}</script>`;
+  // (boot: how the app starts, e.g. the code tab's { code: { member } }; "<" escaped inside the script)
+  const bootJs = boot ? `window.__KSS_BOOT = ${JSON.stringify(boot).replace(/</g, '\\u003c')};` : '';
+  const head = `<base href="${base.replace(/\/?$/, '/')}">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n<script nonce="${nonce}">${bootJs}${SHIM}</script>`;
   return indexHtml.replace(/<head([^>]*)>/i, (m) => `${m}\n${head}`).replace(/<script\b(?![^>]*\bnonce=)/gi, `<script nonce="${nonce}"`);
 }
 

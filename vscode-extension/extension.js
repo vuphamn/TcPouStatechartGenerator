@@ -57,8 +57,14 @@ function activate(context) {
   );
   const version = context.extension.packageJSON.version;
 
-  /** The app in a webview, its host for that .TcPOU */
-  const resolve = (pouPath, webviewPanel) => {
+  // The code tabs (kvalMachineScope.code): per file, its panel and post; the member each was asked to show
+  const codeTabs = new Map();
+  const pendingCode = new Map();
+  /** A section's key → the app's member name: Method:doState → doState, Property:Speed.Get → Speed.Get, '' → '' */
+  const memberOfKey = (key) => (!key ? '' : /^Property:[^.]+$/.test(key) ? `${key.slice(9)}.Get` : key.replace(/^(Method|Property|Action|Transition):/, ''));
+
+  /** The app in a webview, its host for that .TcPOU (code: the code tab's { member }) */
+  const resolve = (pouPath, webviewPanel, code = null) => {
     const webview = webviewPanel.webview;
     webview.options = { enableScripts: true, localResourceRoots: [appDir] };
     const post = (m) => void webview.postMessage(m);
@@ -101,9 +107,14 @@ function activate(context) {
     posts.add(post);
     charts.set(key, posts);
     webviewPanel.onDidDispose(() => posts.delete(post));
-    webviewPanel.title = `${path.basename(pouPath)} · statechart`;
+    webviewPanel.title = code ? `${path.basename(pouPath).replace(/\.tcpou$/i, '')}${code.member ? `.${code.member}` : ''}` : `${path.basename(pouPath)} · statechart`;
+    if (code) {
+      const entry = { panel: webviewPanel, post, member: code.member };
+      codeTabs.set(key, entry);
+      webviewPanel.onDidDispose(() => codeTabs.get(key) === entry && codeTabs.delete(key));
+    }
     const index = fs.readFileSync(path.join(appDir.fsPath, 'index.html'), 'utf8');
-    webview.html = webviewHtml(index, { base: webview.asWebviewUri(appDir).toString(), cspSource: webview.cspSource, nonce: crypto.randomBytes(16).toString('base64') });
+    webview.html = webviewHtml(index, { base: webview.asWebviewUri(appDir).toString(), cspSource: webview.cspSource, nonce: crypto.randomBytes(16).toString('base64'), ...(code ? { boot: { code } } : {}) });
     const subs = [
       webview.onDidReceiveMessage((m) => {
         const r = host.handle(m);
@@ -142,6 +153,43 @@ function activate(context) {
       },
       { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }
     )
+  );
+  // The code tab (as MachineScope's Method Editor: one tab, the declaration above, the implementation below, a splitter
+  // between): the app in its code mode, for a .TcPOU's member
+  context.subscriptions.push(
+    vscode.window.registerCustomEditorProvider(
+      'kvalMachineScope.code',
+      {
+        openCustomDocument: (uri) => ({ uri, dispose() {} }),
+        resolveCustomEditor: (doc, panel) => {
+          const k = normalPath(doc.uri.fsPath).toLowerCase();
+          const asked = pendingCode.get(k);
+          pendingCode.delete(k);
+          resolve(doc.uri.fsPath, panel, { member: asked?.member ?? '' });
+          // (a line asked for: shown once the app has the POU)
+          if (asked?.line) setTimeout(() => codeTabs.get(k)?.post({ type: 'showMember', member: asked.member, line: asked.line, ...(asked.part ? { part: asked.part } : {}) }), 2500);
+        },
+      },
+      { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: false }
+    ),
+    // A .TcPOU's member in its code tab (the tab there: the member shown in it)
+    vscode.commands.registerCommand('kvalMachineScope.openCode', async (file, key = '', opts = {}) => {
+      const k = normalPath(file).toLowerCase();
+      const member = memberOfKey(key);
+      const open = codeTabs.get(k);
+      if (open) {
+        open.member = member;
+        open.panel.reveal(opts.viewColumn ?? open.panel.viewColumn, false);
+        open.panel.title = `${path.basename(file).replace(/\.tcpou$/i, '')}${member ? `.${member}` : ''}`;
+        open.post({ type: 'showMember', member, ...(opts.line ? { line: opts.line } : {}), ...(opts.part ? { part: opts.part } : {}) });
+        return true;
+      }
+      pendingCode.set(k, { member, line: opts.line, part: opts.part });
+      await vscode.commands.executeCommand('vscode.openWith', vscode.Uri.file(file), 'kvalMachineScope.code', opts.viewColumn ?? vscode.ViewColumn.Active);
+      return true;
+    }),
+    // (for the tests: the code tabs open, { file: member })
+    vscode.commands.registerCommand('kvalMachineScope.codeTabsShown', () => Object.fromEntries([...codeTabs].map(([k, v]) => [path.basename(k), v.member])))
   );
   // Show in statechart (the CodeLens above a state's CASE branch): the POU's chart beside, that state selected
   context.subscriptions.push(

@@ -96,6 +96,8 @@ export type HostMessage =
   | { type: 'saveDocumentResult'; path?: string; error?: string; canceled?: boolean }
   /** Two-way selection: the caret in TwinCAT's editor of the loaded POU (line of the editor, both parts) */
   | { type: 'editorCaret'; method: string; line: number; lineCount: number; force?: boolean }
+  /** The code tab (VS Code): a member shown (a method's name, '' for the POU itself), at a line when given */
+  | { type: 'showMember'; member: string; line?: number; part?: 'declaration' }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
