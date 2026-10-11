@@ -41,6 +41,12 @@ const bundled = require('esbuild').buildSync({
 });
 add('extension/extension.js', bundled.outputFiles[0].contents);
 if (fs.existsSync(path.join(HERE, 'README.md'))) add('extension/README.md', fs.readFileSync(path.join(HERE, 'README.md')));
+// (What's new: the features from the git history, shown once after an update; none without git)
+try {
+  add('extension/whatsNew.json', JSON.stringify(require('../scripts/release-plan.cjs').vscodeFeatures()));
+} catch (e) {
+  console.warn(`What's new left out: ${e.message.split('\n')[0]}`);
+}
 // (the Structured Text grammar and the TwinCAT view's icon)
 for (const dir of ['syntaxes', 'media', 'snippets']) {
   for (const e of fs.readdirSync(path.join(HERE, dir))) add(`extension/${dir}/${e}`, fs.readFileSync(path.join(HERE, dir, e)));

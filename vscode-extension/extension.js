@@ -237,6 +237,8 @@ function activate(context) {
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
   tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
+  // What's New: once after an update, the features since (a first install: nothing); the command any time
+  require('./whatsNew.cjs').registerWhatsNew(context, vscode);
   // Bookmarks (TwinCAT's, MachineScope's): kept here, the POU's app panels told and telling
   bookmarks = registerBookmarks(context, {
     vscode,

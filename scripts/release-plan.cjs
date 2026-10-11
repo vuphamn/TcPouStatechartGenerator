@@ -129,8 +129,20 @@ function descriptionOf(body) {
 }
 
 function commitsOf(range, e) {
-  // (records apart by \x1e: a body has line breaks)
-  const log = git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s%x1f%b%x1e', ...range, '--', ...pathspec(e));
+  return parseLog(git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s%x1f%b%x1e', ...range, '--', ...pathspec(e)));
+}
+
+/**
+ * The VS Code extension's What's new (vscode-extension/pack.cjs writes it into the VSIX): the feature commits touching
+ * it, the shared code or the app it carries, newest first → [{ hash, date, changes, body }]
+ */
+function vscodeFeatures(n = 80) {
+  const log = git('log', '--no-merges', '--date=short', '--format=%h%x1f%ad%x1f%s%x1f%b%x1e', '-n', String(n), '--', 'vscode-extension', 'shared', ...APP, ':(exclude)**/*.md', ':(exclude)*.md');
+  return parseLog(log).filter((c) => c.changes.some((x) => x.kind === 'feat'));
+}
+
+/** git log's records (apart by \x1e: a body has line breaks) → commits */
+function parseLog(log) {
   return log
     ? log
         .split('\x1e')
@@ -163,7 +175,7 @@ function history() {
 /** The version in each edition's files (stamped by CI before a release build) */
 const versions = () => Object.fromEntries(Object.keys(EDITIONS).map((e) => [e, EDITIONS[e].version()]));
 
-module.exports = { history, versions, changesOf, descriptionOf };
+module.exports = { history, versions, changesOf, descriptionOf, vscodeFeatures };
 
 const args = require.main === module ? process.argv.slice(2) : null;
 if (!args) {

@@ -395,6 +395,12 @@
         "title": "Show Writes / Reads…",
         "category": "TwinCAT",
         "icon": "$(filter)"
+      },
+      {
+        "command": "kvalMachineScope.whatsNew",
+        "title": "What's New",
+        "category": "Kval MachineScope",
+        "icon": "$(sparkle)"
       }
     ],
     "keybindings": [

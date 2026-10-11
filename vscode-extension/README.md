@@ -42,6 +42,8 @@ file access.
   **Cross Reference List** (the right-click menu), as XAE's: every place of the name in the project in the **Cross
   Reference** view (the TwinCAT view), by POU and member, each a declaration, a write, a call or a read with its line;
   its filter shows the writes or the reads only; a click opens it.
+- **What's New** (Kval MachineScope: What's New): the features since the version you last used, by area, each with
+  what it does. After an update a notification offers them once; a first install says nothing.
 - **Bookmarks** (as TwinCAT's and MachineScope's, the same ones): **Toggle Bookmark** (`Ctrl+K Ctrl+K`, the right-click
   menu) on a line of a member's declaration or implementation; on a `CASE` label it bookmarks that state. **Next** /
   **Previous** (`Ctrl+K Ctrl+N` / `Ctrl+K Ctrl+P`); a mark in the gutter and the overview ruler; a line's bookmark is found

@@ -387,7 +387,13 @@ exports.run = async function run() {
 
     // 20. The TwinCAT commands (XAE's toolbar) are there
     const cmds = await vscode.commands.getCommands(true);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference'].map((c) => `kvalMachineScope.${c}`);
+    // What's New: the features since a commit of the history (the extension run from its sources: from git), in a panel
+    const history = require(path.join(__dirname, '..', '..', 'scripts', 'release-plan.cjs')).vscodeFeatures();
+    const wn = history.length > 3 ? await vscode.commands.executeCommand('kvalMachineScope.whatsNew', history[3].hash) : null;
+    const wnTab = await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => /What's New/.test(t.label)), 5000);
+    expect(history.every((c) => c.changes.some((x) => x.kind === 'feat')) && wn?.items === 3 && wn.sinceSeen && wnTab, `What's New: the 3 features since ${history[3]?.hash} in its panel (${JSON.stringify(wn)}, ${wnTab?.label})`);
+    if (wnTab) await vscode.window.tabGroups.close(wnTab);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference', 'whatsNew'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

@@ -25,6 +25,8 @@ const ext = path.join(OUT, 'ext');
 fs.mkdirSync(ext);
 require('esbuild').buildSync({ entryPoints: [path.join(REPO, 'vscode-extension', 'extension.js')], bundle: true, platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'], outfile: path.join(ext, 'extension.js'), logLevel: 'warning' });
 fs.copyFileSync(path.join(REPO, 'vscode-extension', 'package.json'), path.join(ext, 'package.json'));
+// (What's New's features, as pack.cjs writes them)
+fs.writeFileSync(path.join(ext, 'whatsNew.json'), JSON.stringify(require(path.join(REPO, 'scripts', 'release-plan.cjs')).vscodeFeatures()));
 for (const dir of ['syntaxes', 'media', 'snippets']) fs.cpSync(path.join(REPO, 'vscode-extension', dir), path.join(ext, dir), { recursive: true });
 
 // A TwinCAT project: its .tsproj, a PLC project, a POU (CRLF, a BOM) and its enum
