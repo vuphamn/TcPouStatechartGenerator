@@ -121,8 +121,9 @@ async function openXaeForProject(pouPath, version) {
   return { ...r, message: `${r.message}.${rmNote}`, file, build, remoteManager };
 }
 
-// The files MachineScope keeps beside the PLC project (the builds seen, the coverage): to commit with it, or to ignore
-const MACHINESCOPE_FILES = ['MachineScope.builds.json', 'MachineScope.coverage.json'];
+// The files MachineScope keeps beside the PLC project (the builds seen, the coverage, the watch lists): to commit with
+// it, or to ignore
+const MACHINESCOPE_FILES = ['MachineScope.builds.json', 'MachineScope.coverage.json', 'MachineScope.watch.json'];
 
 /**
  * Those files and how git sees them: { dir, files: [{ name, path, state: 'tracked' | 'ignored' | 'untracked' }],

@@ -31,6 +31,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
     else if (m.type === 'watchLists') {
       listMsgs.push(m);
       await toApp({ type: 'watchListsResult', requestId: m.requestId, lists });
+    } else if (m.type === 'machineScopeFiles') {
+      await toApp({ type: 'machineScopeFilesResult', requestId: m.requestId, dir: 'C:\proj', git: true, files: lists.Clamping ? [{ name: 'MachineScope.watch.json', path: 'C:\proj\MachineScope.watch.json', state: 'untracked' }] : [] });
     } else if (m.type === 'watchListSave') {
       listMsgs.push(m);
       if (m.vars === null) delete lists[m.name];
@@ -118,6 +120,14 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await p.keyboard.press('Enter');
   await h.until(() => (lists.Clamping ? true : null), 4000);
   expect(JSON.stringify(lists.Clamping) === JSON.stringify(['cmd_bUnclamp', 'nFeedCount']), `saved: Clamping = ${JSON.stringify(lists.Clamping)}`);
+  // (its file beside the project, not in git yet: said on the bar)
+  const sharedChip = (await h.until(() => p.$eval('#live-watch-lists-shared', (e) => e.getAttribute('data-state')).then((x) => (x === 'untracked' ? x : null)).catch(() => null), 6000)) ?? (await p.$eval('#live-watch-lists-shared', (e) => e.getAttribute('data-state')).catch(() => null));
+  expect(sharedChip === 'untracked', `the lists' file: ${sharedChip} (not in git: commit it to share them)`);
+  // (an untracked MachineScope file: the app asks once whether to stage or ignore it; not now)
+  const asked = await h.until(() => p.$('#text-prompt-dialog'), 4000);
+  expect(!!asked, 'the new file: asked to stage or ignore it');
+  await p.keyboard.press('Escape');
+  await h.sleep(300);
   await p.select('#live-watch-list-load', 'Feeding');
   const watchedNames = () => p.evaluate(() => JSON.parse(localStorage.getItem('kss.live.watch.SM_TableManager') || '[]'));
   const loaded = await h.until(async () => { const w = await watchedNames(); return JSON.stringify(w) === JSON.stringify(['nFeedCount', 'bFeedOn']) ? w : null; }, 4000);

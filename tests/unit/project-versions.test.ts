@@ -54,12 +54,13 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect((await machineScopeFiles(pou)).files.length === 0, 'none there yet: nothing to ask');
   fs.writeFileSync(path.join(plcDir, 'MachineScope.builds.json'), '{"builds":[]}\n');
   fs.writeFileSync(path.join(plcDir, 'MachineScope.coverage.json'), '{"pous":{}}\n');
+  fs.writeFileSync(path.join(plcDir, 'MachineScope.watch.json'), '{"pous":{}}\n');
   let ms = await machineScopeFiles(pou);
-  expect(ms.git && ms.files.length === 2 && ms.files.every((f: { state: string }) => f.state === 'untracked'), `both there, untracked (${JSON.stringify(ms.files.map((f: { state: string }) => f.state))})`);
+  expect(ms.git && ms.files.length === 3 && ms.files.every((f: { state: string }) => f.state === 'untracked'), `the three there (the watch lists too), untracked (${JSON.stringify(ms.files.map((f: { name: string; state: string }) => `${f.name}:${f.state}`))})`);
   let act = await machineScopeFilesAct(pou, 'ignore');
   const ignore = fs.readFileSync(path.join(plcDir, '.gitignore'), 'utf8');
   ms = await machineScopeFiles(pou);
-  expect(act.ok && /# Kval MachineScope/.test(ignore) && /MachineScope\.builds\.json\nMachineScope\.coverage\.json\n$/.test(ignore) && ms.files.every((f: { state: string }) => f.state === 'ignored'), `ignored: the .gitignore beside them (${act.message})`);
+  expect(act.ok && /# Kval MachineScope/.test(ignore) && /MachineScope\.builds\.json\nMachineScope\.coverage\.json\nMachineScope\.watch\.json\n$/.test(ignore) && ms.files.every((f: { state: string }) => f.state === 'ignored'), `ignored: the .gitignore beside them (${act.message})`);
   act = await machineScopeFilesAct(pou, 'ignore');
   expect(!act.ok && fs.readFileSync(path.join(plcDir, '.gitignore'), 'utf8') === ignore, 'again: nothing to do, the .gitignore not touched');
   // (the .gitignore gone: staged instead)

@@ -7243,8 +7243,12 @@ export const App: React.FC = () => {
   // (the coverage file: how it is shared, for the Coverage strip)
   const [coverageShared, setCoverageShared] = useState<'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null>(null);
   coverageSharedRef.current = coverageShared;
+  // (the watch lists' file too: its chip in the Live tab; looked at again after a list is saved or removed)
+  const [watchShared, setWatchShared] = useState<'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null>(null);
+  const [msFilesTick, setMsFilesTick] = useState(0);
   useEffect(() => {
     setCoverageShared(null);
+    setWatchShared(null);
     if (!pouPath || !(isXaeHost() || isDesktopApp())) return;
     let alive = true;
     const look = () =>
@@ -7252,6 +7256,8 @@ export const App: React.FC = () => {
         if (alive && s?.dir) {
           const f = s.files.find((x) => x.name === 'MachineScope.coverage.json');
           setCoverageShared(!f ? 'unwritten' : !s.git ? 'no-git' : f.state);
+          const w = s.files.find((x) => x.name === 'MachineScope.watch.json');
+          setWatchShared(!w ? 'unwritten' : !s.git ? 'no-git' : w.state);
         }
         if (!alive || !s?.dir || !s.git) return;
         const open = s.files.filter((f) => f.state === 'untracked');
@@ -7295,7 +7301,7 @@ export const App: React.FC = () => {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [pouPath, showCopyToast]);
+  }, [pouPath, showCopyToast, msFilesTick]);
   // The builds of this project copy seen (XAE keeps only the latest's compile info): the PLC's ID seen before is an
   // older build of this copy, with when it was built
   const liveStatusShown = useMemo(() => {
@@ -8199,6 +8205,7 @@ export const App: React.FC = () => {
   const watchListsProps = {
     names: Object.keys(watchLists.lists).sort((a, b) => a.localeCompare(b)),
     where: watchLists.where,
+    shared: watchLists.where === 'project' ? watchShared : null,
     onLoad: (name: string) => {
       setUserWatch([...(watchLists.lists[name] ?? [])]);
       showCopyToast(`Watching the list ${name}: ${(watchLists.lists[name] ?? []).length} variables`, 'success');
@@ -8207,12 +8214,14 @@ export const App: React.FC = () => {
       void saveWatchList(pouPath, pausePou, name, userWatch).then((r) => {
         if (r.error) return showCopyToast(r.error, 'error', 7000);
         setWatchLists((w) => ({ ...w, lists: r.lists ?? w.lists }));
+        setMsFilesTick((n) => n + 1);
         showCopyToast(`Saved the list ${name}${watchLists.where === 'project' ? ' (MachineScope.watch.json, beside the PLC project)' : ' (this browser)'}`, 'success');
       }),
     onDelete: (name: string) =>
       void saveWatchList(pouPath, pausePou, name, null).then((r) => {
         if (r.error) return showCopyToast(r.error, 'error', 7000);
         setWatchLists((w) => ({ ...w, lists: r.lists ?? {} }));
+        setMsFilesTick((n) => n + 1);
       }),
     onExport: () => void saveDocument(`${pausePou}_watch.csv`, ['variable', ...userWatch].join('\n'), { personal: true }).then((r) => r?.path && showCopyToast(`Saved: ${r.path}`, 'success')),
     onImport: (text: string) => {

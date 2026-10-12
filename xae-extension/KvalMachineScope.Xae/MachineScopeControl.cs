@@ -2146,7 +2146,7 @@ namespace KvalMachineScope.Xae
         }
 
         // The files MachineScope keeps beside the PLC project (as shared/projectVersions.cjs)
-        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json" };
+        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json", "MachineScope.watch.json" };
 
         /// <summary>Those files there and how git sees them: (dir, git, [(name, path, state: tracked | ignored | untracked)])</summary>
         private static (string dir, bool git, List<(string name, string path, string state)> files) MachineScopeFileStates(string pouPath)

@@ -98,7 +98,7 @@ interface LivePanelProps {
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string }[];
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
-  watchLists?: { names: string[]; where: 'project' | 'browser'; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
+  watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
   scope?: React.ComponentProps<typeof LiveScope>;
   onUnwatch?: (name: string) => void;
@@ -259,7 +259,14 @@ interface LivePanelProps {
 const REPLAY_SPEEDS = [1, 2, 5, 10, 60, 600];
 
 /** The watch lists' bar: a saved list loaded (replacing the watched ones), the watched ones saved under a name, a list removed, CSV */
-const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasVars: boolean }> = ({ names, where, onLoad, onSave, onDelete, onExport, onImport, hasVars }) => {
+const WATCH_SHARED = {
+  tracked: { text: 'shared (git)', cls: 'border-emerald-700/70 text-emerald-300', title: 'MachineScope.watch.json is in git: committed, colleagues load the same lists' },
+  untracked: { text: 'not in git', cls: 'border-amber-600/70 text-amber-200', title: 'MachineScope.watch.json is beside the project but not in git: commit it to share the lists' },
+  ignored: { text: 'this computer', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.watch.json is ignored by git (.gitignore): the lists stay on this computer' },
+  'no-git': { text: 'this computer', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.watch.json is beside the project, which is not in a git working copy: copy it along to share it' },
+  unwritten: { text: 'none saved', cls: 'border-slate-700 text-slate-400', title: 'MachineScope.watch.json is written beside the project when a list is saved' },
+} as const;
+const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasVars: boolean }> = ({ names, where, shared, onLoad, onSave, onDelete, onExport, onImport, hasVars }) => {
   const [naming, setNaming] = useState(false);
   const [chosen, setChosen] = useState('');
   return (
@@ -267,6 +274,11 @@ const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasV
       <span className="text-slate-400" title={where === 'project' ? 'Kept beside the PLC project (MachineScope.watch.json): commit it to share them' : 'Kept in this browser (CSV to share)'}>
         Watch lists
       </span>
+      {shared && (
+        <span id="live-watch-lists-shared" data-state={shared} className={`shrink-0 px-1 rounded border text-[10px] ${WATCH_SHARED[shared].cls}`} title={WATCH_SHARED[shared].title}>
+          {WATCH_SHARED[shared].text}
+        </span>
+      )}
       <select id="live-watch-list-load" value={chosen} onChange={(e) => { setChosen(e.target.value); if (e.target.value) onLoad(e.target.value); }} className="max-w-[160px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300" title="Load a list: it replaces the watched variables">
         <option value="">{names.length ? 'load a list…' : 'none saved yet'}</option>
         {names.map((n) => (
