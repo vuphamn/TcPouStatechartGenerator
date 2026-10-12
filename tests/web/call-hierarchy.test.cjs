@@ -3,7 +3,8 @@
 // MAIN calls PRG_Line(), two POUs extend SM_TableManager with their own doState): the method's callers, a caller
 // opened to its own callers, the Calls tab; the overrides of doState listed; asked for the folder once. The Cross
 // Reference List of cmd_bUnclamp (an input): its places here and PRG_Line's write, the Writes filter. Find in Files
-// (Ctrl+Shift+F): smTable in the project (PRG_Line's declaration and body); Replace all: PRG_Line written, its XML kept
+// (Ctrl+Shift+F): smTable in the project (PRG_Line's declaration and body); Replace all: PRG_Line written, its XML kept.
+// The Type Hierarchy: its base, the two extending it
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -152,6 +153,18 @@ const FILES = {
   expect(/PRG_Line: 5/.test(preview) && !!written && !/smTable/.test(written) && (written.match(/smLine/g) ?? []).length === 5 && /<POU Name="PRG_Line"/.test(written), `Replace all: previewed (${preview.replace(/\s+/g, ' ').slice(0, 90)}), PRG_Line written, its XML kept`);
   const after = await h.until(async () => ((await p.$eval('#find-files-count', (e) => e.textContent).catch(() => '')).startsWith('0 matches') ? true : null), 6000);
   expect(!!after, 'searched again: none left');
+  await p.keyboard.press('Escape');
+
+  // 8. Type Hierarchy (the command palette): SM_TableManager's base, the two extending it (SM_TableA, SM_TableB)
+  await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyP'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
+  await p.waitForSelector('#command-palette-input', { timeout: 5000 }).catch(() => {});
+  await p.keyboard.type('Type Hierarchy');
+  await h.sleep(300);
+  await p.keyboard.press('Enter');
+  await p.waitForSelector('#type-hierarchy-dialog', { timeout: 10000 }).catch(() => {});
+  const subs = await h.until(async () => { const x = await p.$$eval('.type-hierarchy-sub', (r) => r.map((e) => e.getAttribute('data-type'))); return x.length ? x : null; }, 8000);
+  const sup = await p.$$eval('.type-hierarchy-super', (r) => r.map((e) => e.getAttribute('data-type'))).catch(() => []);
+  expect(JSON.stringify(subs) === JSON.stringify(['SM_TableA', 'SM_TableB']) && JSON.stringify(sup) === JSON.stringify(['KvalStateMachineBase']), `Type Hierarchy: extends ${JSON.stringify(sup)}, extended by ${JSON.stringify(subs)}`);
   await p.keyboard.press('Escape');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

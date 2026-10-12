@@ -172,6 +172,7 @@ import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { CallHierarchyDialog } from './components/CallHierarchyDialog.tsx';
 import { CrossReferenceDialog, type CrossReferenceGroup } from './components/CrossReferenceDialog.tsx';
 import { FindInFilesDialog, type FindGroup, type FindScope } from './components/FindInFilesDialog.tsx';
+import { TypeHierarchyDialog, type TypeEntry } from './components/TypeHierarchyDialog.tsx';
 import { findMatcher, projectWordOf, replaceInCode, searchCode, type FindMatch, type FindOptions } from './utils/findInFiles.ts';
 import { PouIndex, implementationsOf, incomingCalls, instancesIn as callInstancesIn, nodeLabel, outgoingCalls, parsePou, type CallNode, type CallSite } from './utils/callHierarchy.ts';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
@@ -5427,6 +5428,63 @@ export const App: React.FC = () => {
   );
   // ---- Cross Reference List: a name's places in this POU and the project's POUs that name it (read in full)
   const [xrefView, setXrefView] = useState<{ name: string; groups: CrossReferenceGroup[]; loading: boolean; note?: string } | null>(null);
+  // ---- Type Hierarchy: a type's bases (up its chain), its interfaces (its bases' too), the types extending or
+  // implementing it (from the project's POUs that name it, read in full)
+  const [typeView, setTypeView] = useState<{ target: TypeEntry; supers: TypeEntry[]; interfaces: TypeEntry[]; note?: string } | null>(null);
+  const typeEntryOf = (index: PouIndex, name: string): TypeEntry => {
+    const p = index.get(name);
+    return { name: p?.name ?? name, kind: p?.kind ?? typeKindOf(name) ?? 'type', path: p?.path };
+  };
+  const handleTypeHierarchy = useCallback(
+    (name?: string) => {
+      const self = parsePou(pouContent)?.name ?? pouTypeNameOf(pouContent);
+      const target = (name || self).replace(/\(\)$/, '');
+      void (async () => {
+        let index = await callIndexFor([target]);
+        // (up the chain: each base's file fetched by its name)
+        const supers: TypeEntry[] = [];
+        let at = index.get(target);
+        for (let i = 0; i < 12 && at?.extends && !supers.some((s) => s.name.toLowerCase() === at!.extends!.toLowerCase()); i++) {
+          index = await callIndexFor([at.extends]);
+          supers.push(typeEntryOf(index, at.extends));
+          at = index.get(at.extends);
+        }
+        const own = index.get(target);
+        const ifaceNames = own?.kind === 'INTERFACE' ? own.implements : [...index.interfacesOf(target)];
+        if (ifaceNames.length) index = await callIndexFor(ifaceNames);
+        const interfaces = ifaceNames.map((n) => typeEntryOf(index, n));
+        setTypeView({ target: typeEntryOf(index, target), supers, interfaces, note: callNote() });
+      })();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, callIndexFor]
+  );
+  const loadSubtypes = useCallback(
+    async (name: string): Promise<TypeEntry[]> => {
+      const index = await callIndexFor([name]);
+      const n = name.toLowerCase();
+      return [...index.pous.values()]
+        .filter((p) => p.extends?.toLowerCase() === n || p.implements.some((i) => i.toLowerCase() === n))
+        .map((p) => ({ name: p.name, kind: p.kind, path: p.path }))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    },
+    [callIndexFor]
+  );
+  const openType = useCallback(
+    (t: TypeEntry) => {
+      const self = parsePou(pouContent)?.name ?? '';
+      if (t.name.toLowerCase() === self.toLowerCase()) {
+        setDockLayout((l) => activateDockTab(l, 'pou'));
+        return;
+      }
+      const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
+      if (isXaeHost() || Boolean(desktop?.openPouInProject && pouPath)) void handleOpenType(t.name, 'machinescope');
+      else showCopyToast(`${t.name}: open it in the TwinCAT editor`, 'error');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, pouPath, handleOpenType, showCopyToast]
+  );
+
   // ---- Find in Files (Ctrl+Shift+F): this POU's code, or the project's POUs that have the query's word (read in full)
   const [findFiles, setFindFiles] = useState<{ text: string } | null>(null);
   const findFilesRef = useRef<Map<string, { content: string; path: string; pou: string }>>(new Map());
@@ -5614,6 +5672,7 @@ export const App: React.FC = () => {
       callHierarchy: handleCallHierarchy,
       crossReference: handleCrossReference,
       findInFiles: (text) => setFindFiles({ text: text ?? '' }),
+      typeHierarchy: handleTypeHierarchy,
       goToImplementation: handleGoToImplementation,
       problems: () => lintFindingsRef.current,
       liveValues: () => liveValuesRef.current,
@@ -5623,7 +5682,7 @@ export const App: React.FC = () => {
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction, handleCallHierarchy, handleGoToImplementation, handleCrossReference]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction, handleCallHierarchy, handleGoToImplementation, handleCrossReference, handleTypeHierarchy]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -6136,6 +6195,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    cmds.push({ id: 'app:type-hierarchy', group: 'Navigate', label: 'Type Hierarchy', hint: "this POU's bases, interfaces and the types extending it", run: () => handleTypeHierarchy() });
     cmds.push({ id: 'app:find-in-files', group: 'Edit', label: 'Find in Files', hint: 'Ctrl+Shift+F: this POU or the project', run: () => setFindFiles({ text: '' }) });
     cmds.push({ id: 'app:whats-new', group: 'Help', label: "What's new", hint: 'the new features, each with what it does', run: () => setWhatsNewOpen(true) });
     cmds.push({ id: 'app:release-notes', group: 'Help', label: 'Release notes', hint: "every edition's releases", run: () => setReleaseNotesOpen(true) });
@@ -11783,6 +11843,7 @@ export const App: React.FC = () => {
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
+      {typeView && <TypeHierarchyDialog target={typeView.target} supers={typeView.supers} interfaces={typeView.interfaces} loadSubs={loadSubtypes} onOpen={openType} note={typeView.note} onClose={() => setTypeView(null)} />}
       {findFiles && <FindInFilesDialog initial={findFiles.text} onSearch={searchFiles} onReplace={replaceFiles} onOpen={openFound} onClose={() => setFindFiles(null)} />}
       {xrefView && <CrossReferenceDialog name={xrefView.name} groups={xrefView.groups} loading={xrefView.loading} note={xrefView.note} onOpen={openXref} onClose={() => setXrefView(null)} />}
       {callView && <CallHierarchyDialog target={callView.target} mode={callView.mode} implementations={callView.implementations} load={loadCalls} note={callView.note} onOpen={openCallNode} onClose={() => setCallView(null)} />}
