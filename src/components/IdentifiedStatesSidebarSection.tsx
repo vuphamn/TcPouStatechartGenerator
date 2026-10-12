@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { IdentifiedPouState } from '../utils/pouStateExtractor.ts';
 import { CustomNodeStylesMap } from '../types.ts';
-import { withStateMethod } from '../utils/stateMethod.ts';
+import { currentStateMethodLabel, withStateMethod } from '../utils/stateMethod.ts';
 
 export interface IdentifiedStatesSidebarSectionProps {
   states: IdentifiedPouState[];
@@ -550,7 +550,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
           )}
           {states.length > 0 && (
             <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
-              {logicCount} in doState()
+              {logicCount} in {currentStateMethodLabel()}
             </span>
           )}
           <button

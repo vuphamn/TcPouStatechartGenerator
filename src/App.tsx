@@ -3309,7 +3309,7 @@ export const App: React.FC = () => {
         onSubmit: (name) => {
           const added = addState(pouContent, dutContent, name);
           if (!added) {
-            showCopyToast('doState() has no CASE to add the state to', 'error');
+            showCopyToast(`${currentStateMethodLabel()} has no CASE to add the state to`, 'error');
             return;
           }
           const pou = updateMethodCodeInPou(pouContent, 'doState', added.pouCode);
@@ -3318,7 +3318,7 @@ export const App: React.FC = () => {
             return;
           }
           handleReplaceSources(pou.updatedPou, added.dut);
-          showCopyToast(`Added ${name}${added.dut ? ' to the enum and' : ''} to doState(): connect it with Add transition`, 'success');
+          showCopyToast(`Added ${name}${added.dut ? ' to the enum and' : ''} to ${currentStateMethodLabel()}: connect it with Add transition`, 'success');
         },
       }),
     [pouContent, dutContent, handleReplaceSources, showCopyToast]
@@ -3400,7 +3400,7 @@ export const App: React.FC = () => {
         onSubmit: (condition, declarations) => {
           const code = addTransition(pouContent, from, to, condition, v);
           if (!code) {
-            showCopyToast(`${from} has no CASE branch in doState()`, 'error');
+            showCopyToast(`${from} has no CASE branch in ${currentStateMethodLabel()}`, 'error');
             return;
           }
           if (declarations?.length) {
@@ -3569,7 +3569,7 @@ export const App: React.FC = () => {
         return;
       }
       if (!knownStates.has(stateId)) {
-        showCopyToast(`${stateId} is not a state of the enum / doState() (a composite state?)`, 'error');
+        showCopyToast(`${stateId} is not a state of the enum / ${currentStateMethodLabel()} (a composite state?)`, 'error');
         return;
       }
       // (an arm starts at its IF: its end moves, its start is the IF's state)
@@ -3629,7 +3629,7 @@ export const App: React.FC = () => {
     (id: string) => {
       const loc = locateState(pouContent, id);
       if (!loc) {
-        showCopyToast(`${id.split('__').pop()} has no CASE branch${subMachineId(pouContent, id) ? ` in ${subMachineId(pouContent, id)!.method}()` : ' in doState()'}`, 'error');
+        showCopyToast(`${id.split('__').pop()} has no CASE branch${subMachineId(pouContent, id) ? ` in ${subMachineId(pouContent, id)!.method}()` : ` in ${currentStateMethodLabel()}`}`, 'error');
         return;
       }
       handleOpenInspectorPanel('method', { method: `${loc.method}()` });
@@ -3927,7 +3927,7 @@ export const App: React.FC = () => {
       if (!Array.isArray(whole)) return showCopyToast(whole.error, 'error', 6000);
       setPromptRequest({
         title: `Code of ${state}`,
-        label: `${state}'s code in doState() (its CASE branch), as written: its actions, its transitions, all of it.`,
+        label: `${state}'s code in ${currentStateMethodLabel()} (its CASE branch), as written: its actions, its transitions, all of it.`,
         initial: whole.join('\n'),
         monospace: true,
         multiline: true,

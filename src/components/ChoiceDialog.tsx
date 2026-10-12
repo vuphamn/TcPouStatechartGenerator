@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, Trash2, X } from 'lucide-react';
 import type { ChoiceRow } from '../utils/statechartEdits.ts';
+import { currentStateMethodLabel } from '../utils/stateMethod.ts';
 
 export interface ChoiceRequest {
   from: string;
@@ -56,7 +57,7 @@ export const ChoiceDialog: React.FC<{ request: ChoiceRequest; onClose: () => voi
           </button>
         </div>
         <div className="p-4 space-y-2">
-          <div className="text-slate-400">The conditions are checked in this order (IF / ELSIF); the first that holds decides. Added at the end of the state's branch in doState().</div>
+          <div className="text-slate-400">The conditions are checked in this order (IF / ELSIF); the first that holds decides. Added at the end of the state's branch in {currentStateMethodLabel()}.</div>
           {rows.map((r, i) => (
             <div key={i} className="flex items-center gap-2">
               <span className="w-10 text-right font-mono text-slate-500">{i === 0 ? 'IF' : 'ELSIF'}</span>

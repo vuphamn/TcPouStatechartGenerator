@@ -8,7 +8,7 @@ export const PALETTE_MIME = 'application/x-kss-statechart-element';
 
 const ITEMS: { kind: PaletteElement; label: string; icon: React.ReactNode; title: string; noDrag?: boolean }[] = [
   { kind: 'pointer', label: 'Pointer', icon: <MousePointer2 className="w-4 h-4" />, title: 'Pointer: select and move (ends drawing a transition)', noDrag: true },
-  { kind: 'state', label: 'State', icon: <Square className="w-4 h-4" />, title: 'State: drag it onto the canvas (into a composite to add it there). A new enum member and CASE branch in doState()' },
+  { kind: 'state', label: 'State', icon: <Square className="w-4 h-4" />, title: 'State: drag it onto the canvas (into a composite to add it there). A new enum member and CASE branch in the state method (doState(), Execute() …)' },
   { kind: 'initial', label: 'Initial', icon: <CircleDot className="w-4 h-4" />, title: 'Initial state: drag it onto a state. The state variable starts there (its initial value in the declaration, or set in initialize() when the base FB declares it)' },
   { kind: 'final', label: 'Final', icon: <Circle className="w-4 h-4 ring-2 ring-current ring-offset-1 ring-offset-slate-900 rounded-full" />, title: 'Final state: drag it onto the canvas for a new final state, or onto a state to mark it final (no transitions out)' },
   { kind: 'choice', label: 'Choice', icon: <Diamond className="w-4 h-4" />, title: 'Choice: drag it onto a state. Its conditions and targets become an IF / ELSIF / ELSE in its branch' },
