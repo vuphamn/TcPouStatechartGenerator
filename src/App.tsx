@@ -1962,8 +1962,11 @@ export const App: React.FC = () => {
       if (pou === bookmarksPouRef.current) postToHost({ type: 'bookmarksChanged', bookmarks: b });
     });
   }, []);
-  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks });
-  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks };
+  // (XAE's notification bar after an update: What's new (set where its page is))
+  const openWhatsNewRef = useRef<() => void>(() => {});
+  const openWhatsNew = () => openWhatsNewRef.current();
+  const hostHandlersRef = useRef({ applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks, openWhatsNew });
+  hostHandlersRef.current = { applyLoadedPou, applyDutCandidates, showCopyToast, handleSourceChanged, handleLiveStatus, handleLiveValues, handleLiveWatchResult, handleLiveVars, handleEditorCaret, handleLiveBrowseResult, showMember, applyBookmarks, openWhatsNew };
 
   useEffect(() => {
     if (!isXaeHost()) return;
@@ -2017,6 +2020,8 @@ export const App: React.FC = () => {
         h.handleEditorCaret(m);
       } else if (m.type === 'showMember') {
         h.showMember(m);
+      } else if (m.type === 'showWhatsNew') {
+        h.openWhatsNew();
       } else if (m.type === 'bookmarks') {
         // (the host keeps them: its copy taken, and this window's changes told to it from now on)
         h.applyBookmarks(m.bookmarks, m.pou);
@@ -2724,6 +2729,7 @@ export const App: React.FC = () => {
   const appHost: 'XAE' | 'Desktop' | 'Web' = isXaeHost() ? 'XAE' : desktopLive() ? 'Desktop' : 'Web';
   // What's new: the features since the build last opened here (by itself once after an update; the Help palette's)
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  openWhatsNewRef.current = () => setWhatsNewOpen(true);
   const whatsNewSeenRef = useRef<string | null>(null);
   useEffect(() => {
     let seen: string | null = null;

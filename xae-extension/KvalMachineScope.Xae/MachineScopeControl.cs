@@ -317,6 +317,8 @@ namespace KvalMachineScope.Xae
                     case "ready":
                         Log.Write("app ready");
                         _appReady = true;
+                        // (What's new asked for before this tab was ready: shown now)
+                        if (WhatsNewPending) { WhatsNewPending = false; Post(new { type = "showWhatsNew" }); }
                         if (_pendingPou != null)
                         {
                             var p = _pendingPou;
@@ -1692,6 +1694,19 @@ namespace KvalMachineScope.Xae
         /// whose boot projects do not start by themselves): each PLC project logged in (FORCEDOWNLOAD | SILENT), started,
         /// its boot project put in, logged off. TwinCAT's own ITcPlcOnline, found at run time (XAE has its assembly loaded)
         /// </summary>
+        /// <summary>What's new asked for (the update's notification bar): the next tab that is ready shows it</summary>
+        internal static bool WhatsNewPending;
+
+        /// <summary>The app's What's new page opened in this tab (false: not ready yet; it opens when it is)</summary>
+        internal bool ShowWhatsNew()
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            if (!_appReady) return false;
+            WhatsNewPending = false;
+            Post(new { type = "showWhatsNew" });
+            return true;
+        }
+
         private void HandleDownloadProject(Dictionary<string, object> msg)
         {
             ThreadHelper.ThrowIfNotOnUIThread();

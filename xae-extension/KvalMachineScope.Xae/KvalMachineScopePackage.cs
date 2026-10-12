@@ -32,6 +32,54 @@ namespace KvalMachineScope.Xae
             await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             Instance = this;
             await OpenInMachineScopeCommand.InitializeAsync(this);
+            // (updated since the last time: said once, with What's new)
+            try
+            {
+                var version = typeof(KvalMachineScopePackage).Assembly.GetName().Version?.ToString(3);
+                if (UpdateNotice.Check(version) != null) await ShowUpdatedBarAsync(version);
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                Log.Write("update notice: " + ex.Message);
+            }
+        }
+
+        /// <summary>The main window's notification bar: updated to the version, What's new (MachineScope's page)</summary>
+        private async Task ShowUpdatedBarAsync(string version)
+        {
+            await JoinableTaskFactory.SwitchToMainThreadAsync(DisposalToken);
+            if (!(await GetServiceAsync(typeof(SVsShell)) is IVsShell shell)) return;
+            if (shell.GetProperty((int)__VSSPROPID7.VSSPROPID_MainWindowInfoBarHost, out var hostObj) != VSConstants.S_OK || !(hostObj is IVsInfoBarHost host)) return;
+            if (!(await GetServiceAsync(typeof(SVsInfoBarUIFactory)) is IVsInfoBarUIFactory factory)) return;
+            var model = new InfoBarModel(
+                new[] { new InfoBarTextSpan($"Kval MachineScope was updated to {version}. ") },
+                new[] { new InfoBarHyperlink("What's new") },
+                Microsoft.VisualStudio.Imaging.KnownMonikers.StatusInformation,
+                true);
+            var bar = factory.CreateInfoBar(model);
+            bar.Advise(new UpdatedBarEvents(this), out _);
+            host.AddInfoBar(bar);
+        }
+
+        /// <summary>What's new clicked: a MachineScope tab shown, its What's new page opened; the bar closed</summary>
+        private sealed class UpdatedBarEvents : IVsInfoBarUIEvents
+        {
+            private readonly KvalMachineScopePackage _package;
+            public UpdatedBarEvents(KvalMachineScopePackage package) { _package = package; }
+            public void OnClosed(IVsInfoBarUIElement infoBarUIElement) { }
+            public void OnActionItemClicked(IVsInfoBarUIElement infoBarUIElement, IVsInfoBarActionItem actionItem)
+            {
+                ThreadHelper.ThrowIfNotOnUIThread();
+                infoBarUIElement.Close();
+                _package.JoinableTaskFactory.RunAsync(async () =>
+                {
+                    MachineScopeControl.WhatsNewPending = true;
+                    await _package.ShowMachineScopeAsync(null);
+                    await _package.JoinableTaskFactory.SwitchToMainThreadAsync();
+                    for (var id = 0; id < MaxTabs; id++)
+                        if (_package.FindToolWindow(typeof(MachineScopeToolWindow), id, false) is MachineScopeToolWindow tab && tab.Control != null && tab.Control.ShowWhatsNew()) break;
+                });
+            }
         }
 
         /// <summary>Most MachineScope tabs looked for (and created)</summary>

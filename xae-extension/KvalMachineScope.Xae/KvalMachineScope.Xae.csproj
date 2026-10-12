@@ -57,6 +57,7 @@
     <Compile Include="HostFiles.cs" />
     <Compile Include="ProjectScan.cs" />
     <Compile Include="PlcDownload.cs" />
+    <Compile Include="UpdateNotice.cs" />
     <Compile Include="SaveAllRelay.cs" />
     <Compile Include="TwinCATProject.cs" />
     <Compile Include="CodeNavigation.cs" />

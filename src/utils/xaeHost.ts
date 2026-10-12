@@ -66,6 +66,8 @@ export type HostMessage =
   | { type: 'activateResult'; requestId: number; ok: boolean; message: string; noAutostart?: string[] }
   /** The project's PLC programs downloaded and started (downloadProject) */
   | { type: 'downloadResult'; requestId: number; ok: boolean; message: string }
+  // (XAE's notification bar after the extension's update: its What's new clicked)
+  | { type: 'showWhatsNew' }
   // The loaded POU's project files' TwinCAT version here and in git
   | { type: 'projectVersionsResult'; requestId: number; files: ProjectFileVersion[]; converted: boolean }
   /** The coverage counts beside the project (MachineScope.coverage.json): every POU type's */

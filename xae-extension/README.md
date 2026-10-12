@@ -46,6 +46,7 @@ It needs the Microsoft Edge WebView2 Runtime, which Windows 10/11 normally alrea
   - the project-item context menu;
   - the context menu of an open document's tab.
 - **Tools > Kval MachineScope...** opens the selected or active `.TcPOU`. Without one, it asks for a file.
+- **After an update:** the first time TcXaeShell loads a newer version of the extension, its notification bar says so; **What's new** opens a MachineScope tab on its What's new page (the new features, each with what it does). A first install says nothing. The version last loaded is kept in `%LocalAppData%KvalMachineScope®-version.txt`.
 - **Command Window:** `Tools.KvalMachineScope.Open C:\Path\SM_X.TcPOU`
 - **One tab per POU:** each POU opens in its own **MachineScope: <POU>** tab, so several state machines can be watched at once. Opening a POU that already has a tab brings that tab forward, without reloading it. The tabs share one WebView2 browser process. The tabs open when XAE closed come back with the POU each showed (`%LocalAppData%\KvalMachineScope\tabs.txt`).
 - **Another company's POU** (its state machine in `Execute()` on `CASE State OF`, not `doState()` on `machineState`): read from that method, its transitions through helper methods given the next state as an argument too. Its enum, when it is not beside the POU, is found in the PLC project by the state variable's type: the extension's `findEnumType` (the enum can be edited and saved there). See the main README.

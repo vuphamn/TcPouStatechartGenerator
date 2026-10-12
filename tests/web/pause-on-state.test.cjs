@@ -148,6 +148,12 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('.live-pause-chip .live-pause-remove');
   await h.sleep(200);
 
+  // 8. XAE's notification bar after an update: What's new clicked there opens the page here
+  await toApp({ type: 'showWhatsNew' });
+  const wnOpen = await h.until(() => p.$('#whats-new-dialog'), 4000);
+  expect(!!wnOpen, "XAE's showWhatsNew: What's new opened");
+  await p.keyboard.press('Escape');
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

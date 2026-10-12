@@ -57,6 +57,7 @@
     <Compile Include="$(Src)HostFiles.cs" Link="HostFiles.cs" />
     <Compile Include="$(Src)ProjectScan.cs" Link="ProjectScan.cs" />
     <Compile Include="$(Src)PlcDownload.cs" Link="PlcDownload.cs" />
+    <Compile Include="$(Src)UpdateNotice.cs" Link="UpdateNotice.cs" />
     <Compile Include="$(Src)SaveAllRelay.cs" Link="SaveAllRelay.cs" />
     <Compile Include="$(Src)TwinCATProject.cs" Link="TwinCATProject.cs" />
     <Compile Include="$(Src)CodeNavigation.cs" Link="CodeNavigation.cs" />
