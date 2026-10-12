@@ -9248,11 +9248,57 @@ export const App: React.FC = () => {
       const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
       // (the live state's sub-machines: each method's VAR_INST, as <instance>.<method>.<variable>, else searched)
       const sub: LiveWatchVar[] = instance ? liveSubLevels.map((L) => ({ id: L.watchId, candidates: [`${instance}.${L.m.method}.${L.m.variable}`], search: { under: instance, words: [L.m.method, L.m.variable] } })) : [];
+      // (the PLC's tasks, last: their execution time and overruns, TwinCAT_SystemInfoVarList._TaskInfo[1..4])
+      const tasks: LiveWatchVar[] = [1, 2, 3, 4].flatMap((i) => [
+        { id: `task:${i}:name`, candidates: [`TwinCAT_SystemInfoVarList._TaskInfo[${i}].TaskName`] },
+        { id: `task:${i}:exec`, candidates: [`TwinCAT_SystemInfoVarList._TaskInfo[${i}].LastExecTime`] },
+        { id: `task:${i}:over`, candidates: [`TwinCAT_SystemInfoVarList._TaskInfo[${i}].CycleTimeExceeded`] },
+      ]);
       // The guards first, then the overview's machines; a gateway follows at most 100 by default (more is refused)
-      sendLiveWatch([...sub, ...guards, ...machines, ...symbols].slice(0, MAX_WATCHED));
+      sendLiveWatch([...sub, ...guards, ...machines, ...symbols, ...tasks].slice(0, MAX_WATCHED));
     }, 120);
     return () => window.clearTimeout(timer);
   }, [liveWatchKey, symbolPaths, ioVars, overviewPaths, liveStateVar, liveStatus.state, liveStatus.instance, sendLiveWatch, liveSubLevels, liveSubWatchKey]);
+  // The PLC's tasks while live: each one's last execution time, the longest seen, its overruns (CycleTimeExceeded
+  // becoming TRUE) counted since live, said once each (a notification too when on)
+  const taskPeakRef = useRef<Record<string, { maxMs: number; overruns: number; was: boolean }>>({});
+  const [taskOverruns, setTaskOverruns] = useState(0);
+  const liveTasks = useMemo(() => {
+    if (liveStatus.state !== 'connected') return [];
+    const out: { name: string; execMs: number; maxMs: number; overruns: number; exceeded: boolean }[] = [];
+    for (const i of [1, 2, 3, 4]) {
+      const name = liveVarValues[`task:${i}:name`];
+      const exec = liveVarValues[`task:${i}:exec`];
+      if (typeof name !== 'string' || !name || typeof exec !== 'number') continue;
+      const peak = taskPeakRef.current[name] ?? { maxMs: 0, overruns: 0, was: false };
+      const execMs = exec / 10000;
+      out.push({ name: name.split('_').pop() || name, execMs, maxMs: Math.max(peak.maxMs, execMs), overruns: peak.overruns, exceeded: liveVarValues[`task:${i}:over`] === true });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveVarValues, liveStatus.state, taskOverruns]);
+  useEffect(() => {
+    if (liveStatus.state !== 'connected') {
+      taskPeakRef.current = {};
+      return;
+    }
+    for (const i of [1, 2, 3, 4]) {
+      const name = liveVarValues[`task:${i}:name`];
+      const exec = liveVarValues[`task:${i}:exec`];
+      if (typeof name !== 'string' || !name) continue;
+      const peak = (taskPeakRef.current[name] ??= { maxMs: 0, overruns: 0, was: false });
+      if (typeof exec === 'number') peak.maxMs = Math.max(peak.maxMs, exec / 10000);
+      const over = liveVarValues[`task:${i}:over`] === true;
+      if (over && !peak.was) {
+        peak.overruns++;
+        setTaskOverruns((n) => n + 1);
+        showCopyToast(`Task ${name}: its cycle time was exceeded (${typeof exec === 'number' ? `last execution ${(exec / 10000).toFixed(3)} ms` : 'an overrun'})`, 'error', 8000);
+        if (notifyOn) void notifyStuck(`Kval MachineScope: ${name} overran its cycle`, 'Its cycle time was exceeded', `kss-task-${name}`);
+      }
+      peak.was = over;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveVarValues, liveStatus.state]);
   const liveGuardViews = useMemo(
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
@@ -11471,6 +11517,7 @@ export const App: React.FC = () => {
             pauseStates={identifiedStatesResult.states.map((s) => s.id)}
             onPauseOnChange={setPauseOn}
             liveHold={liveHold}
+            tasks={liveTasks}
             onResumeLive={resumeLive}
             notify={notifyOn}
             onNotifyChange={(on) => {

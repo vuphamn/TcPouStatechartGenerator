@@ -241,6 +241,8 @@ interface LivePanelProps {
   /** Held at a chosen state's entry (live): the state, its time; Resume shows what came since */
   liveHold?: { state: string; at: number; condition?: boolean } | null;
   onResumeLive?: () => void;
+  /** The PLC's tasks while live (_TaskInfo): the last execution time, the longest, the overruns since live */
+  tasks?: { name: string; execMs: number; maxMs: number; overruns: number; exceeded: boolean }[];
   onReplayPlay?: (playing: boolean) => void;
   onReplaySeek?: (pos: number) => void;
   onReplaySpeed?: (speed: number) => void;
@@ -548,6 +550,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onPauseOnChange,
   liveHold = null,
   onResumeLive,
+  tasks = [],
   reachable = {},
   onOpenInstance,
   openTarget = 'window',
@@ -1044,6 +1047,23 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 }
               }}
             />
+          </div>
+        )}
+        {tasks.length > 0 && (
+          <div id="live-tasks" className="flex flex-wrap items-center gap-1 text-[11px]">
+            {tasks.map((t) => (
+              <span
+                key={t.name}
+                className={`live-task shrink-0 px-1.5 rounded border font-mono ${t.overruns || t.exceeded ? 'border-rose-600 bg-rose-950/60 text-rose-200' : 'border-slate-700 text-slate-300'}`}
+                data-task={t.name}
+                data-overruns={t.overruns}
+                title={`Task ${t.name}: its last cycle took ${t.execMs.toFixed(3)} ms, the longest since live ${t.maxMs.toFixed(3)} ms${t.overruns ? `; its cycle time exceeded ${t.overruns}× since live` : ''} (TwinCAT_SystemInfoVarList._TaskInfo)`}
+              >
+                {t.overruns ? '⚠ ' : ''}
+                {t.name} {t.execMs.toFixed(3)} ms <span className="text-slate-500">max {t.maxMs.toFixed(3)}</span>
+                {t.overruns ? ` · ${t.overruns} overrun${t.overruns === 1 ? '' : 's'}` : ''}
+              </span>
+            ))}
           </div>
         )}
         {liveHold && (

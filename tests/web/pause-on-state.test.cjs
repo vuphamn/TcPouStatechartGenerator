@@ -70,6 +70,23 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const again = await h.until(() => p.$('#live-hold-banner'), 4000);
   expect(!!again && (await current()) === S('CLAMPED'), `entered again: held again (in ${await current()})`);
   await p.click('#live-hold-resume');
+  // 3a. The PLC's tasks (_TaskInfo): the execution time, the longest; an overrun (CycleTimeExceeded TRUE) counted once
+  // while it stays TRUE, again when it comes again
+  const tt = Date.now();
+  const task = (exec, over, k) => toApp({ type: 'liveVars', values: [{ id: 'task:1:name', t: tt + k, v: 'Plc_PlcTask' }, { id: 'task:1:exec', t: tt + k, v: exec }, { id: 'task:1:over', t: tt + k, v: over }] });
+  await task(523, false, 1);
+  const chip = () => p.$eval('.live-task', (e) => ({ text: e.textContent, overruns: e.getAttribute('data-overruns') })).catch(() => null);
+  const c1 = await h.until(chip, 4000);
+  await task(12000, true, 2);
+  await h.sleep(300);
+  await task(800, true, 3);
+  await h.sleep(300);
+  const c2 = await chip();
+  await task(700, false, 4);
+  await task(13000, true, 5);
+  await h.sleep(300);
+  const c3 = await chip();
+  expect(/PlcTask 0\.052 ms/.test(c1?.text ?? '') && c2?.overruns === '1' && /max 1\.200/.test(c2?.text ?? '') && c3?.overruns === '2' && /⚠/.test(c3?.text ?? ''), `the tasks: ${c1?.text} → ${c2?.text} → ${c3?.text}`);
   await p.click('#live-stop-btn').catch(() => {});
   await h.sleep(500);
   expect(!(await p.$('#live-hold-banner')), 'not live: no hold');
