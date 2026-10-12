@@ -251,6 +251,52 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
   const metaNow = new Map();
   // Values prepared to write (Prepare Value…), by symbol: { full, root, info, value, text }
   const prepared = new Map();
+  // Hold Values: prepared values written again every HOLD_MS until released (by symbol: { full, root, info, value,
+  // text, misses }). Not TwinCAT's Force (the runtime sets a forced value before and after each cycle; only XAE's online
+  // mode does that): the PLC's code may change a held value between two writes, and it is released on logout
+  const HOLD_MS = 100;
+  const held = new Map();
+  const holdBar = vscode.window.createStatusBarItem('kvalMachineScope.held', vscode.StatusBarAlignment.Left, 45);
+  holdBar.name = 'TwinCAT held values';
+  holdBar.command = 'kvalMachineScope.releaseValues';
+  context.subscriptions.push(holdBar);
+  const showHeld = () => {
+    void vscode.commands.executeCommand('setContext', 'kvalMachineScope.held', held.size > 0);
+    if (!held.size) return void holdBar.hide();
+    holdBar.text = `$(lock) ${held.size} held`;
+    holdBar.tooltip = `Held (written again every ${HOLD_MS} ms, not TwinCAT's Force: the PLC's code may change them between writes):\n${[...held.values()].map((x) => `${x.full} := ${x.text}`).join('\n')}\nClick: release`;
+    holdBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    holdBar.show();
+  };
+  let holding = false;
+  const holdTimer = setInterval(async () => {
+    if (holding || !held.size) return;
+    holding = true;
+    try {
+      for (const x of [...held.values()]) {
+        // (logged out: released)
+        if (!online.isOnline(x.root)) {
+          held.delete(x.full.toLowerCase());
+          continue;
+        }
+        try {
+          const src = await online.source(x.root);
+          await src.write(x.full, x.info, x.value);
+          x.misses = 0;
+        } catch (err) {
+          // (written nowhere three times in a row: released, said)
+          if (++x.misses >= 3) {
+            held.delete(x.full.toLowerCase());
+            void vscode.window.showWarningMessage(`${x.full} no longer held: ${err?.message ?? err}`);
+          }
+        }
+      }
+    } finally {
+      holding = false;
+      showHeld();
+    }
+  }, HOLD_MS);
+  context.subscriptions.push({ dispose: () => clearInterval(holdTimer) });
   const fileInfo = (file) => {
     let st;
     try {
@@ -349,10 +395,11 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
           meta.push({ full, root: p.root, sym, enumNames: enums.get(ek), uses: n.uses, text: t });
           // (a value prepared to write: after the current one)
           const prep = prepared.get(full.toLowerCase());
-          const label = prep ? ` ${t} ⇒ ${prep.text} ` : ` ${t} `;
+          const hold = held.get(full.toLowerCase());
+          const label = hold ? ` ${t} 🔒 ` : prep ? ` ${t} ⇒ ${prep.text} ` : ` ${t} `;
           for (const u of n.uses) {
             const at = ed.document.positionAt(u.end);
-            list.push({ range: new vscode.Range(at, at), renderOptions: { after: { contentText: label } }, hoverMessage: `${full} (${sym.type || 'value'}) = ${t}${prep ? `; prepared: ${prep.text} (Write Values: Ctrl+F7)` : ''}` });
+            list.push({ range: new vscode.Range(at, at), renderOptions: { after: { contentText: label } }, hoverMessage: `${full} (${sym.type || 'value'}) = ${t}${hold ? `; held at ${hold.text} (written again every ${HOLD_MS} ms; Release Held Values)` : ''}${prep ? `; prepared: ${prep.text} (Write Values: Ctrl+F7)` : ''}` });
           }
         }
         ed.setDecorations(deco, list);
@@ -578,6 +625,39 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
       else void vscode.window.showInformationMessage(`Wrote ${list.length} value${list.length > 1 ? 's' : ''}`);
       return { written: list.length - failed.length, failed };
     }),
+    // Hold Values: every prepared value held (written again every HOLD_MS) after one question naming them and the PLC
+    vscode.commands.registerCommand('kvalMachineScope.holdValues', async (opts) => {
+      const list = [...prepared.values()].filter((x) => online.isOnline(x.root));
+      if (!list.length) return void vscode.window.showInformationMessage('No values prepared: Prepare Value… on a variable first (logged in)');
+      if (!opts?.confirmed) {
+        const where = [...new Set(list.map((x) => online.targetName?.(x.root) ?? 'the PLC'))].join(', ');
+        const ok = await vscode.window.showWarningMessage(`Hold ${list.length} value${list.length > 1 ? 's' : ''} on the PLC on ${where}?`, { modal: true, detail: `${list.slice(0, 12).map((x) => `${x.full} := ${x.text}`).join('\n')}${list.length > 12 ? `\n… and ${list.length - 12} more` : ''}\n\nWritten again every ${HOLD_MS} ms until released (the status bar's 🔒, Release Held Values) or logged out. Not TwinCAT's Force: the PLC's code may change them between two writes.` }, 'Hold');
+        if (ok !== 'Hold') return;
+      }
+      for (const x of list) {
+        held.set(x.full.toLowerCase(), { ...x, misses: 0 });
+        prepared.delete(x.full.toLowerCase());
+      }
+      void vscode.commands.executeCommand('setContext', 'kvalMachineScope.prepared', prepared.size > 0);
+      showHeld();
+      void tick();
+      return { held: [...held.values()].map((x) => x.full) };
+    }),
+    // Release: one held value (chosen), or all of them
+    vscode.commands.registerCommand('kvalMachineScope.releaseValues', async (which) => {
+      if (!held.size) return [];
+      let names = typeof which === 'string' ? (which === '*' ? [...held.keys()] : [which.toLowerCase()]) : null;
+      if (!names) {
+        const pick = await vscode.window.showQuickPick([{ label: '$(unlock) Release all', all: true }, ...[...held.values()].map((x) => ({ label: x.full, description: `held at ${x.text}`, key: x.full.toLowerCase() }))], { title: 'Held values: release' });
+        if (!pick) return [...held.values()].map((x) => x.full);
+        names = pick.all ? [...held.keys()] : [pick.key];
+      }
+      for (const k of names) held.delete(k);
+      showHeld();
+      void tick();
+      return [...held.values()].map((x) => x.full);
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.heldShown', () => [...held.values()].map((x) => ({ full: x.full, text: x.text }))),
     // Watch: the variable at the caret (its full path), or one typed
     vscode.commands.registerCommand('kvalMachineScope.addWatch', async (given) => {
       const root = currentRoot();
@@ -641,6 +721,9 @@ function registerLiveValues(context, { online, projectOf, currentRoot = () => nu
       if (!online.isOnline(root ?? '')) {
         for (const ed of vscode.window.visibleTextEditors) if (ed.document.uri.scheme === SCHEME) { ed.setDecorations(deco, []); clearActive(ed); }
         void dropTrackers(root);
+        // (logged out: nothing held there any more)
+        for (const [k, x] of [...held]) if (!root || x.root === root) held.delete(k);
+        showHeld();
       }
       void tick();
     },

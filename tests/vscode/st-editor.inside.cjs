@@ -208,6 +208,22 @@ exports.run = async function run() {
     const v4 = await waitFor(async () => (await shownOf())?.Busy === 'FALSE', 8000);
     const onPlc = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')).symbols['MAIN.fbScan.Busy'].value;
     expect(wrote?.written === 1 && onPlc === false && v4, `Write Values: Busy := FALSE written (${JSON.stringify(wrote)}; on the PLC ${onPlc}; shown ${JSON.stringify(await shownOf())})`);
+    // Hold Values: Busy held at TRUE; the PLC's code setting it FALSE (the stand-in's value changed): written back;
+    // released: it stays as the PLC sets it
+    const plcValue = () => JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')).symbols['MAIN.fbScan.Busy'].value;
+    const plcSets = (v) => { const j = JSON.parse(fs.readFileSync(process.env.KSS_LIVE_STANDIN, 'utf8')); j.symbols['MAIN.fbScan.Busy'].value = v; fs.writeFileSync(process.env.KSS_LIVE_STANDIN, JSON.stringify(j)); };
+    exEd.selection = new vscode.Selection(bPos, bPos);
+    await vscode.commands.executeCommand('kvalMachineScope.prepareValue', { text: 'TRUE' });
+    const hv = await vscode.commands.executeCommand('kvalMachineScope.holdValues', { confirmed: true });
+    const heldNow = await vscode.commands.executeCommand('kvalMachineScope.heldShown');
+    const h1 = await waitFor(() => plcValue() === true, 3000);
+    plcSets(false);
+    const h2 = await waitFor(() => plcValue() === true, 3000);
+    expect(hv?.held?.includes('MAIN.fbScan.Busy') && heldNow?.[0]?.text === 'TRUE' && h1 && h2, `Hold Values: Busy held at TRUE, written back after the PLC set it FALSE (${JSON.stringify(heldNow)}, ${h1}, ${h2})`);
+    const left = await vscode.commands.executeCommand('kvalMachineScope.releaseValues', '*');
+    plcSets(false);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(Array.isArray(left) && left.length === 0 && plcValue() === false, `released: as the PLC sets it (${plcValue()})`);
     // The Watch view: _Count by its full path, its value; written from there; the trend panel
     await vscode.commands.executeCommand('kvalMachineScope.addWatch', 'MAIN.fbScan._Count');
     const w1 = await waitFor(async () => (await vscode.commands.executeCommand('kvalMachineScope.watchShown'))?.['MAIN.fbScan._Count'] === '7', 8000);
@@ -416,7 +432,7 @@ exports.run = async function run() {
     const wnTab = await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => /What's New/.test(t.label)), 5000);
     expect(history.every((c) => c.changes.some((x) => x.kind === 'feat')) && wn?.items === 3 && wn.sinceSeen && wnTab, `What's New: the 3 features since ${history[3]?.hash} in its panel (${JSON.stringify(wn)}, ${wnTab?.label})`);
     if (wnTab) await vscode.window.tabGroups.close(wnTab);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference', 'whatsNew', 'compareSaved', 'allChanges'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference', 'whatsNew', 'compareSaved', 'allChanges', 'holdValues', 'releaseValues'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

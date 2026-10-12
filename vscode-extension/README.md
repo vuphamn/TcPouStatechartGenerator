@@ -146,6 +146,10 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   its type: its range, `16#FF`, a string's length), then shown after the current one (`7 ⇒ 9`). **Write Values**
   (`Ctrl+F7`) writes every prepared value, after one question naming them and the PLC. **Clear Prepared Values**.
   Forcing (holding a value against the program) is XAE's.
+- **Hold Values** (the right-click menu, with values prepared): the prepared values written again every 100 ms until
+  released (the status bar's 🔒 item: **Release Held Values**, one or all) or logged out; shown with 🔒 in the code. Asked
+  first. Not TwinCAT's Force (the runtime sets a forced value before and after each cycle; only XAE's online mode does
+  that): the PLC's code may change a held value between two writes.
 - **Watch** (the TwinCAT view): **Add to Watch** (a variable's right-click menu while logged in, or the view's `+` with
   a full path such as `MAIN.fbTest.nCycles`): its value twice a second; **Write Value…** on one (asked first),
   **Remove**, **Clear Watch**. **Show Trend**: the watched numbers and booleans over the last ten minutes.

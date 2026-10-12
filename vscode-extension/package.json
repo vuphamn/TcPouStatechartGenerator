@@ -413,6 +413,18 @@
         "title": "All Changes (not saved yet)",
         "category": "TwinCAT",
         "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "kvalMachineScope.holdValues",
+        "title": "Hold Values (written again until released)",
+        "category": "TwinCAT",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "kvalMachineScope.releaseValues",
+        "title": "Release Held Values",
+        "category": "TwinCAT",
+        "icon": "$(unlock)"
       }
     ],
     "keybindings": [
@@ -711,6 +723,10 @@
         {
           "command": "kvalMachineScope.crossReferenceFilter",
           "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.releaseValues",
+          "when": "kvalMachineScope.held"
         }
       ],
       "editor/context": [
@@ -722,6 +738,16 @@
         {
           "command": "kvalMachineScope.writeValues",
           "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.prepared",
+          "group": "twincat@2"
+        },
+        {
+          "command": "kvalMachineScope.holdValues",
+          "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.prepared",
+          "group": "twincat@2"
+        },
+        {
+          "command": "kvalMachineScope.releaseValues",
+          "when": "kvalMachineScope.held",
           "group": "twincat@2"
         },
         {
