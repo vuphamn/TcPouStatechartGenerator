@@ -1715,31 +1715,9 @@ namespace KvalMachineScope.Xae
                     if (string.Equals(file, project.Value.path, StringComparison.OrdinalIgnoreCase)) { found = p; break; }
                 }
                 if (found == null) throw new InvalidOperationException($"{project.Value.name}.tsproj is not open in XAE");
-                dynamic sysManager = found.Object;
-                var online = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("TCatSysManagerLib.ITcPlcOnline", false)).FirstOrDefault(t => t != null)
-                    ?? throw new InvalidOperationException("TwinCAT's automation assembly (TCatSysManagerLib) is not loaded in XAE");
-                var flagsType = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType("TCatSysManagerLib.PLC_LOGIN_FLAGS", false)).FirstOrDefault(t => t != null);
-                var done = new List<string>();
+                // (the same as the real-PLC check runs: PlcDownload)
                 dte.SuppressUI = true;
-                foreach (var plc in PlcProjectNames(project.Value.path))
-                {
-                    object item = sysManager.LookupTreeItem($"TIPC^{plc}^{plc} Project");
-                    // (FORCEDOWNLOAD 4 | SILENT 256: asking nothing; the application stops, takes the code, waits)
-                    var flags = flagsType != null ? Enum.ToObject(flagsType, 4 + 256) : (object)(4 + 256);
-                    online.GetMethod("Login").Invoke(item, new[] { flags });
-                    var loggedIn = false;
-                    for (var w = 0; w < 60 && !loggedIn; w++)
-                    {
-                        loggedIn = (bool)online.GetProperty("IsLoggedIn").GetValue(item);
-                        if (!loggedIn) System.Threading.Thread.Sleep(500);
-                    }
-                    if (!loggedIn) throw new InvalidOperationException($"XAE did not log in to {plc}'s PLC: nothing was downloaded");
-                    try { online.GetMethod("Start").Invoke(item, null); } catch (System.Reflection.TargetInvocationException) { }
-                    try { ((dynamic)sysManager.LookupTreeItem("TIPC^" + plc)).GenerateBootProject(true); } catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException) { Log.Write($"download: boot project of {plc}: {ex.Message}"); }
-                    try { online.GetMethod("Logoff").Invoke(item, null); } catch (System.Reflection.TargetInvocationException) { }
-                    Log.Write($"download: {plc} downloaded and started");
-                    done.Add(plc);
-                }
+                var done = PlcDownload.Run(found.Object, PlcDownload.PlcProjectNames(project.Value.path), Log.Write);
                 Post(new { type = "downloadResult", requestId, ok = true, message = done.Count > 0 ? $"{string.Join(", ", done)} downloaded and started" : "No PLC project in the TwinCAT project" });
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
@@ -1752,19 +1730,6 @@ namespace KvalMachineScope.Xae
             {
                 if (dte != null) dte.SuppressUI = false;
             }
-        }
-
-        /// <summary>The PLC projects a .tsproj holds (its &lt;Plc&gt;&lt;Project Name="…"&gt;)</summary>
-        private static List<string> PlcProjectNames(string tsproj)
-        {
-            try
-            {
-                var xml = File.ReadAllText(tsproj);
-                var plc = System.Text.RegularExpressions.Regex.Match(xml, @"<Plc>([\s\S]*?)</Plc>");
-                return System.Text.RegularExpressions.Regex.Matches(plc.Success ? plc.Groups[1].Value : "", @"<Project\b[^>]*\bName=""([^""]+)""")
-                    .Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value).Distinct().ToList();
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { return new List<string>(); }
         }
 
         private void HandleActivateProject(Dictionary<string, object> msg)
@@ -1796,7 +1761,7 @@ namespace KvalMachineScope.Xae
                 if (dte.Solution.SolutionBuild.LastBuildInfo > 0) throw new InvalidOperationException("the project has build errors (XAE's Error List): fix them first");
                 var noBoot = new List<string>();
                 var noAutostart = new List<string>();
-                foreach (var plc in PlcProjectNames(project.Value.path))
+                foreach (var plc in PlcDownload.PlcProjectNames(project.Value.path))
                 {
                     try
                     {

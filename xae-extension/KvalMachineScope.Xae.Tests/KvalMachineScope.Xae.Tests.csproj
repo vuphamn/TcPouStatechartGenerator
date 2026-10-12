@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\KvalMachineScope.Xae\ProjectScan.cs" Link="ProjectScan.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\PlcDownload.cs" Link="PlcDownload.cs" />
     <Compile Include="..\KvalMachineScope.Xae\SaveAllRelay.cs" Link="SaveAllRelay.cs" />
     <Compile Include="..\KvalMachineScope.Xae\TabMemory.cs" Link="TabMemory.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcSearch.cs" Link="PlcSearch.cs" />

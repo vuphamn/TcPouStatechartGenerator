@@ -9,6 +9,8 @@
 //  4. the same through VS Code itself (real-plc.inside.cjs; this computer's VS Code, a profile of its own)
 //  3b. the online change check: the project the PLC runs (its sources in its boot folder) compared with the local one,
 //      only code; a declaration changed and a RETAIN variable added here: said; the libraries' versions (none missing)
+//  4b. the XAE extension's Download and start (its PlcDownload, from its built DLL, xae-extension/build.ps1) on a hidden
+//      XAE: the PLC stopped first; downloaded and started: it runs, the project's latest build
 //  5. the PLC stopped at the end (its configuration stays active)
 //   KSS_REAL_PLC=1 node tests/run.cjs plc
 const h = require('../lib/harness.cjs');
@@ -217,6 +219,24 @@ END_CASE
     }
     for (const [ok, what] of results) expect(ok, `VS Code: ${what}`);
   } else console.log('-    VS Code: not installed here (skipped)');
+
+  // 4b. The XAE extension's Download and start
+  const dll = path.join(R, 'xae-extension', 'KvalMachineScope.Xae', 'bin', 'Release', 'KvalMachineScope.Xae.dll');
+  if (fs.existsSync(dll)) {
+    await stopPlc(c).catch(() => {});
+    await c.disconnect().catch(() => {});
+    let out = '';
+    try {
+      out = execFileSync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'xae-download.ps1'), '-Sln', path.join(projDir, 'KssLocalTest.sln'), '-Dll', dll], { encoding: 'utf8', timeout: 400000 });
+    } catch (e) {
+      out = `${e.stdout ?? ''}${e.stderr ?? ''}${e.message}`;
+    }
+    await sleep(2000);
+    c = await systemClient({ netId, ip: '127.0.0.1' }, 851, { allowNoPlc: true });
+    const after = await c.readState().catch((e) => ({ adsStateStr: e.message }));
+    const cmp2 = compareBuilds(await plcCompileId(c).catch(() => null), projectBuilds(plcproj));
+    expect(/done KssPlc/.test(out) && after.adsStateStr === 'Run' && cmp2?.state === 'newest', `XAE's Download and start (PlcDownload): ${out.trim().split(/\r?\n/).slice(-3).join(' | ')}; the PLC ${after.adsStateStr}, ${cmp2?.state}`);
+  } else console.log('-    XAE Download and start: the XAE extension is not built (xae-extension/build.ps1; skipped)');
 
   // 5. Stopped
   const end = await stopPlc(c);
