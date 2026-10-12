@@ -62,6 +62,67 @@ const SKIP_DIRS = new Set(['node_modules', '_boot', '_compileinfo', '_libraries'
 // Web: the last .TcPOU picked and the folder the user granted, reused while later POUs are inside it
 let lastPouHandle: FsFileHandle | null = null;
 let grantedFolder: FsDirectoryHandle | null = null;
+
+// The project folder granted once, kept for the next session (IndexedDB keeps a folder's handle across reloads; its
+// permission is asked for again with the next click, not the folder picked again). Used only when no POU file is
+// open, or the open one is in it: another project's POU never searches it
+const FOLDER_DB = 'kss-folders';
+function folderDb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(FOLDER_DB, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('handles');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+async function keepFolder(h: FsDirectoryHandle): Promise<void> {
+  const db = await folderDb();
+  if (!db) return;
+  try {
+    // (a handle the browser cannot store (a stand-in's): not kept)
+    db.transaction('handles', 'readwrite').objectStore('handles').put(h, 'project');
+  } catch {
+    // (not kept)
+  }
+}
+async function restoredFolder(): Promise<FsDirectoryHandle | null> {
+  const db = await folderDb();
+  if (!db) return null;
+  const h = await new Promise<FsDirectoryHandle | null>((resolve) => {
+    try {
+      const req = db.transaction('handles', 'readonly').objectStore('handles').get('project');
+      req.onsuccess = () => resolve((req.result as FsDirectoryHandle) ?? null);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+  if (!h) return null;
+  try {
+    const perm = h as unknown as { queryPermission?: (o: object) => Promise<string>; requestPermission?: (o: object) => Promise<string> };
+    let state = (await perm.queryPermission?.({ mode: 'readwrite' })) ?? 'granted';
+    if (state !== 'granted') state = (await perm.requestPermission?.({ mode: 'readwrite' })) ?? 'denied';
+    if (state !== 'granted') return null;
+    // (the open POU's project: the POU in it)
+    if (lastPouHandle && !(await h.resolve(lastPouHandle))) return null;
+    return h;
+  } catch {
+    return null;
+  }
+}
+/** The project folder: the one granted now, else the one kept from before (asked for again), else picked (once) */
+async function projectFolder(): Promise<FsDirectoryHandle> {
+  if (grantedFolder) return grantedFolder;
+  const kept = await restoredFolder();
+  if (kept) return (grantedFolder = kept);
+  grantedFolder = await w.showDirectoryPicker!({ id: 'tc-project', mode: 'readwrite', startIn: lastPouHandle ?? undefined });
+  void keepFolder(grantedFolder);
+  return grantedFolder;
+}
 /** The .TcDUT files found in the granted folder, by relative path: they can be written back */
 const dutHandles = new Map<string, FsFileHandle>();
 
@@ -320,12 +381,10 @@ const pouHandles = new Map<string, FsFileHandle>();
  */
 export async function webProjectUses(name: string): Promise<{ files?: { name: string; path: string; content: string }[]; error?: string }> {
   if (typeof w.showDirectoryPicker !== 'function') return { error: 'this browser cannot open a project folder (Chrome or Edge can)' };
-  if (!grantedFolder) {
-    try {
-      grantedFolder = await w.showDirectoryPicker({ id: 'tc-project', mode: 'readwrite', startIn: lastPouHandle ?? undefined });
-    } catch (e) {
-      return { error: isAbort(e) ? 'canceled' : String(e) };
-    }
+  try {
+    await projectFolder();
+  } catch (e) {
+    return { error: isAbort(e) ? 'canceled' : String(e) };
   }
   const word = new RegExp(`(^|[^\\w])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`, 'i');
   const files: { name: string; path: string; content: string }[] = [];
@@ -348,7 +407,7 @@ export async function webProjectUses(name: string): Promise<{ files?: { name: st
       }
     }
   }
-  await walk(grantedFolder, '', 0);
+  await walk(grantedFolder!, '', 0);
   return { files };
 }
 
@@ -399,7 +458,7 @@ export async function webFindPou(typeName: string, ask: boolean): Promise<PouSou
     if (!ask) return { error: 'needs-folder' };
     if (typeof w.showDirectoryPicker !== 'function') return { error: 'this browser cannot open a project folder (Chrome or Edge can)' };
     try {
-      grantedFolder = await w.showDirectoryPicker({ id: 'tc-project', mode: 'readwrite', startIn: lastPouHandle ?? undefined });
+      await projectFolder();
     } catch (e) {
       return { error: isAbort(e) ? 'canceled' : String(e) };
     }
@@ -419,8 +478,8 @@ export async function webFindPou(typeName: string, ask: boolean): Promise<PouSou
     }
     return null;
   }
-  const hit = await find(grantedFolder, '', 0);
-  if (!hit) return { error: `${typeName}.TcPOU was not found in the folder ${grantedFolder.name}` };
+  const hit = await find(grantedFolder!, '', 0);
+  if (!hit) return { error: `${typeName}.TcPOU was not found in the folder ${grantedFolder!.name}` };
   try {
     const content = (await (await hit.file.getFile()).text()).replace(/^\ufeff/, '');
     // (its edits written back as another POU's: writeWebOtherPous, by this path)
