@@ -171,6 +171,8 @@ import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTI
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { CallHierarchyDialog } from './components/CallHierarchyDialog.tsx';
 import { CrossReferenceDialog, type CrossReferenceGroup } from './components/CrossReferenceDialog.tsx';
+import { FindInFilesDialog, type FindGroup, type FindScope } from './components/FindInFilesDialog.tsx';
+import { findMatcher, projectWordOf, replaceInCode, searchCode, type FindMatch, type FindOptions } from './utils/findInFiles.ts';
 import { PouIndex, implementationsOf, incomingCalls, instancesIn as callInstancesIn, nodeLabel, outgoingCalls, parsePou, type CallNode, type CallSite } from './utils/callHierarchy.ts';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
 import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
@@ -5425,6 +5427,93 @@ export const App: React.FC = () => {
   );
   // ---- Cross Reference List: a name's places in this POU and the project's POUs that name it (read in full)
   const [xrefView, setXrefView] = useState<{ name: string; groups: CrossReferenceGroup[]; loading: boolean; note?: string } | null>(null);
+  // ---- Find in Files (Ctrl+Shift+F): this POU's code, or the project's POUs that have the query's word (read in full)
+  const [findFiles, setFindFiles] = useState<{ text: string } | null>(null);
+  const findFilesRef = useRef<Map<string, { content: string; path: string; pou: string }>>(new Map());
+  const searchFiles = useCallback(
+    async (o: FindOptions, scope: FindScope): Promise<{ groups: FindGroup[]; note?: string; error?: string }> => {
+      const rx = findMatcher(o);
+      if ('error' in rx) return { groups: [], error: rx.error };
+      const self = parsePou(pouContent)?.name ?? pouTypeNameOf(pouContent);
+      const groups: FindGroup[] = [];
+      const own = searchCode(pouContent, rx);
+      if (own.length) groups.push({ pou: self, path: pouPath || pouFileName, self: true, matches: own });
+      findFilesRef.current = new Map();
+      if (scope === 'pou') return { groups };
+      const word = projectWordOf(o);
+      if (!word) return { groups, note: "The project's other POUs are found by a name in what is looked for (3 letters or more): this POU only." };
+      const r = await fetchProjectUses(word);
+      if (!r.files) return { groups, note: "This POU only: the project's other POUs are not at hand here (open it from XAE or the desktop app, or pick its project folder)." };
+      for (const f of r.files) {
+        if ((f.path || f.name).toLowerCase() === (pouPath || '').toLowerCase()) continue;
+        const pou = parsePou(f.content)?.name ?? f.name.replace(/\.\w+$/, '');
+        if (pou.toLowerCase() === self.toLowerCase()) continue;
+        const matches = searchCode(f.content, rx);
+        if (!matches.length) continue;
+        findFilesRef.current.set((f.path || f.name).toLowerCase(), { content: f.content, path: f.path || f.name, pou });
+        groups.push({ pou, path: f.path || f.name, matches });
+      }
+      return { groups: [groups[0]?.self ? groups[0] : null, ...groups.filter((g) => !g.self).sort((a, b) => a.pou.localeCompare(b.pou, undefined, { sensitivity: 'base' }))].filter((g): g is FindGroup => !!g) };
+    },
+    [pouContent, pouPath, pouFileName, fetchProjectUses]
+  );
+  const replaceFiles = useCallback(
+    async (o: FindOptions, _scope: FindScope, replacement: string, groups: FindGroup[]): Promise<string | null> => {
+      const rx = findMatcher(o);
+      if ('error' in rx) return rx.error;
+      // (a plain text's replacement as typed: its $ not a group)
+      const repl = o.regex ? replacement : replacement.replace(/\$/g, '$$$$');
+      let n = 0;
+      const others = groups
+        .filter((g) => !g.self)
+        .map((g) => findFilesRef.current.get((g.path ?? '').toLowerCase()))
+        .filter((x): x is { content: string; path: string; pou: string } => !!x)
+        .map((x) => {
+          const r = replaceInCode(x.content, rx, repl);
+          n += r.count;
+          return { path: x.path, content: r.xml, baseline: x.content };
+        })
+        .filter((x) => x.content !== x.baseline);
+      if (others.length) {
+        const err = await writeOtherPous(others);
+        if (err) {
+          showCopyToast(`Not replaced in the other POUs: ${err}`, 'error', 8000);
+          return err;
+        }
+      }
+      if (groups.some((g) => g.self)) {
+        const r = replaceInCode(pouContent, rx, repl);
+        if (r.count) {
+          handleReplaceSources(r.xml, null);
+          n += r.count;
+        }
+      }
+      showCopyToast(`Replaced ${n} match${n === 1 ? '' : 'es'}${others.length ? ` (${others.length} other POU${others.length === 1 ? '' : 's'} written)` : ''}${groups.some((g) => g.self) ? '; this POU: Save writes it' : ''}`, 'success', 6000);
+      return null;
+    },
+    [pouContent, writeOtherPous, handleReplaceSources, showCopyToast]
+  );
+  const openFound = useCallback(
+    (g: FindGroup, m: FindMatch) => {
+      if (g.self) {
+        const method = m.unit && getAllMethodsFromPou(pouContent).find((x) => x.toLowerCase() === m.unit.toLowerCase());
+        if (method) {
+          handleOpenInspectorPanel('method', { method: `${method}()` });
+          if (m.part === 'implementation') setCodeJump({ method, line: m.line, nonce: Date.now() });
+        } else {
+          setDockLayout((l) => activateDockTab(l, 'pou'));
+          setPouReveal({ symbol: '', nonce: Date.now(), line: m.line, part: m.part });
+        }
+        return;
+      }
+      const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
+      if (isXaeHost() || Boolean(desktop?.openPouInProject && pouPath)) void handleOpenType(g.pou, 'machinescope', m.unit || undefined);
+      else showCopyToast(`${g.pou} ${m.where} line ${m.line}: open it in the TwinCAT editor`, 'error');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, pouPath, handleOpenType, handleOpenInspectorPanel, showCopyToast]
+  );
+
   const handleCrossReference = useCallback(
     (name: string) => {
       const self = parsePou(pouContent)?.name ?? pouTypeNameOf(pouContent);
@@ -5524,6 +5613,7 @@ export const App: React.FC = () => {
       findReferences: handleFindReferences,
       callHierarchy: handleCallHierarchy,
       crossReference: handleCrossReference,
+      findInFiles: (text) => setFindFiles({ text: text ?? '' }),
       goToImplementation: handleGoToImplementation,
       problems: () => lintFindingsRef.current,
       liveValues: () => liveValuesRef.current,
@@ -6046,6 +6136,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'app:redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Y', run: () => stepHistory(false) });
     cmds.push({ id: 'app:bookmarks', group: 'Bookmarks', label: 'Show all bookmarks', run: () => setBookmarksOpen(true) });
     cmds.push({ id: 'app:shortcuts', group: 'Help', label: 'Keyboard shortcuts', hint: '?', run: () => setShortcutsOpen(true) });
+    cmds.push({ id: 'app:find-in-files', group: 'Edit', label: 'Find in Files', hint: 'Ctrl+Shift+F: this POU or the project', run: () => setFindFiles({ text: '' }) });
     cmds.push({ id: 'app:whats-new', group: 'Help', label: "What's new", hint: 'the new features, each with what it does', run: () => setWhatsNewOpen(true) });
     cmds.push({ id: 'app:release-notes', group: 'Help', label: 'Release notes', hint: "every edition's releases", run: () => setReleaseNotesOpen(true) });
     if (isXaeHost()) cmds.push({ id: 'app:xae-checks', group: 'Help', label: 'XAE checks…', hint: "the extension's features checked in one sitting", run: () => setXaeChecksOpen(true) });
@@ -11692,6 +11783,7 @@ export const App: React.FC = () => {
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
+      {findFiles && <FindInFilesDialog initial={findFiles.text} onSearch={searchFiles} onReplace={replaceFiles} onOpen={openFound} onClose={() => setFindFiles(null)} />}
       {xrefView && <CrossReferenceDialog name={xrefView.name} groups={xrefView.groups} loading={xrefView.loading} note={xrefView.note} onOpen={openXref} onClose={() => setXrefView(null)} />}
       {callView && <CallHierarchyDialog target={callView.target} mode={callView.mode} implementations={callView.implementations} load={loadCalls} note={callView.note} onOpen={openCallNode} onClose={() => setCallView(null)} />}
       {updateOffer && !codeMode && (

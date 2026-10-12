@@ -2,7 +2,8 @@
 // web edition with its project folder (Chrome / Edge's folder access, stood in for: PRG_Line calls smTable.doState(),
 // MAIN calls PRG_Line(), two POUs extend SM_TableManager with their own doState): the method's callers, a caller
 // opened to its own callers, the Calls tab; the overrides of doState listed; asked for the folder once. The Cross
-// Reference List of cmd_bUnclamp (an input): its places here and PRG_Line's write, the Writes filter
+// Reference List of cmd_bUnclamp (an input): its places here and PRG_Line's write, the Writes filter. Find in Files
+// (Ctrl+Shift+F): smTable in the project (PRG_Line's declaration and body); Replace all: PRG_Line written, its XML kept
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -24,7 +25,11 @@ const FILES = {
   p.on('pageerror', (e) => errors.push(e.message));
   await p.evaluateOnNewDocument((files) => {
     window.__picked = 0;
-    const file = (name, text) => ({ kind: 'file', name, getFile: async () => new File([text], name), queryPermission: async () => 'granted', requestPermission: async () => 'granted' });
+    window.__written = {};
+    const file = (name, text) => {
+      let content = text;
+      return { kind: 'file', name, getFile: async () => new File([content], name), queryPermission: async () => 'granted', requestPermission: async () => 'granted', createWritable: async () => ({ write: async (d) => { window.__written[name] = d; content = d; }, close: async () => {} }) };
+    };
     const dir = (name, entries) => ({ kind: 'directory', name, values: async function* () { yield* entries; }, getDirectoryHandle: async () => { throw new Error('none'); }, resolve: async () => null });
     const pouDir = dir('POUs', Object.entries(files).map(([n, t]) => file(n, t)));
     window.showDirectoryPicker = async () => {
@@ -124,6 +129,29 @@ const FILES = {
   await h.sleep(200);
   const wrows = await p.$$eval('.xref-row', (r) => r.map((x) => x.getAttribute('data-kind')));
   expect(wrows.length > 0 && wrows.every((k) => k === 'write'), `Writes: ${wrows.length}, all writes`);
+  await p.keyboard.press('Escape');
+
+  // 7. Find in Files (Ctrl+Shift+F in the POU Editor): smTable in the project; Replace all: smLine, PRG_Line written
+  await p.evaluate(() => { const ta = document.getElementById('pou-implementation-editor') ?? document.getElementById('pou-declaration-editor'); ta.focus(); ta.setSelectionRange(0, 0); });
+  await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyF'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
+  await p.waitForSelector('#find-files-dialog', { timeout: 5000 }).catch(() => {});
+  await p.evaluate(() => { const i = document.getElementById('find-files-query'); i.value = ''; });
+  await p.click('#find-files-query', { clickCount: 3 });
+  await p.keyboard.type('smTable');
+  await p.click('#find-files-word');
+  await p.keyboard.press('Enter');
+  await p.click('#find-files-run');
+  const found = await h.until(async () => { const r = await p.$$eval('.find-files-row', (x) => x.map((e) => `${e.getAttribute('data-pou')}:${e.getAttribute('data-where')}:${e.getAttribute('data-line')}`)); return r.length ? r : null; }, 8000);
+  expect(!!found && found.filter((x) => x.startsWith('PRG_Line:')).length === 5 && found.includes('PRG_Line:declaration:3'), `Find in Files: smTable in PRG_Line (${JSON.stringify(found)})`);
+  await p.type('#find-files-replace', 'smLine');
+  await p.click('#find-files-replace-all');
+  await p.waitForSelector('#find-files-preview', { timeout: 3000 }).catch(() => {});
+  const preview = await p.$eval('#find-files-preview', (e) => e.textContent).catch(() => '');
+  await p.click('#find-files-replace-confirm');
+  const written = await h.until(() => p.evaluate(() => window.__written['PRG_Line.TcPOU'] ?? null), 6000);
+  expect(/PRG_Line: 5/.test(preview) && !!written && !/smTable/.test(written) && (written.match(/smLine/g) ?? []).length === 5 && /<POU Name="PRG_Line"/.test(written), `Replace all: previewed (${preview.replace(/\s+/g, ' ').slice(0, 90)}), PRG_Line written, its XML kept`);
+  const after = await h.until(async () => ((await p.$eval('#find-files-count', (e) => e.textContent).catch(() => '')).startsWith('0 matches') ? true : null), 6000);
+  expect(!!after, 'searched again: none left');
   await p.keyboard.press('Escape');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);

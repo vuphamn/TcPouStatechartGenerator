@@ -41,6 +41,7 @@ export const SHORTCUTS: { area: string; keys: [string, string][] }[] = [
       ['F12', 'Go to Definition (another POU: at its member)'],
       ['Shift+F12', 'Find All References'],
       ['Shift+Alt+H', 'Call Hierarchy: who calls it, what it calls'],
+      ['Ctrl+Shift+F', 'Find in Files: this POU or the project (Replace all, previewed)'],
       ['Ctrl+F12', "Go to Implementation (an interface's implementations, a method's overrides)"],
       ['Shift+F2', 'Declare the name at the caret'],
       ['Shift+F6', 'Rename in place: the name at the caret (its uses highlighted)'],

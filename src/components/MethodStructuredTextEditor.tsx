@@ -1313,6 +1313,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       const ta = e.currentTarget;
       const resolved = resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd);
       if (resolved?.symbol) editorServices()?.findReferences?.(resolved.symbol);
+    } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+      // Find in Files: the selection, else the word at the caret
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+      const word = sel && !sel.includes('\n') ? sel : resolveSymbolFromText(ta.value, ta.selectionStart, ta.selectionEnd)?.symbol ?? '';
+      editorServices()?.findInFiles?.(word);
     } else if (e.key === 'F12' && (e.ctrlKey || e.metaKey)) {
       // Go to Implementation
       e.preventDefault();

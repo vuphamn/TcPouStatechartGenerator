@@ -107,7 +107,7 @@ export function renameInText(text: string, oldName: string, newName: string): { 
   return { text: out, count: hits.length };
 }
 
-interface Section {
+export interface Section {
   /** Offsets of the CDATA text in the XML */
   start: number;
   end: number;
@@ -117,7 +117,7 @@ interface Section {
   where: string;
 }
 
-function sections(pouXml: string): Section[] {
+export function sections(pouXml: string): Section[] {
   // The units: Method / Action / Transition / Property's Get / Set (by their element ranges)
   const units: { name: string; label: string; start: number; end: number }[] = [];
   const unitRx = /<(Method|Action|Transition|Property)\b[^>]*\bName="([^"]+)"[^>]*>/gi;
