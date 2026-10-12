@@ -4,7 +4,7 @@
  * implementation, as sourceLocation.ts) and may carry a fix.
  */
 
-import { isBodyMethod, resolveStateMethod, stateMethodName } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod, stateMethodName, stateMethodText } from './stateMethod.ts';
 import { getPouBody } from './pouBody.ts';
 import type { EdgeInfo } from '../types.ts';
 import { stateQualifier } from './stateNames.ts';
@@ -453,6 +453,8 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   const stateMethod = stateMethodName(pouXml).toLowerCase();
   const doState = units.find((u) => u.method?.toLowerCase() === stateMethod);
   if (!doState) return [];
+  // (said as the POU has it: doState(), Execute(), the POU's body)
+  const sm = stateMethodText(pouXml);
   const mainCase = scanMainCase(doState.code);
   if (!mainCase) return [];
   const variable = mainCase.variable;
@@ -476,7 +478,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     for (const label of b.labels) {
       if (labelled.has(label)) {
         add({ key: `duplicate-case:${label}`, rule: 'duplicate-case', stateId: label, ...at(doState, b.line),
-          message: `${label} has another branch at doState line ${labelled.get(label)!.line + 1}` });
+          message: `${label} has another branch at ${sm} line ${labelled.get(label)!.line + 1}` });
       } else labelled.set(label, b);
       if (enumMatches && !enumNames.has(label)) {
         add({ key: `unknown-case-label:${label}`, rule: 'unknown-case-label', stateId: label, ...at(doState, b.line),
@@ -510,8 +512,8 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
       add({ key: `missing-branch:${target}`, rule: 'missing-branch', stateId: target, ...at(unitOf(first), first.line),
         severity: hasElse ? 'info' : 'warning',
         message: hasElse
-          ? `${target} is entered but only handled by doState's ELSE branch`
-          : `${target} is entered but doState() has no branch for it`,
+          ? `${target} is entered but only handled by ${sm}'s ELSE branch`
+          : `${target} is entered but ${sm} has no branch for it`,
         fix: { kind: 'add-case-branch', name: target } });
     }
   }

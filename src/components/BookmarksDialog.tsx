@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Bookmark, ChevronDown, ChevronUp, Download, Pencil, Upload, X } from 'lucide-react';
 import type { BookmarkEntry } from '../utils/bookmarks.ts';
 import { BODY, ENUM_KEY, declarationOf, isDeclarationKey } from '../utils/bookmarks.ts';
+import { currentStateMethodLabel } from '../utils/stateMethod.ts';
 
 /** A section's heading: a method's implementation or declaration, the POU's, the enum */
 const sectionName = (m: string) => {
@@ -91,7 +92,7 @@ export const BookmarksDialog: React.FC<{
           <Bookmark className="w-3 h-3 text-sky-300 fill-sky-400 shrink-0" />
           {e.kind === 'state' ? <span className="font-mono text-slate-100 shrink-0">{e.state}</span> : <span className="w-9 text-right text-slate-500 font-mono shrink-0">{e.line}</span>}
           {e.note && <span className="bookmark-note shrink-0 max-w-[45%] truncate px-1.5 rounded bg-amber-950/70 text-amber-200 border border-amber-800/60 font-sans">{e.note}</span>}
-          <span className="truncate font-mono text-slate-400">{e.kind === 'state' ? (e.line > 0 ? `doState() line ${e.line}` : 'no CASE branch') : e.text}</span>
+          <span className="truncate font-mono text-slate-400">{e.kind === 'state' ? (e.line > 0 ? `${currentStateMethodLabel()} line ${e.line}` : 'no CASE branch') : e.text}</span>
         </button>
       )}
       {onNote && naming !== e.key && (

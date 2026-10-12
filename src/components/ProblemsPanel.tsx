@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertOctagon, AlertTriangle, Info, CheckCircle2, Code2, Wrench, EyeOff, Eye, Crosshair } from 'lucide-react';
 import { LINT_RULES, LintFinding, LintSeverity } from '../utils/stateMachineLint.ts';
+import { withStateMethod } from '../utils/stateMethod.ts';
 
 interface ProblemsPanelProps {
   findings: LintFinding[];
@@ -127,7 +128,7 @@ export const ProblemsPanel: React.FC<ProblemsPanelProps> = ({
                   <span className="mt-0.5">{SEVERITY[f.severity].icon}</span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-200" title={LINT_RULES[f.rule].description}>
+                      <span className="font-semibold text-slate-200" title={withStateMethod(LINT_RULES[f.rule].description)}>
                         {LINT_RULES[f.rule].title}
                       </span>
                       {f.method && f.line && (

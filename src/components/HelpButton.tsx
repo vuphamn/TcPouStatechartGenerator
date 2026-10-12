@@ -97,7 +97,7 @@ export const HelpButton: React.FC = () => {
           <section>
             <div className="font-semibold text-slate-100 text-xs mb-1">How it works</div>
             <p>
-              Parses <code className="text-sky-300">doState()</code> and <code className="text-sky-300">preProcess()</code> from the POU, matches
+              Parses the POU's state machine (a <code className="text-sky-300">CASE</code> on an enum: Kval's <code className="text-sky-300">doState()</code> and <code className="text-sky-300">preProcess()</code>, or another company's method such as <code className="text-sky-300">Execute()</code>, or the POU's body), matches
               enum sequences from the DUT or embedded UML composites, and emits clean Mermaid diagram markdown.
             </p>
             <p className="mt-1">

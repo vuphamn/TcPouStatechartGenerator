@@ -3,6 +3,7 @@ import { FileCode2, FolderOpen, FolderSearch, ListTree, ChevronDown, AlertTriang
 import { usePendingEditors } from '../utils/pendingSaves.ts';
 import { DockMenu, DockMenuItem } from './dock/DockMenu.tsx';
 import { DutMatch } from '../utils/dutMatcher.ts';
+import { currentStateMethodLabel, withStateMethod } from '../utils/stateMethod.ts';
 
 /**
  * How the enum (.TcDUT) of the loaded function block was obtained:
@@ -162,7 +163,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/50 text-[11px] font-semibold whitespace-nowrap transition-colors"
         title={
           canSearchFolder
-            ? "Find the enum: allow read access to the .TcPOU's folder; it and its subfolders are searched for the .TcDUT that declares the doState() states"
+            ? withStateMethod("Find the enum: allow read access to the .TcPOU's folder; it and its subfolders are searched for the .TcDUT that declares the doState() states")
             : 'Choose the .TcDUT file(s) with the state enum (this browser cannot search folders)'
         }
       >
@@ -177,7 +178,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         type="button"
         onClick={openMenu}
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/50 text-[11px] font-semibold whitespace-nowrap transition-colors"
-        title="No .TcDUT in the .TcPOU's folder (or its subfolders) declares the doState() states"
+        title={withStateMethod("No .TcDUT in the .TcPOU's folder (or its subfolders) declares the doState() states")}
       >
         <AlertTriangle className="w-3 h-3 shrink-0" />
         No matching .TcDUT
@@ -194,7 +195,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-900/70 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] whitespace-nowrap transition-colors min-w-0"
         title={
           shown
-            ? `State enum: ${shown.relativePath}\n${shown.matched} of ${shown.caseStates} doState() states declared` +
+            ? `State enum: ${shown.relativePath}\n${shown.matched} of ${shown.caseStates} ${currentStateMethodLabel()} states declared` +
               (dutMatches && dutMatches.length > 1 ? `\n${dutMatches.length} matching .TcDUT files: click to choose` : '')
             : `State enum: ${dutFileName}`
         }
@@ -278,7 +279,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           id="pou-inherited-chip"
           onClick={inherited.onShow}
           className="px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/40 text-sky-200 text-[11px] whitespace-nowrap hover:bg-sky-500/20"
-          title={`Its doState() and state methods are read from ${inherited.bases.join(' → ')} (EXTENDS). Click: the chain and which methods each level overrides`}
+          title={`Its ${currentStateMethodLabel()} and state methods are read from ${inherited.bases.join(' → ')} (EXTENDS). Click: the chain and which methods each level overrides`}
         >
           extends {inherited.bases[0]}
         </button>
@@ -290,7 +291,7 @@ export const SourceFilesHeaderItem: React.FC<SourceFilesHeaderItemProps> = ({
           onClick={inherited.onFind}
           disabled={!inherited.onFind}
           className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/60 text-amber-200 text-[11px] whitespace-nowrap hover:bg-amber-500/25 disabled:opacity-70"
-          title={`This POU has no doState(): it EXTENDS ${inherited.missing}, whose state machine it inherits.${inherited.error ? ` ${inherited.error}.` : ''}${inherited.onFind ? ' Choose the PLC project folder to find it.' : ''}`}
+          title={`This POU has no ${currentStateMethodLabel()}: it EXTENDS ${inherited.missing}, whose state machine it inherits.${inherited.error ? ` ${inherited.error}.` : ''}${inherited.onFind ? ' Choose the PLC project folder to find it.' : ''}`}
         >
           {inherited.onFind ? `Find ${inherited.missing}…` : `${inherited.missing} not found`}
         </button>

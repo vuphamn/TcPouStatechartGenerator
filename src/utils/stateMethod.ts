@@ -137,6 +137,21 @@ export function stateMethodName(pouXml: string): string {
 }
 
 /** A method name asked for: 'doState' is the POU's state method (Execute() in another company's POU); others as they are */
+/** The state method as said to the user: doState() (Kval's), Execute() (another company's), or the POU's body */
+export function stateMethodText(pouXml: string): string {
+  const n = stateMethodName(pouXml);
+  return isBodyMethod(pouXml, n) ? "the POU's body" : `${n}()`;
+}
+// (the loaded POU's, set by the app: for the texts of components that do not have its code)
+let currentLabel = 'doState()';
+export const setCurrentStateMethodLabel = (label: string) => {
+  currentLabel = label || 'doState()';
+};
+export const currentStateMethodLabel = () => currentLabel;
+/** A text that names doState() said with the POU's own state method (Execute() in another company's POU) */
+export const withStateMethod = (text: string, label = currentLabel) =>
+  label === 'doState()' ? text : text.replace(/\bdoState\(\)'s\b/g, `${label}'s`).replace(/\bdoState\(\)/g, label).replace(/\bdoState's\b/g, `${label}'s`).replace(/\bdoState line\b/g, `${label} line`);
+
 export function resolveStateMethod(pouXml: string, name: string): string {
   return name.toLowerCase() === 'dostate' ? stateMethodName(pouXml) : name;
 }

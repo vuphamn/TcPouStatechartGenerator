@@ -31,6 +31,7 @@ export interface ContextMenuExtraItem {
 }
 import { copyTextToClipboard } from '../utils/diagramExport.ts';
 import { hostEditorName } from '../utils/xaeHost.ts';
+import { withStateMethod } from '../utils/stateMethod.ts';
 
 interface DiagramContextMenuProps {
   x: number;
@@ -331,7 +332,7 @@ export const DiagramContextMenu: React.FC<DiagramContextMenuProps> = ({
                   onClose();
                 }}
                 className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left rounded-md hover:bg-slate-800 text-slate-300 hover:text-slate-100 transition-colors"
-                title={target.type === 'node' ? "Open doState() at this state's CASE branch in TwinCAT's editor" : "Open the code of this transition in TwinCAT's editor"}
+                title={target.type === 'node' ? withStateMethod("Open doState() at this state's CASE branch in TwinCAT's editor") : "Open the code of this transition in TwinCAT's editor"}
               >
                 <Code2 className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Show in {hostEditorName()}</span>

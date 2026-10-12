@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { usePendingSave } from '../utils/pendingSaves.ts';
+import { currentStateMethodLabel } from '../utils/stateMethod.ts';
 import {
   Code2,
   Save,
@@ -186,7 +187,7 @@ export const StateStructuredTextEditor: React.FC<StateStructuredTextEditorProps>
         <div className="flex items-center gap-1.5 min-w-0">
           <FileCode className="w-3.5 h-3.5 text-sky-400 shrink-0" />
           <div className="flex items-center gap-1 text-[11px] font-mono text-slate-300 truncate">
-            <span className="text-slate-500">doState()</span>
+            <span className="text-slate-500">{currentStateMethodLabel()}</span>
             <span className="text-slate-600">›</span>
             <span className="text-sky-400 font-semibold">{selectedStateId}</span>
           </div>
@@ -253,7 +254,7 @@ export const StateStructuredTextEditor: React.FC<StateStructuredTextEditorProps>
             <div>
               <span className="font-semibold">No CASE statement branch found</span> for{' '}
               <code className="text-amber-300 font-mono text-[11px]">{selectedStateId}</code> in{' '}
-              <code className="text-slate-300">doState()</code>.
+              <code className="text-slate-300">{currentStateMethodLabel()}</code>.
             </div>
           </div>
           <button

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { IdentifiedPouState } from '../utils/pouStateExtractor.ts';
 import { CustomNodeStylesMap } from '../types.ts';
+import { withStateMethod } from '../utils/stateMethod.ts';
 
 export interface IdentifiedStatesSidebarSectionProps {
   states: IdentifiedPouState[];
@@ -644,7 +645,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                         ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
                         : 'bg-slate-950 hover:bg-slate-800 text-slate-400 border border-slate-800/80'
                     }`}
-                    title="States with an explicit CASE branch in doState()"
+                    title={withStateMethod('States with an explicit CASE branch in doState()')}
                   >
                     Logic ({logicCount})
                   </button>
@@ -716,7 +717,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                 <AlertCircle className="w-5 h-5 text-slate-500 mb-1.5" />
                 <p className="text-xs font-medium text-slate-300">No states identified</p>
                 <p className="text-[11px] text-slate-500 mt-1 max-w-[240px]">
-                  Load a TwinCAT <code className="text-sky-400">.TcPOU</code> file containing <code className="text-sky-400">doState()</code> or state transitions.
+                  Load a TwinCAT <code className="text-sky-400">.TcPOU</code> with a state machine: a <code className="text-sky-400">CASE</code> on an enum (in Kval's <code className="text-sky-400">doState()</code>, or another method or the POU's body).
                 </p>
               </div>
             ) : filteredStates.length === 0 ? (
@@ -800,7 +801,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                             <AlertCircle className="w-3 h-3 text-rose-400" />
                           </span>
                         ) : state.hasCaseBranch ? (
-                          <span title="Implemented in doState()">
+                          <span title={withStateMethod('Implemented in doState()')}>
                             <Code2 className="w-3 h-3 text-sky-400" />
                           </span>
                         ) : (

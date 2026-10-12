@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { currentStateMethodLabel } from '../utils/stateMethod.ts';
 import {
   Flame,
   X,
@@ -410,7 +411,7 @@ export const ComplexityHeatmapPanel: React.FC<ComplexityHeatmapPanelProps> = ({
               <p>
                 Each state has a base path of <strong>1</strong>. Decision branches on outgoing transitions
                 (guards) add <strong>+1</strong>. Compound operators (<code>AND</code>, <code>OR</code>, <code>XOR</code>)
-                add <strong>+1</strong> per predicate test. Internal Structured Text logic in <code>doState()</code>
+                add <strong>+1</strong> per predicate test. Internal Structured Text logic in <code>{currentStateMethodLabel()}</code>
                 (<code>IF</code>, <code>ELSIF</code>, <code>CASE</code>) adds decision depth.
               </p>
               <div className="grid grid-cols-2 gap-1 text-[10px] pt-1">

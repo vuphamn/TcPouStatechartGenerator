@@ -379,6 +379,7 @@ import {
 import { copyTextToClipboard } from './utils/diagramExport.ts';
 import { exportDiagramVisibleAreaToPdf } from './utils/printToPdf.ts';
 import { updateStateCodeInPou, updatePreProcessCodeInPou, updateMethodCodeInPou } from './utils/pouStateEditor.ts';
+import { currentStateMethodLabel, setCurrentStateMethodLabel, stateMethodText } from './utils/stateMethod.ts';
 
 
 /** Diagram notes in localStorage: one entry per POU, "<this key>:<POU path or file name>" */
@@ -833,6 +834,8 @@ export const App: React.FC = () => {
   const baseChangedRef = useRef<((path: string, content: string) => boolean) | null>(null);
 
   // Extract all identified states and their transitions from .TcPOU and optional .TcDUT
+  // (the POU's state method as said in the texts: doState(), Execute(), the POU's body)
+  setCurrentStateMethodLabel(useMemo(() => stateMethodText(pouContent), [pouContent]));
   const identifiedStatesResult = useMemo(() => {
     return extractIdentifiedStatesFromPou(chartPou, dutContent);
   }, [chartPou, dutContent]);
@@ -1457,7 +1460,7 @@ export const App: React.FC = () => {
       } else if (forceFirst && candidates.length > 0) {
         applyDut(candidates[0]);
         setDutStatus('found');
-        showCopyToast(`${candidates[0].name} declares none of the doState() states`, 'error');
+        showCopyToast(`${candidates[0].name} declares none of the ${currentStateMethodLabel()} states`, 'error');
       } else if (!hasOwnMethod(pou, 'doState') && extendsOf(pou) && !registeredBases(pouTypeNameOf(pou)).length) {
         // (its doState() is in a base, still looked for: its enum is matched once it is found)
         applyDut(null);
@@ -1490,7 +1493,7 @@ export const App: React.FC = () => {
         showCopyToast(
           candidates.length === 0
             ? 'No .TcDUT files in the .TcPOU folder or its subfolders'
-            : `None of the ${candidates.length} .TcDUT files declares the doState() states`,
+            : `None of the ${candidates.length} .TcDUT files declares the ${currentStateMethodLabel()} states`,
           'error'
         );
       }
@@ -3298,7 +3301,7 @@ export const App: React.FC = () => {
     () =>
       setPromptRequest({
         title: 'Add a state',
-        label: 'Name (added to the enum, with an empty CASE branch in doState())',
+        label: `Name (added to the enum, with an empty CASE branch in ${currentStateMethodLabel()})`,
         placeholder: 'e.g. TABLEMANAGER_WAIT_FOR_DOOR',
         monospace: true,
         submitLabel: 'Add state',
@@ -4009,7 +4012,7 @@ export const App: React.FC = () => {
   const createState = useCallback(
     (name: string, opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string; from?: { state: string; condition: string; declarations?: NewVariable[] } }) => {
       let pou = addCaseBranch(pouContent, name);
-      if (!pou) return showCopyToast('doState() has no CASE to add the state to', 'error');
+      if (!pou) return showCopyToast(`${currentStateMethodLabel()} has no CASE to add the state to`, 'error');
       const u = updateMethodCodeInPou(pouContent, 'doState', pou);
       if (!u.success) return showCopyToast(u.error || 'Could not add the state', 'error');
       pou = u.updatedPou;
