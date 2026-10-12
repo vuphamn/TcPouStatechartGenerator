@@ -170,6 +170,7 @@ import { ShortcutsDialog } from './components/ShortcutsDialog.tsx';
 import { setUserSnippets, snippetsFromText, snippetsToText, userSnippets, BUILTIN_SNIPPETS, snippetsToFile, snippetsFromFile, mergeSnippets } from './utils/stSnippets.ts';
 import { ReferencesDialog } from './components/ReferencesDialog.tsx';
 import { CallHierarchyDialog } from './components/CallHierarchyDialog.tsx';
+import { CrossReferenceDialog, type CrossReferenceGroup } from './components/CrossReferenceDialog.tsx';
 import { PouIndex, implementationsOf, incomingCalls, instancesIn as callInstancesIn, nodeLabel, outgoingCalls, parsePou, type CallNode, type CallSite } from './utils/callHierarchy.ts';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
 import { checkExtract, checkExtractAction, checkExtractProperty, extractAction, extractMethod, extractProperty, guessExpressionType, planExtract, planExtractProperty } from './utils/extractMethod.ts';
@@ -5396,6 +5397,51 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pouContent, pouPath, handleOpenType, handleOpenInspectorPanel, showCopyToast]
   );
+  // ---- Cross Reference List: a name's places in this POU and the project's POUs that name it (read in full)
+  const [xrefView, setXrefView] = useState<{ name: string; groups: CrossReferenceGroup[]; loading: boolean; note?: string } | null>(null);
+  const handleCrossReference = useCallback(
+    (name: string) => {
+      const self = parsePou(pouContent)?.name ?? pouTypeNameOf(pouContent);
+      const enums = (dutContent.match(/\bTYPE\s+(\w+)/gi) ?? []).map((m) => m.split(/\s+/)[1]);
+      const own: CrossReferenceGroup = { pou: self, path: pouPath || pouFileName, self: true, refs: findReferences(pouContent, name, enums) };
+      setXrefView({ name, groups: [own], loading: true });
+      void fetchProjectUses(name).then((r) => {
+        const others = (r.files ?? [])
+          .filter((f) => (f.path || f.name).toLowerCase() !== (pouPath || '').toLowerCase())
+          .map((f) => {
+            // (its instances of this POU: inst.name there is this POU's name)
+            const p = parsePou(f.content);
+            const insts = p ? [...callInstancesIn(p.decl, ...p.units.map((u) => u.decl)).entries()].filter(([, t]) => t.toLowerCase() === self.toLowerCase()).map(([n]) => n) : [];
+            return { pou: p?.name ?? f.name.replace(/\.\w+$/, ''), path: f.path || f.name, refs: findReferences(f.content, name, insts) };
+          })
+          .filter((g) => g.refs.length && g.pou.toLowerCase() !== self.toLowerCase())
+          .sort((a, b) => a.pou.localeCompare(b.pou, undefined, { sensitivity: 'base' }));
+        const note = r.files ? undefined : "This POU only: the project's other POUs are not at hand here (open it from XAE or the desktop app, or pick its project folder).";
+        setXrefView((v) => (v && v.name === name ? { ...v, groups: [own, ...others], loading: false, note } : v));
+      });
+    },
+    [pouContent, dutContent, pouPath, pouFileName, fetchProjectUses]
+  );
+  const openXref = useCallback(
+    (g: CrossReferenceGroup, ref: Reference) => {
+      if (g.self) {
+        const method = ref.unit && getAllMethodsFromPou(pouContent).find((m) => m.toLowerCase() === ref.unit!.toLowerCase());
+        if (method) {
+          handleOpenInspectorPanel('method', { method: `${method}()` });
+          if (ref.part === 'implementation') setCodeJump({ method, line: ref.line, nonce: Date.now() });
+        } else {
+          setDockLayout((l) => activateDockTab(l, 'pou'));
+          setPouReveal({ symbol: xrefView?.name ?? '', nonce: Date.now(), line: ref.line, part: ref.part });
+        }
+        return;
+      }
+      const desktop = (window as unknown as { tcDesktop?: { openPouInProject?: unknown } }).tcDesktop;
+      if (isXaeHost() || Boolean(desktop?.openPouInProject && pouPath)) void handleOpenType(g.pou, 'machinescope', ref.unit ?? undefined);
+      else showCopyToast(`${g.pou} ${ref.where} line ${ref.line}: open it in the TwinCAT editor`, 'error');
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pouContent, pouPath, xrefView?.name, handleOpenType, handleOpenInspectorPanel, showCopyToast]
+  );
   const handleGoToImplementation = useCallback(
     (name: string, ctx: { method?: string; memberOf?: string }) => {
       const self = parsePou(pouContent);
@@ -5451,6 +5497,7 @@ export const App: React.FC = () => {
       declare: handleDeclareInPou,
       findReferences: handleFindReferences,
       callHierarchy: handleCallHierarchy,
+      crossReference: handleCrossReference,
       goToImplementation: handleGoToImplementation,
       problems: () => lintFindingsRef.current,
       liveValues: () => liveValuesRef.current,
@@ -5460,7 +5507,7 @@ export const App: React.FC = () => {
       showBookmarks: () => setBookmarksOpen(true),
     });
     return () => setOpenTypeHandler(null);
-  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction, handleCallHierarchy, handleGoToImplementation]);
+  }, [handleOpenType, pouPath, pouFileName, pouContent, identifiedStatesResult, handleRenameVariable, handleDeclareInPou, symbolsVersion, handleFindReferences, handleRenameMethod, handleExtractMethod, handleExtractProperty, handleExtractAction, handleCallHierarchy, handleGoToImplementation, handleCrossReference]);
   const handleBackToPreviousPou = useCallback(() => {
     const prev = pouHistory[pouHistory.length - 1];
     if (!prev) return;
@@ -11587,6 +11634,7 @@ export const App: React.FC = () => {
       {diffView && !diffView.docked && <DiffPanel key={JSON.stringify(diffView.req)} {...diffInfo(diffView.req)} onClose={closeDiff} onDock={dockDiff} />}
       {plcCopyDiff && <DiffDialog title={plcCopyDiff.title} beforeLabel="on the PLC" afterLabel="your local copy" parts={plcCopyDiff.parts} onClose={() => setPlcCopyDiff(null)} />}
       {refsView && <ReferencesDialog name={refsView.name} refs={refsView.refs} writesOnly={refsView.writesOnly} onOpen={handleOpenReference} onClose={() => setRefsView(null)} />}
+      {xrefView && <CrossReferenceDialog name={xrefView.name} groups={xrefView.groups} loading={xrefView.loading} note={xrefView.note} onOpen={openXref} onClose={() => setXrefView(null)} />}
       {callView && <CallHierarchyDialog target={callView.target} mode={callView.mode} implementations={callView.implementations} load={loadCalls} note={callView.note} onOpen={openCallNode} onClose={() => setCallView(null)} />}
       {updateOffer && !codeMode && (
         <div id="update-banner" className="fixed bottom-10 right-4 z-[70] flex items-center gap-3 px-4 py-2 rounded-lg border border-emerald-700 bg-slate-900 shadow-xl text-sm text-slate-200">

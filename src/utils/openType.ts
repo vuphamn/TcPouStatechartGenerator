@@ -41,6 +41,8 @@ export interface OpenTypeHandler {
   /** Call Hierarchy (Shift+Alt+H): who calls the name at the caret (a method, an action, a POU), what it calls; no
    * callable there: the member the caret is in (method: its name; none: the POU's body). memberOf: inst.Name's inst */
   callHierarchy?: (name: string | null, ctx: { method?: string; memberOf?: string }) => void;
+  /** Cross Reference List: every place of a name in the project (its other POUs too), by POU, reads and writes */
+  crossReference?: (name: string) => void;
   /** Go to Implementation (Ctrl+F12): an interface's implementations, a method's overrides (one: opened at once) */
   goToImplementation?: (name: string, ctx: { method?: string; memberOf?: string }) => void;
   /** Live: whether connected, the values (by path, lower case) */

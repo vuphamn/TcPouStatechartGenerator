@@ -1,7 +1,8 @@
 // Call Hierarchy (Shift+Alt+H, the editors' menu) and Go to Implementation (Ctrl+F12) in the app's code editors, the
 // web edition with its project folder (Chrome / Edge's folder access, stood in for: PRG_Line calls smTable.doState(),
 // MAIN calls PRG_Line(), two POUs extend SM_TableManager with their own doState): the method's callers, a caller
-// opened to its own callers, the Calls tab; the overrides of doState listed; asked for the folder once
+// opened to its own callers, the Calls tab; the overrides of doState listed; asked for the folder once. The Cross
+// Reference List of cmd_bUnclamp (an input): its places here and PRG_Line's write, the Writes filter
 const h = require('../lib/harness.cjs');
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
@@ -10,7 +11,7 @@ const cdata = (s) => `<![CDATA[${s}]]>`;
 const pou = (name, decl, body, members = '') => `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0.1">\n  <POU Name="${name}" Id="{9}" SpecialFunc="None">\n    <Declaration>${cdata(decl)}</Declaration>\n    <Implementation>\n      <ST>${cdata(body)}</ST>\n    </Implementation>${members}\n  </POU>\n</TcPlcObject>`;
 const method = (name, impl) => `\n    <Method Name="${name}" Id="{8}">\n      <Declaration>${cdata(`METHOD ${name} : BOOL`)}</Declaration>\n      <Implementation>\n        <ST>${cdata(impl)}</ST>\n      </Implementation>\n    </Method>`;
 const FILES = {
-  'PRG_Line.TcPOU': pou('PRG_Line', 'PROGRAM PRG_Line\nVAR\n\tsmTable : SM_TableManager;\nEND_VAR', 'smTable();\n// smTable.doState() in a comment\nIF smTable.doState() THEN\n\t;\nEND_IF'),
+  'PRG_Line.TcPOU': pou('PRG_Line', 'PROGRAM PRG_Line\nVAR\n\tsmTable : SM_TableManager;\nEND_VAR', 'smTable();\n// smTable.doState() in a comment\nIF smTable.doState() THEN\n\t;\nEND_IF\nsmTable.cmd_bUnclamp := bButton;'),
   'MAIN.TcPOU': pou('MAIN', 'PROGRAM MAIN', 'PRG_Line();'),
   'SM_TableA.TcPOU': pou('SM_TableA', 'FUNCTION_BLOCK SM_TableA EXTENDS SM_TableManager', '', method('doState', 'doState := SUPER^.doState();')),
   'SM_TableB.TcPOU': pou('SM_TableB', 'FUNCTION_BLOCK SM_TableB EXTENDS SM_TableManager', '', method('doState', 'doState := TRUE;')),
@@ -108,6 +109,22 @@ const FILES = {
   const impls = await p.$$eval('#call-hierarchy-list .call-hierarchy-row', (r) => r.map((x) => x.getAttribute('data-label'))).catch(() => []);
   expect(JSON.stringify(impls) === JSON.stringify(['SM_TableA.doState()', 'SM_TableB.doState()']), `Go to Implementation: the overrides (${JSON.stringify(impls)})`);
   await p.screenshot({ path: h.out('call-hierarchy.png') });
+
+  // 6. The Cross Reference List of cmd_bUnclamp (the POU Editor's declaration): here and in PRG_Line (a write)
+  await p.keyboard.press('Escape');
+  await p.click('#dock-tab-pou');
+  await p.waitForSelector('#pou-declaration-editor', { timeout: 10000 });
+  await h.sleep(600);
+  const xl = await menuAt('pou-declaration-editor', 'cmd_bUnclamp', 'editor-menu-cross-reference');
+  await p.waitForSelector('#xref-dialog', { timeout: 10000 }).catch(() => {});
+  const xrefDone = await h.until(() => p.evaluate(() => !document.querySelector('#xref-dialog .animate-spin') && document.querySelectorAll('.xref-pou').length > 1), 10000);
+  const xrows = await p.$$eval('.xref-row', (r) => r.map((x) => `${x.getAttribute('data-pou')}:${x.getAttribute('data-kind')}`));
+  expect(xl === 'Cross Reference List: cmd_bUnclamp' && xrefDone && xrows.some((x) => x === 'SM_TableManager:declaration') && xrows.includes('PRG_Line:write'), `the Cross Reference List: here and PRG_Line's write (${xl}; ${[...new Set(xrows)].join(', ')})`);
+  await p.click('#xref-writes');
+  await h.sleep(200);
+  const wrows = await p.$$eval('.xref-row', (r) => r.map((x) => x.getAttribute('data-kind')));
+  expect(wrows.length > 0 && wrows.every((k) => k === 'write'), `Writes: ${wrows.length}, all writes`);
+  await p.keyboard.press('Escape');
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

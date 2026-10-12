@@ -1102,6 +1102,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     }
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-all-refs', label: `Find All References to ${sym}`, title: 'Every use in the POU: its declaration, body, methods and the guards (Shift+F12)', onSelect: () => services.findReferences!(sym) });
     if (services?.findReferences && !memberOf) items.push({ id: 'editor-menu-find-writes', label: `Find All Writes to ${sym}`, title: 'Where it is set in the POU (:=, R= / S=, an output bound to it): who sets this?', onSelect: () => services.findReferences!(sym, { writesOnly: true }) });
+    if (services?.crossReference && !memberOf) items.push({ id: 'editor-menu-cross-reference', label: `Cross Reference List: ${sym}`, title: "Every place of it in the project (its other POUs too): reads and writes, as XAE's Cross Reference List", onSelect: () => services.crossReference!(sym) });
     items.push(...callItems(sym));
     // A method / property of the POU: Rename method…
     // (a property: its accessors are listed, Prop.Get / Prop.Set)
