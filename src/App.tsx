@@ -1827,6 +1827,9 @@ export const App: React.FC = () => {
   // (the conditions among them: bError = TRUE; the values shown so far, to see one become met)
   const pauseCondRef = useRef<PauseCondition[]>([]);
   const shownVarsRef = useRef<Record<string, LiveValue>>({});
+  // (the scope: each watched variable's samples, the last 10 minutes; the PLC's clock against this computer's)
+  const varHistoryRef = useRef(new Map<string, { t: number; v: LiveValue }[]>());
+  const plcClockOffsetRef = useRef(0);
   // (the list and its setter, for the canvas's state menu: set where the list is)
   const pauseOnListRef = useRef<string[]>([]);
   const setPauseOnRef = useRef<(states: string[]) => void>(() => {});
@@ -1897,6 +1900,14 @@ export const App: React.FC = () => {
     for (const s of values) {
       if (s.v === null || s.v === undefined) delete shownVarsRef.current[s.id];
       else shownVarsRef.current[s.id] = s.v;
+      // (the scope's history)
+      if (s.v === null || s.v === undefined) continue;
+      const t = Number.isFinite(s.t) ? s.t : Date.now();
+      if (Number.isFinite(s.t)) plcClockOffsetRef.current = Date.now() - s.t;
+      const list = varHistoryRef.current.get(s.id) ?? [];
+      list.push({ t, v: s.v });
+      while (list.length > 6000 || (list.length > 1 && list[0].t < t - 600_000)) list.shift();
+      varHistoryRef.current.set(s.id, list);
     }
     // (when each value last changed, PLC time: a transition right after it has it as a candidate)
     for (const s of values) {
@@ -2700,7 +2711,10 @@ export const App: React.FC = () => {
   // The watched variables, kept per POU
   const userWatchRef = useRef<string[]>([]);
   userWatchRef.current = userWatch;
+  // (a POU loaded: its list read; the save in that same render, still the previous POU's list, skipped)
+  const watchJustLoadedRef = useRef(false);
   useEffect(() => {
+    watchJustLoadedRef.current = true;
     try {
       const raw = JSON.parse(localStorage.getItem(`kss.live.watch.${pouFileName.replace(/\.TcPOU$/i, '')}`) || '[]');
       setUserWatch(Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []);
@@ -2716,7 +2730,13 @@ export const App: React.FC = () => {
     }
   };
   const userWatchKey = userWatch.join('|');
-  useEffect(() => saveUserWatch(userWatch), [userWatchKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (watchJustLoadedRef.current) {
+      watchJustLoadedRef.current = false;
+      return;
+    }
+    saveUserWatch(userWatch);
+  }, [userWatchKey, pouFileName]); // eslint-disable-line react-hooks/exhaustive-deps
   // (read by the canvas's keys, set up further down)
   const bookmarksRef = useRef<string[]>([]);
   const identifiedStatesRef = useRef<string[]>([]);
@@ -8008,6 +8028,29 @@ export const App: React.FC = () => {
   );
   // Pause on state: the states chosen for this POU (kept in this browser); Resume; said when it pauses
   const pausePou = pouFileName.replace(/\.TcPOU$/i, '') || 'POU';
+  // The scope's variables (per POU, in this browser); a new live session starts its history anew
+  const [scopeVars, setScopeVars] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      setScopeVars(JSON.parse(localStorage.getItem(`kss.scope|${pausePou.toLowerCase()}`) ?? '[]'));
+    } catch {
+      setScopeVars([]);
+    }
+  }, [pausePou]);
+  const setScopeVarsKept = useCallback(
+    (names: string[]) => {
+      setScopeVars(names);
+      try {
+        localStorage.setItem(`kss.scope|${pausePou.toLowerCase()}`, JSON.stringify(names));
+      } catch {
+        // (not kept)
+      }
+    },
+    [pausePou]
+  );
+  useEffect(() => {
+    if (liveStatus.state === 'connecting') varHistoryRef.current = new Map();
+  }, [liveStatus.state]);
   const [pauseOn, setPauseOnState] = useState<string[]>([]);
   useEffect(() => setPauseOnState(loadPauseOn(pausePou)), [pausePou]);
   // (an entry with a comparison: a condition; else a state)
@@ -11158,6 +11201,15 @@ export const App: React.FC = () => {
             }}
             onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
             watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type }))}
+            scope={{
+              watched: userWatch,
+              chosen: scopeVars,
+              onChosenChange: setScopeVarsKept,
+              history: () => varHistoryRef.current,
+              now: () => Date.now() - plcClockOffsetRef.current,
+              live: liveStatus.state === 'connected',
+              onExport: (csv) => void saveDocument(`${pausePou}_scope_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, csv, { personal: true }).then((r) => r?.path && showCopyToast(`Scope saved: ${r.path}`, 'success')),
+            }}
             onUnwatch={(n) => setUserWatch((cur) => cur.filter((x) => x !== n))}
             mode={liveMode}
             gatewayOrigin={gatewayOrigin}
