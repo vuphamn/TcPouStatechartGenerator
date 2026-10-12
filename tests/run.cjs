@@ -6,7 +6,10 @@
 //   once instead of compiling each module on first use (CI: a slow machine)
 //   --jobs <n>: the web tests n at a time (each has its own ports and browser; the app server is shared). A full local
 //   run: --jobs 2 about halves the web suite's time. A web test failed while others ran beside it is run once more
-//   alone (a slow machine's timing, not the app): it passes then, but is listed as flaky in the summary
+//   alone (a slow machine's timing, not the app): it passes then, but is listed as flaky in the summary; no test is
+//   started side by side while free memory is under 1.5 GB (its lowest is said at the end)
+//   A test that failed while the computer slept (a laptop's lid closed) is run once more. A hidden XAE (the Automation
+//   Interface's) a test left running is stopped after it
 //   --retry: the failed web tests run once more without --jobs too (CI: its shards)
 //   desktop on a locked Windows screen: skipped (Electron does not draw then: every test would time out);
 //   KSS_DESKTOP_WHEN_LOCKED=1 runs it anyway
@@ -111,6 +114,43 @@ const files = (suite, ext) =>
     ? fs.readdirSync(path.join(__dirname, suite)).filter((f) => f.endsWith(ext) && (!filter || f.includes(filter))).sort()
     : [];
 
+// The computer asleep (a laptop's lid closed, its sleep timer): this process's clock jumps, its timers stood still. Seen
+// by a heartbeat: a gap of over a minute between two beats. A test that failed while it slept is run once more
+const sleeps = [];
+// (the free memory too: its lowest said at the end; with --jobs, no test started while it is low)
+const LOW_MEMORY = 1.5 * 1024 ** 3;
+let lowestFree = require('os').freemem();
+{
+  let beat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    if (now - beat > 60000) sleeps.push({ from: beat, to: now });
+    beat = now;
+    lowestFree = Math.min(lowestFree, require('os').freemem());
+  }, 5000).unref();
+}
+/** With tests side by side: wait (up to a minute) while the computer is short of memory, then start the next */
+async function memoryToStart() {
+  for (let i = 0; i < 12 && require('os').freemem() < LOW_MEMORY; i++) await new Promise((r) => setTimeout(r, 5000));
+}
+const sleptDuring = (from, to) => sleeps.some((s) => s.from < to && s.to > from);
+
+// The hidden XAEs the Automation Interface started (TcXaeShell -Embedding: COM's, not a child of the test, so not
+// stopped with it): their ids; the ones a test left behind are stopped after it (the user's own XAE never: it has no
+// -Embedding, and one that was there before the test is not touched)
+function embeddedXaes() {
+  if (process.platform !== 'win32') return [];
+  const ps = spawnSync('powershell', ['-NoProfile', '-Command', "Get-CimInstance Win32_Process -Filter \"Name='TcXaeShell.exe'\" | Where-Object { $_.CommandLine -match '-Embedding' } | ForEach-Object { $_.ProcessId }"], { encoding: 'utf8', timeout: 30000 });
+  return (ps.stdout || '').split(/\s+/).filter(Boolean).map(Number);
+}
+const usesXae = (file) => {
+  try {
+    return /buildFromProject|TcXaeShell|xae-download\.ps1|create-project\.ps1/.test(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+};
+
 function run(cmd, args, { env, timeout, log }) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -123,7 +163,7 @@ function run(cmd, args, { env, timeout, log }) {
     child.on('exit', (code, signal) => {
       clearTimeout(timer);
       fs.closeSync(fd);
-      resolve({ code: code ?? (signal ? 1 : 0), ms: Date.now() - started });
+      resolve({ code: code ?? (signal ? 1 : 0), ms: Date.now() - started, slept: sleptDuring(started, Date.now()) });
     });
   });
 }
@@ -199,6 +239,8 @@ function failuresOf(log) {
 
 (async () => {
   const results = [];
+  // (the tests run again because the computer slept during them)
+  const sleptRuns = [];
   let app = null;
   let devApp = null;
   try {
@@ -229,6 +271,8 @@ function failuresOf(log) {
           return;
         }
         const log = path.join(LOGS, `${suite}-${name}.log`);
+        const xaeTest = suite !== 'web' && suite !== 'unit' && usesXae(path.join(__dirname, suite, f));
+        const xaesBefore = xaeTest ? embeddedXaes() : [];
         let r;
         if (suite === 'unit') {
           // Bundled like the app (TypeScript, imports from src/)
@@ -248,9 +292,22 @@ function failuresOf(log) {
           if (needsDev && !devApp) devApp = await (devStarting ??= startApp({ dev: true }));
           r = await run(process.execPath, [path.join(__dirname, suite, f)], { env: { TEST_APP_URL: needsDev ? devApp.url : app ? app.url : '' }, timeout: ownTimeout(path.join(__dirname, suite, f)) || TIMEOUT[suite] || 300000, log });
         }
+        // (a hidden XAE the test left: stopped, said in its log)
+        if (xaeTest) {
+          const left = embeddedXaes().filter((id) => !xaesBefore.includes(id));
+          for (const id of left) spawnSync('taskkill', ['/PID', String(id), '/T', '/F'], { stdio: 'ignore' });
+          if (left.length) fs.appendFileSync(log, `\n[runner] stopped ${left.length} hidden XAE it left running (pid ${left.join(', ')})\n`);
+        }
         const text = fs.readFileSync(log, 'utf8');
         // A test fails on a non-zero exit, and on any "FAIL" line (some tests only print them)
         const ok = r.code === 0 && !/^FAIL\b/m.test(text);
+        // (failed while the computer slept: its timing, not the app; run once more, the first run's log kept)
+        if (!ok && r.slept && !again) {
+          fs.copyFileSync(log, log.replace(/\.log$/, '.first.log'));
+          console.log(`  ~ ${name} failed while the computer slept: run again`);
+          sleptRuns.push(`${suite}/${name}`);
+          return runOne(f, true);
+        }
         const skipped = ok && /^skipped/m.test(text);
         results.push({ suite, name, file: f, ok, ms: r.ms, log, flaky: again && ok });
         console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s${again ? ', run again alone' : ''})`}`);
@@ -261,7 +318,10 @@ function failuresOf(log) {
       else {
         const queue = [...list];
         await Promise.all(Array.from({ length: n }, async () => {
-          while (queue.length) await runOne(queue.shift());
+          while (queue.length) {
+            await memoryToStart();
+            if (queue.length) await runOne(queue.shift());
+          }
         }));
       }
       // The web tests failed beside others (or with --retry): once more, alone; the first run's log kept (.first.log)
@@ -296,6 +356,8 @@ function failuresOf(log) {
       console.log(`::error title=${title}::${esc(found.join('\n') || 'failed (no FAIL line: see its log)')}`);
     }
   }
+  console.log(`\n(lowest free memory during the run: ${(lowestFree / 1024 ** 3).toFixed(1)} GB of ${(require('os').totalmem() / 1024 ** 3).toFixed(1)} GB)`);
+  if (sleptRuns.length) console.log(`\nrun again (the computer slept while they ran; the first run: its .first.log): ${sleptRuns.join(', ')}`);
   const flaky = results.filter((r) => r.flaky);
   if (flaky.length) console.log(`\nflaky (failed beside other tests, passed alone; the first run: its .first.log): ${flaky.map((r) => `${r.suite}/${r.name}`).join(', ')}`);
   console.log(`\n${results.length - failed.length}/${results.length} passed${failed.length ? `; failed: ${failed.map((r) => `${r.suite}/${r.name}`).join(', ')} (logs in tests/.output/logs)` : ''}`);

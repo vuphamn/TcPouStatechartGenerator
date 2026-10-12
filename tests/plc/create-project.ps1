@@ -21,7 +21,10 @@ public class KssFilter : IOleMessageFilter {
 "@
 [KssFilter]::Register()
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+# (its own XAE: the ids started now, stopped at the end if Quit leaves it running; another XAE never)
+$before = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
 $dte = New-Object -ComObject 'TcXaeShell.DTE.17.0'
+$mine = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object { $_.Id })
 try {
   Start-Sleep -Seconds 3
   $dte.SuppressUI = $true
@@ -38,4 +41,6 @@ try {
   'created'
 } finally {
   try { $dte.Quit() } catch { }
+  Start-Sleep -Seconds 3
+  foreach ($id in $mine) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
 }

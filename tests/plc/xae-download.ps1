@@ -26,7 +26,10 @@ $tcsm = [Reflection.Assembly]::LoadWithPartialName('TCatSysManagerLib')
 if (-not $tcsm) { throw 'The automation assembly of TwinCAT XAE (TCatSysManagerLib) is not installed' }
 [void][Reflection.Assembly]::LoadWithPartialName('Microsoft.CSharp')
 [void][Reflection.Assembly]::LoadFrom($Dll)
+# (its own XAE: the ids started now, stopped at the end if Quit leaves it running; another XAE never)
+$before = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
 $dte = New-Object -ComObject 'TcXaeShell.DTE.17.0'
+$mine = @(Get-Process -Name TcXaeShell -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | ForEach-Object { $_.Id })
 try {
   Start-Sleep -Seconds 3
   $dte.SuppressUI = $true
@@ -42,4 +45,6 @@ try {
   "done $($done -join ',')"
 } finally {
   try { $dte.Quit() } catch { }
+  Start-Sleep -Seconds 3
+  foreach ($id in $mine) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
 }
