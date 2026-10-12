@@ -293,7 +293,7 @@ import { CompareRecordingsDialog } from './components/CompareRecordingsDialog.ts
 import { ProjectCoverageDialog } from './components/ProjectCoverageDialog.tsx';
 import { XaeChecksDialog, type XaeCheck } from './components/XaeChecksDialog.tsx';
 import { printHtml } from './utils/printHtml.ts';
-import { INLINE_ENUM_PATH, inlineStateEnum, resolveStateMethod, stateEnumTypeOf, stateMethodLabel, stateMethodName } from './utils/stateMethod.ts';
+import { INLINE_ENUM_PATH, inlineStateEnum, resolveStateMethod, stateEnumTypeOf, stateMethodLabel, stateMethodName, STATE_METHOD } from './utils/stateMethod.ts';
 import { coverageReportHtml, projectCoverage, projectCoverageCsv, projectTransitionsCsv, type ProjectCoverage } from './utils/projectCoverage.ts';
 import { peerColor, useLivePeers, type LiveShare } from './utils/livePeers.ts';
 import { buildCopyOf, loadBuilds, rememberBuild, rememberBuilds, withSeenBuilds } from './utils/buildHistory.ts';
@@ -2676,7 +2676,7 @@ export const App: React.FC = () => {
     if (!chartPou) return out;
     // The state's whole CASE branch in doState(), as written (its first 60 lines), indentation kept relative
     const MAX = 60;
-    const doCode = getMethodCodeFromPou(chartPou, 'doState');
+    const doCode = getMethodCodeFromPou(chartPou, STATE_METHOD);
     const doLines = doCode.methodFound ? doCode.code.replace(/\r\n/g, '\n').split('\n') : [];
     const doBlank = blankComments(doLines.join('\n')).split('\n');
     for (const st of identifiedStatesResult.states) {
@@ -2986,7 +2986,7 @@ export const App: React.FC = () => {
   const stateProblems = useMemo(() => {
     const out: Record<string, { messages: string[]; names: string[] }> = {};
     if (!pouContent) return out;
-    const m = getMethodCodeFromPou(pouContent, 'doState');
+    const m = getMethodCodeFromPou(pouContent, STATE_METHOD);
     const code = m.methodFound ? blankComments(m.code).split(/\r?\n/) : [];
     for (const st of identifiedStatesResult.states) {
       const range = code.length ? caseBranchRange(code, st.id) : null;
@@ -3312,7 +3312,7 @@ export const App: React.FC = () => {
             showCopyToast(`${currentStateMethodLabel()} has no CASE to add the state to`, 'error');
             return;
           }
-          const pou = updateMethodCodeInPou(pouContent, 'doState', added.pouCode);
+          const pou = updateMethodCodeInPou(pouContent, STATE_METHOD, added.pouCode);
           if (!pou.success) {
             showCopyToast(pou.error || 'Could not add the state', 'error');
             return;
@@ -3404,7 +3404,7 @@ export const App: React.FC = () => {
             return;
           }
           if (declarations?.length) {
-            const u = updateMethodCodeInPou(pouContent, 'doState', code);
+            const u = updateMethodCodeInPou(pouContent, STATE_METHOD, code);
             const pou = u.success ? withDeclarations(u.updatedPou, declarations) : null;
             if (!u.success) showCopyToast(u.error || 'Could not add the transition', 'error');
             if (!pou) return;
@@ -3945,7 +3945,7 @@ export const App: React.FC = () => {
           label: 'Open in Method Editor',
           title: `doState() at ${state}'s CASE label (what is typed here is not kept)`,
           run: () => {
-            const m = getMethodCodeFromPou(pouContent, 'doState');
+            const m = getMethodCodeFromPou(pouContent, STATE_METHOD);
             const range = m.methodFound ? caseBranchRange(blankComments(m.code).split(/\r?\n/), state) : null;
             handleOpenInspectorPanel('method', { method: 'doState' });
             if (range) setCodeJump({ method: 'doState', line: range.start + 1, nonce: Date.now() });
@@ -4013,13 +4013,13 @@ export const App: React.FC = () => {
     (name: string, opts: { composite?: string | null; final?: boolean; at?: { x: number; y: number } | null; newComposite?: string; from?: { state: string; condition: string; declarations?: NewVariable[] } }) => {
       let pou = addCaseBranch(pouContent, name);
       if (!pou) return showCopyToast(`${currentStateMethodLabel()} has no CASE to add the state to`, 'error');
-      const u = updateMethodCodeInPou(pouContent, 'doState', pou);
+      const u = updateMethodCodeInPou(pouContent, STATE_METHOD, pou);
       if (!u.success) return showCopyToast(u.error || 'Could not add the state', 'error');
       pou = u.updatedPou;
       // From a state: the transition to it (at the end of that state's branch)
       if (opts.from) {
         const code = addTransition(pou, opts.from.state, name, opts.from.condition, stateVarName);
-        const t = code ? updateMethodCodeInPou(pou, 'doState', code) : null;
+        const t = code ? updateMethodCodeInPou(pou, STATE_METHOD, code) : null;
         if (!t?.success) return showCopyToast(`${opts.from.state} has no CASE branch in doState()`, 'error');
         pou = t.updatedPou;
         const declared = withDeclarations(pou, opts.from.declarations);
@@ -9870,8 +9870,8 @@ export const App: React.FC = () => {
   // minimap and in the canvas's search
   const changedStates = useMemo(() => {
     if (!savedSources.pou || !pouContent || savedSources.pou === pouContent) return [] as string[];
-    const before = getMethodCodeFromPou(savedSources.pou, 'doState');
-    const after = getMethodCodeFromPou(pouContent, 'doState');
+    const before = getMethodCodeFromPou(savedSources.pou, STATE_METHOD);
+    const after = getMethodCodeFromPou(pouContent, STATE_METHOD);
     if (!before.methodFound || !after.methodFound || before.code === after.code) return [] as string[];
     // (each state's branch as written, its comments too: from its label to the next one)
     const branches = (code: string) => {

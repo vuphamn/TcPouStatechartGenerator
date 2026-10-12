@@ -10,6 +10,7 @@ import { blankComments } from './stateMachineLint.ts';
 import { getMethodCodeFromPou, updateMethodCodeInPou } from './pouStateEditor.ts';
 import { caseBranchRange } from './stateEdits.ts';
 import { escapeRx, labelNames } from './sourceLocation.ts';
+import { STATE_METHOD } from './stateMethod.ts';
 
 export type ActionKind = 'entry' | 'do' | 'exit';
 
@@ -89,7 +90,7 @@ interface Branch {
 }
 
 function branchOf(pouXml: string, state: string, stateVar: string): Branch | { error: string } {
-  const m = getMethodCodeFromPou(pouXml, 'doState');
+  const m = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!m.methodFound) return { error: 'The POU has no doState()' };
   const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = m.code.split(/\r?\n/);
@@ -200,7 +201,7 @@ export function writeStateAction(pouXml: string, state: string, stateVar: string
     const shift = dos.filter((s) => s.start < at).reduce((n, s) => n + (s.end - s.start), 0);
     lines.splice(at - shift, 0, ...written);
   }
-  const u = updateMethodCodeInPou(pouXml, 'doState', lines.join(b.eol));
+  const u = updateMethodCodeInPou(pouXml, STATE_METHOD, lines.join(b.eol));
   if (!u.success) return { error: u.error || 'Could not write doState()' };
   const what = { entry: 'entry', do: 'do', exit: 'exit' }[kind];
   return { pou: u.updatedPou, message: content.length ? `${state}: ${what} action set (${content.filter((l) => l.trim()).length} line${content.length === 1 ? '' : 's'})` : `${state}: ${what} action removed` };
@@ -208,13 +209,13 @@ export function writeStateAction(pouXml: string, state: string, stateVar: string
 
 /** The state variable: the state method's CASE (machineState, mainState; State in another company's POU) */
 function stateVarOfPou(pouXml: string): string {
-  const m = pouXml ? getMethodCodeFromPou(pouXml, 'doState') : null;
+  const m = pouXml ? getMethodCodeFromPou(pouXml, STATE_METHOD) : null;
   return m?.methodFound ? m.code.match(/\bCASE\s*\(?\s*(\w+)/i)?.[1] ?? 'machineState' : 'machineState';
 }
 
 /** Every state's actions (for the diagram): the states are doState()'s CASE labels */
 export function allStateActions(pouXml: string, stateVarGiven?: string): Map<string, { entry?: string; do?: string; exit?: string }> {
-  const m = pouXml ? getMethodCodeFromPou(pouXml, 'doState') : null;
+  const m = pouXml ? getMethodCodeFromPou(pouXml, STATE_METHOD) : null;
   if (!m?.methodFound) return new Map();
   const stateVar = stateVarGiven ?? m.code.match(/\bCASE\s*\(?\s*(\w+)/i)?.[1] ?? 'machineState';
   const states = new Set<string>();
@@ -245,7 +246,7 @@ export function writeStateCode(pouXml: string, state: string, code: string): { p
   })();
   const content = trimBlank(code.replace(/\r\n/g, '\n').split('\n'));
   lines.splice(b.bodyStart, b.bodyEnd - b.bodyStart, ...content.map((l) => (l.trim() ? `${bodyIndent}${l}` : '')));
-  const u = updateMethodCodeInPou(pouXml, 'doState', lines.join(b.eol));
+  const u = updateMethodCodeInPou(pouXml, STATE_METHOD, lines.join(b.eol));
   if (!u.success) return { error: u.error || 'Could not write doState()' };
   const n = content.filter((l) => l.trim()).length;
   return { pou: u.updatedPou, message: `${state}: its code set (${n} line${n === 1 ? '' : 's'})` };

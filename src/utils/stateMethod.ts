@@ -152,6 +152,13 @@ export const currentStateMethodLabel = () => currentLabel;
 export const withStateMethod = (text: string, label = currentLabel) =>
   label === 'doState()' ? text : text.replace(/\bdoState\(\)'s\b/g, `${label}'s`).replace(/\bdoState\(\)/g, label).replace(/\bdoState's\b/g, `${label}'s`).replace(/\bdoState line\b/g, `${label} line`);
 
+/**
+ * The POU's state method, whatever it is called there (doState() in Kval's POUs, Execute() or the method, or the body,
+ * with the CASE on the state variable in another company's): the methods' readers and writers resolve it
+ * (resolveStateMethod)
+ */
+export const STATE_METHOD = 'doState';
+
 export function resolveStateMethod(pouXml: string, name: string): string {
   return name.toLowerCase() === 'dostate' ? stateMethodName(pouXml) : name;
 }

@@ -17,6 +17,7 @@ import { caseBranchRange } from './stateEdits.ts';
 import { stateQualifier } from './stateNames.ts';
 import { leading } from './transitionEdits.ts';
 import { parseParallelRegions, inferredComposites } from '../generator.ts';
+import { STATE_METHOD } from './stateMethod.ts';
 
 export const FINAL_MARK = '(* final *)';
 const REGION_RX = /^\s*\{\s*region\b\s*(?:"([^"]*)"|'([^']*)'|([^}]*?))\s*\}/i;
@@ -541,7 +542,7 @@ export function setInitialState(pouXml: string, stateVar: string, state: string)
   const code = blankComments(decl);
   const rx = new RegExp(`^([ \\t]*${escapeRx(stateVar)}\\s*:\\s*[A-Za-z_][\\w.]*)(\\s*:=[^;]*)?(\\s*;)`, 'im');
   const m = code.match(rx);
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   const q = stateQualifier(doState.methodFound ? doState.code : '', stateVar);
   if (!m || m.index === undefined) {
     // Inherited from the base FB: set in initialize(), after SUPER^.initialize()
@@ -567,7 +568,7 @@ export function setInitialState(pouXml: string, stateVar: string, state: string)
 
 /** Lines appended to a state's doState() branch, indented like it */
 function appendToBranch(pouXml: string, from: string, code: string[]): string | null {
-  const method = getMethodCodeFromPou(pouXml, 'doState');
+  const method = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!method.methodFound) return null;
   const eol = method.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = method.code.split(/\r?\n/);
@@ -593,7 +594,7 @@ export function addChoice(pouXml: string, from: string, rows: ChoiceRow[], elseT
   const valid = rows.filter((r) => r.condition.trim() && r.to);
   if (valid.length === 0) return { error: 'Give at least one condition and its target' };
   if (valid.some((r) => r.to === from) || elseTo === from) return { error: `${from} cannot go to itself: that is no transition` };
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   const q = stateQualifier(doState.methodFound ? doState.code : '', stateVar);
   const code: string[] = [];
   valid.forEach((r, i) => code.push(`${i === 0 ? 'IF' : 'ELSIF'} ${r.condition.trim()} THEN`, `\t${stateVar} := ${q}${r.to};`));
@@ -605,7 +606,7 @@ export function addChoice(pouXml: string, from: string, rows: ChoiceRow[], elseT
 
 /** Whether the state is marked final ("(* final *)" on its label) */
 export function isFinalState(pouXml: string, state: string): boolean {
-  const m = getMethodCodeFromPou(pouXml, 'doState');
+  const m = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!m.methodFound) return false;
   const lines = m.code.split(/\r?\n/);
   const range = caseBranchRange(blankComments(lines.join('\n')).split('\n'), state);
@@ -614,7 +615,7 @@ export function isFinalState(pouXml: string, state: string): boolean {
 
 /** The state marked final (or not) */
 export function setFinalState(pouXml: string, state: string, final: boolean): { pou: string } | { error: string } {
-  const m = getMethodCodeFromPou(pouXml, 'doState');
+  const m = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!m.methodFound) return { error: 'The POU has no doState()' };
   const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = m.code.split(/\r?\n/);
@@ -674,7 +675,7 @@ export interface ForkRegion {
 /** The state variables of a state's parallel regions, by state (from doState()) */
 export function regionVariables(pouXml: string, dutContent: string, stateVar: string): Map<string, { variable: string; parent: string; states: string[] }> {
   const out = new Map<string, { variable: string; parent: string; states: string[] }>();
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!doState.methodFound || !dutContent.trim()) return out;
   for (const list of parseParallelRegions(doState.code, stateVar, new Set(enumMembersOf(dutContent))).values())
     for (const r of list) for (const s of r.states) out.set(s, { variable: r.variable, parent: r.parent, states: r.states });
@@ -699,7 +700,7 @@ export function addForkJoinRegions(
   if (target === from) return { error: `${from} cannot go to itself: that is no transition` };
   const enumType = declOf(dutContent).decl.match(/\bTYPE\s+([A-Za-z_]\w*)/i)?.[1];
   if (!enumType) return { error: "The enum's TYPE was not found in the .TcDUT" };
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!doState.methodFound) return { error: 'The POU has no doState()' };
   if (!/\bbFirstPass\b/.test(blankComments(doState.code))) return { error: 'The regions start on entry: doState() needs bFirstPass (from the base FB)' };
   const used = blankComments(pouXml);
@@ -765,7 +766,7 @@ export function addForkJoinRegions(
 /** A completion transition: "<stateVar> := TARGET;" with no condition at the end of the branch (taken once the state's code has run) */
 export function addCompletionTransition(pouXml: string, from: string, to: string, stateVar: string): { pou: string } | { error: string } {
   if (from === to) return { error: `${from} cannot go to itself: that is no transition` };
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   const q = stateQualifier(doState.methodFound ? doState.code : '', stateVar);
   const pou = appendToBranch(pouXml, from, [`${stateVar} := ${q}${to}; // completion transition`]);
   return pou ? { pou } : { error: `${from} has no CASE branch in doState()` };
@@ -810,7 +811,7 @@ export function addExceptionTransition(
   stateVar: string
 ): { pou: string; where: string } | { error: string } {
   const cond = condition.trim() || 'TRUE';
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   const q = stateQualifier(doState.methodFound ? doState.code : '', stateVar);
   if (source.composite) {
     const span = compositeSpan(dutContent, source.composite);

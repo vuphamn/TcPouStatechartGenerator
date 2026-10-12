@@ -4,7 +4,7 @@
  * implementation, as sourceLocation.ts) and may carry a fix.
  */
 
-import { isBodyMethod, resolveStateMethod, stateMethodName, stateMethodText } from './stateMethod.ts';
+import { isBodyMethod, resolveStateMethod, stateMethodName, stateMethodText, STATE_METHOD } from './stateMethod.ts';
 import { getPouBody } from './pouBody.ts';
 import type { EdgeInfo } from '../types.ts';
 import { stateQualifier } from './stateNames.ts';
@@ -451,11 +451,11 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   const units = stateUnits(pouXml);
   // (the state method: doState(), or Execute() in another company's POU)
   const stateMethod = stateMethodName(pouXml).toLowerCase();
-  const doState = units.find((u) => u.method?.toLowerCase() === stateMethod);
-  if (!doState) return [];
+  const stateUnit = units.find((u) => u.method?.toLowerCase() === stateMethod);
+  if (!stateUnit) return [];
   // (said as the POU has it: doState(), Execute(), the POU's body)
   const sm = stateMethodText(pouXml);
-  const mainCase = scanMainCase(doState.code);
+  const mainCase = scanMainCase(stateUnit.code);
   if (!mainCase) return [];
   const variable = mainCase.variable;
   const findings: LintFinding[] = [];
@@ -477,11 +477,11 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   for (const b of mainCase.branches) {
     for (const label of b.labels) {
       if (labelled.has(label)) {
-        add({ key: `duplicate-case:${label}`, rule: 'duplicate-case', stateId: label, ...at(doState, b.line),
+        add({ key: `duplicate-case:${label}`, rule: 'duplicate-case', stateId: label, ...at(stateUnit, b.line),
           message: `${label} has another branch at ${sm} line ${labelled.get(label)!.line + 1}` });
       } else labelled.set(label, b);
       if (enumMatches && !enumNames.has(label)) {
-        add({ key: `unknown-case-label:${label}`, rule: 'unknown-case-label', stateId: label, ...at(doState, b.line),
+        add({ key: `unknown-case-label:${label}`, rule: 'unknown-case-label', stateId: label, ...at(stateUnit, b.line),
           message: `${label} is not declared in the enum`, fix: { kind: 'add-enum-member', name: label } });
       }
     }
@@ -529,34 +529,34 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   const lifecycle = new Set(enablingIdx >= 0 ? enumItems.slice(0, enablingIdx + 1) : [initial]);
 
   // Reachability and exits
-  const rawDoState = getMethodCodeFromPou(pouXml, 'doState').code.split(/\r?\n/);
+  const rawStateCode = getMethodCodeFromPou(pouXml, STATE_METHOD).code.split(/\r?\n/);
   // (or "// @final" on its line in the enum)
   const markedFinal = (state: string) => new RegExp(`^[ \\t]*,?[ \\t]*${escapeRx(state)}\\b[^\\n]*@final\\b`, 'im').test(dutContent || '');
   const exitsOf = (state: string) => {
     const out = new Set<string>();
     const b = labelled.get(state);
-    if (b) for (const a of allAssignments) if (a.method === doState.method && a.line >= b.line && a.line < b.endLine && a.target !== state) out.add(a.target);
+    if (b) for (const a of allAssignments) if (a.method === stateUnit.method && a.line >= b.line && a.line < b.endLine && a.target !== state) out.add(a.target);
     for (const e of edges) if (e.from === state && e.to !== state) out.add(e.to);
     return out;
   };
   for (const [state, b] of labelled) {
-    const incoming = (targets.get(state) ?? []).filter((a) => !(a.method === doState.method && branchOf(a.line) === b));
+    const incoming = (targets.get(state) ?? []).filter((a) => !(a.method === stateUnit.method && branchOf(a.line) === b));
     if (!lifecycle.has(state) && state !== initial && incoming.length === 0 && !edges.some((e) => e.to === state && e.from !== state)) {
-      add({ key: `unreachable:${state}`, rule: 'unreachable', stateId: state, ...at(doState, b.line),
+      add({ key: `unreachable:${state}`, rule: 'unreachable', stateId: state, ...at(stateUnit, b.line),
         message: `No transition in this POU leads to ${state}`, fix: { kind: 'delete-state', name: state } });
     }
     // (a final state, "(* final *)" on its label, has no way out on purpose)
-    if (!lifecycle.has(state) && exitsOf(state).size === 0 && !FINAL_LABEL.test(rawDoState[b.line] ?? '') && !markedFinal(state)) {
+    if (!lifecycle.has(state) && exitsOf(state).size === 0 && !FINAL_LABEL.test(rawStateCode[b.line] ?? '') && !markedFinal(state)) {
       const errorLike = ERROR_LIKE.test(state);
-      add({ key: `dead-end:${state}`, rule: 'dead-end', stateId: state, ...at(doState, b.line),
+      add({ key: `dead-end:${state}`, rule: 'dead-end', stateId: state, ...at(stateUnit, b.line),
         severity: errorLike ? 'info' : 'warning',
         message: errorLike ? `${state} has no way out (a reset may happen elsewhere)` : `${state} has no transition out of it` });
     }
   }
   for (const b of mainCase.branches) {
-    const self = allAssignments.find((a) => a.method === doState.method && a.line >= b.line && a.line < b.endLine && b.labels.includes(a.target));
+    const self = allAssignments.find((a) => a.method === stateUnit.method && a.line >= b.line && a.line < b.endLine && b.labels.includes(a.target));
     if (self && !findings.some((f) => f.key === `self-transition:${self.target}`)) {
-      add({ key: `self-transition:${self.target}`, rule: 'self-transition', stateId: self.target, ...at(doState, self.line),
+      add({ key: `self-transition:${self.target}`, rule: 'self-transition', stateId: self.target, ...at(stateUnit, self.line),
         message: `${self.target} assigns itself` });
     }
   }
@@ -618,7 +618,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
 
   // Parallel regions (Fork / Join): a final state each, every state entered
   // (the raw code: the regions' final states are marked in comments)
-  for (const list of parseParallelRegions(rawDoState.join('\n'), variable, new Set(enumItems)).values()) {
+  for (const list of parseParallelRegions(rawStateCode.join('\n'), variable, new Set(enumItems)).values()) {
     for (const r of list) {
       if (!r.finals.length)
         add({ key: `region-no-final:${r.parent}.${r.variable}`, rule: 'region-no-final', stateId: r.parent, message: `${r.parent}'s region ${r.variable} has no final state: its join never fires` });
@@ -641,7 +641,7 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
   }
 
   if (mainCase.elseLine === null && mainCase.endCaseLine !== null) {
-    add({ key: 'no-else', rule: 'no-else', ...at(doState, mainCase.endCaseLine), message: `CASE ${variable} OF has no ELSE branch`, ...(doState.method ? { fix: { kind: 'add-else' as const, name: variable, method: doState.method, line: mainCase.endCaseLine + 1 } } : {}) });
+    add({ key: 'no-else', rule: 'no-else', ...at(stateUnit, mainCase.endCaseLine), message: `CASE ${variable} OF has no ELSE branch`, ...(stateUnit.method ? { fix: { kind: 'add-else' as const, name: variable, method: stateUnit.method, line: mainCase.endCaseLine + 1 } } : {}) });
   }
 
   const order: Record<LintSeverity, number> = { error: 0, warning: 1, info: 2 };
@@ -653,9 +653,9 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
  * any branch: the CASE line, ELSE, code before / after the CASE)
  */
 export function stateAtLine(pouXml: string, line: number): string | null {
-  const doState = stateUnits(pouXml).find((u) => u.method?.toLowerCase() === stateMethodName(pouXml).toLowerCase());
-  if (!doState) return null;
-  const main = scanMainCase(doState.code);
+  const stateUnit = stateUnits(pouXml).find((u) => u.method?.toLowerCase() === stateMethodName(pouXml).toLowerCase());
+  if (!stateUnit) return null;
+  const main = scanMainCase(stateUnit.code);
   const branch = main?.branches.find((b) => line - 1 >= b.line && line - 1 < b.endLine);
   return branch ? branch.labels[0] : null;
 }
@@ -729,7 +729,7 @@ export function addEnumMember(dutContent: string, name: string): string | null {
 
 /** doState()'s ST code with an empty branch for the state added before the CASE's ELSE / END_CASE */
 export function addCaseBranch(pouXml: string, name: string): string | null {
-  const method = getMethodCodeFromPou(pouXml, 'doState');
+  const method = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!method.methodFound) return null;
   const eol = method.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = method.code.split(/\r?\n/);

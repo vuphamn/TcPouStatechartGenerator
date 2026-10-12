@@ -13,6 +13,7 @@ import { escapeRx, labelNames } from './sourceLocation.ts';
 import { caseBranchRange, checkNewStateName } from './stateEdits.ts';
 import { stateQualifier } from './stateNames.ts';
 import { deleteTransition, leading } from './transitionEdits.ts';
+import { STATE_METHOD } from './stateMethod.ts';
 
 const blankedLines = (lines: string[]) => blankComments(lines.join('\n')).split('\n');
 const isPreProcess = (m: string) => /^preProcess$/i.test(m);
@@ -161,7 +162,7 @@ export function deleteState(pouXml: string, dutContent: string, name: string, st
     // 1. The transitions into it: doState() (outside its own branch), then preProcess()
     const failed = new Set<string>();
     for (let guard = 0; guard < 500; guard++) {
-      const m = getMethodCodeFromPou(pou, 'doState');
+      const m = getMethodCodeFromPou(pou, STATE_METHOD);
       if (!m.methodFound) break;
       const code = blankedLines(m.code.split(/\r?\n/));
       const from = code

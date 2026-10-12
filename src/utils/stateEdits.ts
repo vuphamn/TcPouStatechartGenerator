@@ -7,6 +7,7 @@ import { addCaseBranch, addEnumMember, blankComments, enumMembers } from './stat
 import { stateQualifier } from './stateNames.ts';
 import { getMethodCodeFromPou } from './pouStateEditor.ts';
 import { escapeRx } from './sourceLocation.ts';
+import { STATE_METHOD } from './stateMethod.ts';
 
 export const isIdentifier = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
@@ -81,7 +82,7 @@ export function addState(pouXml: string, dutContent: string, name: string): { po
  * null when the source state has no branch (or doState has no CASE).
  */
 export function addTransition(pouXml: string, from: string, to: string, condition: string, stateVar: string): string | null {
-  const method = getMethodCodeFromPou(pouXml, 'doState');
+  const method = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!method.methodFound) return null;
   const eol = method.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = method.code.split(/\r?\n/);

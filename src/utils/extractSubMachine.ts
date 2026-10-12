@@ -16,6 +16,7 @@ import { blankComments, enumMembers } from './stateMachineLint.ts';
 import { escapeRx, labelNames } from './sourceLocation.ts';
 import { addEnumMemberIn, enumComposites } from './statechartEdits.ts';
 import { removeEnumMember } from './stateCopyDelete.ts';
+import { STATE_METHOD } from './stateMethod.ts';
 
 export interface ExtractSubMachinePlan {
   method: string;
@@ -50,7 +51,7 @@ export function checkExtractSubMachine(pouXml: string, dutContent: string, state
   const nameError = checkNewStateName(pouXml, dutContent, newState);
   if (nameError) return nameError;
   const members = new Set(enumMembers(dutContent));
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   if (!doState.methodFound) return 'The POU has no doState()';
   const lines = doState.code.split(/\r?\n/);
   const blanked = blankComments(doState.code).split(/\r?\n/);
@@ -95,7 +96,7 @@ export function extractSubMachine(
 ): { pou: string; dut: string; plan: ExtractSubMachinePlan } | { error: string } {
   const error = checkExtractSubMachine(pouXml, dutContent, states, method, newState, stateVar);
   if (error) return { error };
-  const doState = getMethodCodeFromPou(pouXml, 'doState');
+  const doState = getMethodCodeFromPou(pouXml, STATE_METHOD);
   const eol = doState.code.includes('\r\n') ? '\r\n' : '\n';
   const lines = doState.code.split(/\r?\n/);
   const blanked = blankComments(doState.code).split(/\r?\n/);
@@ -216,7 +217,7 @@ export function extractSubMachine(
   const doStateCode = kept.map((l) => (l.includes(':=') ? redirect(l) : l)).join(eol);
   const doStateDecl = (doState.declaration ?? 'METHOD doState\r\n').replace(/\s*$/, '') + `${eol}VAR${eol}\t${exitVar}\t: INT;\t// where ${method}() goes on (0: it runs)${eol}END_VAR${eol}`;
   let pou = pouXml;
-  const u1 = updateMethodCodeInPou(pou, 'doState', doStateCode, doStateDecl);
+  const u1 = updateMethodCodeInPou(pou, STATE_METHOD, doStateCode, doStateDecl);
   if (!u1.success) return { error: u1.error || 'Could not change doState()' };
   pou = u1.updatedPou;
   for (const m of ['preProcess', 'initialize']) {
