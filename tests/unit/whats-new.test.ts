@@ -37,6 +37,7 @@ expect(whatsNew(h, null, 2).items.length === 2, 'at most max');
 
 // 3. Shown by itself: only after an update with new features
 expect(!showWhatsNewOnStart(h, null), 'a first start: not shown');
+expect(!showWhatsNewOnStart(h, 'gone'), "a commit not in this edition's history (another edition's): not shown, what came since not known");
 expect(!showWhatsNewOnStart(h, 'a5'), 'the same build: not shown');
 const fixed: EditionHistory = { ...h, unreleased: [{ hash: 'a6', date: '2026-10-12', changes: [{ kind: 'fix', text: 'another crash' }] }, ...h.unreleased] };
 expect(!showWhatsNewOnStart(fixed, 'a5'), 'only a fix since: not shown');

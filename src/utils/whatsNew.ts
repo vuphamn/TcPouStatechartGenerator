@@ -16,8 +16,8 @@ export interface WhatsNewItem {
   area: string;
 }
 
-/** The newest commit seen here (the build last opened): localStorage, per viewer */
-export const WHATS_NEW_SEEN_KEY = 'kss.whatsNew.seen';
+/** The newest commit seen here (the build last opened): localStorage, per viewer and edition (their histories differ) */
+export const whatsNewSeenKey = (edition: string) => `kss.whatsNew.seen|${edition}`;
 
 const AREA_LABEL: Record<string, string> = {
   vscode: 'VS Code',
@@ -65,11 +65,15 @@ export function whatsNew(h: EditionHistory | undefined, seen: string | null, max
   return { items, newest, sinceSeen: at >= 0 };
 }
 
-/** Shown by itself on opening: an earlier build was opened here (a first start says nothing) and this one has new features */
+/**
+ * Shown by itself on opening: an earlier build of this edition was opened here and this one has new features since.
+ * A first start says nothing; nor does a commit not in this edition's history (another edition's, or too old to be
+ * listed): what came since is not known then
+ */
 export function showWhatsNewOnStart(h: EditionHistory | undefined, seen: string | null): boolean {
   if (!seen || !h) return false;
   const r = whatsNew(h, seen);
-  return !!r.newest && r.newest !== seen && r.items.length > 0;
+  return r.sinceSeen && !!r.newest && r.newest !== seen && r.items.length > 0;
 }
 
 /** Items grouped by area, in the order the areas first come (the newest first) */

@@ -184,7 +184,7 @@ import { BookmarksDialog } from './components/BookmarksDialog.tsx';
 import { ReleaseNotesDialog } from './components/ReleaseNotesDialog.tsx';
 import { WhatsNewDialog } from './components/WhatsNewDialog.tsx';
 import releaseHistory from 'virtual:kss-release-notes';
-import { WHATS_NEW_SEEN_KEY, showWhatsNewOnStart, whatsNew } from './utils/whatsNew.ts';
+import { showWhatsNewOnStart, whatsNew, whatsNewSeenKey } from './utils/whatsNew.ts';
 import { armState } from './utils/choiceArms.ts';
 import { COMPOSITE_PRESETS, normalizeCompositeColor } from './utils/compositeColors.ts';
 import { dutPartDiff, pouPartDiffs, type PartDiff } from './utils/pouDiff.ts';
@@ -2704,7 +2704,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     let seen: string | null = null;
     try {
-      seen = localStorage.getItem(WHATS_NEW_SEEN_KEY);
+      seen = localStorage.getItem(whatsNewSeenKey(editionOf(appHost)));
     } catch {
       return;
     }
@@ -2715,13 +2715,23 @@ export const App: React.FC = () => {
     // (a first start: nothing to tell, this build seen from now on; VS Code's code tab: never by itself)
     if (!seen || codeMode) {
       try {
-        localStorage.setItem(WHATS_NEW_SEEN_KEY, newest);
+        localStorage.setItem(whatsNewSeenKey(editionOf(appHost)), newest);
       } catch {
         // (not kept)
       }
       return;
     }
-    if (!showWhatsNewOnStart(h, seen)) return;
+    if (!showWhatsNewOnStart(h, seen)) {
+      // (nothing to tell, or not known what came since: this build seen from now on)
+      if (seen !== newest) {
+        try {
+          localStorage.setItem(whatsNewSeenKey(editionOf(appHost)), newest);
+        } catch {
+          // (not kept)
+        }
+      }
+      return;
+    }
     const t = window.setTimeout(() => setWhatsNewOpen(true), 1200);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2732,7 +2742,7 @@ export const App: React.FC = () => {
     if (!newest) return;
     whatsNewSeenRef.current = newest;
     try {
-      localStorage.setItem(WHATS_NEW_SEEN_KEY, newest);
+      localStorage.setItem(whatsNewSeenKey(editionOf(appHost)), newest);
     } catch {
       // (not kept)
     }

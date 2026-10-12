@@ -14,7 +14,8 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   const p = await browser.newPage();
   const errors = [];
   p.on('pageerror', (e) => errors.push(e.message));
-  const SEEN = 'kss.whatsNew.seen';
+  // (per edition: the web edition here)
+  const SEEN = 'kss.whatsNew.seen|web';
   const shown = () => p.$('#whats-new-dialog').then((x) => !!x);
 
   // 1. A first start: nothing shown, this build seen
