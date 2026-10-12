@@ -97,6 +97,8 @@ interface LivePanelProps {
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string }[];
+  /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
+  watchLists?: { names: string[]; where: 'project' | 'browser'; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
   scope?: React.ComponentProps<typeof LiveScope>;
   onUnwatch?: (name: string) => void;
@@ -255,6 +257,61 @@ interface LivePanelProps {
 }
 
 const REPLAY_SPEEDS = [1, 2, 5, 10, 60, 600];
+
+/** The watch lists' bar: a saved list loaded (replacing the watched ones), the watched ones saved under a name, a list removed, CSV */
+const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasVars: boolean }> = ({ names, where, onLoad, onSave, onDelete, onExport, onImport, hasVars }) => {
+  const [naming, setNaming] = useState(false);
+  const [chosen, setChosen] = useState('');
+  return (
+    <div id="live-watch-lists" className="flex flex-wrap items-center gap-1 px-2.5 py-1 text-[11px] border-b border-slate-800">
+      <span className="text-slate-400" title={where === 'project' ? 'Kept beside the PLC project (MachineScope.watch.json): commit it to share them' : 'Kept in this browser (CSV to share)'}>
+        Watch lists
+      </span>
+      <select id="live-watch-list-load" value={chosen} onChange={(e) => { setChosen(e.target.value); if (e.target.value) onLoad(e.target.value); }} className="max-w-[160px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300" title="Load a list: it replaces the watched variables">
+        <option value="">{names.length ? 'load a list…' : 'none saved yet'}</option>
+        {names.map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+      </select>
+      {naming ? (
+        <input
+          id="live-watch-list-name"
+          autoFocus
+          placeholder="its name, Enter"
+          className="w-28 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200"
+          onKeyDown={(e) => {
+            const v = e.currentTarget.value.trim();
+            if (e.key === 'Escape') setNaming(false);
+            if (e.key === 'Enter' && v) {
+              onSave(v);
+              setChosen(v);
+              setNaming(false);
+            }
+          }}
+          onBlur={() => setNaming(false)}
+        />
+      ) : (
+        <button id="live-watch-list-save" type="button" disabled={!hasVars} onClick={() => setNaming(true)} className="px-1.5 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="Save the watched variables as a named list">
+          Save as…
+        </button>
+      )}
+      {chosen && names.includes(chosen) && (
+        <button id="live-watch-list-delete" type="button" onClick={() => { onDelete(chosen); setChosen(''); }} className="px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 hover:text-rose-300 hover:bg-slate-800" title={`Remove the list ${chosen}`}>
+          Remove
+        </button>
+      )}
+      <button id="live-watch-csv" type="button" disabled={!hasVars} onClick={onExport} className="ml-auto px-1.5 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="The watched variables as CSV (a variable a line)">
+        CSV
+      </button>
+      <label className="px-1.5 py-0.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 cursor-pointer" title="Watch the variables of a CSV (its first column; a header line is skipped)">
+        Import…
+        <input id="live-watch-import" type="file" accept=".csv,.txt" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) onImport(await f.text()); e.target.value = ''; }} />
+      </label>
+    </div>
+  );
+};
 
 /** A recorded variable over the replay's span: steps (booleans high / low, numbers scaled), the position marked */
 const ReplayVarChart: React.FC<{ id: string; points: { t: number; v: number | boolean | string | null }[]; from: number; to: number; pos: number }> = ({ id, points, from, to, pos }) => {
@@ -507,6 +564,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onPeerDiff,
   onComparePlc,
   watchList,
+  watchLists,
   scope,
   onUnwatch,
   mode,
@@ -1845,6 +1903,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
         </div>
       )}
 
+      {/* Named watch lists: loaded, saved, removed; CSV out and in */}
+      {watchLists && <WatchListsBar {...watchLists} hasVars={!!watchList?.length} />}
       {/* The variables watched from the code */}
       {watchList && watchList.length > 0 && (
         <div id="live-watch-list" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5">

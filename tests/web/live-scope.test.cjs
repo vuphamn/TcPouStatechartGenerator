@@ -1,7 +1,9 @@
 const h = require('../lib/harness.cjs');
+const fs = require('fs');
 // The Live tab's scope (XAE stand-in bridge): two watched variables charted (a BOOL, a number), their values coming in
 // over time; the line drawn, the newest value shown; Pause holds the window while values keep coming; a click puts a
-// cursor (each chart's value there); the 10 s / 1 min / 5 min span; CSV of what was recorded; kept per POU
+// cursor (each chart's value there); the 10 s / 1 min / 5 min span; CSV of what was recorded; kept per POU. The named
+// watch lists (the host's MachineScope.watch.json): saved, loaded (replacing the watched ones), CSV out and in
 let fails = 0;
 const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 
@@ -19,11 +21,22 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   });
   const I = 'MAIN.mainStateMachine.smTableManager';
   let saved = null;
+  // (the host's watch lists: SM_TableManager's, one there already)
+  const lists = { Feeding: ['nFeedCount', 'bFeedOn'] };
+  const listMsgs = [];
   await p.exposeFunction('__hostPost', async (m) => {
     if (m.type === 'ready') {
       await toApp({ type: 'loadPou', source: { name: 'SM_TableManager.TcPOU', path: 'C:\\\\proj\\\\SM_TableManager.TcPOU', content: sample.pou, dutCandidates: [{ name: 'E_TableManager_States.TcDUT', relativePath: 'E_TableManager_States.TcDUT', path: 'C:\\\\proj\\\\E_TableManager_States.TcDUT', content: sample.dut }] } });
     } else if (m.type === 'liveStart') await toApp({ type: 'liveStatus', state: 'connected', message: `${I}.machineState on 5.1.2.3.1.1:851 (PLC Run)`, target: '5.1.2.3.1.1:851', plcState: 'Run', instance: I, instances: [I] });
-    else if (m.type === 'saveDocument') {
+    else if (m.type === 'watchLists') {
+      listMsgs.push(m);
+      await toApp({ type: 'watchListsResult', requestId: m.requestId, lists });
+    } else if (m.type === 'watchListSave') {
+      listMsgs.push(m);
+      if (m.vars === null) delete lists[m.name];
+      else lists[m.name] = m.vars;
+      await toApp({ type: 'watchListSaveResult', requestId: m.requestId, lists });
+    } else if (m.type === 'saveDocument') {
       saved = m;
       await toApp({ type: 'saveDocumentResult', path: `C:\\\\docs\\\\${m.name}` });
     } else if (m.type === 'projectPous') await toApp({ type: 'projectPous', project: 'P', pous: [], duts: [] });
@@ -95,6 +108,29 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   await h.sleep(200);
   expect(JSON.stringify((await charts()).map((c) => c.v)) === JSON.stringify(['cmd_bUnclamp']), 'one taken off');
   await p.screenshot({ path: h.out('live-scope.png') });
+
+  // 7. Watch lists: the watched ones saved as "Clamping"; "Feeding" loaded (the watched ones replaced); CSV out, in
+  const opts = await p.$$eval('#live-watch-list-load option', (o) => o.map((x) => x.value).filter(Boolean));
+  expect(JSON.stringify(opts) === JSON.stringify(['Feeding']) && listMsgs.some((m) => m.type === 'watchLists' && m.pouType === 'SM_TableManager'), `the project's lists: ${JSON.stringify(opts)}`);
+  await p.click('#live-watch-list-save');
+  await p.waitForSelector('#live-watch-list-name', { timeout: 3000 });
+  await p.type('#live-watch-list-name', 'Clamping');
+  await p.keyboard.press('Enter');
+  await h.until(() => (lists.Clamping ? true : null), 4000);
+  expect(JSON.stringify(lists.Clamping) === JSON.stringify(['cmd_bUnclamp', 'nFeedCount']), `saved: Clamping = ${JSON.stringify(lists.Clamping)}`);
+  await p.select('#live-watch-list-load', 'Feeding');
+  const watchedNames = () => p.evaluate(() => JSON.parse(localStorage.getItem('kss.live.watch.SM_TableManager') || '[]'));
+  const loaded = await h.until(async () => { const w = await watchedNames(); return JSON.stringify(w) === JSON.stringify(['nFeedCount', 'bFeedOn']) ? w : null; }, 4000);
+  expect(!!loaded, `loaded: the watched ones now ${JSON.stringify(await watchedNames())}`);
+  saved = null;
+  await p.click('#live-watch-csv');
+  await h.until(() => saved, 4000);
+  expect(saved?.content === 'variable\nnFeedCount\nbFeedOn' && /_watch\.csv$/.test(saved?.name ?? ''), `CSV: ${JSON.stringify(saved?.content)}`);
+  const csvIn = h.out('watch-in.csv');
+  fs.writeFileSync(csvIn, 'variable;comment\ncmd_bUnclamp;the clamp\nnFeedCount;again\nnot a name!;x\n');
+  await (await p.$('#live-watch-import')).uploadFile(csvIn);
+  const imported = await h.until(async () => { const w = await watchedNames(); return w.length === 3 ? w : null; }, 4000);
+  expect(JSON.stringify(imported) === JSON.stringify(['nFeedCount', 'bFeedOn', 'cmd_bUnclamp']), `imported: ${JSON.stringify(imported ?? (await watchedNames()))} (no repeat, no bad name)`);
 
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();

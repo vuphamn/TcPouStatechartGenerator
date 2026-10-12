@@ -210,7 +210,7 @@ import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
-import { loadProjectFiles, saveDocument } from './utils/projectFiles.ts';
+import { fetchWatchLists, loadProjectFiles, saveDocument, saveWatchList } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -8184,6 +8184,40 @@ export const App: React.FC = () => {
   );
   // Pause on state: the states chosen for this POU (kept in this browser); Resume; said when it pauses
   const pausePou = pouFileName.replace(/\.TcPOU$/i, '') || 'POU';
+  // Named watch lists (the project's file; the web edition: this browser's), read when the POU opens
+  const [watchLists, setWatchLists] = useState<{ lists: Record<string, string[]>; where: 'project' | 'browser' }>({ lists: {}, where: 'browser' });
+  useEffect(() => {
+    let alive = true;
+    void fetchWatchLists(pouPath, pausePou).then((r) => alive && setWatchLists(r));
+    return () => {
+      alive = false;
+    };
+  }, [pouPath, pausePou]);
+  const watchListsProps = {
+    names: Object.keys(watchLists.lists).sort((a, b) => a.localeCompare(b)),
+    where: watchLists.where,
+    onLoad: (name: string) => {
+      setUserWatch([...(watchLists.lists[name] ?? [])]);
+      showCopyToast(`Watching the list ${name}: ${(watchLists.lists[name] ?? []).length} variables`, 'success');
+    },
+    onSave: (name: string) =>
+      void saveWatchList(pouPath, pausePou, name, userWatch).then((r) => {
+        if (r.error) return showCopyToast(r.error, 'error', 7000);
+        setWatchLists((w) => ({ ...w, lists: r.lists ?? w.lists }));
+        showCopyToast(`Saved the list ${name}${watchLists.where === 'project' ? ' (MachineScope.watch.json, beside the PLC project)' : ' (this browser)'}`, 'success');
+      }),
+    onDelete: (name: string) =>
+      void saveWatchList(pouPath, pausePou, name, null).then((r) => {
+        if (r.error) return showCopyToast(r.error, 'error', 7000);
+        setWatchLists((w) => ({ ...w, lists: r.lists ?? {} }));
+      }),
+    onExport: () => void saveDocument(`${pausePou}_watch.csv`, ['variable', ...userWatch].join('\n'), { personal: true }).then((r) => r?.path && showCopyToast(`Saved: ${r.path}`, 'success')),
+    onImport: (text: string) => {
+      const names = text.split(/\r?\n/).map((l) => l.split(/[;,\t]/)[0].trim().replace(/^"(.*)"$/, '$1')).filter((n) => /^[A-Za-z_][\w.[\]^]*$/.test(n) && n.toLowerCase() !== 'variable');
+      setUserWatch((cur) => [...cur, ...names.filter((n) => !cur.some((c) => c.toLowerCase() === n.toLowerCase()))]);
+      showCopyToast(`Watching ${names.length} variables from the CSV`, 'success');
+    },
+  };
   // The scope's variables (per POU, in this browser); a new live session starts its history anew
   const [scopeVars, setScopeVars] = useState<string[]>([]);
   useEffect(() => {
@@ -11403,6 +11437,7 @@ export const App: React.FC = () => {
             }}
             onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
             watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type }))}
+            watchLists={watchListsProps}
             scope={{
               watched: userWatch,
               chosen: scopeVars,

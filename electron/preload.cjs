@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   machineScopeFilesAct: (pouPath, action) => ipcRenderer.invoke('tc:ms-files-act', pouPath, action),
   coverageFile: (pouPath) => ipcRenderer.invoke('tc:coverage-file', pouPath),
   coverageFileSave: (pouPath, pouType, counts) => ipcRenderer.invoke('tc:coverage-file-save', pouPath, pouType, counts),
+  watchLists: (pouPath, pouType) => ipcRenderer.invoke('tc:watch-lists', pouPath, pouType),
+  watchListSave: (pouPath, pouType, name, vars) => ipcRenderer.invoke('tc:watch-list-save', pouPath, pouType, name, vars),
   revertProjectFiles: (pouPath, paths) => ipcRenderer.invoke('tc:revert-project-files', pouPath, paths),
   /** The committed (git HEAD) version of a file: { content } or { error } */
   gitShow: (path) => ipcRenderer.invoke('tc:git-show', path),

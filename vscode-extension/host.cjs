@@ -188,6 +188,8 @@ function createHost({ pouPath, post, ui }) {
     coverageFile: ({ requestId }) => post({ type: 'coverageFileResult', requestId, ...require('../shared/coverageFile.cjs').readCoverageFile(pou) }),
     coverageFileSave: ({ requestId, pouType, counts }) => post({ type: 'coverageFileSaveResult', requestId, ...require('../shared/coverageFile.cjs').mergeCoverageFile(pou, pouType, counts) }),
     reportSettings: ({ requestId }) => post({ type: 'reportSettingsResult', requestId, ...require('../shared/reportSettings.cjs').readReportSettings(pou) }),
+    watchLists: ({ requestId, pouType }) => post({ type: 'watchListsResult', requestId, ...require('../shared/watchListsFile.cjs').readWatchLists(pou, pouType) }),
+    watchListSave: ({ requestId, pouType, name, vars }) => post({ type: 'watchListSaveResult', requestId, ...require('../shared/watchListsFile.cjs').saveWatchList(pou, pouType, name, vars ?? null) }),
     machineScopeFiles: async ({ requestId }) => post({ type: 'machineScopeFilesResult', requestId, ...(await require('../shared/projectVersions.cjs').machineScopeFiles(pou)) }),
     machineScopeFilesAct: async ({ requestId, action }) => post({ type: 'machineScopeFilesActResult', requestId, ...(await require('../shared/projectVersions.cjs').machineScopeFilesAct(pou, action)) }),
     openXaeFor: async ({ requestId, version }) => post({ type: 'openXaeForResult', requestId, ...(await require('../shared/projectVersions.cjs').openXaeForProject(pou, version)) }),

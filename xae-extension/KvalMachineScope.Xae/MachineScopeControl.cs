@@ -435,6 +435,12 @@ namespace KvalMachineScope.Xae
                     case "openXaeFor":
                         HandleOpenXaeFor(msg);
                         break;
+                    case "watchLists":
+                        HandleWatchLists(msg, false);
+                        break;
+                    case "watchListSave":
+                        HandleWatchLists(msg, true);
+                        break;
                     case "coverageFile":
                         HandleCoverageFile(msg);
                         break;
@@ -1980,6 +1986,59 @@ namespace KvalMachineScope.Xae
                 }
             }
             catch (Exception ex) when (ex is System.Security.SecurityException || ex is UnauthorizedAccessException || ex is IOException || ex is ArgumentException) { return null; }
+        }
+
+        // Named watch lists beside the PLC project (as shared/watchListsFile.cjs: the same file for every edition): per POU
+        // type, each list's name and variables. watchLists { pouType } → watchListsResult { lists }; watchListSave
+        // { pouType, name, vars (null: removed) } → watchListSaveResult { lists, error? }
+        private const string WatchListsFile = "MachineScope.watch.json";
+
+        private void HandleWatchLists(Dictionary<string, object> msg, bool save)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var type = msg.TryGetValue("pouType", out var t) ? t as string : null;
+            var name = msg.TryGetValue("name", out var n) ? n as string : null;
+            var vars = msg.TryGetValue("vars", out var v) ? (v as object[])?.OfType<string>().ToList() : null;
+            var pou = _pouPath;
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                string error = null;
+                var dir = string.IsNullOrEmpty(pou) ? null : FolderWith(pou, ".plcproj");
+                var pous = new SortedDictionary<string, SortedDictionary<string, List<string>>>(StringComparer.Ordinal);
+                var file = dir == null ? null : Path.Combine(dir, WatchListsFile);
+                var json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                try
+                {
+                    if (file != null && File.Exists(file) && json.DeserializeObject(File.ReadAllText(file)) is Dictionary<string, object> root && root.TryGetValue("pous", out var p) && p is Dictionary<string, object> types)
+                        foreach (var ty in types)
+                        {
+                            if (!System.Text.RegularExpressions.Regex.IsMatch(ty.Key, @"^\w+$") || !(ty.Value is Dictionary<string, object> lists)) continue;
+                            var mine = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+                            foreach (var l in lists) if (l.Value is object[] a) mine[l.Key] = a.OfType<string>().Distinct().Take(200).ToList();
+                            pous[ty.Key] = mine;
+                        }
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is InvalidOperationException) { }
+                var valid = type != null && System.Text.RegularExpressions.Regex.IsMatch(type, @"^\w+$");
+                if (save)
+                {
+                    if (dir == null || !valid || string.IsNullOrEmpty(name) || name.Length > 60 || name.IndexOfAny("\\/:*?\"<>|\r\n".ToCharArray()) >= 0) error = "No PLC project (.plcproj) above the POU, or not a list name";
+                    else
+                    {
+                        if (!pous.TryGetValue(type, out var lists)) pous[type] = lists = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+                        if (vars == null) lists.Remove(name);
+                        else lists[name] = vars.Where(x => System.Text.RegularExpressions.Regex.IsMatch(x, @"^[A-Za-z_][\w.\[\]^]{0,249}$")).Distinct().Take(200).ToList();
+                        if (lists.Count == 0) pous.Remove(type);
+                        try { File.WriteAllText(file, json.Serialize(new Dictionary<string, object> { ["note"] = "Watch lists of Kval MachineScope (the Live tab's Watched): each POU type's named lists of variables. Commit it with the project to share them.", ["pous"] = pous }) + "\n"); }
+                        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException) { error = "Not written: " + ex.Message; }
+                    }
+                }
+                var result = valid && pous.TryGetValue(type, out var found) ? found.ToDictionary(x => x.Key, x => (object)x.Value) : new Dictionary<string, object>();
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = save ? "watchListSaveResult" : "watchListsResult", requestId, lists = result, error });
+            });
         }
 
         // The transitions each state machine's PLC took, kept beside the PLC project (as shared/coverageFile.cjs: the same

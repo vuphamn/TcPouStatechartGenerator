@@ -224,6 +224,45 @@ export async function fetchCoverageFile(pouPath: string | undefined): Promise<Re
   return d?.coverageFile && pouPath ? d.coverageFile(pouPath).then((r) => r.pous).catch(() => null) : null;
 }
 
+// Named watch lists beside the PLC project (MachineScope.watch.json, shared with the team); the web edition: this
+// browser's (and CSV to share)
+const webLists = (pouType: string): Record<string, string[]> => {
+  try {
+    const v = JSON.parse(localStorage.getItem(`kss.watchLists|${pouType.toLowerCase()}`) ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+};
+/** A POU type's named watch lists, and where they are kept */
+export async function fetchWatchLists(pouPath: string | undefined, pouType: string): Promise<{ lists: Record<string, string[]>; where: 'project' | 'browser' }> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ lists?: Record<string, string[]> }>({ type: 'watchLists', pouType }, 'watchListsResult');
+    if (r) return { lists: r.lists ?? {}, where: 'project' };
+  }
+  const d = (window as unknown as { tcDesktop?: { watchLists?: (p: string, t: string) => Promise<{ lists: Record<string, string[]> }> } }).tcDesktop;
+  if (d?.watchLists && pouPath) return { lists: (await d.watchLists(pouPath, pouType).catch(() => null))?.lists ?? {}, where: 'project' };
+  return { lists: webLists(pouType), where: 'browser' };
+}
+/** A list saved (vars null: removed) → the lists now, or { error } */
+export async function saveWatchList(pouPath: string | undefined, pouType: string, name: string, vars: string[] | null): Promise<{ lists?: Record<string, string[]>; error?: string }> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ lists?: Record<string, string[]>; error?: string }>({ type: 'watchListSave', pouType, name, vars }, 'watchListSaveResult');
+    if (r) return r;
+  }
+  const d = (window as unknown as { tcDesktop?: { watchListSave?: (p: string, t: string, n: string, v: string[] | null) => Promise<{ lists?: Record<string, string[]>; error?: string }> } }).tcDesktop;
+  if (d?.watchListSave && pouPath) return d.watchListSave(pouPath, pouType, name, vars).catch((e: unknown) => ({ error: String(e) }));
+  const lists = webLists(pouType);
+  if (vars === null) delete lists[name];
+  else lists[name] = vars;
+  try {
+    localStorage.setItem(`kss.watchLists|${pouType.toLowerCase()}`, JSON.stringify(lists));
+  } catch {
+    return { error: 'Not kept (this browser keeps nothing)' };
+  }
+  return { lists };
+}
+
 /** This POU type's counts merged into the project's file (the highest count wins): the type's counts there now */
 export async function saveCoverageFile(pouPath: string | undefined, pouType: string, counts: CoverageCounts): Promise<CoverageCounts | null> {
   if (isXaeHost()) return (await hostAsk<{ counts?: CoverageCounts }>({ type: 'coverageFileSave', pouType, counts }, 'coverageFileSaveResult'))?.counts ?? null;
