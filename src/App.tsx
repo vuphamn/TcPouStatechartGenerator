@@ -249,7 +249,7 @@ import { SimulationPanel, SimTransition } from './components/SimulationPanel.tsx
 import type { ContextMenuExtraItem } from './components/DiagramContextMenu.tsx';
 import { LivePanel, LiveSettings, LiveStatus } from './components/LivePanel.tsx';
 import { EMPTY_LIVE_SESSION, LiveSession, MAX_LIVE_TRANSITIONS, applyLiveSamples, enumValueMap, liveStateName, recheckInModel } from './utils/liveView.ts';
-import { firstEntryInto, loadPauseOn, replayStopIn, savePauseOn } from './utils/pauseOnState.ts';
+import { conditionMetIn, firstEntryInto, loadPauseOn, parsePauseCondition, replayConditionStopIn, replayStopIn, savePauseOn, type PauseCondition } from './utils/pauseOnState.ts';
 import {
   buildEnumTables,
   buildGuardEdges,
@@ -1823,12 +1823,15 @@ export const App: React.FC = () => {
   // Pause on state: the states chosen (lower case); a hold: the live view kept at the moment one was entered, the
   // samples since kept for Resume (the PLC runs on)
   const pauseOnRef = useRef<Set<string>>(new Set());
+  // (the conditions among them: bError = TRUE; the values shown so far, to see one become met)
+  const pauseCondRef = useRef<PauseCondition[]>([]);
+  const shownVarsRef = useRef<Record<string, LiveValue>>({});
   // (the list and its setter, for the canvas's state menu: set where the list is)
   const pauseOnListRef = useRef<string[]>([]);
   const setPauseOnRef = useRef<(states: string[]) => void>(() => {});
   const holdRef = useRef<{ on: boolean; at: number; values: { t: number; value: number }[]; vars: { id: string; t: number; v: LiveValue | null }[] }>({ on: false, at: 0, values: [], vars: [] });
   const lastLiveValueRef = useRef<number | null>(null);
-  const [liveHold, setLiveHold] = useState<{ state: string; at: number } | null>(null);
+  const [liveHold, setLiveHold] = useState<{ state: string; at: number; condition?: boolean } | null>(null);
   const handleLiveValues = useCallback((events: { t: number; value: number }[]) => {
     // (a live session's samples while a replay shows: recorded, not shown)
     recorderRef.current.addValues(events);
@@ -1873,6 +1876,26 @@ export const App: React.FC = () => {
       holdRef.current.vars.push(...after);
       values = values.filter((s) => !after.includes(s));
       if (!values.length) return;
+    } else {
+      // (Pause on a condition: the values up to the one that met it shown, the rest kept for Resume)
+      // (one value at a time against the ones before it: the first that meets a condition it did not)
+      const running: Record<string, LiveValue> = { ...shownVarsRef.current };
+      for (let i = 0; i < values.length && pauseCondRef.current.length; i++) {
+        const s = values[i];
+        const met = conditionMetIn([s], pauseCondRef.current, running);
+        if (s.v === null || s.v === undefined) delete running[s.id];
+        else running[s.id] = s.v;
+        if (!met) continue;
+        const at = Number.isFinite(s.t) ? s.t : Date.now();
+        holdRef.current = { on: true, at, values: [], vars: values.slice(i + 1) };
+        values = values.slice(0, i + 1);
+        setLiveHold({ state: met.text, at, condition: true });
+        break;
+      }
+    }
+    for (const s of values) {
+      if (s.v === null || s.v === undefined) delete shownVarsRef.current[s.id];
+      else shownVarsRef.current[s.id] = s.v;
     }
     // (when each value last changed, PLC time: a transition right after it has it as a candidate)
     for (const s of values) {
@@ -7884,7 +7907,9 @@ export const App: React.FC = () => {
         if (!r || !r.playing) return r;
         const pos = Math.min(r.to, r.pos + 100 * r.speed);
         // (Pause on state: stopped where the chosen state is entered)
-        const stop = replayStopIn(r.rec.values, r.pos, pos, liveNamesRef.current, pauseOnRef.current);
+        const byState = replayStopIn(r.rec.values, r.pos, pos, liveNamesRef.current, pauseOnRef.current);
+        const byCond = replayConditionStopIn(r.rec.vars, r.pos, pos, pauseCondRef.current);
+        const stop = byState && byCond ? (byCond.t < byState.t ? { t: byCond.t, state: byCond.text } : byState) : byState ?? (byCond ? { t: byCond.t, state: byCond.text } : null);
         if (stop) return { ...r, pos: stop.t, playing: false, pausedOn: stop.state };
         return { ...r, pos, playing: pos < r.to, pausedOn: undefined };
       });
@@ -7932,13 +7957,25 @@ export const App: React.FC = () => {
   const pausePou = pouFileName.replace(/\.TcPOU$/i, '') || 'POU';
   const [pauseOn, setPauseOnState] = useState<string[]>([]);
   useEffect(() => setPauseOnState(loadPauseOn(pausePou)), [pausePou]);
-  pauseOnRef.current = new Set(pauseOn.map((s) => s.toLowerCase()));
+  // (an entry with a comparison: a condition; else a state)
+  const pauseConds = useMemo(() => pauseOn.map((s) => (/[<>=]/.test(s) ? parsePauseCondition(s) : null)).filter((c): c is PauseCondition => !!c && !('error' in c)), [pauseOn]);
+  pauseOnRef.current = new Set(pauseOn.filter((s) => !/[<>=]/.test(s)).map((s) => s.toLowerCase()));
+  pauseCondRef.current = pauseConds;
   pauseOnListRef.current = pauseOn;
   const setPauseOn = useCallback(
     (list: string[]) => {
-      setPauseOnState(list);
-      savePauseOn(pausePou, list);
+      // (a condition: checked, its variable watched (its values come in only then))
+      const added = list.filter((s) => !pauseOnListRef.current.includes(s) && /[<>=]/.test(s));
+      for (const s of added) {
+        const c = parsePauseCondition(s);
+        if ('error' in c) return void showCopyToast(c.error, 'error', 6000);
+        setUserWatch((cur) => (cur.some((n) => n.toLowerCase() === c.id) ? cur : [...cur, c.name]));
+      }
+      const clean = list.map((s) => (/[<>=]/.test(s) ? (parsePauseCondition(s) as PauseCondition).text : s));
+      setPauseOnState(clean);
+      savePauseOn(pausePou, clean);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [pausePou]
   );
   setPauseOnRef.current = setPauseOn;
@@ -7964,13 +8001,13 @@ export const App: React.FC = () => {
   }, [liveStatus.state]);
   useEffect(() => {
     if (!liveHold) return;
-    showCopyToast(`Paused: the PLC entered ${liveHold.state}. The view holds that moment (Resume in the Live tab); the PLC runs on.`, 'success', 8000);
+    showCopyToast(liveHold.condition ? `Paused: ${liveHold.state} became true. The view holds that moment (Resume in the Live tab); the PLC runs on.` : `Paused: the PLC entered ${liveHold.state}. The view holds that moment (Resume in the Live tab); the PLC runs on.`, 'success', 8000);
     if (notifyOn) void notifyStuck(`Kval MachineScope: ${liveHold.state} entered`, 'Paused on this state: the view holds that moment', `kss-pause-${liveHold.state}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveHold]);
   const replayPausedOn = replay?.pausedOn;
   useEffect(() => {
-    if (replayPausedOn) showCopyToast(`Replay paused: ${replayPausedOn} entered (Pause on state). Play goes on.`, 'success', 6000);
+    if (replayPausedOn) showCopyToast(/[<>=]/.test(replayPausedOn) ? `Replay paused: ${replayPausedOn} became true (Pause on). Play goes on.` : `Replay paused: ${replayPausedOn} entered (Pause on state). Play goes on.`, 'success', 6000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayPausedOn]);
   // The PLC switcher while live: stop, take the remembered PLC's settings, go live again once they are in state

@@ -119,6 +119,35 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await h.sleep(300);
   expect(off === 'Do not pause when entered' && (await chips()).length === 0, `and off again: ${off}`);
 
+  // 7. A condition (Pause on … when): typed, its variable watched; live, held where it became true (not while it was)
+  await p.evaluate(() => document.getElementById('dock-tab-live')?.click());
+  await h.sleep(300);
+  // (the replay ended first: Stop)
+  await p.click('#live-stop-btn').catch(() => {});
+  await p.waitForSelector('#live-start-btn', { timeout: 5000 }).catch(() => {});
+  await p.type('#live-pause-when', 'cmd_bUnclamp == TRUE');
+  await p.keyboard.press('Enter');
+  await h.sleep(400);
+  const condChips = await chips();
+  const watchedNow = await p.evaluate(() => document.body.innerText.includes('cmd_bUnclamp'));
+  expect(JSON.stringify(condChips) === JSON.stringify(['cmd_bUnclamp = TRUE']) && watchedNow, `a condition: ${JSON.stringify(condChips)}, its variable watched (${watchedNow})`);
+  await p.click('#live-start-btn');
+  await h.sleep(600);
+  const t1 = Date.UTC(2026, 8, 21, 8, 0, 0);
+  await toApp({ type: 'liveVars', values: [{ id: 'cmd_bunclamp', t: t1, v: false }] });
+  await h.sleep(400);
+  expect(!(await p.$('#live-hold-banner')), 'FALSE: not paused');
+  await toApp({ type: 'liveVars', values: [{ id: 'cmd_bunclamp', t: t1 + 1000, v: true }] });
+  const condBanner = await h.until(() => p.$eval('#live-hold-banner', (e) => e.textContent).catch(() => null), 4000);
+  expect(/cmd_bUnclamp = TRUE became true/.test(condBanner ?? ''), `became TRUE: held (${(condBanner ?? '').trim().slice(0, 80)})`);
+  await p.click('#live-hold-resume');
+  await toApp({ type: 'liveVars', values: [{ id: 'cmd_bunclamp', t: t1 + 2000, v: true }] });
+  await h.sleep(500);
+  expect(!(await p.$('#live-hold-banner')), 'still TRUE: not paused again (it has to become true)');
+  await p.click('#live-stop-btn').catch(() => {});
+  await p.click('.live-pause-chip .live-pause-remove');
+  await h.sleep(200);
+
   expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
   console.log(`${fails} failures`);

@@ -60,3 +60,78 @@ export function replayStopIn(values: { t: number; value: number }[], pos: number
   const s = values[lo + i];
   return { t: s.t, state: liveStateName(s.value, names) };
 }
+
+// ---- Pause on a condition: a watched variable compared with a value (bError = TRUE, nCount > 10, eMode <> Auto)
+
+export type PauseOp = '=' | '<>' | '<' | '>' | '<=' | '>=';
+export interface PauseCondition {
+  /** As typed (shown) */
+  text: string;
+  /** The variable as watched (its name), its live id (lower case) */
+  name: string;
+  id: string;
+  op: PauseOp;
+  value: boolean | number | string;
+}
+
+/** "bError = TRUE", "fbAxis.nCount >= 10", "eMode <> E_Mode.Auto" → the condition, or { error } */
+export function parsePauseCondition(text: string): PauseCondition | { error: string } {
+  const m = /^\s*([A-Za-z_][\w.[\]]*)\s*(<>|<=|>=|==|!=|=|<|>)\s*(.+?)\s*$/.exec(text);
+  if (!m) return { error: 'A variable, a comparison (=, <>, <, >, <=, >=) and a value: bError = TRUE' };
+  const op = (m[2] === '!=' ? '<>' : m[2] === '==' ? '=' : m[2]) as PauseOp;
+  const raw = m[3].replace(/^'(.*)'$/, '$1');
+  const value: boolean | number | string = /^(TRUE|FALSE)$/i.test(raw) ? /^TRUE$/i.test(raw) : /^[-+]?\d+(\.\d+)?(e[-+]?\d+)?$/i.test(raw) ? Number(raw) : raw;
+  return { text: `${m[1]} ${op} ${m[3]}`, name: m[1], id: m[1].toLowerCase(), op, value };
+}
+
+/** Does a value meet the condition (an enum's value by its name, the type's name before it not counted) */
+export function meetsCondition(c: PauseCondition, v: boolean | number | string | null | undefined): boolean {
+  if (v === null || v === undefined) return false;
+  const num = (x: unknown) => (typeof x === 'boolean' ? (x ? 1 : 0) : typeof x === 'number' ? x : Number.NaN);
+  if (typeof c.value === 'boolean' || typeof v === 'boolean') {
+    const a = typeof v === 'boolean' ? v : /^TRUE$/i.test(String(v)) || num(v) === 1;
+    const b = typeof c.value === 'boolean' ? c.value : /^TRUE$/i.test(String(c.value)) || num(c.value) === 1;
+    return c.op === '=' ? a === b : c.op === '<>' ? a !== b : false;
+  }
+  if (typeof c.value === 'number' && Number.isFinite(Number(v))) {
+    const a = Number(v);
+    const b = c.value;
+    return { '=': a === b, '<>': a !== b, '<': a < b, '>': a > b, '<=': a <= b, '>=': a >= b }[c.op];
+  }
+  const tail = (s: string) => s.split('.').pop()!.toLowerCase();
+  const eq = tail(String(v)) === tail(String(c.value));
+  return c.op === '=' ? eq : c.op === '<>' ? !eq : false;
+}
+
+/**
+ * Live values arriving: the first condition that becomes met (it was not met before: an edge, not a level) → it, or
+ * null; before: the values shown so far (by id)
+ */
+export function conditionMetIn(values: { id: string; v: boolean | number | string | null }[], conditions: PauseCondition[], before: Record<string, boolean | number | string>): PauseCondition | null {
+  if (!conditions.length) return null;
+  const now = { ...before };
+  for (const s of values) {
+    const was = now[s.id];
+    if (s.v === null) delete now[s.id];
+    else now[s.id] = s.v;
+    for (const c of conditions) if (c.id === s.id && !meetsCondition(c, was) && meetsCondition(c, s.v)) return c;
+  }
+  return null;
+}
+
+/** A replay's step from pos to next: the first moment a condition becomes met (its recorded values) → { t, text }, or null */
+export function replayConditionStopIn(vars: { id: string; t: number; v: boolean | number | string | null }[], pos: number, next: number, conditions: PauseCondition[]): { t: number; text: string } | null {
+  if (!conditions.length || next <= pos) return null;
+  const ids = new Set(conditions.map((c) => c.id));
+  const at: Record<string, boolean | number | string> = {};
+  for (const s of vars) {
+    if (s.t > next) break;
+    if (!ids.has(s.id)) continue;
+    const was = at[s.id];
+    if (s.v === null) delete at[s.id];
+    else at[s.id] = s.v;
+    if (s.t <= pos) continue;
+    for (const c of conditions) if (c.id === s.id && !meetsCondition(c, was) && meetsCondition(c, s.v)) return { t: s.t, text: c.text };
+  }
+  return null;
+}

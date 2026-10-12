@@ -236,7 +236,7 @@ interface LivePanelProps {
   pauseStates?: string[];
   onPauseOnChange?: (states: string[]) => void;
   /** Held at a chosen state's entry (live): the state, its time; Resume shows what came since */
-  liveHold?: { state: string; at: number } | null;
+  liveHold?: { state: string; at: number; condition?: boolean } | null;
   onResumeLive?: () => void;
   onReplayPlay?: (playing: boolean) => void;
   onReplaySeek?: (pos: number) => void;
@@ -1018,7 +1018,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               className="max-w-[220px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300"
               title="Pause when the PLC enters this state"
             >
-              <option value="">{pauseOn.length ? '+ another state…' : 'a state… (pause when entered)'}</option>
+              <option value="">{pauseOn.length ? '+ a state…' : 'a state… (pause when entered)'}</option>
               {pauseStates
                 .filter((s) => !pauseOn.includes(s))
                 .map((s) => (
@@ -1027,13 +1027,34 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   </option>
                 ))}
             </select>
+            <input
+              id="live-pause-when"
+              placeholder="+ when… (bError = TRUE)"
+              className="w-44 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200 font-mono"
+              title="Pause when a condition becomes true: a variable, a comparison (=, <>, <, >, <=, >=) and a value (it is watched); Enter adds it"
+              onKeyDown={(e) => {
+                const v = e.currentTarget.value.trim();
+                if (e.key === 'Enter' && v) {
+                  onPauseOnChange([...pauseOn, v]);
+                  e.currentTarget.value = '';
+                }
+              }}
+            />
           </div>
         )}
         {liveHold && (
           <div id="live-hold-banner" className="flex items-center gap-2 rounded border border-amber-700 bg-amber-950/50 px-2 py-1.5 text-[11px] text-amber-100">
             <OctagonPause className="w-3.5 h-3.5 shrink-0 text-amber-400" />
             <span className="min-w-0">
-              Paused: the PLC entered <span className="font-mono font-semibold">{liveHold.state}</span>. The view holds that moment; the PLC runs on.
+              {liveHold.condition ? (
+                <>
+                  Paused: <span className="font-mono font-semibold">{liveHold.state}</span> became true. The view holds that moment; the PLC runs on.
+                </>
+              ) : (
+                <>
+                  Paused: the PLC entered <span className="font-mono font-semibold">{liveHold.state}</span>. The view holds that moment; the PLC runs on.
+                </>
+              )}
             </span>
             <button id="live-hold-resume" type="button" onClick={onResumeLive} className="ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 rounded bg-amber-700 hover:bg-amber-600 text-white" title="Show what came since, and go on">
               <Play className="w-3 h-3" /> Resume
