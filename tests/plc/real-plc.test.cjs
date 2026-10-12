@@ -11,6 +11,8 @@
 //      only code; a declaration changed and a RETAIN variable added here: said; the libraries' versions (none missing)
 //  4b. the XAE extension's Download and start (its PlcDownload, from its built DLL, xae-extension/build.ps1) on a hidden
 //      XAE: the PLC stopped first; downloaded and started: it runs, the project's latest build
+//  4c. the Library Manager's edits built by XAE: Tc2_Standard pinned to a version installed here, a library added (one
+//      installed here: Tc2_Utilities, else another): built, no errors; the .plcproj as it was afterwards
 //  5. the PLC stopped at the end (its configuration stays active)
 //   KSS_REAL_PLC=1 node tests/run.cjs plc
 const h = require('../lib/harness.cjs');
@@ -237,6 +239,27 @@ END_CASE
     const cmp2 = compareBuilds(await plcCompileId(c).catch(() => null), projectBuilds(plcproj));
     expect(/done KssPlc/.test(out) && after.adsStateStr === 'Run' && cmp2?.state === 'newest', `XAE's Download and start (PlcDownload): ${out.trim().split(/\r?\n/).slice(-3).join(' | ')}; the PLC ${after.adsStateStr}, ${cmp2?.state}`);
   } else console.log('-    XAE Download and start: the XAE extension is not built (xae-extension/build.ps1; skipped)');
+
+  // 4c. The Library Manager's edits, built
+  {
+    const { setLibraryVersion, addLibrary, installedLibraries, editPlcproj, compareVersions } = require(path.join(R, 'vscode-extension', 'libraryEdit.cjs'));
+    const { readLibraries } = require(path.join(R, 'vscode-extension', 'plcTree.cjs'));
+    const kept = fs.readFileSync(plcproj);
+    try {
+      const std = readLibraries(plcproj).find((l) => l.name === 'Tc2_Standard');
+      const pin = [...(std?.installed ?? [])].sort(compareVersions)[0];
+      const have = new Set(readLibraries(plcproj).map((l) => l.name.toLowerCase()));
+      const extra = installedLibraries().find((l) => l.name === 'Tc2_Utilities' && !have.has('tc2_utilities')) ?? installedLibraries().find((l) => /^Tc2_/.test(l.name) && !have.has(l.name.toLowerCase()) && l.vendor === 'Beckhoff Automation GmbH');
+      if (std && pin) editPlcproj(plcproj, (x) => setLibraryVersion(x, std, pin));
+      if (extra) editPlcproj(plcproj, (x) => addLibrary(x, { name: extra.name, vendor: extra.vendor }));
+      const now = readLibraries(plcproj);
+      const libBuilt = await b.buildFromProject(null, { file: plcproj, onStep });
+      expect(!!pin && !!extra && now.find((l) => l.name === 'Tc2_Standard')?.used === pin && now.some((l) => l.name === extra.name && !l.missing) && libBuilt.ok && libBuilt.errors === 0, `the Library Manager's edits built: Tc2_Standard at ${pin}, ${extra?.name} added (${libBuilt.fatal ?? `${libBuilt.errors} errors`})`);
+    } finally {
+      fs.writeFileSync(plcproj, kept);
+      b.closeXae();
+    }
+  }
 
   // 5. Stopped
   const end = await stopPlc(c);
