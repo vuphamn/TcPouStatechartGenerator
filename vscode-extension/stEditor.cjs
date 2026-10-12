@@ -967,6 +967,78 @@ function register(context) {
       await vscode.commands.executeCommand('vscode.diff', left, u, `${path.posix.basename(u.path)} (HEAD ↔ now)`);
     })
   );
+
+  // Compare with Saved and All Changes (as MachineScope's Diff and All changes): a section as its file has it on disk
+  // beside the edits not saved yet; every section with unsaved edits, in one multi-file diff
+  const SAVED_SCHEME = 'twincat-st-saved';
+  const savedChanged = new vscode.EventEmitter();
+  const savedText = (a) => {
+    try {
+      return parseSource(fs.readFileSync(a.file, 'utf8')).members.find((m) => m.key === a.key)?.[a.section]?.text ?? '(this section is not in the saved file)';
+    } catch (err) {
+      return `(the file could not be read: ${err?.message ?? err})`;
+    }
+  };
+  /** Lines added and removed from a to b (a longest common subsequence; long sections: by line counts) */
+  const lineChanges = (a, b) => {
+    const x = a.split(/\r?\n/);
+    const y = b.split(/\r?\n/);
+    if (x.length * y.length > 4e6) {
+      const set = new Set(x);
+      const added = y.filter((l) => !set.has(l)).length;
+      return { added, removed: Math.max(0, x.length - (y.length - added)) };
+    }
+    let prev = new Array(y.length + 1).fill(0);
+    for (let i = 1; i <= x.length; i++) {
+      const cur = new Array(y.length + 1).fill(0);
+      for (let j = 1; j <= y.length; j++) cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+      prev = cur;
+    }
+    const same = prev[y.length];
+    return { added: y.length - same, removed: x.length - same };
+  };
+  const unsavedSections = () => vscode.workspace.textDocuments.filter((d) => d.uri.scheme === SCHEME && d.isDirty);
+  context.subscriptions.push(
+    savedChanged,
+    vscode.workspace.registerTextDocumentContentProvider(SAVED_SCHEME, { onDidChange: savedChanged.event, provideTextDocumentContent: (uri) => savedText(addressOf(uri.query)) }),
+    // (saved, or the file changed on disk: the saved side read again)
+    vscode.workspace.onDidSaveTextDocument((d) => {
+      if (d.uri.scheme === SCHEME) savedChanged.fire(d.uri.with({ scheme: SAVED_SCHEME }));
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.compareSaved', async (uri) => {
+      const u = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
+      if (!u || u.scheme !== SCHEME) return void vscode.window.showInformationMessage('Compare with Saved: open a TwinCAT section first');
+      const left = u.with({ scheme: SAVED_SCHEME });
+      savedChanged.fire(left);
+      const doc = await vscode.workspace.openTextDocument(left);
+      await setLanguage(doc).catch(() => {});
+      await vscode.commands.executeCommand('vscode.diff', left, u, `${path.posix.basename(u.path)} (saved ↔ now)`);
+      const now = (await vscode.workspace.openTextDocument(u)).getText();
+      return { section: path.posix.basename(u.path), ...lineChanges(doc.getText(), now) };
+    }),
+    vscode.commands.registerCommand('kvalMachineScope.allChanges', async (opts) => {
+      const dirty = unsavedSections();
+      const list = dirty.map((d) => {
+        const a = addressOf(d.uri.query);
+        // (FB_X.Execute (Impl): the section's own name says its POU)
+        return { label: path.posix.basename(d.uri.path).replace(/\.st$/, ''), uri: d.uri, ...lineChanges(savedText(a), d.getText()) };
+      });
+      if (!list.length) {
+        if (!opts?.quiet) void vscode.window.showInformationMessage('All Changes: no TwinCAT section has unsaved edits');
+        return [];
+      }
+      for (const d of dirty) savedChanged.fire(d.uri.with({ scheme: SAVED_SCHEME }));
+      const cmds = await vscode.commands.getCommands(true);
+      if (cmds.includes('vscode.changes')) {
+        // (VS Code's multi-file diff: each section's saved text beside its edits)
+        await vscode.commands.executeCommand('vscode.changes', `TwinCAT: All Changes (${list.length} section${list.length === 1 ? '' : 's'})`, list.map((x) => [x.uri, x.uri.with({ scheme: SAVED_SCHEME }), x.uri]));
+      } else if (!opts?.quiet) {
+        const pick = await vscode.window.showQuickPick(list.map((x) => ({ label: x.label, description: `+${x.added} −${x.removed}`, x })), { title: 'TwinCAT: All Changes (not saved yet)', placeHolder: 'Compare a section with its saved text' });
+        if (pick) await vscode.commands.executeCommand('kvalMachineScope.compareSaved', pick.x.uri);
+      }
+      return list.map(({ label, added, removed }) => ({ label, added, removed }));
+    })
+  );
   return { openMember, activeFile, fileOf, sectionUriOf, revealInSource };
 }
 

@@ -401,6 +401,18 @@
         "title": "What's New",
         "category": "Kval MachineScope",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "kvalMachineScope.compareSaved",
+        "title": "Compare with Saved",
+        "category": "TwinCAT",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "kvalMachineScope.allChanges",
+        "title": "All Changes (not saved yet)",
+        "category": "TwinCAT",
+        "icon": "$(diff-multiple)"
       }
     ],
     "keybindings": [
@@ -490,6 +502,16 @@
           "group": "navigation@10"
         },
         {
+          "command": "kvalMachineScope.compareSaved",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@11"
+        },
+        {
+          "command": "kvalMachineScope.allChanges",
+          "when": "resourceScheme == twincat-st",
+          "group": "navigation@11"
+        },
+        {
           "command": "kvalMachineScope.compareCommitted",
           "when": "resourceScheme == twincat-st",
           "group": "navigation@11"
@@ -540,6 +562,11 @@
           "command": "kvalMachineScope.writeValues",
           "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn && kvalMachineScope.prepared",
           "group": "navigation@3"
+        },
+        {
+          "command": "kvalMachineScope.compareSaved",
+          "when": "resourceScheme == twincat-st && activeEditorIsDirty",
+          "group": "navigation@90"
         }
       ],
       "view/title": [
@@ -701,6 +728,16 @@
           "command": "kvalMachineScope.addWatch",
           "when": "resourceScheme == twincat-st && kvalMachineScope.loggedIn",
           "group": "twincat@4"
+        },
+        {
+          "command": "kvalMachineScope.compareSaved",
+          "when": "resourceScheme == twincat-st",
+          "group": "twincat@9"
+        },
+        {
+          "command": "kvalMachineScope.allChanges",
+          "when": "resourceScheme == twincat-st",
+          "group": "twincat@9"
         },
         {
           "command": "kvalMachineScope.compareCommitted",

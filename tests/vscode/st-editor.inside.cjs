@@ -281,6 +281,19 @@ exports.run = async function run() {
     const committed = await waitFor(() => vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'twincat-st-git' && /Execute \(Impl\)\.st$/.test(d.uri.path)), 5000);
     expect(committed && /CASE State OF/.test(committed.getText()) && !/noSuchVar/.test(committed.getText()) && /noSuchVar/.test(exDoc.getText()), `Compare with Committed: HEAD's Execute() (without the edits) beside it (${committed ? committed.getText().split(/\r?\n/)[0] : 'not opened'})`);
 
+    // Compare with Saved (the edits not saved yet beside the file's text) and All Changes (every section with them)
+    const dirtyNow = exDoc.isDirty;
+    if (!dirtyNow) {
+      const ed = await vscode.window.showTextDocument(exDoc);
+      await ed.edit((e) => e.insert(new vscode.Position(0, 0), '// an unsaved note\n'));
+    }
+    const cs = await vscode.commands.executeCommand('kvalMachineScope.compareSaved', exDoc.uri);
+    const savedSide = await waitFor(() => vscode.workspace.textDocuments.find((d) => d.uri.scheme === 'twincat-st-saved' && /Execute \(Impl\)\.st$/.test(d.uri.path)), 5000);
+    expect(exDoc.isDirty && savedSide && savedSide.getText() !== exDoc.getText() && cs?.added > 0, `Compare with Saved: the saved Execute() beside the edits (${JSON.stringify(cs)}; it was ${dirtyNow ? 'dirty' : 'made dirty'})`);
+    const allCh = (await vscode.commands.executeCommand('kvalMachineScope.allChanges', { quiet: true })) ?? [];
+    expect(allCh.some((x) => /Execute \(Impl\)/.test(x.label) && x.added > 0), `All Changes: ${JSON.stringify(allCh)}`);
+    for (const t of vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => /saved ↔ now|All Changes/.test(t.label))) await vscode.window.tabGroups.close(t);
+
     // 19. Add Method / Add POU (their answers given): the method in the file, opened; the POU file and the .plcproj
     const added = await vscode.commands.executeCommand('kvalMachineScope.addMethod', { name: 'Reset', type: '' });
     const pouNow = fs.readFileSync(pou, 'utf8');
@@ -393,7 +406,7 @@ exports.run = async function run() {
     const wnTab = await waitFor(() => vscode.window.tabGroups.all.flatMap((g) => g.tabs).find((t) => /What's New/.test(t.label)), 5000);
     expect(history.every((c) => c.changes.some((x) => x.kind === 'feat')) && wn?.items === 3 && wn.sinceSeen && wnTab, `What's New: the 3 features since ${history[3]?.hash} in its panel (${JSON.stringify(wn)}, ${wnTab?.label})`);
     if (wnTab) await vscode.window.tabGroups.close(wnTab);
-    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference', 'whatsNew'].map((c) => `kvalMachineScope.${c}`);
+    const want = ['build', 'login', 'logout', 'start', 'stop', 'pickTarget', 'pickBuild', 'goToMember', 'openStructuredText', 'openXml', 'buildOnlineChange', 'prepareValue', 'writeValues', 'pickInstance', 'refreshSolution', 'addLibrary', 'setLibraryVersion', 'removeLibrary', 'onlineChangeDetails', 'crossReference', 'whatsNew', 'compareSaved', 'allChanges'].map((c) => `kvalMachineScope.${c}`);
     expect(want.every((c) => cmds.includes(c)), `the TwinCAT commands (${want.filter((c) => !cmds.includes(c)).join(', ') || 'all there'})`);
   } catch (err) {
     results.push([false, `threw: ${err?.stack ?? err}`]);

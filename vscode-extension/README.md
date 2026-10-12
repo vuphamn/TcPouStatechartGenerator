@@ -86,6 +86,10 @@ file access.
 - **Hover:** a name's declaration (its line, with its comment) and where it is declared.
 - **Compare with Committed (git HEAD)** (an editor tab's menu, the right-click menu): the section beside its committed
   version, in VS Code's diff editor.
+- **Compare with Saved** (the editor's title bar while it has unsaved edits, the menus), as MachineScope's Diff: the
+  section as its file has it on disk beside your edits. **All Changes (not saved yet)**: every TwinCAT section with
+  unsaved edits in one multi-file diff (VS Code's; an older VS Code: a list, each opening its Compare with Saved).
+  The code tab has MachineScope's own **Diff** button.
 - **Snippets** (`kval-st` and `st`): `tcsm` a state machine (`CASE` on an enum), `tcstate` / `tcstatet` a branch (with a
   timeout), `tcfb` a function block, `tcmethod`, `tcprop`, `tcton`, `tcrtrig`, `tcfor`.
 - **Add POU… / Add DUT…** (the **Solution** view's title, a folder's buttons): its kind (function block, program,
