@@ -74,6 +74,18 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await h.sleep(500);
   expect(!(await p.$('#live-hold-banner')), 'not live: no hold');
 
+  // 3b. The code that ran (live coverage "On the chart"): in the Method Editor's doState, the CASE labels of the
+  // states left and the assignments of the transitions taken marked in the gutter
+  await p.click('#live-coverage-on-chart').catch(() => {});
+  await h.sleep(300);
+  await p.evaluate(() => document.getElementById('dock-tab-method')?.click());
+  await p.waitForSelector('#method-implementation-editor', { timeout: 10000 }).catch(() => {});
+  const executed = await h.until(async () => { const x = await p.$$eval('.st-executed', (e) => e.map((m) => m.getAttribute('title'))); return x.length ? x : null; }, 6000);
+  expect(!!executed && executed.some((t) => /TABLEMANAGER_IDLE_FEED_OFF → TABLEMANAGER_CLAMPPING: taken/.test(t)) && executed.some((t) => /TABLEMANAGER_CLAMPPING: left/.test(t)), `the code that ran: ${(executed ?? []).length} lines marked (${(executed ?? []).slice(0, 3).join(' | ')})`);
+  await p.click('#live-coverage-on-chart').catch(() => {});
+  await p.evaluate(() => document.getElementById('dock-tab-live')?.click());
+  await h.sleep(300);
+
   // 4. A replay stops at CLAMPED's entry; Play goes on to the end
   const rec = { kind: 'kval-machinescope-recording', version: 1, pou: 'SM_TableManager', instance: I, stateVar: 'machineState', values: ['IDLE_FEED_OFF', 'CLAMPPING', 'CLAMPED', 'UNCLAMP_START', 'IDLE_FEED_OFF'].map((s, i) => ({ t: t0 + i * 5000, value: sample.values[S(s)] })), vars: [], watched: {} };
   const file = h.out('pause.kssrec.json');

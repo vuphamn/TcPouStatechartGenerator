@@ -41,6 +41,8 @@ export interface OpenTypeHandler {
   /** Call Hierarchy (Shift+Alt+H): who calls the name at the caret (a method, an action, a POU), what it calls; no
    * callable there: the member the caret is in (method: its name; none: the POU's body). memberOf: inst.Name's inst */
   callHierarchy?: (name: string | null, ctx: { method?: string; memberOf?: string }) => void;
+  /** The code that ran (live coverage shown: "On the chart"): a method's lines → what ran there; null: none shown */
+  executedLines?: (method: string, code: string) => Map<number, import('./executedLines.ts').ExecutedLine> | null;
   /** Type Hierarchy: a type's bases, interfaces and the types extending it (none given: this POU's) */
   typeHierarchy?: (name?: string) => void;
   /** Find in Files (Ctrl+Shift+F): the dialog, with a text to find (the selection or the word at the caret) */

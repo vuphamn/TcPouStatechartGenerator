@@ -2248,6 +2248,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               onKeyDown={handleEditorKeyDown}
               onContextMenu={handleImplContextMenu}
               bookmarkLines={bookmarkLines}
+              executedLines={editorServices()?.executedLines?.(cleanMethodName, code) ?? null}
               onBookmarkClick={toggleBookmarkAt}
               inlineValues={inlineValues}
               completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}

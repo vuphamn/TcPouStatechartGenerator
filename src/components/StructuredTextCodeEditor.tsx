@@ -114,6 +114,8 @@ export interface StructuredTextCodeEditorProps {
   onContextMenu?: (e: React.MouseEvent<HTMLTextAreaElement>) => void;
   /** Bookmarked lines (1-based original line numbers): a mark in the gutter */
   bookmarkLines?: number[];
+  /** The lines that ran (live coverage): a green mark in the gutter, what ran in its title */
+  executedLines?: Map<number, { n: number; title: string; kind: string }> | null;
   /** A line's own hover text (the Enum Editor: a member's CASE branch), when no problem or name says more */
   lineTitle?: (line: number, text: string) => string | null;
   /** A click on the bookmark margin of a line (its mark, or the faint one a row shows on hover): toggle it */
@@ -151,6 +153,7 @@ export const StructuredTextCodeEditor = forwardRef<
       activeFindMatchIndex,
       onContextMenu,
       bookmarkLines,
+      executedLines,
       onBookmarkClick,
       lineTitle,
       completionScope,
@@ -780,6 +783,9 @@ export const StructuredTextCodeEditor = forwardRef<
 
                 {/* Right: Line Number and Find Match Indicator */}
                 <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
+                  {entry.originalLineNumber !== null && executedLines?.has(entry.originalLineNumber) && (
+                    <span className={`st-executed shrink-0 w-1.5 h-1.5 rounded-full ${executedLines.get(entry.originalLineNumber)!.kind === 'state' ? 'bg-emerald-300' : 'bg-emerald-500'}`} data-executed-line={entry.originalLineNumber} title={executedLines.get(entry.originalLineNumber)!.title} />
+                  )}
                   {entry.originalLineNumber !== null && bookmarkSet.has(entry.originalLineNumber) ? (
                     <span
                       className={`st-bookmark shrink-0 text-sky-300 ${onBookmarkClick ? 'cursor-pointer hover:text-sky-100' : ''}`}

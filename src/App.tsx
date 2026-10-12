@@ -173,6 +173,7 @@ import { CallHierarchyDialog } from './components/CallHierarchyDialog.tsx';
 import { CrossReferenceDialog, type CrossReferenceGroup } from './components/CrossReferenceDialog.tsx';
 import { FindInFilesDialog, type FindGroup, type FindScope } from './components/FindInFilesDialog.tsx';
 import { TypeHierarchyDialog, type TypeEntry } from './components/TypeHierarchyDialog.tsx';
+import { executedLines } from './utils/executedLines.ts';
 import { findMatcher, projectWordOf, replaceInCode, searchCode, type FindMatch, type FindOptions } from './utils/findInFiles.ts';
 import { PouIndex, implementationsOf, incomingCalls, instancesIn as callInstancesIn, nodeLabel, outgoingCalls, parsePou, type CallNode, type CallSite } from './utils/callHierarchy.ts';
 import { deadLines, lintVariables, plannedCall } from './utils/variableLint.ts';
@@ -5487,6 +5488,8 @@ export const App: React.FC = () => {
 
   // ---- Find in Files (Ctrl+Shift+F): this POU's code, or the project's POUs that have the query's word (read in full)
   const [findFiles, setFindFiles] = useState<{ text: string } | null>(null);
+  // (the code that ran: the coverage shown on the chart, its transitions; set where they are)
+  const executedRef = useRef<{ rows: { from: string; to: string; n: number }[]; stateVar: string } | null>(null);
   const findFilesRef = useRef<Map<string, { content: string; path: string; pou: string }>>(new Map());
   const searchFiles = useCallback(
     async (o: FindOptions, scope: FindScope): Promise<{ groups: FindGroup[]; note?: string; error?: string }> => {
@@ -5673,6 +5676,7 @@ export const App: React.FC = () => {
       crossReference: handleCrossReference,
       findInFiles: (text) => setFindFiles({ text: text ?? '' }),
       typeHierarchy: handleTypeHierarchy,
+      executedLines: (_method, code) => (executedRef.current ? executedLines(code, executedRef.current.stateVar, executedRef.current.rows) : null),
       goToImplementation: handleGoToImplementation,
       problems: () => lintFindingsRef.current,
       liveValues: () => liveValuesRef.current,
@@ -7322,6 +7326,7 @@ export const App: React.FC = () => {
   };
   // (on the chart: the never-taken ones dashed and dimmed, while the Coverage strip's toggle is on)
   const [coverageOnChart, setCoverageOnChart] = useState(false);
+  executedRef.current = coverageOnChart && liveCoverage ? { rows: liveCoverage.rows, stateVar: stateVarName } : null;
   const coverageHighlight = useMemo(
     () => (coverageOnChart && liveCoverage ? { never: liveCoverage.rows.filter((r) => r.n === 0).map((r) => ({ from: r.from, to: r.to })) } : null),
     [coverageOnChart, liveCoverage]
