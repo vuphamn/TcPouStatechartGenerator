@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope, X, OctagonPause } from 'lucide-react';
+import { LiveScope } from './LiveScope.tsx';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import { GatewayPlcOverview, GatewayPlcState, RenewLicenseSteps, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import type { PlcActionEntry } from '../utils/plcActionLog.ts';
@@ -96,6 +97,8 @@ interface LivePanelProps {
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
   watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string }[];
+  /** The scope: the watched variables charted over time (live) */
+  scope?: React.ComponentProps<typeof LiveScope>;
   onUnwatch?: (name: string) => void;
   /**
    * xae: TwinCAT XAE with a POU from an open TwinCAT project; desktop: the desktop app (ADS straight to the PLC);
@@ -502,6 +505,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onPeerDiff,
   onComparePlc,
   watchList,
+  scope,
   onUnwatch,
   mode,
   defaultVia = 'link',
@@ -1849,6 +1853,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
           ))}
         </div>
       )}
+      {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (
