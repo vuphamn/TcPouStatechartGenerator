@@ -111,8 +111,8 @@ function register(context, { activeFile, sectionUriOf }) {
     const rm = rmOf(p);
     bar.rm.text = `$(versions) Build ${rm || '(Default)'}`;
     bar.rm.tooltip = `XAE's Remote Manager: the TwinCAT build that builds ${p.name}${rm ? '' : ' (XAE\'s default)'}: click to choose another`;
-    bar.plc.text = plcText(s);
-    bar.plc.tooltip = `${p.plcProject || p.name} on ${t?.name ?? '?'}: ${s.loggedIn ? 'logged in' : 'not logged in'}; PLC ${s.plc ?? 'not reachable'}${s.code ? `; ${CODE_TEXT[s.code.state] ?? ''}` : ''}\nClick: Login, Logout, Start, Stop`;
+    bar.plc.text = `${plcText(s)}${s.ocWarn ? ' $(warning)' : ''}`;
+    bar.plc.tooltip = `${p.plcProject || p.name} on ${t?.name ?? '?'}: ${s.loggedIn ? 'logged in' : 'not logged in'}; PLC ${s.plc ?? 'not reachable'}${s.code ? `; ${CODE_TEXT[s.code.state] ?? ''}` : ''}${s.ocWarn ? `\n⚠ The last comparison with the PLC's project: ${s.ocWarn} changed, an online change may not be possible (Online Change view)` : ''}\nClick: Login, Logout, Start, Stop`;
     void vscode.commands.executeCommand('setContext', 'kvalMachineScope.loggedIn', s.loggedIn);
     void vscode.commands.executeCommand('setContext', 'kvalMachineScope.plcRunning', s.plc === 'Run');
     void vscode.commands.executeCommand('setContext', 'kvalMachineScope.busy', !!s.busy);
@@ -349,6 +349,9 @@ function register(context, { activeFile, sectionUriOf }) {
   /** The comparison in the Online Change view; its lines for a confirmation */
   function showOnlineChange(p, risks) {
     onlineChangeView.show({ risks, dir: path.dirname(p.plcproj), at: new Date(), target: targetOf(p)?.name ?? 'the PLC' });
+    // (tasks or libraries changed: an online change may not do; said on the PLC's status bar item until the next one)
+    stateOf(p.root).ocWarn = risks.tasks.length || risks.libraries.length ? [risks.tasks.length ? 'tasks' : null, risks.libraries.length ? 'libraries' : null].filter(Boolean).join(' and ') : null;
+    render();
     const lines = riskLines(risks);
     return lines.length ? lines : ['No declarations, RETAIN / PERSISTENT variables, tasks or libraries changed: only code.'];
   }
@@ -800,11 +803,15 @@ function register(context, { activeFile, sectionUriOf }) {
       show(next, error) {
         shown = next;
         const n = next ? groups().reduce((a, g) => a + g.items.length, 0) : 0;
+        // (the warnings counted on the view and the TwinCAT view's icon)
+        const warns = next ? groups().filter((g) => g.warn).reduce((a, g) => a + g.items.length, 0) : 0;
+        view.badge = warns ? { value: warns, tooltip: `${warns} change${warns === 1 ? '' : 's'} an online change may not take (tasks, libraries, RETAIN / PERSISTENT)` } : undefined;
         view.message = error ?? (next && !n ? `Compared with the PLC on ${next.target} (${next.at.toLocaleTimeString()}): only code changed.` : next ? undefined : view.message);
         view.description = next ? `${next.target} · ${next.at.toLocaleTimeString()}` : '';
         changed.fire(undefined);
       },
       groups,
+      badge: () => view.badge?.value ?? 0,
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.onlineChangeDetails', async (given) => {
@@ -816,7 +823,7 @@ function register(context, { activeFile, sectionUriOf }) {
       return null;
     }
   }));
-  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.onlineChangeShown', () => onlineChangeView.groups().map((g) => ({ label: g.label, items: g.items.map((i) => ({ label: i.label, description: i.description, opens: !!(i.open && i.open) })) }))));
+  context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.onlineChangeShown', () => ({ groups: onlineChangeView.groups().map((g) => ({ label: g.label, items: g.items.map((i) => ({ label: i.label, description: i.description, opens: !!(i.open && i.open) })) })), badge: onlineChangeView.badge(), plcBar: bar.plc.text })));
 
   // ---- The Library Manager (the Solution view's References, as XAE's): a library's version, one added, one removed.
   // The .plcproj edited: XAE, when it has the project open, asks to reload it

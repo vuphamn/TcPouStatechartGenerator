@@ -159,6 +159,8 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   declarations changed (pointers and references to their instances become invalid), and those added or removed.
   **Show Details** (the confirmation's button), or **Online Change Details** (the **Online Change** view's button) alone,
   lists them in the Online Change view by kind, the warnings first: a click opens the POU, DUT, GVL or task.
+  Logged in, the view's **Build and Online Change** button acts on what it shows. Its badge counts the warnings, and
+  while the last comparison found tasks or libraries changed, the PLC's status bar item has a $(warning) mark.
 - **Solution** view (the TwinCAT view): the PLC project as XAE's Solution Explorer shows it (its `.plcproj`'s folders,
   POUs, DUTs, GVLs, visualizations, task, and its libraries under **References**); a click opens a source as Structured
   Text.

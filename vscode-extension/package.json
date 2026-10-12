@@ -664,6 +664,11 @@
           "command": "kvalMachineScope.crossReferenceFilter",
           "when": "view == kvalMachineScope.crossReference",
           "group": "navigation@1"
+        },
+        {
+          "command": "kvalMachineScope.buildOnlineChange",
+          "when": "view == kvalMachineScope.onlineChange && kvalMachineScope.loggedIn",
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [

@@ -331,10 +331,20 @@ exports.run = async function run() {
     });
     plcSide.push({ path: 'POUs/FB_Gone.TcPOU', content: '<TcPlcObject><POU Name="FB_Gone"><Declaration><![CDATA[FUNCTION_BLOCK FB_Gone]]></Declaration></POU></TcPlcObject>' });
     const ocLines = await vscode.commands.executeCommand('kvalMachineScope.onlineChangeDetails', plcSide);
-    const oc = (await vscode.commands.executeCommand('kvalMachineScope.onlineChangeShown')) ?? [];
+    const ocShown = (await vscode.commands.executeCommand('kvalMachineScope.onlineChangeShown')) ?? {};
+    const oc = ocShown.groups ?? [];
     const ocDecl = oc.find((g) => g.label === 'Declarations changed');
     expect(!!ocDecl && ocDecl.items.some((i) => i.label === pouName && i.opens) && oc.find((g) => g.label === 'Removed')?.items.some((i) => i.label === 'FB_Gone'), `Online Change Details: ${pouName}'s declaration changed (opens it), FB_Gone removed (${JSON.stringify(oc)})`);
     expect(Array.isArray(ocLines) && ocLines.some((l) => /^Declarations changed/.test(l)), `its lines for the confirmation (${(ocLines ?? []).join(' | ')})`);
+    // (a task changed on the PLC's side: a warning, counted on the view, said on the PLC's status bar item)
+    const ttoAt = plcSide.findIndex((x) => /\.TcTTO$/i.test(x.path));
+    const withTask = ttoAt >= 0 ? plcSide.map((x, i) => (i === ttoAt ? { ...x, content: x.content.replace(/<CycleTime>\d+<\/CycleTime>/, '<CycleTime>99000</CycleTime>') } : x)) : [...plcSide, { path: 'PlcTask.TcTTO', content: '<TcPlcObject><Task Name="PlcTask"><CycleTime>99000</CycleTime><Priority>20</Priority></Task></TcPlcObject>' }];
+    await vscode.commands.executeCommand('kvalMachineScope.onlineChangeDetails', withTask);
+    const warned = (await vscode.commands.executeCommand('kvalMachineScope.onlineChangeShown')) ?? {};
+    expect(warned.badge >= 1 && /\$\(warning\)/.test(warned.plcBar ?? '') && (warned.groups ?? []).some((g) => g.label === 'Tasks changed'), `a task changed: the view's badge ${warned.badge}, the PLC's status bar item "${warned.plcBar}"`);
+    await vscode.commands.executeCommand('kvalMachineScope.onlineChangeDetails', localProjectFiles(robotProj));
+    const clean = (await vscode.commands.executeCommand('kvalMachineScope.onlineChangeShown')) ?? {};
+    expect(!clean.badge && !/\$\(warning\)/.test(clean.plcBar ?? ''), `nothing changed: no badge, no warning (${clean.badge}, "${clean.plcBar}")`);
 
     // 19a. Show in statechart: a lens over each state's branch of Execute() (the state method); one opens the chart
     const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', exDoc.uri);
