@@ -119,7 +119,8 @@ const tmFile = path.join(h.REPO, 'src/samples/SM_TableManager.TcPOU');
   // Off: an empty set releases them
   await page.click('#live-guards-off');
   await sleep(800);
-  expect(sent.filter((m) => m.type === 'liveWatch').pop().vars.length === 0, 'off: an empty liveWatch');
+  // (the PLC's tasks stay watched while live: only they are left)
+  expect(sent.filter((m) => m.type === 'liveWatch').pop().vars.every((v) => v.id.startsWith('task:')), 'off: the guard variables released (the tasks only)');
   console.log('page errors:', errors.slice(0, 5));
   await browser.close().catch(() => {});
   edge.kill();
