@@ -494,3 +494,31 @@ export async function postWebhook(url: string, text: string): Promise<{ ok: bool
     return { ok: false, error: String(e) };
   }
 }
+
+/** A POU type's settings of a kind beside the PLC project (alerts: MachineScope.alerts.json) → { value, where } */
+export async function fetchProjectStore<T>(pouPath: string | undefined, kind: 'alerts', pouType: string): Promise<{ value: T | null; where: 'project' | 'browser' }> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ value?: T | null }>({ type: 'projectStore', kind, pouType }, 'projectStoreResult');
+    if (r) return { value: r.value ?? null, where: 'project' };
+  }
+  const d = (window as unknown as { tcDesktop?: { projectStore?: (p: string, k: string, t: string) => Promise<{ value?: T | null }> } }).tcDesktop;
+  if (d?.projectStore && pouPath) {
+    const r = await d.projectStore(pouPath, kind, pouType).catch(() => null);
+    if (r) return { value: r.value ?? null, where: 'project' };
+  }
+  return { value: null, where: 'browser' };
+}
+
+/** Saved beside the PLC project (null: removed) → { ok } or { error } */
+export async function saveProjectStore(pouPath: string | undefined, kind: 'alerts', pouType: string, value: unknown): Promise<{ ok: boolean; error?: string }> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ error?: string }>({ type: 'projectStoreSave', kind, pouType, value }, 'projectStoreSaveResult');
+    if (r) return r.error ? { ok: false, error: r.error } : { ok: true };
+  }
+  const d = (window as unknown as { tcDesktop?: { projectStoreSave?: (p: string, k: string, t: string, v: unknown) => Promise<{ error?: string }> } }).tcDesktop;
+  if (d?.projectStoreSave && pouPath) {
+    const r = await d.projectStoreSave(pouPath, kind, pouType, value).catch((e: unknown) => ({ error: String(e) }));
+    return r.error ? { ok: false, error: r.error } : { ok: true };
+  }
+  return { ok: false, error: 'Not beside a project here' };
+}

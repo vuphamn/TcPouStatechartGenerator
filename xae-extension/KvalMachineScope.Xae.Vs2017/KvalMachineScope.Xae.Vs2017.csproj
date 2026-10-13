@@ -69,6 +69,7 @@
     <Compile Include="$(Src)GitBlame.cs" Link="GitBlame.cs" />
     <Compile Include="$(Src)PlcAddFiles.cs" Link="PlcAddFiles.cs" />
     <Compile Include="$(Src)CommissioningFile.cs" Link="CommissioningFile.cs" />
+    <Compile Include="$(Src)ProjectStore.cs" Link="ProjectStore.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

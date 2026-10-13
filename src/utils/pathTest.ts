@@ -58,7 +58,7 @@ export function guardInputs(guard: string): GuardInputs {
 }
 
 /** The test suite for a path (its states one after another) → as generateTcUnitTest returns it */
-export function generateTcUnitPathTest(o: { pou: string; enumType: string; stateVar: string; path: PathStep[]; title?: string; started?: number; suiteName?: string }) {
+export function generateTcUnitPathTest(o: { pou: string; enumType: string; stateVar: string; path: PathStep[]; title?: string; started?: number; suiteName?: string; limitMs?: Record<string, number> }) {
   const states = [o.path[0]?.from ?? '', ...o.path.map((s) => s.to)];
   const values = states.map((_, i) => ({ t: (i + 1) * 1000, value: i }));
   const vars: { id: string; t: number; v: boolean | number | string | null }[] = [];
@@ -81,6 +81,7 @@ export function generateTcUnitPathTest(o: { pou: string; enumType: string; state
     run: { values, vars, watched, instance: 'U', started: o.started ?? Date.now() },
     title: o.title ?? `The path ${states.join(' → ')}`,
     rawStrings: true,
+    limitMs: o.limitMs,
     notes,
     methodPrefix: 'Path',
     suiteName: o.suiteName,

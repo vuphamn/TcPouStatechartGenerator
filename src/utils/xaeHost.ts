@@ -82,6 +82,8 @@ export type HostMessage =
   | { type: 'gitBlameResult'; requestId: number; lines?: BlameLine[] | null; error?: string | null }
   | { type: 'eventsSaveResult'; requestId: number; ok: boolean; path?: string; error?: string | null }
   | { type: 'runPlcTestsResult'; requestId: number; ok: boolean; message: string }
+  | { type: 'projectStoreResult'; requestId: number; value?: unknown; error?: string }
+  | { type: 'projectStoreSaveResult'; requestId: number; value?: unknown; error?: string }
   | { type: 'webhookResult'; requestId: number; ok: boolean; status?: number; error?: string }
   | { type: 'commissioningResult'; requestId: number; allowed?: string[]; log?: CommissioningEntry[]; error?: string }
   | { type: 'commissioningSaveResult'; requestId: number; allowed?: string[]; log?: CommissioningEntry[]; error?: string }
@@ -233,6 +235,9 @@ export type AppMessage =
   | { type: 'commissioning'; requestId: number; pouType: string }
   /** An alert told to a webhook (answered with webhookResult) */
   | { type: 'webhook'; requestId: number; url: string; text: string }
+  /** Per-POU-type settings beside the PLC project (answered with projectStoreResult / projectStoreSaveResult) */
+  | { type: 'projectStore'; requestId: number; kind: string; pouType: string }
+  | { type: 'projectStoreSave'; requestId: number; kind: string; pouType: string; value: unknown }
   | { type: 'commissioningSave'; requestId: number; pouType: string; allowed?: string[]; entry?: CommissioningEntryRequest }
   /** A loaded POU's layout file beside it: read, or written (text; null: removed) */
   | { type: 'layoutRead'; path: string; requestId: number }

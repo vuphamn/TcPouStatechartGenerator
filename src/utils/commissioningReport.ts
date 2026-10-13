@@ -4,6 +4,31 @@
  * to, on which PLC, why, written or not), newest first; with the counts per user and per state. Printable.
  */
 import type { CommissioningEntry } from './xaeHost.ts';
+import { textPdf } from './textPdf.ts';
+
+/** The same report as a PDF (text: the list, the counts, every state set, newest first) */
+export function commissioningReportPdf(o: { pouType: string; allowed: string[]; log: CommissioningEntry[]; where: 'project' | 'browser'; made?: Date }): string {
+  const made = o.made ?? new Date();
+  const count = (key: (e: CommissioningEntry) => string) => {
+    const m = new Map<string, number>();
+    for (const e of o.log) m.set(key(e), (m.get(key(e)) ?? 0) + 1);
+    return [...m].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k}: ${n}`).join(', ');
+  };
+  const failed = o.log.filter((e) => !e.ok).length;
+  return textPdf([
+    `Commissioning: ${o.pouType}`,
+    `Made by Kval MachineScope ${made.toLocaleString()}; from ${o.where === 'project' ? 'MachineScope.commissioning.json, beside the PLC project' : 'this browser'}.`,
+    `${o.log.length} state${o.log.length === 1 ? '' : 's'} set${failed ? `, ${failed} not written` : ''}.`,
+    '',
+    `May be set to: ${o.allowed.length ? o.allowed.join(', ') : 'none'}`,
+    `By user: ${count((e) => e.user || '?') || 'none'}`,
+    `By state: ${count((e) => e.state) || 'none'}`,
+    '',
+    'Every state set (newest first; UTC):',
+    ...[...o.log].reverse().map((e) => `${e.t.slice(0, 19).replace('T', ' ')}  ${e.user}: ${e.from || '?'} -> ${e.state}${e.plc ? ` on ${e.plc}` : ''}${e.reason ? `  "${e.reason}"` : ''}${e.ok ? '' : `  NOT WRITTEN: ${e.message ?? ''}`}`),
+    ...(o.log.length ? [] : ['  nobody set the PLC to a state from MachineScope yet']),
+  ]);
+}
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 

@@ -413,6 +413,10 @@ namespace KvalMachineScope.Xae
                     case "runPlcTests":
                         HandleRunPlcTests(msg);
                         break;
+                    case "projectStore":
+                    case "projectStoreSave":
+                        HandleProjectStore(msg, type == "projectStoreSave");
+                        break;
                     case "webhook":
                         HandleWebhook(msg);
                         break;
@@ -1319,6 +1323,27 @@ namespace KvalMachineScope.Xae
             {
                 Log.Write("run tests: " + ex.Message);
                 Answer(false, (ex.InnerException ?? ex).Message);
+            }
+        }
+
+        /// <summary>Per-POU-type settings beside the PLC project (ProjectStore): read, or saved</summary>
+        private void HandleProjectStore(Dictionary<string, object> msg, bool save)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var kind = msg.TryGetValue("kind", out var k) ? k as string : null;
+            var pouType = msg.TryGetValue("pouType", out var t) ? t as string : null;
+            var dir = string.IsNullOrEmpty(_pouPath) ? null : FolderWith(_pouPath, ".plcproj");
+            if (save)
+            {
+                msg.TryGetValue("value", out var value);
+                var ok = ProjectStore.Save(dir, kind, pouType, value, out var error);
+                Post(new { type = "projectStoreSaveResult", requestId, value = ok ? value : null, error });
+            }
+            else
+            {
+                var value = ProjectStore.Read(dir, kind, pouType, out var error);
+                Post(new { type = "projectStoreResult", requestId, value, error });
             }
         }
 
@@ -2513,7 +2538,7 @@ namespace KvalMachineScope.Xae
         }
 
         // The files MachineScope keeps beside the PLC project (as shared/projectVersions.cjs)
-        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json", "MachineScope.watch.json", "MachineScope.commissioning.json" };
+        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json", "MachineScope.watch.json", "MachineScope.commissioning.json", "MachineScope.alerts.json" };
 
         /// <summary>Those files there and how git sees them: (dir, git, [(name, path, state: tracked | ignored | untracked)])</summary>
         private static (string dir, bool git, List<(string name, string path, string state)> files) MachineScopeFileStates(string pouPath)

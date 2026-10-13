@@ -60,6 +60,10 @@ try {
     $after = (& $node scripts\tc-system-mode.cjs 2>$null | Select-Object -Last 1)
   }
   "TwinCAT after: $after" | Out-File -Append -Encoding utf8 $log
+  # The tests that failed (the runs' "N/M passed; failed: a, b (logs …)" lines) and the flaky ones (passed alone)
+  $logText = Get-Content -Raw -Encoding UTF8 $log
+  $failedTests = @([regex]::Matches($logText, '\d+/\d+ passed; failed: ([^\r\n(]+)') | ForEach-Object { $_.Groups[1].Value -split ',\s*' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+  $flakyTests = @([regex]::Matches($logText, '(?m)^flaky \([^)]*\): (.+)$') | ForEach-Object { $_.Groups[1].Value -split ',\s*' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
   $result = [ordered]@{
     when = $started.ToString('o')
     seconds = [int]((Get-Date) - $started).TotalSeconds
@@ -69,13 +73,19 @@ try {
     twinCatBefore = $before
     twinCatAfter = $after
     log = $log
+    failed = $failedTests
+    flaky = $flakyTests
   }
   $result | ConvertTo-Json | Out-File -Encoding utf8 (Join-Path $dir 'last.json')
   # The last 30 runs (history.json, oldest first): when, passed, how long, for the trend
   $historyFile = Join-Path $dir 'history.json'
   $history = @()
   if (Test-Path $historyFile) { try { $parsed = Get-Content -Raw -Encoding UTF8 $historyFile | ConvertFrom-Json; $history = @($parsed | ForEach-Object { $_ }) } catch { $history = @() } }
-  $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds; full = $result.full })
+  # (against the run before: the failures new tonight, the ones failing again)
+  $previousFailed = if ($history.Count) { @($history[-1].failed | Where-Object { $_ }) } else { @() }
+  $newFailures = @($failedTests | Where-Object { $previousFailed -notcontains $_ })
+  $stillFailing = @($failedTests | Where-Object { $previousFailed -contains $_ })
+  $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds; full = $result.full; failed = $failedTests; flaky = $flakyTests; newFailures = $newFailures })
   if ($history.Count -gt 30) { $history = $history[($history.Count - 30)..($history.Count - 1)] }
   ConvertTo-Json -InputObject @($history) | Out-File -Encoding utf8 $historyFile
   # Keep the last 30 logs
@@ -92,6 +102,11 @@ try {
     $summary = (Get-Content -Encoding UTF8 $log | Where-Object { $_ -match '^\s*FAIL|\d+/\d+ passed|^flaky' } | Select-Object -First 14) -join "`n"
     $link = 'file:///' + ($log -replace '\\', '/')
     $what = if ($Full) { 'real-PLC test and the whole suite' } else { 'real-PLC test' }
+    $compare = @()
+    if ($newFailures.Count) { $compare += 'New since the run before: ' + ($newFailures -join ', ') }
+    if ($stillFailing.Count) { $compare += 'Failing the run before too: ' + ($stillFailing -join ', ') }
+    if ($flakyTests.Count) { $compare += 'Flaky (passed alone): ' + ($flakyTests -join ', ') }
+    if ($compare.Count) { $summary = ($compare -join "`n") + "`n" + $summary }
     $text = if ($result.passed) { "Kval MachineScope $what passed on $env:COMPUTERNAME ($($result.seconds) s)`n$summary`n[The log]($link)" } else { "Kval MachineScope $what FAILED on $env:COMPUTERNAME`n$summary`n[The log]($link) ($log)" }
     try {
       Invoke-RestMethod -Method Post -Uri $webhook -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ text = $text } | ConvertTo-Json))) -TimeoutSec 30 | Out-Null

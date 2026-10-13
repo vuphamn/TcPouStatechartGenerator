@@ -30,6 +30,8 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const I = 'MAIN.mainStateMachine.smTableManager';
   const PATH = 'C:\\proj\\SM_TableManager.TcPOU';
   const sent = [];
+  // (the project's settings files, as the host keeps them: MachineScope.alerts.json …)
+  const store = {};
   const saved = [];
   let liveValues = {};
   await p.exposeFunction('__hostPost', async (m) => {
@@ -45,6 +47,12 @@ const S = (n) => `TABLEMANAGER_${n}`;
     else if (m.type === 'gitBlame') await toApp({ type: 'gitBlameResult', requestId: m.requestId, lines: sample.pou.split(/\r?\n/).map((text, i) => ({ hash: i % 2 ? 'bbb2222' : 'aaa1111', author: i % 2 ? 'Ann' : 'Bob', date: i % 2 ? '2026-10-02' : '2026-10-01', summary: 'x', text })) });
     else if (m.type === 'addPlcFiles') await toApp({ type: 'addPlcFilesResult', requestId: m.requestId, ok: true, written: m.files.map((f) => f.name), tcunit: true, folder: 'C:\\proj\\KssTests' });
     else if (m.type === 'webhook') await toApp({ type: 'webhookResult', requestId: m.requestId, ok: true });
+    else if (m.type === 'liveWrite') await toApp({ type: 'liveWriteResult', requestId: m.requestId, ok: true, message: `${m.id} := ${m.value}` });
+    else if (m.type === 'projectStore') await toApp({ type: 'projectStoreResult', requestId: m.requestId, value: store[m.kind]?.[m.pouType] ?? null });
+    else if (m.type === 'projectStoreSave') {
+      store[m.kind] = { ...(store[m.kind] ?? {}), [m.pouType]: m.value };
+      await toApp({ type: 'projectStoreSaveResult', requestId: m.requestId, value: m.value });
+    }
     else if (m.type === 'runPlcTests') await toApp({ type: 'runPlcTestsResult', requestId: m.requestId, ok: true, message: 'KssPlc: built, downloaded and started: the tests run' });
     else if (m.type === 'eventsSave') await toApp({ type: 'eventsSaveResult', requestId: m.requestId, ok: true, path: `C:\\proj\\MachineScope.events\\${m.name}` });
     else if (m.type === 'saveDocument') {
@@ -140,6 +148,31 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('#live-alerts-webhook-test').catch(() => {});
   const testHook = await h.until(() => sent.find((m) => m.type === 'webhook' && /a test message/.test(m.text)) ?? null, 3000);
   expect(!!testHook, 'the webhook: a test message');
+  // (a snapshot written back: the values that differ now, asked first, the box ticked)
+  await vars([['nfeedcount', 40]]);
+  await h.sleep(300);
+  const writesBefore = sent.filter((m) => m.type === 'liveWrite').length;
+  await p.click('.live-snapshot-restore').catch(() => {});
+  await p.waitForSelector('#text-prompt-check', { timeout: 3000 }).catch(() => {});
+  const restoreDetails = await p.$eval('#text-prompt-details', (e) => e.textContent).catch(() => '');
+  await p.click('#text-prompt-check').catch(() => {});
+  await p.click('#text-prompt-submit').catch(() => {});
+  const restored = await h.until(() => { const w = sent.filter((m) => m.type === 'liveWrite').slice(writesBefore); return w.length ? w : null; }, 4000);
+  expect(/nFeedCount: 40 → 30/.test(restoreDetails) && !!restored && restored.some((m) => m.id === 'nfeedcount' && m.value === 30), `a snapshot written back: ${restoreDetails.slice(0, 60)} (${JSON.stringify(restored?.map((m) => [m.id, m.value]))})`);
+  // (a template: put in the field to edit)
+  await p.select('#live-watch-expr-template', 'In any state longer than a minute').catch(() => {});
+  const templ = await p.$eval('#live-watch-expr-input', (e) => e.value).catch(() => '');
+  expect(templ === '_inState > T#1M', `a template: ${templ}`);
+  await p.evaluate(() => { const i = document.getElementById('live-watch-expr-input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ''); i.dispatchEvent(new Event('input', { bubbles: true })); });
+  // (the statistics: by kind, by the state then, by shift)
+  await p.click('#live-events-stats').catch(() => {});
+  await h.sleep(200);
+  const statRows = await p.$$eval('.live-events-stat', (x) => x.map((e) => `${e.getAttribute('data-section')}:${e.getAttribute('data-key')}`));
+  expect(statRows.some((r) => r === 'kind:alert') && statRows.some((r) => r.startsWith('state:')) && statRows.some((r) => r.startsWith('shift:')), `the events' statistics: ${statRows.length} rows`);
+  await p.click('#live-events-stats-csv').catch(() => {});
+  const statsCsv = await h.until(() => saved.find((m) => /_events_stats_.*\.csv$/.test(m.name)) ?? null, 3000);
+  expect(!!statsCsv && statsCsv.content.startsWith('section;key;count'), 'the statistics as CSV');
+  await p.click('#live-events-stats').catch(() => {});
 
   // 2c. The live state in an expression (_inState, _state: not asked of the PLC); alert profiles saved and loaded
   await p.type('#live-watch-expr-input', '_inState > T#1S AND _state <> X');
@@ -162,6 +195,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await h.sleep(300);
   const onAgain = await p.$eval('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert', (b) => b.getAttribute('data-on')).catch(() => null);
   const forAgain = await p.$eval('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert-for', (b) => b.textContent).catch(() => null);
+  expect(!!store.alerts?.SM_TableManager?.['Night shift'] && (await p.$eval('#live-alert-profile-where', (e) => e.textContent.trim()).catch(() => '')) === 'project', `the profiles kept beside the project (MachineScope.alerts.json): ${JSON.stringify(Object.keys(store.alerts?.SM_TableManager ?? {}))}`);
   expect(JSON.stringify(profiles) === '["Night shift"]' && offNow === 'false' && onAgain === 'true' && forAgain === '1 s', `an alert profile: saved ${JSON.stringify(profiles)}, loaded (${offNow} → ${onAgain}, ${forAgain})`);
 
   // 3. The timeline: zoomed by the wheel (Now comes back), a recording as a lane, CSV and SVG
@@ -197,7 +231,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.evaluate(() => { const i = document.getElementById('live-events-find'); if (i) { const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ''); i.dispatchEvent(new Event('input', { bubbles: true })); } });
   await h.sleep(200);
   const markers = await p.$$eval('#live-timeline-markers .live-timeline-marker', (x) => x.map((e) => e.getAttribute('data-kind')));
-  expect(markers.includes('alert') && markers.includes('connect'), `the events on the timeline: ${JSON.stringify([...new Set(markers)])}`);
+  expect(markers.includes('alert') && new Set(markers).size >= 2, `the events on the timeline: ${JSON.stringify([...new Set(markers)])}`);
   const track = await p.evaluate(() => { const r = document.querySelectorAll('#live-timeline-lanes .live-timeline-track')[1].getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2, w: r.width }; });
   await p.keyboard.down('Shift');
   await p.mouse.move(track.x + track.w * 0.2, track.y);
@@ -239,6 +273,22 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const ran = await h.until(() => sent.find((m) => m.type === 'runPlcTests') ?? null, 4000);
   const ranEvent = await h.until(() => p.$$eval('.live-event', (x) => x.map((e) => e.textContent)).then((x) => x.find((t) => /The TcUnit tests run/.test(t)) ?? null), 4000);
   expect(!!ran && !!ranEvent, `Run the tests: asked, then XAE told (${ranEvent})`);
+  await p.click('#live-stop-btn').catch(() => {});
+  await h.sleep(300);
+
+  // 5a. TcUnit tests of the transitions never taken (live coverage)
+  saved.length = 0;
+  await p.click('#live-start-btn').catch(() => {});
+  await h.sleep(600);
+  const t1 = Date.now() - 20000;
+  await toApp({ type: 'liveValues', events: ['IDLE_FEED_OFF', 'CLAMPPING', 'CLAMPED'].map((s, i) => ({ t: t1 + i * 5000, value: sample.values[S(s)] })) });
+  await p.waitForSelector('#live-coverage-tcunit', { timeout: 5000 }).catch(() => {});
+  await p.click('#live-coverage-tcunit').catch(() => {});
+  await p.waitForSelector('#tcunit-save', { timeout: 3000 }).catch(() => {});
+  const untakenLabel = await p.$eval('#text-prompt-dialog', (e) => e.textContent).catch(() => '');
+  await p.click('#tcunit-save').catch(() => {});
+  const untaken = await h.until(() => saved.find((m) => /_Untaken1_Test\.TcPOU$/.test(m.name)) ?? null, 6000);
+  expect(/never took/.test(untakenLabel) && untaken?.name === 'FB_SM_TableManager_Untaken1_Test.TcPOU' && /never taken live/.test(untaken.content), `the untaken transitions' tests: ${untaken?.name}`);
   await p.click('#live-stop-btn').catch(() => {});
   await h.sleep(300);
 

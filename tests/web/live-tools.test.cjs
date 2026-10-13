@@ -141,6 +141,9 @@ const S = (n) => `TABLEMANAGER_${n}`;
   // (the commissioning report: an HTML page of the list and the log)
   await p.click('#live-set-state-report').catch(() => {});
   const report = await h.until(() => saved.find((m) => /_commissioning\.html$/.test(m.name)) ?? null, 4000);
+  await p.click('#live-set-state-report-pdf').catch(() => {});
+  const pdf = await h.until(() => saved.find((m) => /_commissioning\.pdf$/.test(m.name)) ?? null, 4000);
+  expect(!!pdf && pdf.content.startsWith('%PDF-1.4') && pdf.content.trimEnd().endsWith('%%EOF') && pdf.content.includes('clamp test'), `the report as PDF: ${pdf?.name}`);
   expect(report?.name === 'SM_TableManager_commissioning.html' && report.content.includes('clamp test after the valve change') && report.content.includes('<li>ann: 1</li>'), `the commissioning report: ${report?.name}`);
 
   // 4. The event log: connected, the PLC set to a state; CSV

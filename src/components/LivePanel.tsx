@@ -80,6 +80,8 @@ interface LivePanelProps {
   /** Transition coverage: the chart's transitions the PLC has taken (kept per POU across sessions); its CSV */
   coverage?: import('../utils/transitionCoverage.ts').Coverage | null;
   onExportCoverage?: () => void;
+  /** TcUnit tests of the transitions never taken (coverage) */
+  onTcUnitUntaken?: () => void;
   /** Other windows live on this POU on another PLC (Compare…): their PLC and current state; their differences */
   peers?: import('../utils/livePeers.ts').LivePeer[];
   onPeerDiff?: (id: string) => void;
@@ -103,26 +105,28 @@ interface LivePanelProps {
   /** How long a watch expression must stay true before its alert (asked) */
   onSetAlertFor?: (name: string) => void;
   /** Alert profiles: named sets of expressions and their alerts, loaded / saved / removed */
-  alertProfiles?: { names: string[]; current: string | null; onLoad: (name: string) => void; onSave: () => void; onDelete: (name: string) => void };
+  alertProfiles?: { names: string[]; current: string | null; where?: 'project' | 'browser'; onLoad: (name: string) => void; onSave: () => void; onDelete: (name: string) => void };
   /** A watch expression's alert on / off (said when it becomes true) */
   onToggleAlert?: (name: string) => void;
   /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
   onAddWatchExpr?: (text: string) => string | null;
+  /** Ready-made expressions to start from (their names in capitals to replace) */
+  exprTemplates?: { label: string; text: string }[];
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
   timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[]; focus?: { t: number; nonce: number } | null };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void } };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
   /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
-  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void; onReport?: () => void };
+  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void; onReport?: () => void; onReportPdf?: () => void };
   /** The TcUnit suites added to the PLC project here, read live: 0 running, 1 passed, 2 failed (at a step) */
   tests?: { name: string; steps: number; result?: number; step?: number; failedStep?: number; error?: string }[];
   onForgetTest?: (name: string) => void;
   /** XAE: the tests run on the PLC (asked first) */
   onRunTests?: () => void;
   /** Snapshots: the watched values and the state at moments, compared */
-  snapshots?: { list: LiveSnapshot[]; live: boolean; onTake: () => void; onRemove: (id: string) => void; onClear: () => void; onExport: () => void };
+  snapshots?: { list: LiveSnapshot[]; live: boolean; onTake: () => void; onRemove: (id: string) => void; onClear: () => void; onExport: () => void; onRestore?: (s: LiveSnapshot) => void };
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
   watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
@@ -352,11 +356,33 @@ const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasV
 };
 
 /** A watch expression typed (Enter adds it): = bA AND NOT bB, = fPos - fTarget; why not, under it */
-const WatchExprInput: React.FC<{ onAdd: (text: string) => string | null }> = ({ onAdd }) => {
+const WatchExprInput: React.FC<{ onAdd: (text: string) => string | null; templates?: { label: string; text: string }[] }> = ({ onAdd, templates }) => {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   return (
     <div className="mt-0.5">
+      {templates && templates.length > 0 && (
+        <select
+          id="live-watch-expr-template"
+          value=""
+          onChange={(e) => {
+            const t = templates.find((x) => x.label === e.target.value);
+            if (t) {
+              setText(t.text);
+              setError(null);
+            }
+          }}
+          className="w-full mb-0.5 bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-[10px] text-slate-400"
+          title="A ready-made expression to start from: put in the field, its capitals to replace, then Enter"
+        >
+          <option value="">+ from a template…</option>
+          {templates.map((t) => (
+            <option key={t.label} value={t.label}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+      )}
       <input
         id="live-watch-expr-input"
         value={text}
@@ -623,6 +649,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onUpdateEnum,
   coverage,
   onExportCoverage,
+  onTcUnitUntaken,
   coverageOnChart,
   onCoverageOnChart,
   onResetCoverage,
@@ -636,6 +663,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onComparePlc,
   watchList,
   onAddWatchExpr,
+  exprTemplates,
   onToggleAlert,
   onSetAlertFor,
   alertProfiles,
@@ -1264,6 +1292,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {setStateAllowed.onReport && (
               <button id="live-set-state-report" type="button" onClick={setStateAllowed.onReport} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="The commissioning report: the states the PLC may be set to and every state set (who, when, why), as an HTML page">
                 Report…
+              </button>
+            )}
+            {setStateAllowed.onReportPdf && (
+              <button id="live-set-state-report-pdf" type="button" onClick={setStateAllowed.onReportPdf} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="The commissioning report as a PDF">
+                PDF…
               </button>
             )}
           </div>
@@ -2098,6 +2131,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                     </option>
                   ))}
                 </select>
+                {alertProfiles.where === 'project' && (
+                  <span id="live-alert-profile-where" className="text-slate-500" title="Kept beside the PLC project (MachineScope.alerts.json): commit it to share them">
+                    project
+                  </span>
+                )}
                 <button id="live-alert-profile-save" type="button" onClick={alertProfiles.onSave} className="px-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="The expressions and their alerts saved as a profile">
                   Save as…
                 </button>
@@ -2153,13 +2191,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               )}
             </div>
           ))}
-          {onAddWatchExpr && <WatchExprInput onAdd={onAddWatchExpr} />}
+          {onAddWatchExpr && <WatchExprInput onAdd={onAddWatchExpr} templates={exprTemplates} />}
         </div>
       )}
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
       {snapshots && (snapshots.live || snapshots.list.length > 0) && <LiveSnapshots {...snapshots} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} shared={events.shared} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} shared={events.shared} onExportStats={events.onExportStats} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (
@@ -2239,7 +2277,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Coverage: the chart's transitions the PLC has taken (kept across sessions) */}
       {peers && peers.length > 0 && status.state === 'connected' && <PeersStrip peers={peers} own={{ state: session.current?.state ?? null, since: session.current ? session.current.since + (session.clockOffset ?? 0) : null }} onDiff={onPeerDiff} />}
       {coverage && coverage.total > 0 && (
+        <>
+        {onTcUnitUntaken && (
+          <button id="live-coverage-tcunit" type="button" onClick={onTcUnitUntaken} className="self-start px-1.5 py-0.5 rounded border border-violet-700 text-[10px] text-violet-200 hover:bg-violet-900/50" title="A TcUnit test of each transition the PLC never took: the shortest path from the initial state to it, then the transition">
+            TcUnit tests of the untaken…
+          </button>
+        )}
         <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} onProject={onProjectCoverage} shared={coverageShared} />
+        </>
       )}
 
       {/* Trail */}

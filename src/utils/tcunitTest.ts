@@ -41,6 +41,8 @@ export function generateTcUnitTest(o: {
   methodPrefix?: string;
   /** The suite's name (default FB_<POU>_Test) */
   suiteName?: string;
+  /** How long each state may last before the test fails there (ms: as measured live); else twice its recorded time */
+  limitMs?: Record<string, number>;
 }): { name: string; xml: string; steps: number; declaration: string; methodName: string; methodCode: string; instance: string } {
   const cycleMs = o.cycleMs ?? 10;
   // The states one after another (the same one twice: once)
@@ -72,7 +74,8 @@ export function generateTcUnitTest(o: {
   const methodName = ident(`${o.methodPrefix ?? 'RecordedRun'}_${new Date(o.run.started ?? steps[0]?.t ?? Date.now()).toISOString().slice(0, 16).replace(/[-:T]/g, '')}`);
   const n = Math.max(1, steps.length - 1);
   // (each step's cycles allowed: twice its recorded time at the cycle time, at least 100)
-  const maxCycles = steps.slice(1).map((s, i) => Math.max(100, Math.ceil(((s.t - steps[i].t) * 2) / cycleMs)));
+  // (each step's cycles allowed: the state's measured limit when given, else twice its recorded time; at least 100)
+  const maxCycles = steps.slice(1).map((s, i) => Math.max(100, Math.ceil((o.limitMs?.[steps[i].state] ?? (s.t - steps[i].t) * 2) / cycleMs)));
   const q = (state: string) => `${o.enumType}.${state}`;
   const declaration = [
     `FUNCTION_BLOCK ${name} EXTENDS TcUnit.FB_TestSuite`,

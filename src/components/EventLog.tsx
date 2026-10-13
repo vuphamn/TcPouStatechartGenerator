@@ -7,6 +7,8 @@ export interface LiveEvent {
   t: number;
   kind: LiveEventKind;
   text: string;
+  /** The state the PLC was in then */
+  state?: string;
 }
 const KIND: Record<LiveEventKind, { label: string; cls: string }> = {
   connect: { label: 'live', cls: 'bg-slate-800 text-slate-300' },
@@ -18,6 +20,36 @@ const KIND: Record<LiveEventKind, { label: string; cls: string }> = {
   alert: { label: 'alert', cls: 'bg-rose-800/80 text-rose-100' },
 };
 
+/** Counts of the events: by kind, by the state the PLC was in, by hour of the day, by shift (06–14, 14–22, 22–06) */
+export function eventStats(events: LiveEvent[]): { total: number; from: number | null; to: number | null; byKind: [string, number][]; byState: [string, number][]; byHour: number[]; byShift: [string, number][] } {
+  const count = (key: (e: LiveEvent) => string) => {
+    const m = new Map<string, number>();
+    for (const e of events) m.set(key(e), (m.get(key(e)) ?? 0) + 1);
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  const byHour = Array.from({ length: 24 }, () => 0);
+  for (const e of events) byHour[new Date(e.t).getHours()]++;
+  const shift = (e: LiveEvent) => {
+    const h = new Date(e.t).getHours();
+    return h >= 6 && h < 14 ? '06–14' : h >= 14 && h < 22 ? '14–22' : '22–06';
+  };
+  return {
+    total: events.length,
+    from: events.length ? Math.min(...events.map((e) => e.t)) : null,
+    to: events.length ? Math.max(...events.map((e) => e.t)) : null,
+    byKind: count((e) => e.kind),
+    byState: count((e) => e.state ?? '(not known)'),
+    byHour,
+    byShift: count(shift),
+  };
+}
+
+/** The statistics as CSV: section; key; count */
+export const eventStatsCsv = (events: LiveEvent[]) => {
+  const s = eventStats(events);
+  return ['section;key;count', ...s.byKind.map(([k, n]) => `kind;${k};${n}`), ...s.byState.map(([k, n]) => `state;${k};${n}`), ...s.byShift.map(([k, n]) => `shift;${k};${n}`), ...s.byHour.map((n, h) => `hour;${String(h).padStart(2, '0')};${n}`)].join('\n');
+};
+
 /** The events as CSV: time (ISO), kind, text */
 export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.map((e) => `${new Date(e.t).toISOString()};${e.kind};${e.text.replace(/\s*[;\r\n]+\s*/g, ' ')}`)].join('\n');
 
@@ -25,12 +57,13 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void } }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared, onExportStats }) => {
   // (the gateway's shared events of this PLC, when loaded: shown instead of this session's, with who)
   const events: (LiveEvent & { user?: string })[] = shared?.list ?? own;
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<LiveEventKind | 'all'>('all');
   const [find, setFind] = useState('');
+  const [stats, setStats] = useState(false);
   const shown = [...events].reverse().filter((e) => (kind === 'all' || e.kind === kind) && (!find.trim() || e.text.toLowerCase().includes(find.trim().toLowerCase())));
   return (
     <div id="live-events" className="rounded border border-slate-700/70 bg-slate-900/40 px-2 py-1 text-[11px]">
@@ -45,6 +78,9 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
                 {shared.list ? 'Shared ✓' : 'Shared'}
               </button>
             )}
+            <button id="live-events-stats" type="button" onClick={() => setStats((v) => !v)} className={`px-1.5 py-0.5 rounded border text-[10px] ${stats ? 'border-sky-600 bg-sky-900/60 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title="Counts: by kind, by the PLC's state then, by shift and hour">
+              Stats
+            </button>
             <input id="live-events-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="find…" spellCheck={false} className="ml-auto w-24 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200" title="Only the events with this text" />
             <select id="live-events-kind" value={kind} onChange={(e) => setKind(e.target.value as LiveEventKind | 'all')} className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300">
               <option value="all">all</option>
@@ -87,12 +123,42 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
             </button>
           )}
           {webhook.onAllChange && (
-            <span className="flex items-center gap-1" title="Stuck states and task overruns told too, not only alerts">
+            <span className="flex items-center gap-1" title="Stuck states, task overruns and the PLC set to a state told too, not only alerts">
               <input id="live-alerts-webhook-all" type="checkbox" checked={!!webhook.all} onChange={(e) => webhook.onAllChange!(e.target.checked)} />
-              + stuck, overruns
+              + stuck, overruns, states set
             </span>
           )}
         </label>
+      )}
+      {open && stats && (
+        <div id="live-events-stats-table" className="mt-1 grid grid-cols-3 gap-2 text-[10px] font-mono">
+          {(() => {
+            const s = eventStats(events);
+            const list = (title: string, rows: [string, number][]) => (
+              <div>
+                <div className="text-slate-500 font-sans">{title}</div>
+                {rows.slice(0, 8).map(([k, n]) => (
+                  <div key={k} className="live-events-stat flex justify-between gap-1" data-section={title} data-key={k}>
+                    <span className="truncate text-slate-300">{k}</span>
+                    <span className="text-sky-300">{n}</span>
+                  </div>
+                ))}
+              </div>
+            );
+            return (
+              <>
+                {list('kind', s.byKind)}
+                {list('state', s.byState)}
+                {list('shift', s.byShift)}
+                {onExportStats && (
+                  <button id="live-events-stats-csv" type="button" onClick={onExportStats} className="col-span-3 justify-self-start px-1.5 rounded border border-slate-700 font-sans text-slate-300 hover:bg-slate-800" title="The counts as CSV (by kind, state, shift, hour)">
+                    Stats CSV
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </div>
       )}
       {open && (
         <div className="mt-1 max-h-40 overflow-y-auto space-y-0.5">

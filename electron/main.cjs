@@ -355,6 +355,9 @@ ipcMain.handle('tc:git-log', (_event, filePath) => require('../shared/gitHistory
 // A live session's events kept beside the PLC project (MachineScope.events\<name>.csv)
 // Commissioning beside the PLC project (MachineScope.commissioning.json): the states the PLC may be set to, who set which
 // An alert told to a webhook (https only)
+// Small per-POU-type settings beside the PLC project (MachineScope.alerts.json …)
+ipcMain.handle('tc:project-store', (_event, pouPath, kind, pouType) => require('../shared/projectStore.cjs').readStore(pouPath, kind, pouType));
+ipcMain.handle('tc:project-store-save', (_event, pouPath, kind, pouType, value) => require('../shared/projectStore.cjs').saveStore(pouPath, kind, pouType, value));
 ipcMain.handle('tc:webhook', (_event, url, text) => require('../shared/webhook.cjs').postWebhook(url, text));
 ipcMain.handle('tc:commissioning', (_event, pouPath, pouType) => require('../shared/commissioningFile.cjs').readCommissioning(pouPath, pouType));
 ipcMain.handle('tc:commissioning-save', (_event, pouPath, pouType, req) => require('../shared/commissioningFile.cjs').saveCommissioning(pouPath, pouType, req));

@@ -216,18 +216,18 @@ import { generateTcUnitProgram, generateTcUnitTest, TEST_PROGRAM, testInstanceNa
 import { generateTcUnitPathTest, guardInputs } from './utils/pathTest.ts';
 import { onlineChangeRisks } from './utils/onlineChangeRisks.ts';
 import { recordingLane, type TimelineLane } from './components/StateTimeline.tsx';
-import { eventsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
+import { eventsCsv, eventStatsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
 import { StateHistoryDialog, type StateVersion } from './components/StateHistoryDialog.tsx';
 import { snapshotsCsv, type LiveSnapshot, type SnapshotValue as LiveSnapshotValue } from './components/LiveSnapshots.tsx';
-import { commissioningReport } from './utils/commissioningReport.ts';
+import { commissioningReport, commissioningReportPdf } from './utils/commissioningReport.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
-import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveWatchList, type Commissioning } from './utils/projectFiles.ts';
+import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, type Commissioning } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
-import { findPaths } from './utils/statePaths.ts';
+import { findPaths, untakenPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
 import { addState, addTransition, checkNewStateName, renameEdgeKeys, renameKey, renameState } from './utils/stateEdits.ts';
 import { deleteTransition, moveTransitionStart, retargetTransition, setTransitionPriority, transitionOrder, TransitionEditResult } from './utils/transitionEdits.ts';
@@ -1827,7 +1827,8 @@ export const App: React.FC = () => {
   const gatewayEventsRef = useRef<LiveEvent[]>([]);
   const gatewayLiveRef = useRef(false);
   const addLiveEvent = useCallback((kind: LiveEventKind, text: string) => {
-    const e = { t: Date.now(), kind, text };
+    // (the state the PLC is in then: the statistics count by it)
+    const e = { t: Date.now(), kind, text, ...(exprStateRef.current?.name ? { state: exprStateRef.current.name } : {}) };
     setLiveEvents((cur) => [...cur.slice(-1999), e]);
     if (gatewayLiveRef.current) gatewayEventsRef.current.push(e);
   }, []);
@@ -3011,17 +3012,36 @@ export const App: React.FC = () => {
   const profilesKey = `kss.live.alertProfiles.${pouFileName.replace(/\.TcPOU$/i, '')}`;
   const [alertProfiles, setAlertProfiles] = useState<Record<string, AlertProfile>>({});
   const [alertProfile, setAlertProfile] = useState<string | null>(null);
+  // (beside the PLC project when the host keeps it: MachineScope.alerts.json, shared through git; else this browser)
+  const [profilesWhere, setProfilesWhere] = useState<'project' | 'browser'>('browser');
+  const profilesType = pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1] ?? pouFileName.replace(/\.TcPOU$/i, '');
   useEffect(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(profilesKey) || '{}');
-      setAlertProfiles(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
-    } catch {
-      setAlertProfiles({});
-    }
+    let alive = true;
     setAlertProfile(null);
-  }, [profilesKey]);
+    void fetchProjectStore<Record<string, AlertProfile>>(pouPath, 'alerts', profilesType).then((r) => {
+      if (!alive) return;
+      setProfilesWhere(r.where);
+      if (r.where === 'project') return setAlertProfiles(r.value ?? {});
+      try {
+        const raw = JSON.parse(localStorage.getItem(profilesKey) || '{}');
+        setAlertProfiles(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
+      } catch {
+        setAlertProfiles({});
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [profilesKey, pouPath, profilesType]);
   const keepProfiles = (next: Record<string, AlertProfile>) => {
     setAlertProfiles(next);
+    if (profilesWhere === 'project') {
+      void saveProjectStore(pouPath, 'alerts', profilesType, Object.keys(next).length ? next : null).then((r) => {
+        if (!r.ok) showCopyToast(`Alert profiles not kept beside the project: ${r.error}`, 'error', 7000);
+        else setMsFilesTick((n) => n + 1);
+      });
+      return;
+    }
     try {
       localStorage.setItem(profilesKey, JSON.stringify(next));
     } catch {
@@ -3031,6 +3051,7 @@ export const App: React.FC = () => {
   const alertProfilesProps = {
     names: Object.keys(alertProfiles).sort((a, b) => a.localeCompare(b)),
     current: alertProfile,
+    where: profilesWhere,
     onLoad: (name: string) => {
       const p = alertProfiles[name];
       if (!p) return;
@@ -9411,6 +9432,23 @@ export const App: React.FC = () => {
   const liveActive = liveStatus.state === 'connected' || liveStatus.state === 'lost';
   // Measured state times (the session's transitions: live or a replay), on the diagram when asked for
   const measuredStateTimes = useMemo(() => stateTimes(liveSession.transitions), [liveSession.transitions]);
+  // (the TcUnit tests' step limits: each state measured live, its 90% time twice or its longest and a half, whichever
+  // is longer; not measured: the generators' own)
+  const measuredLimits = () => Object.fromEntries(measuredStateTimes.filter((s) => s.n > 0).map((s) => [s.state, Math.round(Math.max(s.p90Ms * 2, s.maxMs * 1.5))]));
+  // (a TcUnit test of each transition the PLC never took: the shortest path from the initial state, then it)
+  const handleTcUnitUntaken = () => {
+    const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
+    if (!enumType || !liveCoverage) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
+    const initial = initialStateOf(pouContent, liveStateVar) || identifiedStatesResult.states[0]?.id || '';
+    const untaken = liveCoverage.rows.filter((r) => r.n === 0);
+    // (from the initial state, else the live one, else the first state that leads there)
+    const found = untakenPaths(availableEdges, [initial, liveSession.current?.state ?? '', ...identifiedStatesResult.states.map((s) => s.id)], untaken, 10);
+    if (!found.length) return showCopyToast(untaken.length ? 'The transitions not taken are not on the chart' : 'Every transition was taken', untaken.length ? 'error' : 'success', 7000);
+    const pou = pouTypeName ?? pausePou;
+    const limitMs = measuredLimits();
+    const made = found.map((f, i) => generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path: f.path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Untaken${i + 1}_Test`, limitMs, title: `${f.from} → ${f.to}, never taken live (from ${f.start})` }));
+    offerTcUnit(made, `The transitions the PLC never took (${found.length} of ${untaken.length}${untaken.length > 10 ? ', the first 10' : ''}): a test suite each, by the shortest path from ${initial} (else the live state or the first state that leads there: ${[...new Set(found.map((f) => f.start))].join(', ')}), then the transition; each guard's inputs written before its step.`);
+  };
   const stateTimeBadges = useMemo(() => stateTimeLevels(measuredStateTimes), [measuredStateTimes]);
   const handleExportStateTimes = useCallback(() => {
     void downloadCsv(
@@ -10112,6 +10150,7 @@ export const App: React.FC = () => {
         onSubmit: (reason: string) => {
           void writeLiveVar(liveMode, id, value).then((res) => {
             addLiveEvent('state', res.ok ? `Set to ${state}: ${symbol} := ${value} (was ${liveSession.current?.state ?? '?'})` : `Not set to ${state}: ${res.message}`);
+            if (webhookAllRef.current) tellWebhookRef.current(res.ok ? `the PLC set to ${state} (from ${liveSession.current?.state ?? '?'})${reason.trim() ? `: ${reason.trim()}` : ''}` : `the PLC not set to ${state}: ${res.message}`);
             // (who set which state: logged beside the project, the host naming the user)
             void saveCommissioning(pouPath, commissioningType, { entry: { state, from: liveSession.current?.state ?? '', plc: liveStatus.target ?? '', ok: res.ok, ...(reason.trim() ? { reason: reason.trim().slice(0, 300) } : {}), ...(res.ok ? {} : { message: res.message }) } }).then((r) => !('error' in r) && setCommissioning(r));
             showCopyToast(res.ok ? `The PLC set to ${state}` : `Not set: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 4000 : 9000);
@@ -12007,6 +12046,7 @@ export const App: React.FC = () => {
               handleOpenInstance(instance, { settings: { netId: plc.netId, ip: plc.ip ?? '' }, compare: true });
               showCopyToast(`${instance} live on ${plc.name || plc.netId} too: in a new ${isXaeHost() ? 'tab' : 'window'}`, 'success', 5000);
             }}
+            onTcUnitUntaken={liveCoverage && liveCoverage.taken < liveCoverage.total ? handleTcUnitUntaken : undefined}
             onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
             watchList={userWatch.map((n) => {
               if (!isWatchExpr(n)) return { name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type };
@@ -12017,6 +12057,19 @@ export const App: React.FC = () => {
               return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0 };
             })}
             onToggleAlert={toggleWatchAlert}
+            exprTemplates={(() => {
+              // (the state now, its time limit: the templates start from them)
+              const cur = liveSession.current?.state ?? identifiedStatesResult.states[0]?.id ?? 'STATE';
+              const limitS = Math.max(1, Math.round((limitFor(stateLimits, defaultLimit, cur) ?? 30_000) / 1000));
+              return [
+                { label: `In ${cur} longer than its limit (${limitS} s)`, text: `_state = ${cur} AND _inState > T#${limitS}S` },
+                { label: 'In any state longer than a minute', text: '_inState > T#1M' },
+                { label: `An output on outside ${cur}`, text: `OUTPUT AND _state <> ${cur}` },
+                { label: 'A value out of its range', text: '(VALUE < 0) OR (VALUE > 100)' },
+                { label: 'Actual far from its setpoint', text: 'ABS(ACTUAL - SETPOINT) > 0.5' },
+                { label: 'Two signals that must not be on together', text: 'SIGNAL_A AND SIGNAL_B' },
+              ];
+            })()}
             alertProfiles={alertProfilesProps}
             onSetAlertFor={(n) =>
               setPromptRequest({
@@ -12096,6 +12149,7 @@ export const App: React.FC = () => {
                   void postWebhook(alertWebhook, `Kval MachineScope: a test message (${pouFileName.replace(/\.TcPOU$/i, '')})`).then((r) => showCopyToast(r.ok ? 'The webhook was told (a test message)' : `The webhook was not told: ${r.error}`, r.ok ? 'success' : 'error', 7000)),
               },
               onPick: (e) => setTimelineFocus({ t: e.t, nonce: Date.now() }),
+              onExportStats: () => void saveDocument(`${pausePou}_events_stats_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventStatsCsv(sharedEvents ?? liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Statistics saved: ${r.path}`, 'success')),
               shared:
                 liveMode === 'web' && liveStatus.state === 'connected'
                   ? {
@@ -12135,6 +12189,37 @@ export const App: React.FC = () => {
                 showCopyToast(`Snapshot ${s.label}: ${Object.keys(values).length} values${s.state ? `, in ${s.state}` : ''}`, 'success');
               },
               onRemove: (id) => keepSnapshots(snapshots.filter((s) => s.id !== id)),
+              // (its values written back: the watched variables the PLC has, not the expressions; only those that differ)
+              onRestore:
+                liveStatus.state === 'connected' && !replay && (liveMode === 'xae' || liveMode === 'desktop')
+                  ? (s) => {
+                      const items = Object.entries(s.values)
+                        .filter(([name]) => !isWatchExpr(name))
+                        .map(([name, v]) => ({ name, id: name.toLowerCase(), v, w: liveWatched[name.toLowerCase()] }))
+                        .filter((x) => x.w?.symbol && !x.w.error && !/^(task|test|sym|ov):/.test(x.id) && JSON.stringify(liveVarValues[x.id]) !== JSON.stringify(x.v));
+                      if (!items.length) return showCopyToast(`The PLC has the values of ${s.label} already`, 'success');
+                      const text = (v: unknown) => (typeof v === 'boolean' ? (v ? 'TRUE' : 'FALSE') : String(v));
+                      setPromptRequest({
+                        title: `Write the snapshot ${s.label} back?`,
+                        label: `${items.length} value${items.length === 1 ? '' : 's'} written on ${liveStatus.target ?? 'the PLC'}, one after the other: the machine's program sees them in its next cycles. Only when the machine is safe for it.`,
+                        details: items.map((x) => `${x.w!.symbol}: ${text(liveVarValues[x.id])} → ${text(x.v)}`),
+                        confirmOnly: true,
+                        danger: true,
+                        confirmCheck: 'The machine is safe for this, and I may change its PLC',
+                        submitLabel: `Write ${items.length}`,
+                        onSubmit: () =>
+                          void (async () => {
+                            const failed: string[] = [];
+                            for (const x of items) {
+                              const r = await writeLiveVar(liveMode, x.id, x.v);
+                              if (!r.ok) failed.push(`${x.name}: ${r.message}`);
+                            }
+                            addLiveEvent('write', `The snapshot ${s.label} written back: ${items.length - failed.length} of ${items.length}${failed.length ? ` (not: ${failed.join('; ')})` : ''}`);
+                            showCopyToast(failed.length ? `Not written: ${failed.join('; ')}` : `${items.length} value${items.length === 1 ? '' : 's'} of ${s.label} written`, failed.length ? 'error' : 'success', 8000);
+                          })(),
+                      });
+                    }
+                  : undefined,
               onClear: () => keepSnapshots([]),
               onExport: () => void saveDocument(`${pausePou}_snapshots_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, snapshotsCsv(snapshots), { personal: true }).then((r) => r?.path && showCopyToast(`Snapshots saved: ${r.path}`, 'success')),
             }}
@@ -12144,6 +12229,8 @@ export const App: React.FC = () => {
               where: commissioning.where,
               logCount: commissioning.log.length,
               onShowLog: showCommissioningLog,
+              onReportPdf: () =>
+                void saveDocument(`${commissioningType}_commissioning.pdf`, commissioningReportPdf({ pouType: commissioningType, allowed: commissioning.allowed, log: commissioning.log, where: commissioning.where }), { personal: true }).then((r) => r?.path && showCopyToast(`The commissioning report (PDF): ${r.path}`, 'success', 7000)),
               onReport: () =>
                 void saveDocument(`${commissioningType}_commissioning.html`, commissioningReport({ pouType: commissioningType, allowed: commissioning.allowed, log: commissioning.log, where: commissioning.where }), { personal: true }).then((r) => r?.path && showCopyToast(`The commissioning report: ${r.path}`, 'success', 7000)),
             }}
@@ -12201,6 +12288,7 @@ export const App: React.FC = () => {
                       stateName: (v) => liveStateName(v, liveNamesRef.current),
                       run: { values: rec.values, vars: rec.vars, watched: rec.watched, instance: rec.instance, started: rec.started },
                       title: `The recording ${replay.file}`,
+                      limitMs: measuredLimits(),
                     });
                     if (t.steps < 2) return showCopyToast('The recording has one state only: nothing to test', 'error', 6000);
                     offerTcUnit(t, `From the recording ${replay.file}: its inputs written step by step, the ${t.steps} states it went through checked in turn.`);
@@ -12439,11 +12527,12 @@ export const App: React.FC = () => {
             onSelect={setPathIndex}
             onJumpToState={(id) => handleJumpToState(id)}
             onTcUnitTestAll={() => {
+              const limitMs = measuredLimits();
               const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
               if (!enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
               const pou = pouTypeName ?? pausePou;
               const paths = pathResult.paths.slice(0, 10);
-              const made = paths.map((path, i) => generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test` }));
+              const made = paths.map((path, i) => generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test`, limitMs }));
               offerTcUnit(made, `Every path from ${pathFrom} to ${pathTo}${pathResult.paths.length > 10 ? ' (the 10 shortest)' : ''}: a test suite each, each guard's inputs written before its step, the states checked in turn.`);
             }}
             onTcUnitTest={(i) => {
@@ -12451,7 +12540,7 @@ export const App: React.FC = () => {
               const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
               if (!path || !enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
               const pou = pouTypeName ?? pausePou;
-              const t = generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test` });
+              const t = generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test`, limitMs: measuredLimits() });
               const notes = path.map((p) => guardInputs(p.guard).notes.length).reduce((a, b) => a + b, 0);
               offerTcUnit(t, `The path ${path[0].from} → ${path.map((p) => p.to).join(' → ')}: each guard's inputs written before its step (from the guards: ${notes ? `${notes} condition${notes === 1 ? '' : 's'} it cannot set, said in comments there` : 'all of them set'}), the states checked in turn.`);
             }}

@@ -62,6 +62,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   /** Commissioning beside the PLC project: { allowed, log }; saved with { allowed?, entry? } */
   /** An alert told to a webhook (Teams, Slack; https only): { ok } or { error } */
   webhook: (url, text) => ipcRenderer.invoke('tc:webhook', url, text),
+  /** Per-POU-type settings beside the PLC project: { value } / saved { value } or { error } */
+  projectStore: (pouPath, kind, pouType) => ipcRenderer.invoke('tc:project-store', pouPath, kind, pouType),
+  projectStoreSave: (pouPath, kind, pouType, value) => ipcRenderer.invoke('tc:project-store-save', pouPath, kind, pouType, value),
   commissioning: (pouPath, pouType) => ipcRenderer.invoke('tc:commissioning', pouPath, pouType),
   commissioningSave: (pouPath, pouType, req) => ipcRenderer.invoke('tc:commissioning-save', pouPath, pouType, req),
   /** A POU's layout file beside it (<POU>.machinescope.json): read { text | null } / written { written } or { error } */

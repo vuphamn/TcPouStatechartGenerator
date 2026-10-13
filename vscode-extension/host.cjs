@@ -255,6 +255,9 @@ function createHost({ pouPath, post, ui }) {
     // A live session's events kept beside the PLC project (MachineScope.events)
     // Commissioning beside the PLC project (MachineScope.commissioning.json)
     // An alert told to a webhook (https only)
+    // Per-POU-type settings beside the PLC project (MachineScope.alerts.json …)
+    projectStore: ({ requestId, kind, pouType }) => post({ type: 'projectStoreResult', requestId, ...require('../shared/projectStore.cjs').readStore(pou, kind, pouType) }),
+    projectStoreSave: ({ requestId, kind, pouType, value }) => post({ type: 'projectStoreSaveResult', requestId, ...require('../shared/projectStore.cjs').saveStore(pou, kind, pouType, value ?? null) }),
     webhook: async ({ requestId, url, text }) => post({ type: 'webhookResult', requestId, ...(await require('../shared/webhook.cjs').postWebhook(url, text)) }),
     commissioning: ({ requestId, pouType }) => post({ type: 'commissioningResult', requestId, ...require('../shared/commissioningFile.cjs').readCommissioning(pou, pouType) }),
     commissioningSave: ({ requestId, pouType, allowed, entry }) => post({ type: 'commissioningSaveResult', requestId, ...require('../shared/commissioningFile.cjs').saveCommissioning(pou, pouType, { allowed, entry }) }),

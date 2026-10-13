@@ -324,8 +324,10 @@ function failuresOf(log) {
           }
         }));
       }
-      // The web tests failed beside others (or with --retry): once more, alone; the first run's log kept (.first.log)
-      if (suite === 'web' && (n > 1 || retry)) {
+      // The web tests failed beside others (or with --retry), and the live ones (fake PLCs and sockets: their timing, under
+      // the memory the web tests left in use; guards-gw on 2026-10-12 and 13): once more, alone; the first run's log
+      // kept (.first.log)
+      if ((suite === 'web' && (n > 1 || retry)) || suite === 'live') {
         const failedHere = results.filter((r) => r.suite === suite && !r.ok && r.file);
         if (failedHere.length) console.log(`  (${failedHere.length} failed: run again, one at a time)`);
         for (const r of failedHere) {

@@ -259,7 +259,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 const NightlyChip: React.FC = () => {
   const [last, setLast] = React.useState<{ when: string; passed: boolean; seconds: number; log: string } | null>(null);
   // (the last 30 runs: history.json, oldest first)
-  const [history, setHistory] = React.useState<{ when: string; passed: boolean; seconds: number; full?: boolean | null }[]>([]);
+  const [history, setHistory] = React.useState<{ when: string; passed: boolean; seconds: number; full?: boolean | null; failed?: string[]; newFailures?: string[]; flaky?: string[] }[]>([]);
   React.useEffect(() => {
     let alive = true;
     const read = () =>
@@ -294,10 +294,15 @@ const NightlyChip: React.FC = () => {
       id="status-nightly"
       data-passed={last.passed ? 'true' : 'false'}
       className={`shrink-0 font-mono ${last.passed ? 'text-emerald-400' : 'text-rose-400'}`}
-      title={`The nightly real-PLC test (development): ${last.passed ? 'passed' : 'FAILED'} ${when.toLocaleString()}, ${last.seconds} s. Log: ${last.log}${history.length > 1 ? `\nThe last ${history.length} runs (oldest first): ${history.map((h) => (h.passed ? '✓' : '✗')).join('')}, ${history.filter((h) => h.passed).length} passed; ${Math.round(Math.min(...history.map((h) => h.seconds)))}–${Math.round(Math.max(...history.map((h) => h.seconds)))} s, median ${[...history.map((h) => h.seconds)].sort((a, b) => a - b)[Math.floor(history.length / 2)]} s${history.some((h) => h.full != null) ? `; the whole suite: ${history.filter((h) => h.full === true).length} of ${history.filter((h) => h.full != null).length} runs passed` : ''}` : ''}`}
+      title={`The nightly real-PLC test (development): ${last.passed ? 'passed' : 'FAILED'} ${when.toLocaleString()}, ${last.seconds} s. Log: ${last.log}${history.length > 1 ? `\nThe last ${history.length} runs (oldest first): ${history.map((h) => (h.passed ? '✓' : '✗')).join('')}, ${history.filter((h) => h.passed).length} passed; ${Math.round(Math.min(...history.map((h) => h.seconds)))}–${Math.round(Math.max(...history.map((h) => h.seconds)))} s, median ${[...history.map((h) => h.seconds)].sort((a, b) => a - b)[Math.floor(history.length / 2)]} s${history.some((h) => h.full != null) ? `; the whole suite: ${history.filter((h) => h.full === true).length} of ${history.filter((h) => h.full != null).length} runs passed` : ''}` : ''}${(() => {
+        const h = history[history.length - 1];
+        if (!h) return '';
+        return `${h.newFailures?.length ? `\nNew since the run before: ${h.newFailures.join(', ')}` : ''}${h.failed?.filter((f) => !h.newFailures?.includes(f)).length ? `\nFailing the run before too: ${h.failed.filter((f) => !h.newFailures?.includes(f)).join(', ')}` : ''}${h.flaky?.length ? `\nFlaky (passed alone): ${h.flaky.join(', ')}` : ''}`;
+      })()}`}
       data-history={history.map((h) => (h.passed ? '1' : '0')).join('')}
+      data-new-failures={(history[history.length - 1]?.newFailures ?? []).join(',')}
     >
-      nightly {last.passed ? '✓' : '✗'}{history.length > 1 ? ` ${history.filter((h) => h.passed).length}/${history.length}` : ''} {when.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} {when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+      nightly {last.passed ? '✓' : '✗'}{history[history.length - 1]?.newFailures?.length ? ` +${history[history.length - 1].newFailures!.length} new` : ''}{history.length > 1 ? ` ${history.filter((h) => h.passed).length}/${history.length}` : ''} {when.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} {when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
     </span>
   );
 };

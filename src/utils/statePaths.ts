@@ -19,6 +19,37 @@ export interface PathSearchResult {
   truncated: boolean;
 }
 
+/**
+ * A test path to each transition the PLC never took (live coverage): the shortest path to its start from the first of
+ * the starts given that has one (the initial state, the live one, …), then the transition itself → { start, from, to,
+ * path } (at most max)
+ */
+export function untakenPaths(edges: EdgeInfo[], starts: string | string[], untaken: { from: string; to: string }[], max = 10): { start: string; from: string; to: string; path: PathStep[] }[] {
+  const candidates = [...new Set((Array.isArray(starts) ? starts : [starts]).filter(Boolean))];
+  const out: { start: string; from: string; to: string; path: PathStep[] }[] = [];
+  for (const u of untaken) {
+    if (out.length >= max) break;
+    const edge = edges.find((e) => e.from === u.from && e.to === u.to);
+    if (!edge) continue;
+    let lead: PathStep[] | undefined;
+    let start = '';
+    for (const c of candidates) {
+      lead = c === u.from ? [] : findPaths(edges, c, u.from, 1).paths[0];
+      if (lead) {
+        start = c;
+        break;
+      }
+    }
+    // (no start reaches it: the transition alone, from its own start)
+    if (!lead) {
+      lead = [];
+      start = u.from;
+    }
+    out.push({ start, from: u.from, to: u.to, path: [...lead, { from: u.from, to: u.to, guard: guardOf(edge), edgeId: (edge as { id?: string }).id ?? `${u.from}->${u.to}` }] });
+  }
+  return out;
+}
+
 export const guardOf = (edge: EdgeInfo) => extractCleanGuardText(edge.condition || edge.label || '').replace(/\s+/g, ' ').trim();
 
 export function findPaths(edges: EdgeInfo[], from: string, to: string, maxPaths = 25, maxDepth = 30): PathSearchResult {

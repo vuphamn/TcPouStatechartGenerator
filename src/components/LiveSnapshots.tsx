@@ -43,7 +43,9 @@ export const LiveSnapshots: React.FC<{
   onRemove: (id: string) => void;
   onClear: () => void;
   onExport: () => void;
-}> = ({ list, live, onTake, onRemove, onClear, onExport }) => {
+  /** A snapshot's values written back to the PLC (asked first) */
+  onRestore?: (s: LiveSnapshot) => void;
+}> = ({ list, live, onTake, onRemove, onClear, onExport, onRestore }) => {
   const [picked, setPicked] = useState<string[]>([]);
   const pair = picked.map((id) => list.find((s) => s.id === id)).filter((s): s is LiveSnapshot => !!s);
   const rows = pair.length === 2 ? compareSnapshots(pair[0], pair[1]) : [];
@@ -73,6 +75,11 @@ export const LiveSnapshots: React.FC<{
             <label key={s.id} className={`live-snapshot flex items-center gap-1 pl-1 pr-0.5 rounded border font-mono text-[10px] ${picked.includes(s.id) ? 'border-sky-600 bg-sky-950/60 text-sky-100' : 'border-slate-700 text-slate-300'}`} data-id={s.id} title={`${new Date(s.t).toLocaleString()}${s.state ? `, in ${s.state}` : ''}: ${Object.keys(s.values).length} values (tick two to compare)`}>
               <input type="checkbox" className="w-3 h-3" checked={picked.includes(s.id)} onChange={(e) => setPicked((cur) => (e.target.checked ? [...cur.filter((x) => x !== s.id), s.id].slice(-2) : cur.filter((x) => x !== s.id)))} />
               {s.label}
+              {onRestore && (
+                <button type="button" className="live-snapshot-restore text-sky-400 hover:text-white" onClick={(e) => { e.preventDefault(); onRestore(s); }} title="Its values written back to the PLC (the ones that differ now; asked first)">
+                  ⤺
+                </button>
+              )}
               <button type="button" className="text-slate-500 hover:text-white" onClick={(e) => { e.preventDefault(); setPicked((cur) => cur.filter((x) => x !== s.id)); onRemove(s.id); }} title="Remove it">
                 <X className="w-3 h-3" />
               </button>
