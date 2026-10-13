@@ -82,6 +82,10 @@ interface LivePanelProps {
   onExportCoverage?: () => void;
   /** TcUnit tests of the transitions never taken (coverage) */
   onTcUnitUntaken?: () => void;
+  /** Guard coverage: the conditions seen both ways live, the ones never true / never false */
+  guardCoverage?: { total: number; both: number; neverTrue: { from: string; to: string }[]; neverFalse: { from: string; to: string }[]; onReset: () => void };
+  /** The test report (suites, coverage, guard coverage) as HTML or PDF */
+  onTestReport?: (kind: 'html' | 'pdf') => void;
   /** Other windows live on this POU on another PLC (Compare…): their PLC and current state; their differences */
   peers?: import('../utils/livePeers.ts').LivePeer[];
   onPeerDiff?: (id: string) => void;
@@ -101,7 +105,9 @@ interface LivePanelProps {
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
-  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean; alertForMs?: number }[];
+  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean; alertForMs?: number; snoozedUntil?: number }[];
+  /** An alert snoozed: 15 min, then 1 h, then not */
+  onSnoozeAlert?: (name: string) => void;
   /** How long a watch expression must stay true before its alert (asked) */
   onSetAlertFor?: (name: string) => void;
   /** Alert profiles: named sets of expressions and their alerts, loaded / saved / removed */
@@ -115,11 +121,17 @@ interface LivePanelProps {
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
   timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[]; focus?: { t: number; nonce: number } | null };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void; valueStats?: () => { name: string; shift: string; min: number; max: number; avg: number; n: number }[]; onAddNote?: () => void };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
+  /** A note at this moment (a replay's position, or now live) */
+  onAddNote?: () => void;
+  /** The live dashboard (a wall screen) */
+  onOpenDashboard?: () => void;
+  /** The replayed recording's notes (a click goes there) */
+  replayNotes?: { t: number; text: string }[];
   /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
-  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void; onReport?: () => void; onReportPdf?: () => void };
+  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void; onReport?: () => void; onReportPdf?: () => void; onSequence?: () => void };
   /** The TcUnit suites added to the PLC project here, read live: 0 running, 1 passed, 2 failed (at a step) */
   tests?: { name: string; steps: number; result?: number; step?: number; failedStep?: number; error?: string }[];
   onForgetTest?: (name: string) => void;
@@ -351,6 +363,53 @@ const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasV
         Import…
         <input id="live-watch-import" type="file" accept=".csv,.txt" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) onImport(await f.text()); e.target.value = ''; }} />
       </label>
+    </div>
+  );
+};
+
+/** Guard coverage: how many conditions were seen true and false live, the gaps (a click opens them); the test report */
+const GuardCoverageStrip: React.FC<{ guards?: { total: number; both: number; neverTrue: { from: string; to: string }[]; neverFalse: { from: string; to: string }[]; onReset: () => void }; onReport?: (kind: 'html' | 'pdf') => void }> = ({ guards, onReport }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div id="live-guard-coverage" className="px-2.5 py-1 border-b border-slate-800 text-[11px] space-y-0.5">
+      <div className="flex items-center gap-1.5">
+        {guards && (
+          <button id="live-guard-coverage-toggle" type="button" onClick={() => setOpen((v) => !v)} className="text-slate-300 hover:text-sky-300" title="Each transition's condition: seen true and seen false while live (its other branch never ran: a gap)">
+            Conditions seen both ways: <span id="live-guard-coverage-count" className="font-mono text-sky-300">{guards.both} / {guards.total}</span>
+          </button>
+        )}
+        <span className="ml-auto flex items-center gap-1">
+          {onReport && (
+            <>
+              <button id="live-test-report-html" type="button" onClick={() => onReport('html')} className="px-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800" title="The test report (for sign-off): the TcUnit suites' results, the transitions taken, the conditions seen both ways">
+                Test report…
+              </button>
+              <button id="live-test-report-pdf" type="button" onClick={() => onReport('pdf')} className="px-1 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800" title="The test report as a PDF">
+                PDF…
+              </button>
+            </>
+          )}
+          {guards && (
+            <button type="button" onClick={guards.onReset} className="px-1 rounded text-[10px] text-slate-500 hover:text-rose-300" title="Forget what was seen (a new commissioning)">
+              Reset
+            </button>
+          )}
+        </span>
+      </div>
+      {open && guards && (
+        <div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
+          {(['neverTrue', 'neverFalse'] as const).map((k) => (
+            <div key={k} id={`live-guard-coverage-${k}`}>
+              <div className="font-sans text-slate-500">{k === 'neverTrue' ? 'never true' : 'never false'} ({guards[k].length})</div>
+              {guards[k].slice(0, 30).map((e) => (
+                <div key={`${e.from}>${e.to}`} className="live-guard-gap truncate text-amber-200" title={`${e.from} → ${e.to}`}>
+                  {e.from.split('_').pop()} → {e.to.split('_').pop()}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -650,6 +709,8 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   coverage,
   onExportCoverage,
   onTcUnitUntaken,
+  guardCoverage,
+  onTestReport,
   coverageOnChart,
   onCoverageOnChart,
   onResetCoverage,
@@ -666,10 +727,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   exprTemplates,
   onToggleAlert,
   onSetAlertFor,
+  onSnoozeAlert,
   alertProfiles,
   timeline,
   events,
   onTcUnitTest,
+  onAddNote,
+  onOpenDashboard,
+  replayNotes = [],
   setStateAllowed,
   tests = [],
   onForgetTest,
@@ -1218,6 +1283,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             />
           </div>
         )}
+        {onOpenDashboard && (
+          <button id="live-dashboard-btn" type="button" onClick={onOpenDashboard} className="self-start px-1.5 py-0.5 rounded border border-slate-700 text-[11px] text-slate-300 hover:bg-slate-800" title="A wall screen: each followed PLC's state and time in it, the alerts now, the last events (Esc closes)">
+            ⛶ Dashboard
+          </button>
+        )}
         {tests.length > 0 && (
           <div id="live-tests" className="flex flex-wrap items-center gap-1 text-[11px]">
             <span className="text-slate-400" title="The TcUnit tests made from recordings and added to the PLC project (PRG_KssTests), as the PLC runs them">
@@ -1283,6 +1353,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <span id="live-set-state-where" className="text-[10px] text-slate-500" title={setStateAllowed.where === 'project' ? 'Kept beside the PLC project (MachineScope.commissioning.json): commit it to share it' : 'Kept in this browser'}>
                 {setStateAllowed.where === 'project' ? 'project' : 'browser'}
               </span>
+            )}
+            {setStateAllowed.onSequence && status.state === 'connected' && setStateAllowed.list.length >= 2 && (
+              <button id="live-set-state-sequence" type="button" onClick={setStateAllowed.onSequence} className="px-1 rounded text-[10px] text-violet-300 hover:text-white" title="Several states one after another (each step confirmed; one reason, logged with each)">
+                Sequence…
+              </button>
             )}
             {setStateAllowed.onShowLog && (
               <button id="live-set-state-log" type="button" onClick={setStateAllowed.onShowLog} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="Who set the PLC to which state, when">
@@ -1372,6 +1447,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <span className="truncate text-[11px] text-slate-400" title={replay.file}>
                 {replay.file}
               </span>
+              {onAddNote && (
+                <button id="live-replay-note" type="button" onClick={onAddNote} className="shrink-0 px-1.5 py-0.5 rounded border border-emerald-700 text-[10px] text-emerald-200 hover:bg-emerald-900/50" title="A note at this moment of the recording (on the timeline, kept with it)">
+                  + note
+                </button>
+              )}
               {onTcUnitTest && (
                 <button
                   id="live-replay-tcunit"
@@ -1395,6 +1475,15 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               className="w-full accent-violet-400"
               title="Go to a moment of the recording"
             />
+            {replayNotes.length > 0 && (
+              <div id="live-replay-notes" className="flex flex-wrap gap-1">
+                {replayNotes.map((n, i) => (
+                  <button key={`${n.t}-${i}`} type="button" className="live-replay-note px-1 rounded bg-emerald-900/50 text-[10px] text-emerald-100 hover:bg-emerald-800" onClick={() => onReplaySeek?.(n.t)} title={`${new Date(n.t).toLocaleTimeString()}: ${n.text} (a click goes there)`}>
+                    {formatClock(n.t)} {n.text.length > 28 ? `${n.text.slice(0, 27)}…` : n.text}
+                  </button>
+                ))}
+              </div>
+            )}
             {replayVars.length > 0 && (
               <div id="live-replay-vars" className="space-y-0.5 pt-0.5">
                 {replayVars.map((v) => (
@@ -2179,6 +2268,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   {w.alert ? <Bell className="w-3 h-3" /> : <BellOff className="w-3 h-3" />}
                 </button>
               )}
+              {w.expr && w.alert && onSnoozeAlert && (
+                <button type="button" className={`live-watch-alert-snooze text-[10px] font-sans ${w.snoozedUntil ? 'text-amber-300' : 'text-slate-600 hover:text-slate-300'}`} data-until={w.snoozedUntil ?? ''} onClick={() => onSnoozeAlert(w.name)} title={w.snoozedUntil ? `Snoozed until ${new Date(w.snoozedUntil).toLocaleTimeString()} (a click: longer, then not)` : 'Snooze: silent for 15 min (again: 1 h)'}>
+                  {w.snoozedUntil ? `zz ${Math.max(1, Math.round((w.snoozedUntil - Date.now()) / 60_000))}m` : 'zz'}
+                </button>
+              )}
               {w.expr && w.alert && onSetAlertFor && (
                 <button type="button" className="live-watch-alert-for text-[10px] text-rose-300 hover:text-white font-sans" onClick={() => onSetAlertFor(w.name)} title="How long it must stay true before the alert (a click changes it)">
                   {w.alertForMs ? `${w.alertForMs / 1000} s` : 'at once'}
@@ -2197,7 +2291,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
       {snapshots && (snapshots.live || snapshots.list.length > 0) && <LiveSnapshots {...snapshots} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} shared={events.shared} onExportStats={events.onExportStats} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} shared={events.shared} onExportStats={events.onExportStats} valueStats={events.valueStats} onAddNote={events.onAddNote} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (
@@ -2286,6 +2380,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
         <CoverageStrip coverage={coverage} onExport={onExportCoverage} onChart={coverageOnChart} onToggleChart={onCoverageOnChart} onReset={onResetCoverage} onAllTime={onCoverageAllTime} sessions={coverageSessions} onExportSession={onExportCoverageSession} onProject={onProjectCoverage} shared={coverageShared} />
         </>
       )}
+      {(guardCoverage || onTestReport) && (coverage?.total ?? 0) > 0 && <GuardCoverageStrip guards={guardCoverage} onReport={onTestReport} />}
 
       {/* Trail */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-slate-800 shrink-0">

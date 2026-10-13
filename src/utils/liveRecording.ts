@@ -29,12 +29,20 @@ export interface LiveRecording {
   watched: Record<string, { symbol?: string; type?: string; error?: string; enumNames?: Record<string, string> }>;
   /** Samples were dropped at the limit */
   truncated?: boolean;
+  /** Notes at moments (PLC time): "jam cleared here" */
+  notes?: RecordingNote[];
+}
+
+export interface RecordingNote {
+  t: number;
+  text: string;
 }
 
 export class LiveRecorder {
   values: LiveRecording['values'] = [];
   vars: LiveRecording['vars'] = [];
   watched: LiveRecording['watched'] = {};
+  notes: RecordingNote[] = [];
   started = 0;
   truncated = false;
 
@@ -42,6 +50,7 @@ export class LiveRecorder {
     this.values = [];
     this.vars = [];
     this.watched = {};
+    this.notes = [];
     this.started = Date.now();
     this.truncated = false;
   }
@@ -79,7 +88,7 @@ export class LiveRecorder {
   toRecording(meta: Pick<LiveRecording, 'pou' | 'pouFile' | 'instance' | 'target' | 'stateVar'>): LiveRecording {
     return {
       kind: RECORDING_KIND, version: 1, ...meta, started: this.started, ended: Date.now(),
-      values: this.values, vars: this.vars, watched: this.watched, ...(this.truncated ? { truncated: true } : {}),
+      values: this.values, vars: this.vars, watched: this.watched, ...(this.truncated ? { truncated: true } : {}), ...(this.notes.length ? { notes: this.notes } : {}),
     };
   }
 }
@@ -100,6 +109,7 @@ export function parseRecording(text: string): LiveRecording | { error: string } 
     kind: RECORDING_KIND, version: 1, pou: r.pou, pouFile: r.pouFile, instance: r.instance, target: r.target, stateVar: r.stateVar || 'machineState',
     started: Number(r.started) || values[0].t, ended: Number(r.ended) || values[values.length - 1].t, values, vars,
     watched: r.watched && typeof r.watched === 'object' ? r.watched : {}, truncated: !!r.truncated,
+    notes: (Array.isArray(r.notes) ? r.notes : []).filter((n) => n && Number.isFinite(n.t) && typeof n.text === 'string').map((n) => ({ t: n.t, text: n.text.slice(0, 300) })).sort((a, b) => a.t - b.t),
   };
 }
 

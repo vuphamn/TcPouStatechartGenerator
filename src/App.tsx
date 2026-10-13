@@ -218,8 +218,11 @@ import { onlineChangeRisks } from './utils/onlineChangeRisks.ts';
 import { recordingLane, type TimelineLane } from './components/StateTimeline.tsx';
 import { eventsCsv, eventStatsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
 import { StateHistoryDialog, type StateVersion } from './components/StateHistoryDialog.tsx';
+import { LiveDashboard } from './components/LiveDashboard.tsx';
 import { snapshotsCsv, type LiveSnapshot, type SnapshotValue as LiveSnapshotValue } from './components/LiveSnapshots.tsx';
 import { commissioningReport, commissioningReportPdf } from './utils/commissioningReport.ts';
+import { addGuardResults, guardCoverageSummary, loadGuardCoverage, saveGuardCoverage, type GuardCoverage } from './utils/guardCoverage.ts';
+import { testReportHtml, testReportPdf } from './utils/testReport.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
@@ -291,7 +294,8 @@ import type { PlcActionEntry } from './utils/plcActionLog.ts';
 const pouNameOf = (pou: string) => (pou.split(/[\\/]/).pop() ?? pou).replace(WEB_LAYOUT_PREFIX, '');
 const stableEdges = (e: EdgeOffsetsMap) => Object.fromEntries(Object.entries(e).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
 const emptyLook: PouLayout['look'] = { states: {}, transitions: {}, collapsed: [] };
-import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording } from './utils/liveRecording.ts';
+import { LiveRecorder, parseRecording, recordingFileName, recordingSpan, upperBound, type LiveRecording, type RecordingNote } from './utils/liveRecording.ts';
+import { loadRecordingNotes, saveRecordingNote } from './utils/recordingNotes.ts';
 import { addSeen, loadSeen, mergeSeenCounts, seenCounts, removedSeenTransitions, saveSeen, seenKey, seenText, stateSeen, type SeenMap, forgetSeen, setSeenCondition, candidatesOf } from './utils/seenTransitions.ts';
 import { probePlcs, refreshRemembered, addRouteOnPlc, canScanPlcs, ipFieldFor, loadRememberedPlcs, saveRememberedPlcs, scanPlcs, type AddRouteBoth, type AddRouteResult, type FoundPlc, type PlcScanResult, type RememberedPlc } from './utils/plcDiscovery.ts';
 import { GatewayConnection, GatewayPlc, GatewaySso, detectGatewayOrigin, fetchGatewaySso, gatewaySignOut, gatewaySocketUrl, type HelperBuild } from './utils/liveGateway.ts';
@@ -1804,10 +1808,40 @@ export const App: React.FC = () => {
       onSubmit: canAdd ? add : save,
     });
   };
+  // Notes at moments: in a replay at its position (kept with the recording in this browser), live at the PLC's time now
+  // (saved with the recording, and an event)
+  const addRecordingNote = () =>
+    setPromptRequest({
+      title: replay ? `A note at ${new Date(replay.pos).toLocaleTimeString()}` : 'A note now',
+      label: replay ? `In ${replay.file}, at this moment of the replay (on the timeline, kept with the recording here):` : "Now (saved with this session's recording, an event, on the timeline):",
+      placeholder: 'jam cleared here',
+      submitLabel: 'Add note',
+      validate: (t) => (t.trim() ? null : 'Some text'),
+      onSubmit: (text) => {
+        const note = { t: replay ? replay.pos : Date.now() - plcClockOffsetRef.current, text: text.trim().slice(0, 300) };
+        if (replay) {
+          setReplayNotes((cur) => [...cur, note].sort((a, b) => a.t - b.t));
+          saveRecordingNote(replay.file, replay.rec.started, note);
+        } else recorderRef.current.notes.push(note);
+        addLiveEvent('note', note.text);
+      },
+    });
   // (the timeline's recordings added as lanes of their own)
   const [timelineExtra, setTimelineExtra] = useState<TimelineLane[]>([]);
   // (the state variable's watch id: sym:<instance>.<state variable>, followed to set the PLC to a state)
   const stateVarWatchIdRef = useRef('');
+  // (each watched variable's and expression's values by shift, this session: min, max, sum, count; a number or a BOOL)
+  const shiftValuesRef = useRef(new Map<string, { min: number; max: number; sum: number; n: number }>());
+  const addShiftValue = (name: string, v: unknown, t: number) => {
+    const x = typeof v === 'boolean' ? (v ? 1 : 0) : typeof v === 'number' && Number.isFinite(v) ? v : null;
+    if (x === null) return;
+    const h = new Date(t).getHours();
+    const key = `${name}\u0001${h >= 6 && h < 14 ? '06–14' : h >= 14 && h < 22 ? '14–22' : '22–06'}`;
+    const s = shiftValuesRef.current.get(key);
+    if (!s) shiftValuesRef.current.set(key, { min: x, max: x, sum: x, n: 1 });
+    else shiftValuesRef.current.set(key, { min: Math.min(s.min, x), max: Math.max(s.max, x), sum: s.sum + x, n: s.n + 1 });
+  };
+  const shiftValues = () => [...shiftValuesRef.current].map(([k, s]) => ({ name: k.split('\u0001')[0], shift: k.split('\u0001')[1], min: s.min, max: s.max, avg: s.sum / s.n, n: s.n }));
   // (alerts that must last a time: since when each is true; how long each must last; the alert said, set further down)
   const alertPendingRef = useRef(new Map<string, number>());
   const watchAlertForRef = useRef<Record<string, number>>({});
@@ -1821,6 +1855,8 @@ export const App: React.FC = () => {
   const setPlcStateRef = useRef<((state: string) => void) | null>(null);
   // (the state's history, its menu: the state shown in the dialog)
   const [stateHistoryOf, setStateHistoryOf] = useState<string | null>(null);
+  // (the live dashboard: a wall screen of the followed PLCs)
+  const [dashboardOpen, setDashboardOpen] = useState(false);
   // (Show commit, a blame bar's click: what that commit changed in a method or the POU's body)
   const [commitView, setCommitView] = useState<{ method: string; hash: string } | null>(null);
   // (through a gateway: each event also kept there, shared with everyone live on that PLC; sent every few seconds)
@@ -1856,6 +1892,9 @@ export const App: React.FC = () => {
   // Live recordings: the running session is recorded (Save recording); Replay plays one back as if live
   const recorderRef = useRef(new LiveRecorder());
   const [replay, setReplay] = useState<ReplayState | null>(null);
+  // (the replay's notes: a state of their own, not the replay's: a note added while it plays not re-applied to each
+  // clock step React rebases, which made a new replay object each render, and the effect below loop)
+  const [replayNotes, setReplayNotes] = useState<RecordingNote[]>([]);
   const replayingRef = useRef(false);
   replayingRef.current = !!replay;
   exprStateRef.current = liveSession.current
@@ -2055,6 +2094,7 @@ export const App: React.FC = () => {
       if (s.v === null || s.v === undefined) continue;
       const t = Number.isFinite(s.t) ? s.t : Date.now();
       if (Number.isFinite(s.t)) plcClockOffsetRef.current = Date.now() - s.t;
+      if (userWatchRef.current.some((n) => n.toLowerCase() === s.id)) addShiftValue(userWatchRef.current.find((n) => n.toLowerCase() === s.id)!, s.v, Date.now());
       const list = varHistoryRef.current.get(s.id) ?? [];
       list.push({ t, v: s.v });
       while (list.length > 6000 || (list.length > 1 && list[0].t < t - 600_000)) list.shift();
@@ -2078,6 +2118,7 @@ export const App: React.FC = () => {
           else fireAlertRef.current(entry, 0);
         }
         if (!on) alertPendingRef.current.delete(entry);
+        addShiftValue(entry, v, lastT);
         const list = varHistoryRef.current.get(entry.toLowerCase()) ?? [];
         list.push({ t: lastT, v });
         while (list.length > 6000 || (list.length > 1 && list[0].t < lastT - 600_000)) list.shift();
@@ -2962,7 +3003,37 @@ export const App: React.FC = () => {
   const [timelineFocus, setTimelineFocus] = useState<{ t: number; nonce: number } | null>(null);
   const alertWebhookRef = useRef('');
   alertWebhookRef.current = alertWebhook;
+  // (alerts snoozed: until when, per POU in this browser; a snoozed one says nothing until then)
+  const snoozeKey = `kss.live.alertSnooze.${pouFileName.replace(/\.TcPOU$/i, '')}`;
+  const [alertSnooze, setAlertSnoozeState] = useState<Record<string, number>>({});
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(snoozeKey) || '{}');
+      setAlertSnoozeState(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
+    } catch {
+      setAlertSnoozeState({});
+    }
+  }, [snoozeKey]);
+  const alertSnoozeRef = useRef<Record<string, number>>({});
+  alertSnoozeRef.current = alertSnooze;
+  // (a click: snoozed 15 min, again: 1 h, again: not)
+  const cycleAlertSnooze = (entry: string) => {
+    const now = Date.now();
+    const left = (alertSnooze[entry] ?? 0) - now;
+    const ms = left <= 0 ? 15 * 60_000 : left <= 15 * 60_000 ? 60 * 60_000 : 0;
+    const next = { ...alertSnooze };
+    if (ms) next[entry] = now + ms;
+    else delete next[entry];
+    setAlertSnoozeState(next);
+    try {
+      localStorage.setItem(snoozeKey, JSON.stringify(next));
+    } catch {
+      // (not kept)
+    }
+    addLiveEvent('alert', ms ? `Snoozed for ${ms / 60_000} min: ${exprText(entry)}` : `Not snoozed any more: ${exprText(entry)}`);
+  };
   fireAlertRef.current = (entry: string, forMs: number) => {
+    if ((alertSnoozeRef.current[entry] ?? 0) > Date.now()) return;
     const what = `${exprText(entry)} became true${forMs ? ` (for ${forMs / 1000} s)` : ''}`;
     addLiveEvent('alert', what);
     showCopyToast(`Alert: ${what}`, 'error', 8000);
@@ -8509,6 +8580,9 @@ export const App: React.FC = () => {
       setLiveSession(EMPTY_LIVE_SESSION);
       setLiveVarValues({});
       setLiveWatched(rec.watched);
+      const kept = loadRecordingNotes(file.name, rec.started);
+      const notes = [...(rec.notes ?? []), ...kept.filter((n) => !(rec.notes ?? []).some((m) => m.t === n.t && m.text === n.text))].sort((a, b) => a.t - b.t);
+      setReplayNotes(notes);
       setReplay({ rec, file: file.name, from: span.from, to: span.to, pos: span.from, playing: true, speed: 1 });
       setLiveStatus({ state: 'connected', message: `Replay: ${file.name}`, instance: rec.instance, target: rec.target, plcState: 'Replay', instances: rec.instance ? [rec.instance] : [] });
       if (rec.pou && pouTypeName && rec.pou.toLowerCase() !== pouTypeName.toLowerCase()) showCopyToast(`${file.name} was recorded with ${rec.pou}; this is ${pouTypeName}: states are shown by their values`, 'error', 8000);
@@ -8647,7 +8721,9 @@ export const App: React.FC = () => {
         return next;
       });
     }
-  }, [replay]);
+    // (its position and recording: not the object, new on each update React re-applies)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replay?.pos, replay?.rec]);
   const replayView = useMemo(
     () => (replay ? { file: replay.file, from: replay.from, to: replay.to, pos: replay.pos, playing: replay.playing, speed: replay.speed, samples: replay.rec.values.length, pausedOn: replay.pausedOn } : undefined),
     [replay]
@@ -9879,6 +9955,33 @@ export const App: React.FC = () => {
     () => (liveGuardEdges && liveGuardInputs ? evaluateGuards(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all', null) : null),
     [liveGuardEdges, liveGuardInputs, liveGuardScope]
   );
+  // Guard coverage: each condition seen true / false live (not in a replay), kept per POU type in this browser
+  const [guardCov, setGuardCov] = useState<GuardCoverage>({});
+  useEffect(() => setGuardCov(loadGuardCoverage(pouTypeName)), [pouTypeName]);
+  useEffect(() => {
+    if (!liveGuardEdges || !liveGuardViews || replay || liveStatus.state !== 'connected') return;
+    const next = addGuardResults(guardCov, liveGuardEdges.edges, liveGuardViews);
+    if (!next) return;
+    setGuardCov(next);
+    saveGuardCoverage(pouTypeName, next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveGuardViews]);
+  const guardSummary = useMemo(
+    () => guardCoverageSummary(guardCov, availableEdges.filter((e) => e.from && e.to && e.from !== '[*]' && e.from !== e.to).map((e) => ({ from: e.from, to: e.to, conditional: !!(e.condition || e.label)?.trim(), condition: e.condition }))),
+    [guardCov, availableEdges]
+  );
+  // The test report (for sign-off): the suites' results, the coverage, the guard coverage
+  const testReportInput = () => ({
+    pou: pouTypeName ?? pausePou,
+    plc: liveStatus.target,
+    suites: tcunitSuites.map((s) => {
+      const id = (v: string) => `test:${s.name.toLowerCase()}:${v}`;
+      const num = (v: string) => (typeof liveVarValues[id(v)] === 'number' ? (liveVarValues[id(v)] as number) : undefined);
+      return { name: s.name, steps: s.steps, result: liveStatus.state === 'connected' ? num('nresult') : undefined, step: num('nstep'), failedStep: num('nfailedstep'), error: liveStatus.state === 'connected' ? liveWatched[id('nresult')]?.error : undefined };
+    }),
+    coverage: liveCoverage,
+    guards: guardSummary.total ? guardSummary : null,
+  });
   // The I/O tab: the transitions whose conditions read a linked variable (the guards' variables, by lower-case path)
   const ioGuardIndex = useMemo(() => {
     if (!ioTree) return null;
@@ -10162,6 +10265,71 @@ export const App: React.FC = () => {
     [liveStatus, liveMode, liveEnumNames, liveWatched, liveStateVar, pouContent, liveSession.current, showCopyToast, addLiveEvent, setStateAllowed]
   );
   setPlcStateRef.current = liveStatus.state === 'connected' && (liveMode === 'xae' || liveMode === 'desktop') ? handleSetPlcState : null;
+  // A sequence of states (commissioning): typed, all among May set to; asked once with the reason and the box ticked,
+  // then each step confirmed before it is written (Stop ends it); each one logged with the reason and its step
+  const handleSetPlcSequence = () => {
+    if (liveStatus.state !== 'connected' || !liveStatus.instance || (liveMode !== 'xae' && liveMode !== 'desktop')) return showCopyToast('Go live first (TwinCAT XAE, VS Code or the desktop app)', 'error');
+    const names = [...liveEnumNames.entries(), ...Object.entries(liveStatus.plcStateNames ?? {}).map(([v, n]) => [Number(v), n] as [number, string])];
+    const valueOf = (s: string) => names.find(([, n]) => n.toLowerCase() === s.toLowerCase())?.[0];
+    const id = stateVarWatchIdRef.current;
+    const symbol = `${liveStatus.instance}.${liveStateVar}`;
+    if (!id || liveWatched[id]?.error) return showCopyToast(`${symbol} is not followed on the PLC`, 'error', 7000);
+    const parse = (t: string) => t.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+    setPromptRequest({
+      title: 'Set the PLC to a sequence of states',
+      label: `The states one after another (each among May set to: ${setStateAllowed.join(', ') || 'none yet'}), separated by commas:`,
+      monospace: true,
+      initial: setStateAllowed.slice(0, 3).join(', '),
+      validate: (t) => {
+        const list = parse(t);
+        if (list.length < 2) return 'Two states at least';
+        const bad = list.find((s) => !setStateAllowed.some((a) => a.toLowerCase() === s.toLowerCase()));
+        if (bad) return `${bad} is not under May set to`;
+        const unknown = list.find((s) => valueOf(s) === undefined);
+        return unknown ? `${unknown}: its value is not known` : null;
+      },
+      submitLabel: 'Next',
+      onSubmit: (t) => {
+        const list = parse(t).map((s) => setStateAllowed.find((a) => a.toLowerCase() === s.toLowerCase())!);
+        setPromptRequest({
+          title: `Set the PLC to ${list.length} states, one after another?`,
+          label: `Each written to ${symbol} on ${liveStatus.target ?? 'the PLC'} when you confirm its step: the program goes on from it at once, without the steps that normally lead there. Only when the machine is safe for it.`,
+          details: list.map((s, i) => `${i + 1}. ${s} (${valueOf(s)})`),
+          danger: true,
+          placeholder: 'Why (logged with each step; optional)',
+          confirmCheck: 'The machine is safe for this (nothing moving, nobody in it), and I may change its PLC',
+          submitLabel: `Start: ${list[0]}`,
+          onSubmit: (reason: string) => {
+            const why = reason.trim().slice(0, 260);
+            const step = (k: number) => {
+              const state = list[k];
+              const value = valueOf(state)!;
+              // (the state now: the ref of this render, not the closure's)
+              const from = exprStateRef.current?.name ?? '';
+              void writeLiveVar(liveMode, id, value).then((res) => {
+                addLiveEvent('state', res.ok ? `Sequence ${k + 1}/${list.length}: set to ${state} (was ${from || '?'})` : `Sequence ${k + 1}/${list.length}: not set to ${state}: ${res.message}`);
+                void saveCommissioning(pouPath, commissioningType, { entry: { state, from, plc: liveStatus.target ?? '', ok: res.ok, reason: `${why ? `${why} ` : ''}(sequence ${k + 1}/${list.length}: ${list.join(' → ')})`.trim(), ...(res.ok ? {} : { message: res.message }) } }).then((r) => !('error' in r) && setCommissioning(r));
+                if (webhookAllRef.current) tellWebhookRef.current(`sequence ${k + 1}/${list.length}: the PLC ${res.ok ? 'set' : 'not set'} to ${state}${why ? `: ${why}` : ''}`);
+                if (!res.ok) return showCopyToast(`The sequence stopped: ${state} not set (${res.message})`, 'error', 9000);
+                if (k + 1 >= list.length) return showCopyToast(`The sequence done: ${list.join(' → ')}`, 'success', 6000);
+                setPromptRequest({
+                  title: `Step ${k + 2} of ${list.length}: ${list[k + 1]}?`,
+                  label: `${state} written (step ${k + 1}). Next: the PLC set to ${list[k + 1]}. Stop ends the sequence here.`,
+                  details: list.map((s, i) => `${i <= k ? '✓' : i === k + 1 ? '→' : ' '} ${i + 1}. ${s}`),
+                  confirmOnly: true,
+                  danger: true,
+                  submitLabel: `Set to ${list[k + 1]}`,
+                  cancelLabel: 'Stop',
+                  onSubmit: () => step(k + 1),
+                });
+              });
+            };
+            step(0);
+          },
+        });
+      },
+    });
+  };
   // Prepared values (XAE's Prepare Value, then Write Values: Ctrl+F7): by watch id; written together, asked first
   const [preparedValues, setPreparedValues] = useState<{ id: string; name: string; symbol?: string; text: string; value: boolean | number | string }[]>([]);
   useEffect(() => {
@@ -12025,6 +12193,22 @@ export const App: React.FC = () => {
             onActivateProject={isXaeHost() && !isVsCodeHost() ? handleActivateProject : undefined}
             onUpdateEnum={liveStatus.plcStateNames && dutContent ? handleUpdateEnumFromPlc : undefined}
             coverage={liveCoverage}
+            guardCoverage={
+              guardSummary.total
+                ? {
+                    ...guardSummary,
+                    onReset: () => {
+                      setGuardCov({});
+                      saveGuardCoverage(pouTypeName, {});
+                    },
+                  }
+                : undefined
+            }
+            onTestReport={(kind) => {
+              const input = testReportInput();
+              const name = `${input.pou}_test_report.${kind}`;
+              void saveDocument(name, kind === 'html' ? testReportHtml(input) : testReportPdf(input), { personal: true }).then((r) => r?.path && showCopyToast(`The test report: ${r.path}`, 'success', 7000));
+            }}
             coverageOnChart={coverageOnChart}
             onCoverageOnChart={setCoverageOnChart}
             onResetCoverage={handleResetCoverage}
@@ -12054,9 +12238,10 @@ export const App: React.FC = () => {
               const p = parseExpr(exprText(n));
               if ('error' in p) return { name: n, expr: true, error: p.error };
               const v = evalExpr(p.node, withState((x) => liveVarValues[x], exprStateRef.current));
-              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0 };
+              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0, snoozedUntil: (alertSnooze[n] ?? 0) > Date.now() ? alertSnooze[n] : undefined };
             })}
             onToggleAlert={toggleWatchAlert}
+            onSnoozeAlert={cycleAlertSnooze}
             exprTemplates={(() => {
               // (the state now, its time limit: the templates start from them)
               const cur = liveSession.current?.state ?? identifiedStatesResult.states[0]?.id ?? 'STATE';
@@ -12132,7 +12317,7 @@ export const App: React.FC = () => {
                       }),
                     onRemoveLane: (label) => setTimelineExtra((cur) => cur.filter((l) => l.label !== label)),
                     // (the events, on this computer's clock as the lanes: not on a replay's)
-                    markers: replay ? [] : liveEvents,
+                    markers: replay ? replayNotes.map((n) => ({ t: n.t, kind: 'note', text: n.text })) : liveEvents,
                     focus: timelineFocus,
                   }
                 : undefined
@@ -12149,7 +12334,9 @@ export const App: React.FC = () => {
                   void postWebhook(alertWebhook, `Kval MachineScope: a test message (${pouFileName.replace(/\.TcPOU$/i, '')})`).then((r) => showCopyToast(r.ok ? 'The webhook was told (a test message)' : `The webhook was not told: ${r.error}`, r.ok ? 'success' : 'error', 7000)),
               },
               onPick: (e) => setTimelineFocus({ t: e.t, nonce: Date.now() }),
-              onExportStats: () => void saveDocument(`${pausePou}_events_stats_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventStatsCsv(sharedEvents ?? liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Statistics saved: ${r.path}`, 'success')),
+              valueStats: shiftValues,
+              onAddNote: liveStatus.state === 'connected' && !replay ? addRecordingNote : undefined,
+              onExportStats: () => void saveDocument(`${pausePou}_events_stats_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, `${eventStatsCsv(sharedEvents ?? liveEvents)}\n${shiftValues().map((v) => `value;${v.name.replace(/;/g, ',')} @ ${v.shift};min ${v.min} max ${v.max} avg ${Number(v.avg.toFixed(3))} n ${v.n}`).join('\n')}`, { personal: true }).then((r) => r?.path && showCopyToast(`Statistics saved: ${r.path}`, 'success')),
               shared:
                 liveMode === 'web' && liveStatus.state === 'connected'
                   ? {
@@ -12229,6 +12416,7 @@ export const App: React.FC = () => {
               where: commissioning.where,
               logCount: commissioning.log.length,
               onShowLog: showCommissioningLog,
+              onSequence: handleSetPlcSequence,
               onReportPdf: () =>
                 void saveDocument(`${commissioningType}_commissioning.pdf`, commissioningReportPdf({ pouType: commissioningType, allowed: commissioning.allowed, log: commissioning.log, where: commissioning.where }), { personal: true }).then((r) => r?.path && showCopyToast(`The commissioning report (PDF): ${r.path}`, 'success', 7000)),
               onReport: () =>
@@ -12275,6 +12463,9 @@ export const App: React.FC = () => {
                 return next;
               });
             }}
+            onAddNote={liveStatus.state === 'connected' || replay ? addRecordingNote : undefined}
+            onOpenDashboard={liveStatus.state === 'connected' ? () => setDashboardOpen(true) : undefined}
+            replayNotes={replay ? replayNotes : undefined}
             onTcUnitTest={
               replay
                 ? () => {
@@ -12657,7 +12848,8 @@ export const App: React.FC = () => {
           request={promptRequest}
           onClose={() => {
             promptRequest.onDismiss?.();
-            setPromptRequest(null);
+            // (a prompt that asks the next one in its onSubmit: that one kept)
+            setPromptRequest((cur) => (cur === promptRequest ? null : cur));
           }}
         />
       )}
@@ -12788,6 +12980,24 @@ export const App: React.FC = () => {
         );
       })()}
       {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
+      {dashboardOpen && (
+        <LiveDashboard
+          title={`${pouTypeName ?? pausePou}${liveStatus.instance ? ` · ${liveStatus.instance}` : ''}`}
+          tiles={[
+            {
+              label: livePlcLabel || liveStatus.target || 'this PLC',
+              state: liveSession.current?.state ?? null,
+              sinceMs: exprStateRef.current?.sinceMs ?? null,
+              stuck: liveStuck,
+              limitMs: liveLimit,
+            },
+            ...livePeers.map((p) => ({ label: p.plc, state: p.state, sinceMs: p.since, stuck: !!(p.state && p.since != null && liveLimit && Date.now() - p.since > liveLimit), limitMs: liveLimit })),
+          ]}
+          alerts={watchAlerts.filter((a) => exprOnRef.current.get(a)).map((a) => ({ text: exprText(a), snoozedUntil: (alertSnooze[a] ?? 0) > Date.now() ? alertSnooze[a] : undefined }))}
+          events={liveEvents}
+          onClose={() => setDashboardOpen(false)}
+        />
+      )}
       {commitView && (
         <StateHistoryDialog
           state={commitView.method ? `${commitView.method.replace(/\(\)$/, '')}()` : "the POU's body"}

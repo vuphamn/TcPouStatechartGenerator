@@ -88,6 +88,14 @@ try {
   $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds; full = $result.full; failed = $failedTests; flaky = $flakyTests; newFailures = $newFailures })
   if ($history.Count -gt 30) { $history = $history[($history.Count - 30)..($history.Count - 1)] }
   ConvertTo-Json -InputObject @($history) | Out-File -Encoding utf8 $historyFile
+  # (each test's failures and flakes over the nights kept: the worst first, to fix first)
+  $worst = @{}
+  foreach ($h in $history) {
+    foreach ($t in @($h.failed | Where-Object { $_ })) { if (-not $worst[$t]) { $worst[$t] = @{ failed = 0; flaky = 0 } }; $worst[$t].failed++ }
+    foreach ($t in @($h.flaky | Where-Object { $_ })) { if (-not $worst[$t]) { $worst[$t] = @{ failed = 0; flaky = 0 } }; $worst[$t].flaky++ }
+  }
+  $worstText = @($worst.GetEnumerator() | Sort-Object { -($_.Value.failed * 2 + $_.Value.flaky) } | Select-Object -First 5 | ForEach-Object { "$($_.Key) ($($_.Value.failed) failed, $($_.Value.flaky) flaky)" }) -join ', '
+  if ($worstText) { Add-Content -Encoding UTF8 $log "Most often failed or flaky over $($history.Count) runs: $worstText" }
   # Keep the last 30 logs
   Get-ChildItem $dir -Filter '*.log' | Sort-Object Name -Descending | Select-Object -Skip 30 | Remove-Item -ErrorAction SilentlyContinue
   # A webhook (Teams, Slack: a JSON { text } POSTed): KSS_NIGHTLY_WEBHOOK, or scripts\nightly.config.json
@@ -106,6 +114,7 @@ try {
     if ($newFailures.Count) { $compare += 'New since the run before: ' + ($newFailures -join ', ') }
     if ($stillFailing.Count) { $compare += 'Failing the run before too: ' + ($stillFailing -join ', ') }
     if ($flakyTests.Count) { $compare += 'Flaky (passed alone): ' + ($flakyTests -join ', ') }
+    if ($worstText) { $compare += "Most often over $($history.Count) runs: $worstText" }
     if ($compare.Count) { $summary = ($compare -join "`n") + "`n" + $summary }
     $text = if ($result.passed) { "Kval MachineScope $what passed on $env:COMPUTERNAME ($($result.seconds) s)`n$summary`n[The log]($link)" } else { "Kval MachineScope $what FAILED on $env:COMPUTERNAME`n$summary`n[The log]($link) ($log)" }
     try {

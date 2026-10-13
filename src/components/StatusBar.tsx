@@ -297,7 +297,16 @@ const NightlyChip: React.FC = () => {
       title={`The nightly real-PLC test (development): ${last.passed ? 'passed' : 'FAILED'} ${when.toLocaleString()}, ${last.seconds} s. Log: ${last.log}${history.length > 1 ? `\nThe last ${history.length} runs (oldest first): ${history.map((h) => (h.passed ? '✓' : '✗')).join('')}, ${history.filter((h) => h.passed).length} passed; ${Math.round(Math.min(...history.map((h) => h.seconds)))}–${Math.round(Math.max(...history.map((h) => h.seconds)))} s, median ${[...history.map((h) => h.seconds)].sort((a, b) => a - b)[Math.floor(history.length / 2)]} s${history.some((h) => h.full != null) ? `; the whole suite: ${history.filter((h) => h.full === true).length} of ${history.filter((h) => h.full != null).length} runs passed` : ''}` : ''}${(() => {
         const h = history[history.length - 1];
         if (!h) return '';
-        return `${h.newFailures?.length ? `\nNew since the run before: ${h.newFailures.join(', ')}` : ''}${h.failed?.filter((f) => !h.newFailures?.includes(f)).length ? `\nFailing the run before too: ${h.failed.filter((f) => !h.newFailures?.includes(f)).join(', ')}` : ''}${h.flaky?.length ? `\nFlaky (passed alone): ${h.flaky.join(', ')}` : ''}`;
+        return `${h.newFailures?.length ? `\nNew since the run before: ${h.newFailures.join(', ')}` : ''}${h.failed?.filter((f) => !h.newFailures?.includes(f)).length ? `\nFailing the run before too: ${h.failed.filter((f) => !h.newFailures?.includes(f)).join(', ')}` : ''}${h.flaky?.length ? `\nFlaky (passed alone): ${h.flaky.join(', ')}` : ''}${(() => {
+          // (each test over the runs kept: the worst first)
+          const m = new Map<string, { failed: number; flaky: number }>();
+          for (const r of history) {
+            for (const t of r.failed ?? []) m.set(t, { failed: (m.get(t)?.failed ?? 0) + 1, flaky: m.get(t)?.flaky ?? 0 });
+            for (const t of r.flaky ?? []) m.set(t, { failed: m.get(t)?.failed ?? 0, flaky: (m.get(t)?.flaky ?? 0) + 1 });
+          }
+          const worst = [...m].sort((a, b) => b[1].failed * 2 + b[1].flaky - (a[1].failed * 2 + a[1].flaky)).slice(0, 5);
+          return worst.length ? `\nMost often over ${history.length} runs: ${worst.map(([t, c]) => `${t} (${c.failed} failed, ${c.flaky} flaky)`).join(', ')}` : '';
+        })()}`;
       })()}`}
       data-history={history.map((h) => (h.passed ? '1' : '0')).join('')}
       data-new-failures={(history[history.length - 1]?.newFailures ?? []).join(',')}

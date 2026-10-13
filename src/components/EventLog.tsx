@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Download, ListChecks, Trash2 } from 'lucide-react';
 
-export type LiveEventKind = 'connect' | 'overrun' | 'hold' | 'stuck' | 'write' | 'state' | 'alert';
+export type LiveEventKind = 'connect' | 'overrun' | 'hold' | 'stuck' | 'write' | 'state' | 'alert' | 'note';
 export interface LiveEvent {
   /** This computer's time (ms) */
   t: number;
@@ -18,6 +18,7 @@ const KIND: Record<LiveEventKind, { label: string; cls: string }> = {
   write: { label: 'write', cls: 'bg-sky-900/70 text-sky-200' },
   state: { label: 'set state', cls: 'bg-violet-900/70 text-violet-200' },
   alert: { label: 'alert', cls: 'bg-rose-800/80 text-rose-100' },
+  note: { label: 'note', cls: 'bg-emerald-900/70 text-emerald-200' },
 };
 
 /** Counts of the events: by kind, by the state the PLC was in, by hour of the day, by shift (06–14, 14–22, 22–06) */
@@ -57,7 +58,7 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared, onExportStats }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void; valueStats?: () => { name: string; shift: string; min: number; max: number; avg: number; n: number }[]; onAddNote?: () => void }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared, onExportStats, valueStats, onAddNote }) => {
   // (the gateway's shared events of this PLC, when loaded: shown instead of this session's, with who)
   const events: (LiveEvent & { user?: string })[] = shared?.list ?? own;
   const [open, setOpen] = useState(false);
@@ -76,6 +77,11 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
             {shared && (
               <button id="live-events-shared" type="button" onClick={shared.list ? shared.onClose : shared.onLoad} className={`px-1.5 py-0.5 rounded border text-[10px] ${shared.list ? 'border-sky-600 bg-sky-900/60 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title={shared.list ? "Back to this session's events" : "Everyone's events on this PLC, the last 24 hours (kept by the gateway)"}>
                 {shared.list ? 'Shared ✓' : 'Shared'}
+              </button>
+            )}
+            {onAddNote && (
+              <button id="live-events-note" type="button" onClick={onAddNote} className="px-1.5 py-0.5 rounded border border-emerald-700 text-[10px] text-emerald-200 hover:bg-emerald-900/50" title="A note now: an event, on the timeline, saved with this session's recording">
+                + note
               </button>
             )}
             <button id="live-events-stats" type="button" onClick={() => setStats((v) => !v)} className={`px-1.5 py-0.5 rounded border text-[10px] ${stats ? 'border-sky-600 bg-sky-900/60 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title="Counts: by kind, by the PLC's state then, by shift and hour">
@@ -150,6 +156,32 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
                 {list('kind', s.byKind)}
                 {list('state', s.byState)}
                 {list('shift', s.byShift)}
+                {valueStats && valueStats().length > 0 && (
+                  <table id="live-values-by-shift" className="col-span-3 w-full text-[10px]">
+                    <thead>
+                      <tr className="text-slate-500 font-sans">
+                        <th className="text-left font-normal">value (this session)</th>
+                        <th className="text-left font-normal">shift</th>
+                        <th className="text-right font-normal">min</th>
+                        <th className="text-right font-normal">avg</th>
+                        <th className="text-right font-normal">max</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {valueStats()
+                        .slice(0, 24)
+                        .map((v) => (
+                          <tr key={`${v.name}@${v.shift}`} className="live-value-stat" data-name={v.name} data-shift={v.shift}>
+                            <td className="truncate max-w-[140px] text-slate-300" title={v.name}>{v.name}</td>
+                            <td className="text-slate-500">{v.shift}</td>
+                            <td className="text-right text-sky-300">{Number(v.min.toFixed(3))}</td>
+                            <td className="text-right text-sky-300">{Number(v.avg.toFixed(3))}</td>
+                            <td className="text-right text-sky-300">{Number(v.max.toFixed(3))}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                )}
                 {onExportStats && (
                   <button id="live-events-stats-csv" type="button" onClick={onExportStats} className="col-span-3 justify-self-start px-1.5 rounded border border-slate-700 font-sans text-slate-300 hover:bg-slate-800" title="The counts as CSV (by kind, state, shift, hour)">
                     Stats CSV
