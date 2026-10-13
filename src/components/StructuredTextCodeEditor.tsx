@@ -84,6 +84,8 @@ export interface StructuredTextCodeEditorRef {
   getTextarea: () => HTMLTextAreaElement | null;
   /** Re-indent the code (Format Document); false: nothing changed */
   formatDocument: () => boolean;
+  /** The whole code replaced (a refactoring: Convert to CASE), as one edit Ctrl+Z undoes; the caret on a line */
+  replaceText: (text: string, caretLine?: number) => void;
 }
 
 export interface StructuredTextCodeEditorProps {
@@ -460,6 +462,18 @@ export const StructuredTextCodeEditor = forwardRef<
       },
       getTextarea: () => textareaRef.current,
       formatDocument: () => formatNow(),
+      replaceText: (text: string, caretLine?: number) => {
+        const ta = textareaRef.current;
+        if (ta && !(viewModel && viewModel.activeFoldedBlocks.length > 0)) {
+          ta.focus();
+          ta.setSelectionRange(0, ta.value.length);
+          if (!ta.ownerDocument.execCommand('insertText', false, text)) onChange(text);
+          if (caretLine) {
+            const at = text.split('\n').slice(0, caretLine - 1).join('\n').length + (caretLine > 1 ? 1 : 0);
+            ta.setSelectionRange(at, at);
+          }
+        } else onChange(text);
+      },
     }));
 
     // Auto-scroll when scrollToLine prop changes

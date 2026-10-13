@@ -56,6 +56,8 @@ export type HostMessage =
   | { type: 'liveVars'; values: { id: string; t: number; v: boolean | number | string | null }[] }
   /** The committed (git HEAD) version of a loaded file */
   | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
+  | { type: 'gitLogResult'; requestId: number; commits?: { hash: string; date: string; author: string; subject: string; file: string }[] | null; error?: string | null }
+  | { type: 'gitShowAtResult'; requestId: number; content?: string | null; error?: string | null }
   /** A POU's layout file (<POU>.machinescope.json): read (text; null: none yet) or written */
   | { type: 'layoutResult'; requestId: number; text?: string | null; written?: boolean; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
@@ -189,6 +191,9 @@ export type AppMessage =
   | { type: 'liveWrite'; requestId: number; id: string; value: boolean | number | string }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
   | { type: 'gitShow'; path: string; requestId: number }
+  /** A loaded file's git history (a state's history): its commits (gitLogResult), the file at one (gitShowAtResult) */
+  | { type: 'gitLog'; path: string; requestId: number }
+  | { type: 'gitShowAt'; path: string; hash: string; file: string; requestId: number }
   /** A loaded POU's layout file beside it: read, or written (text; null: removed) */
   | { type: 'layoutRead'; path: string; requestId: number }
   | { type: 'layoutWrite'; path: string; requestId: number; text: string | null }

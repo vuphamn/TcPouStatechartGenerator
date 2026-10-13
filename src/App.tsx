@@ -30,6 +30,7 @@ import {
   Activity,
   TrendingUp,
   History,
+  Zap,
   FileSpreadsheet,
   Bookmark,
   Workflow,
@@ -129,7 +130,7 @@ import { declareInDeclaration, declareVariables, declarationVariables, guessType
 import { DeclareVariableDialog } from './components/DeclareVariableForm.tsx';
 import { baseTypeName, buildProjectSymbols, getProjectSymbols, hasProjectSymbols, onProjectSymbols, setProjectSymbols, symbolScope, type ProjectFile } from './utils/projectSymbols.ts';
 import { setTransitionCondition, transitionCondition } from './utils/transitionEdits.ts';
-import { allStateActions, readStateCode, writeStateCode } from './utils/stateActions.ts';
+import { allStateActions, readStateCode, stateBranchLines, writeStateCode } from './utils/stateActions.ts';
 import { lineDiff } from './utils/lineDiff.ts';
 import { isLearnedPou, learnedAsSource, learnedInputOf, learnedSources } from './utils/learnedChart.ts';
 import { plcPous, plcPouSource, plcProjectFiles, type PlcSources, type PlcCopy, type PlcCopyResult } from './utils/plcSources.ts';
@@ -206,7 +207,14 @@ import { StatusBar, type LayoutMenu, type LayoutStatus } from './components/Stat
 import { PathsPanel } from './components/PathsPanel.tsx';
 import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
-import { canReadGitVersions, fetchCommittedVersion } from './utils/hostGit.ts';
+import { canReadGitVersions, fetchCommittedVersion, fetchFileAt, fetchFileLog } from './utils/hostGit.ts';
+import { evalExpr, exprText, isWatchExpr, parseExpr } from './utils/watchExpr.ts';
+import { ifToCase } from './utils/ifToCase.ts';
+import { generateTcUnitTest } from './utils/tcunitTest.ts';
+import { onlineChangeRisks } from './utils/onlineChangeRisks.ts';
+import { StateTimeline } from './components/StateTimeline.tsx';
+import { eventsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
+import { StateHistoryDialog, type StateVersion } from './components/StateHistoryDialog.tsx';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
@@ -1716,6 +1724,15 @@ export const App: React.FC = () => {
   // ---- Live view (XAE): the POU's state variable in the running PLC, over ADS ----
   const [liveStatus, setLiveStatus] = useState<LiveStatus>({ state: 'idle', instances: [] });
   const [liveSession, setLiveSession] = useState<LiveSession>(EMPTY_LIVE_SESSION);
+  // The event log (the Live tab): connected / stopped, overruns, pauses, stuck alarms, writes, the PLC set to a state
+  const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
+  // (the state variable's watch id: sym:<instance>.<state variable>, followed to set the PLC to a state)
+  const stateVarWatchIdRef = useRef('');
+  // (set further down: read by the canvas's menu; null while not live with writes)
+  const setPlcStateRef = useRef<((state: string) => void) | null>(null);
+  // (the state's history, its menu: the state shown in the dialog)
+  const [stateHistoryOf, setStateHistoryOf] = useState<string | null>(null);
+  const addLiveEvent = useCallback((kind: LiveEventKind, text: string) => setLiveEvents((cur) => [...cur.slice(-1999), { t: Date.now(), kind, text }]), []);
   // Live recordings: the running session is recorded (Save recording); Replay plays one back as if live
   const recorderRef = useRef(new LiveRecorder());
   const [replay, setReplay] = useState<ReplayState | null>(null);
@@ -1768,7 +1785,8 @@ export const App: React.FC = () => {
     // (a replay shows transitions already counted when they happened)
     if (replayingRef.current) return;
     // (the watched values that changed within a second before each: candidates for its condition)
-    const changed = [...varChangedRef.current.entries()];
+    // (not the state variable itself, followed to set the PLC to a state)
+    const changed = [...varChangedRef.current.entries()].filter(([id]) => id !== stateVarWatchIdRef.current);
     const withBefore = fresh.map((t) => ({ ...t, before: changed.filter(([, at]) => at <= t.t && t.t - at <= 1000).map(([id]) => id) }));
     setSeen((s) => {
       const next = addSeen(s, withBefore);
@@ -1916,6 +1934,20 @@ export const App: React.FC = () => {
       while (list.length > 6000 || (list.length > 1 && list[0].t < t - 600_000)) list.shift();
       varHistoryRef.current.set(s.id, list);
     }
+    // (the watch expressions' history too, from the values just come: charted as the variables are)
+    const lastT = values.length ? (Number.isFinite(values[values.length - 1].t) ? values[values.length - 1].t : Date.now()) : null;
+    if (lastT !== null)
+      for (const entry of userWatchRef.current) {
+        if (!isWatchExpr(entry)) continue;
+        const p = parseExpr(exprText(entry));
+        if ('error' in p) continue;
+        const v = evalExpr(p.node, (n) => shownVarsRef.current[n]);
+        if (v === null) continue;
+        const list = varHistoryRef.current.get(entry.toLowerCase()) ?? [];
+        list.push({ t: lastT, v });
+        while (list.length > 6000 || (list.length > 1 && list[0].t < lastT - 600_000)) list.shift();
+        varHistoryRef.current.set(entry.toLowerCase(), list);
+      }
     // (when each value last changed, PLC time: a transition right after it has it as a candidate)
     for (const s of values) {
       if (s.v === null || s.v === undefined) continue;
@@ -3943,7 +3975,7 @@ export const App: React.FC = () => {
         altAction: {
           id: 'text-prompt-open-method-btn',
           label: 'Open in Method Editor',
-          title: `doState() at ${state}'s CASE label (what is typed here is not kept)`,
+          title: `${currentStateMethodLabel()} at ${state}'s CASE label (what is typed here is not kept)`,
           run: () => {
             const m = getMethodCodeFromPou(pouContent, STATE_METHOD);
             const range = m.methodFound ? caseBranchRange(blankComments(m.code).split(/\r?\n/), state) : null;
@@ -4020,7 +4052,7 @@ export const App: React.FC = () => {
       if (opts.from) {
         const code = addTransition(pou, opts.from.state, name, opts.from.condition, stateVarName);
         const t = code ? updateMethodCodeInPou(pou, STATE_METHOD, code) : null;
-        if (!t?.success) return showCopyToast(`${opts.from.state} has no CASE branch in doState()`, 'error');
+        if (!t?.success) return showCopyToast(`${opts.from.state} has no CASE branch in ${currentStateMethodLabel()}`, 'error');
         pou = t.updatedPou;
         const declared = withDeclarations(pou, opts.from.declarations);
         if (!declared) return;
@@ -4785,6 +4817,7 @@ export const App: React.FC = () => {
         .then(async (r) => {
           // (built, not written yet: what a write would change, each file against the PLC's)
           let changes: PlcBuildState['changes'];
+          let risks: PlcBuildState['risks'];
           if (r.ok && !r.written) {
             const theirs = await fetchPlcSources(plcOrigin.plcProject ?? '').catch(() => null);
             if (theirs?.files) {
@@ -4793,9 +4826,11 @@ export const App: React.FC = () => {
                 const name = e.path.split('/').pop() ?? e.path;
                 return { file: name, parts: /\.TcPOU$/i.test(e.path) ? pouPartDiffs(was, e.content) : dutPartDiff(was, e.content) };
               });
+              // (what an online change of them risks: declarations moved, RETAIN values, new objects)
+              risks = onlineChangeRisks(edits, (p) => theirs.files!.find((f) => f.path.toLowerCase() === p.toLowerCase())?.content ?? null);
             }
           }
-          setPlcBuild({ ...base, phase: 'done', result: r, changes });
+          setPlcBuild({ ...base, phase: 'done', result: r, changes, risks });
           if (r.written && r.ok) {
             // On the PLC now: this POU is saved there, and its sources are read again
             setSavedSources((b) => ({ ...b, pou: pouContent, dut: dutContent }));
@@ -5262,6 +5297,13 @@ export const App: React.FC = () => {
     },
     [pouContent, handleReplaceSources, showCopyToast]
   );
+  // Extract a state's code into a method (its menu): Extract Method on its branch's lines
+  const extractStateRef = useRef<(state: string) => void>(() => {});
+  extractStateRef.current = (state: string) => {
+    const r = stateBranchLines(pouContent, state);
+    if ('error' in r) return showCopyToast(r.error, 'error', 6000);
+    handleExtractMethod(resolveStateMethod(pouContent, STATE_METHOD), r.start, r.end);
+  };
   // Extract Action: the lines (only the POU's members) into a new Action, its call in their place
   const handleExtractAction = useCallback(
     (method: string, start: number, end: number) => {
@@ -5964,8 +6006,17 @@ export const App: React.FC = () => {
         const whole = readStateCode(pouContent, target.id);
         if (Array.isArray(whole)) {
           const n = whole.filter((l) => l.trim()).length;
-          items.push({ id: 'edit-state-code-btn', label: `Edit the state's code…${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}`, icon: <Code2 className="w-3.5 h-3.5" />, title: "Its CASE branch in doState(), as written: actions and transitions", onSelect: () => handleEditStateCode(target.id) });
+          items.push({ id: 'edit-state-code-btn', label: `Edit the state's code…${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}`, icon: <Code2 className="w-3.5 h-3.5" />, title: `Its CASE branch in ${currentStateMethodLabel()}, as written: actions and transitions`, onSelect: () => handleEditStateCode(target.id) });
+          // (its code into a method of its own, the branch calling it)
+          if (n > 0)
+            items.push({ id: 'extract-state-method-btn', label: 'Extract its code into a method…', icon: <Code2 className="w-3.5 h-3.5" />, title: `The branch's lines in ${currentStateMethodLabel()} into a new method; the branch calls it (Ctrl+Z undoes)`, onSelect: () => extractStateRef.current(target.id) });
         }
+        // (its CASE branch's history in git: who changed it, when, what)
+        if (pouPath && canReadGitVersions())
+          items.push({ id: 'state-history-btn', label: 'History of the state…', icon: <History className="w-3.5 h-3.5" />, title: 'The commits that changed its CASE branch: who, when, what changed', onSelect: () => setStateHistoryOf(target.id) });
+        // (live: the PLC set to this state, asked first)
+        if (setPlcStateRef.current)
+          items.push({ id: 'set-plc-state-btn', label: 'Set the PLC to this state…', icon: <Zap className="w-3.5 h-3.5" />, title: "Commissioning: the PLC's state variable written with this state, asked first", onSelect: () => setPlcStateRef.current?.(target.id) });
       }
       // Learned: what changed just before a transition seen, offered as its condition (drawn instead of an unknown one;
       // idTag: the transition's, in a state's menu)
@@ -6929,6 +6980,7 @@ export const App: React.FC = () => {
   const [overviewPaths, setOverviewPaths] = useState<string[]>([]);
   const handleOverviewPaths = useCallback((paths: string[]) => setOverviewPaths((prev) => (prev.join('\n') === paths.join('\n') ? prev : paths)), []);
   const liveStateVar = identifiedStatesResult.stateVarName || 'machineState';
+  stateVarWatchIdRef.current = liveStatus.instance ? symbolWatchId(`${liveStatus.instance}.${liveStateVar}`) : '';
   const browseSeqRef = useRef(0);
   const browseTargetRef = useRef({ liveMode, stateVar: liveStateVar });
   browseTargetRef.current = { liveMode, stateVar: liveStateVar };
@@ -8288,6 +8340,16 @@ export const App: React.FC = () => {
     }
     if (hold.vars.length) handleLiveVars(hold.vars);
   }, [handleLiveVars]);
+  // (the event log: connected, stopped)
+  const liveWasRef = useRef(liveStatus.state);
+  useEffect(() => {
+    const was = liveWasRef.current;
+    liveWasRef.current = liveStatus.state;
+    if (replay) return;
+    if (liveStatus.state === 'connected' && was !== 'connected') addLiveEvent('connect', `Live: ${liveStatus.instance ?? 'the PLC'}${liveStatus.target ? ` on ${liveStatus.target}` : ''}`);
+    else if (was === 'connected' && liveStatus.state !== 'connected') addLiveEvent('connect', `Not live any more${liveStatus.message ? `: ${liveStatus.message}` : ''}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus.state]);
   // (not live any more: no hold; the next session starts from its own state)
   useEffect(() => {
     if (liveStatus.state === 'connected') return;
@@ -8299,6 +8361,7 @@ export const App: React.FC = () => {
   }, [liveStatus.state]);
   useEffect(() => {
     if (!liveHold) return;
+    addLiveEvent('hold', liveHold.condition ? `Paused: ${liveHold.state} became true` : `Paused: the PLC entered ${liveHold.state}`);
     showCopyToast(liveHold.condition ? `Paused: ${liveHold.state} became true. The view holds that moment (Resume in the Live tab); the PLC runs on.` : `Paused: the PLC entered ${liveHold.state}. The view holds that moment (Resume in the Live tab); the PLC runs on.`, 'success', 8000);
     if (notifyOn) void notifyStuck(`Kval MachineScope: ${liveHold.state} entered`, 'Paused on this state: the view holds that moment', `kss-pause-${liveHold.state}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9047,11 +9110,13 @@ export const App: React.FC = () => {
   // Notify once per stay in the state
   const notifiedStuckRef = useRef('');
   useEffect(() => {
-    if (!liveStuck || !notifyOn || !liveSession.current) return;
+    if (!liveStuck || !liveSession.current) return;
     const key = `${liveSession.current.state}@${liveSession.current.since}`;
     if (notifiedStuckRef.current === key) return;
     notifiedStuckRef.current = key;
     const who = liveStatus.instance ?? (pouTypeName || 'The state machine');
+    addLiveEvent('stuck', `${who} stuck in ${liveSession.current.state} (more than ${formatLimit(liveLimit)})`);
+    if (!notifyOn) return;
     void notifyStuck(`Kval MachineScope: ${who} is stuck`, `In ${liveSession.current.state} for more than ${formatLimit(liveLimit)}`, `kss-stuck-${who}`);
   }, [liveStuck, notifyOn, liveSession, liveLimit, liveStatus.instance, pouTypeName]);
   const handleStateLimit = useCallback(
@@ -9263,7 +9328,13 @@ export const App: React.FC = () => {
     if (liveStatus.state !== 'connected' || !liveStatus.instance) return '';
     const guards = liveGuardEdges && liveGuardInputs ? variablesToWatch(liveGuardEdges.edges, liveGuardInputs, liveGuardScope === 'all') : [];
     // (and the current state's regions' variables, the shown code's, the watched ones)
-    return [...new Set([...guards, ...liveRegions.map((r) => r.variable), ...userWatch, ...editorWatch])].sort().join('\n');
+    // (a watch expression: the variables it reads)
+    const watchedVars = userWatch.flatMap((e) => {
+      if (!isWatchExpr(e)) return [e];
+      const p = parseExpr(exprText(e));
+      return 'error' in p ? [] : p.vars;
+    });
+    return [...new Set([...guards, ...liveRegions.map((r) => r.variable), ...watchedVars, ...editorWatch])].sort().join('\n');
   }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions, editorWatch, userWatch]);
   liveValuesRef.current = { active: liveStatus.state === 'connected', values: liveVarValues };
   const sendLiveWatch = useCallback(
@@ -9290,7 +9361,7 @@ export const App: React.FC = () => {
       lastWatchRef.current = key;
       const paths = liveWatchKey && instance ? liveWatchKey.split('\n') : [];
       const guards = paths.map((p) => ({ id: p.toLowerCase(), candidates: symbolCandidates(p, instance!) }));
-      const symbols = [...new Set([...symbolPaths, ...ioVars])].filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
+      const symbols = [...new Set([...symbolPaths, ...ioVars, ...(instance && liveStateVar ? [`${instance}.${liveStateVar}`] : [])])].filter(isSymbolPathText).map((p) => ({ id: symbolWatchId(p), candidates: [p] }));
       const machines = overviewPaths.filter(isSymbolPathText).map((p) => ({ id: overviewWatchId(p), candidates: [`${p}.${liveStateVar}`] }));
       // (the live state's sub-machines: each method's VAR_INST, as <instance>.<method>.<variable>, else searched)
       const sub: LiveWatchVar[] = instance ? liveSubLevels.map((L) => ({ id: L.watchId, candidates: [`${instance}.${L.m.method}.${L.m.variable}`], search: { under: instance, words: [L.m.method, L.m.variable] } })) : [];
@@ -9338,6 +9409,7 @@ export const App: React.FC = () => {
       if (over && !peak.was) {
         peak.overruns++;
         setTaskOverruns((n) => n + 1);
+        addLiveEvent('overrun', `Task ${name}: its cycle time exceeded${typeof exec === 'number' ? ` (last execution ${(exec / 10000).toFixed(3)} ms)` : ''}`);
         showCopyToast(`Task ${name}: its cycle time was exceeded (${typeof exec === 'number' ? `last execution ${(exec / 10000).toFixed(3)} ms` : 'an overrun'})`, 'error', 8000);
         if (notifyOn) void notifyStuck(`Kval MachineScope: ${name} overran its cycle`, 'Its cycle time was exceeded', `kss-task-${name}`);
       }
@@ -9565,6 +9637,38 @@ export const App: React.FC = () => {
       .map((e) => ({ edgeId: e.edgeId, to: e.to, ...liveGuardViews[e.edgeId] }));
   }, [liveGuardViews, liveGuardEdges]);
 
+  // Set the PLC to a state (commissioning: a state's menu while live): its state variable written with the state's
+  // value, asked first with what it means for the machine
+  const handleSetPlcState = useCallback(
+    (state: string) => {
+      if (liveStatus.state !== 'connected' || !liveStatus.instance) return showCopyToast('Go live first: the state is written to the PLC followed', 'error');
+      if (liveMode !== 'xae' && liveMode !== 'desktop') return showCopyToast('Setting a state needs TwinCAT XAE, VS Code or the desktop app (the web edition does not write to the PLC)', 'error', 7000);
+      const names = [...liveEnumNames.entries(), ...Object.entries(liveStatus.plcStateNames ?? {}).map(([v, n]) => [Number(v), n] as [number, string])];
+      const value = names.find(([, n]) => n.toLowerCase() === state.toLowerCase())?.[0];
+      if (value === undefined || !Number.isFinite(value)) return showCopyToast(`${state}: its value is not known (the state's enum is not loaded)`, 'error', 7000);
+      const id = stateVarWatchIdRef.current;
+      const symbol = `${liveStatus.instance}.${liveStateVar}`;
+      if (!id || liveWatched[id]?.error) return showCopyToast(`${symbol} is not followed on the PLC${liveWatched[id]?.error ? `: ${liveWatched[id]?.error}` : ''}`, 'error', 7000);
+      const enumType = stateEnumTypeOf(pouContent);
+      setPromptRequest({
+        title: `Set the PLC to ${state}?`,
+        label: `The machine's program goes on from ${state} at once, in its next cycle: that state's actions run, without the steps that normally lead to it (its outputs, interlocks, what the states before it set up). Only when the machine is safe for it (commissioning, nothing moving, nobody in it).`,
+        details: [`${symbol} := ${enumType ? `${enumType}.` : ''}${state} (${value})`, `on ${liveStatus.target ?? 'the PLC'}, now in ${liveSession.current?.state ?? 'a state not known'}`],
+        confirmOnly: true,
+        danger: true,
+        submitLabel: `Set to ${state}`,
+        onSubmit: () => {
+          void writeLiveVar(liveMode, id, value).then((res) => {
+            addLiveEvent('state', res.ok ? `Set to ${state}: ${symbol} := ${value} (was ${liveSession.current?.state ?? '?'})` : `Not set to ${state}: ${res.message}`);
+            showCopyToast(res.ok ? `The PLC set to ${state}` : `Not set: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 4000 : 9000);
+          });
+        },
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveStatus, liveMode, liveEnumNames, liveWatched, liveStateVar, pouContent, liveSession.current, showCopyToast, addLiveEvent]
+  );
+  setPlcStateRef.current = liveStatus.state === 'connected' && (liveMode === 'xae' || liveMode === 'desktop') ? handleSetPlcState : null;
   // Prepared values (XAE's Prepare Value, then Write Values: Ctrl+F7): by watch id; written together, asked first
   const [preparedValues, setPreparedValues] = useState<{ id: string; name: string; symbol?: string; text: string; value: boolean | number | string }[]>([]);
   useEffect(() => {
@@ -9584,6 +9688,7 @@ export const App: React.FC = () => {
           const failed: string[] = [];
           for (const p of list) {
             const r = await writeLiveVar(liveMode, p.id, p.value);
+            addLiveEvent('write', r.ok ? `${p.symbol ?? p.name} := ${p.text}` : `${p.symbol ?? p.name} := ${p.text} not written: ${r.message}`);
             if (!r.ok) failed.push(`${p.name}: ${r.message}`);
           }
           setPreparedValues((cur) => cur.filter((p) => failed.some((f) => f.startsWith(`${p.name}:`))));
@@ -9610,7 +9715,7 @@ export const App: React.FC = () => {
         onSubmit: (text) => {
           const r = parseLiveValue(text, v.type, liveEnums);
           if ('error' in r) return;
-          void writeLiveVar(liveMode, v.id, r.value).then((res) => showCopyToast(res.ok ? `${v.name} := ${text.trim()} written` : `Not written: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 3000 : 8000));
+          void writeLiveVar(liveMode, v.id, r.value).then((res) => (addLiveEvent('write', res.ok ? `${v.symbol ?? v.name} := ${text.trim()}` : `${v.symbol ?? v.name} := ${text.trim()} not written: ${res.message}`), showCopyToast(res.ok ? `${v.name} := ${text.trim()} written` : `Not written: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 3000 : 8000)));
         },
         // (Prepare: kept with the others, written together from the Live tab: Write all)
         secondaryAction: {
@@ -11448,7 +11553,77 @@ export const App: React.FC = () => {
               showCopyToast(`${instance} live on ${plc.name || plc.netId} too: in a new ${isXaeHost() ? 'tab' : 'window'}`, 'success', 5000);
             }}
             onExportCoverage={() => void (liveCoverage && downloadCsv(`${pouTypeName ?? 'statechart'}-transition-coverage.csv`, coverageCsv(liveCoverage)))}
-            watchList={userWatch.map((n) => ({ name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type }))}
+            watchList={userWatch.map((n) => {
+              if (!isWatchExpr(n)) return { name: n, value: liveVarValues[n.toLowerCase()], symbol: liveWatched[n.toLowerCase()]?.symbol, type: liveWatched[n.toLowerCase()]?.type };
+              // (an expression: computed from the values watched)
+              const p = parseExpr(exprText(n));
+              if ('error' in p) return { name: n, expr: true, error: p.error };
+              const v = evalExpr(p.node, (x) => liveVarValues[x]);
+              return { name: n, expr: true, value: v === null ? undefined : v };
+            })}
+            onAddWatchExpr={(text) => {
+              const p = parseExpr(text);
+              if ('error' in p) return p.error;
+              const entry = `= ${text.trim()}`;
+              setUserWatch((cur) => (cur.some((c) => c.toLowerCase() === entry.toLowerCase()) ? cur : [...cur, entry]));
+              return null;
+            }}
+            timeline={
+              liveSession.transitions.length || liveSession.current
+                ? {
+                    lanes: (() => {
+                      // (on this computer's clock: this PLC's times moved by its clock offset; a compared PLC's by its
+                      // last transition, into the state it is in since then; a replay keeps the recording's times)
+                      const off = replay ? 0 : (liveSession.clockOffset ?? 0);
+                      const own = {
+                        label: replay ? 'recording' : livePlcLabel || 'this PLC',
+                        transitions: liveSession.transitions.map((t) => ({ ...t, t: t.t + off })),
+                        current: liveSession.current ? { state: liveSession.current.state, since: liveSession.current.since + off } : null,
+                      };
+                      if (replay) return [own];
+                      const peers = livePeers.map((p) => {
+                        const last = p.transitions[p.transitions.length - 1];
+                        const poff = p.since != null && last ? p.since - last.t : 0;
+                        return { label: p.plc, transitions: p.transitions.map((t) => ({ ...t, t: t.t + poff })), current: p.state && p.since != null ? { state: p.state, since: p.since } : null };
+                      });
+                      return [own, ...peers];
+                    })(),
+                    now: () => (replay ? replay.pos : Date.now()),
+                    live: liveStatus.state === 'connected' && !replay,
+                    onSelectState: (s) => {
+                      setSelectedStateId(s);
+                      setSelectedStateLabel(s);
+                    },
+                  }
+                : undefined
+            }
+            events={{
+              list: liveEvents,
+              onClear: () => setLiveEvents([]),
+              onExport: () => void saveDocument(`${pausePou}_events_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventsCsv(liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Events saved: ${r.path}`, 'success')),
+            }}
+            onTcUnitTest={
+              replay
+                ? () => {
+                    const rec = replay.rec;
+                    const enumType = stateEnumTypeOf(pouContent) ?? (dutFileName ? dutFileName.replace(/\.TcDUT$/i, '') : '');
+                    if (!enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
+                    const t = generateTcUnitTest({
+                      pou: rec.pou ?? pouTypeName ?? pausePou,
+                      enumType,
+                      stateVar: rec.stateVar || liveStateVar,
+                      stateName: (v) => liveStateName(v, liveNamesRef.current),
+                      run: { values: rec.values, vars: rec.vars, watched: rec.watched, instance: rec.instance, started: rec.started },
+                      title: `The recording ${replay.file}`,
+                    });
+                    if (t.steps < 2) return showCopyToast('The recording has one state only: nothing to test', 'error', 6000);
+                    void saveDocument(`${t.name}.TcPOU`, t.xml, { personal: true }).then((r) => {
+                      if (!r?.path) return;
+                      showCopyToast(`${t.name} saved (${t.steps} states, ${t.methodName}): add it to a PLC project that references TcUnit (Add Existing Item), and review it. ${r.path}`, 'success', 12000);
+                    });
+                  }
+                : undefined
+            }
             watchLists={watchListsProps}
             scope={{
               watched: userWatch,
@@ -11924,6 +12099,34 @@ export const App: React.FC = () => {
         );
       })()}
       {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
+      {stateHistoryOf && (
+        <StateHistoryDialog
+          state={stateHistoryOf}
+          onClose={() => setStateHistoryOf(null)}
+          load={async () => {
+            const state = stateHistoryOf;
+            const log = await fetchFileLog(pouPath ?? '');
+            if (log.error || !log.commits) return { versions: [], error: log.error ?? 'No history' };
+            // (the branch in each commit; kept where it changed from the commit before)
+            const codeOf = (xml: string | undefined) => {
+              if (!xml) return null;
+              // (its whole CASE branch, as written)
+              const r = readStateCode(xml, state);
+              return Array.isArray(r) ? r.join('\n').trimEnd() : null;
+            };
+            const all: StateVersion[] = [];
+            for (const c of log.commits) {
+              const at = await fetchFileAt(pouPath ?? '', c.hash, c.file);
+              all.push({ hash: c.hash, date: c.date, author: c.author, subject: c.subject, code: at.error ? null : codeOf(at.content) });
+            }
+            const changed = all.filter((v, i) => (i === all.length - 1 ? v.code !== null : v.code !== all[i + 1].code));
+            // (as edited here, when not committed so)
+            const now = codeOf(pouContent);
+            if (now !== null && now !== (all[0]?.code ?? null)) changed.unshift({ hash: 'working', date: 'now', author: 'not committed', subject: 'As edited here (not committed)', code: now });
+            return { versions: changed };
+          }}
+        />
+      )}
       {bookmarksOpen && (
         <BookmarksDialog
           entries={bookmarkEntries}

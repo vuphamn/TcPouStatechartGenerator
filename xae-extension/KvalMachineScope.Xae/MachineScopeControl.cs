@@ -395,6 +395,12 @@ namespace KvalMachineScope.Xae
                     case "gitShow":
                         HandleGitShow(msg);
                         break;
+                    case "gitLog":
+                        HandleGitLog(msg);
+                        break;
+                    case "gitShowAt":
+                        HandleGitShowAt(msg);
+                        break;
                     case "layoutRead":
                     case "layoutWrite":
                         HandleLayoutFile(msg, type == "layoutWrite");
@@ -1136,6 +1142,113 @@ namespace KvalMachineScope.Xae
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Log.Write($"git: {Path.GetFileName(path)} at HEAD: {(error ?? $"{content.Length} chars")}");
                 Post(new { type = "gitShowResult", requestId, content, error });
+            });
+        }
+
+        // ---- A loaded file's git history (a state's history): its commits, the file at one of them ----
+
+        /// <summary>git in a folder: (exit code 0: output; else: the error as gitShow says it)</summary>
+        private static async Task<(string output, string error)> RunGitAsync(string dir, string args)
+        {
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("git", $"-C \"{dir}\" {args}")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = System.Text.Encoding.UTF8,
+                    StandardErrorEncoding = System.Text.Encoding.UTF8,
+                };
+                using (var proc = System.Diagnostics.Process.Start(psi))
+                {
+                    var output = proc.StandardOutput.ReadToEndAsync();
+                    var errors = proc.StandardError.ReadToEndAsync();
+                    if (!proc.WaitForExit(20000))
+                    {
+                        try { proc.Kill(); } catch (InvalidOperationException) { }
+                        return (null, "git did not answer");
+                    }
+                    if (proc.ExitCode != 0)
+                    {
+                        var text = await errors;
+                        return (null, text.Contains("not a git repository") ? "The file is not in a git repository"
+                            : text.Contains("exists on disk, but not in") || text.Contains("does not exist in") ? "The file is not committed yet"
+                            : text.Trim().Split('\n')[0].Trim());
+                    }
+                    return (await output, null);
+                }
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return (null, "git is not installed (or not on the PATH)");
+            }
+        }
+
+        private void HandleGitLog(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            if (path == null || !_lastSeen.ContainsKey(path))
+            {
+                Post(new { type = "gitLogResult", requestId, error = "Not a file loaded in MachineScope" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var (output, error) = await RunGitAsync(Path.GetDirectoryName(path), $"log --follow -n40 \"--date=format:%Y-%m-%d %H:%M\" \"--format=@@%h%x1f%ad%x1f%an%x1f%s\" --name-only -- \"{Path.GetFileName(path)}\"");
+                var commits = new List<object>();
+                if (error == null)
+                {
+                    foreach (var chunk in output.Split(new[] { "@@" }, StringSplitOptions.None).Skip(1))
+                    {
+                        var lines = chunk.Split('\n').Select(l => l.Trim()).ToArray();
+                        var head = lines[0].Split('\x1f');
+                        var file = lines.Skip(1).FirstOrDefault(l => l.Length > 0);
+                        if (head.Length >= 3 && file != null)
+                            commits.Add(new { hash = head[0], date = head[1], author = head[2], subject = head.Length > 3 ? head[3] : "", file });
+                    }
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"git: {Path.GetFileName(path)} log: {(error ?? $"{commits.Count} commits")}");
+                Post(new { type = "gitLogResult", requestId, commits = error == null ? commits : null, error });
+            });
+        }
+
+        private void HandleGitShowAt(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var hash = msg.TryGetValue("hash", out var h) ? h as string : null;
+            var file = msg.TryGetValue("file", out var f) ? f as string : null;
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            if (path == null || !_lastSeen.ContainsKey(path))
+            {
+                Post(new { type = "gitShowAtResult", requestId, error = "Not a file loaded in MachineScope" });
+                return;
+            }
+            if (hash == null || !System.Text.RegularExpressions.Regex.IsMatch(hash, "^[0-9a-fA-F]{4,40}$") || string.IsNullOrEmpty(file)
+                || file.StartsWith("-") || file.StartsWith("/") || file.Contains("..") || file.Contains("\"") || file.Contains("\0"))
+            {
+                Post(new { type = "gitShowAtResult", requestId, error = "Not a commit of the file" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                string content = null;
+                var (top, error) = await RunGitAsync(Path.GetDirectoryName(path), "rev-parse --show-toplevel");
+                if (error == null)
+                {
+                    var (output, err2) = await RunGitAsync(top.Trim(), $"show \"{hash}:{file}\"");
+                    error = err2;
+                    content = output?.TrimStart('﻿');
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "gitShowAtResult", requestId, content, error });
             });
         }
 

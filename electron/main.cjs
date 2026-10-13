@@ -349,6 +349,10 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
   });
 });
 
+// A file's git history (a state's history): its commits, the file at one of them
+ipcMain.handle('tc:git-log', (_event, filePath) => require('../shared/gitHistory.cjs').gitLog(filePath));
+ipcMain.handle('tc:git-show-at', (_event, filePath, hash, file) => require('../shared/gitHistory.cjs').gitShowAt(filePath, hash, file));
+
 // Live view: follow a POU's state variable in a PLC on another computer (messages go back on 'tc:live').
 // Each window has its own session.
 function liveFor(contents) {

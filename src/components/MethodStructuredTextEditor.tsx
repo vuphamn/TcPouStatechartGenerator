@@ -83,6 +83,7 @@ import { markersFor } from '../utils/variableLint.ts';
 import { getProjectSymbols } from '../utils/projectSymbols.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
+import { ifToCaseItem } from '../utils/ifToCase.ts';
 
 const VARIABLE_GROUPS: { source: SearchVariable['source']; label: string }[] = [
   { source: 'state', label: 'State variable' },
@@ -1017,8 +1018,13 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
     const scope = editorServices()?.scope?.(cleanMethodName);
     return undeclaredNames(sym, scope?.top ?? [], scope?.knownNames ?? []).length > 0;
   };
-  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }, expression?: { line: number; from: number; to: number; text: string }) => {
+  const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }, expression?: { line: number; from: number; to: number; text: string }, line?: number) => {
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declEditorRef : implEditorRef).current?.formatDocument()) };
+    // Convert to CASE: the IF / ELSIF chain on the caret's line (each comparing one variable with a value)
+    const toCase = scope === 'implementation' && line ? ifToCaseItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), (message) => {
+      setDefinitionNotification({ type: 'warning', message });
+      setTimeout(() => setDefinitionNotification(null), 5000);
+    }) : null;
     // Extract Method: the selected lines into a new method
     const extract =
       selection && editorServices()?.extractMethod
@@ -1075,6 +1081,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       if (s && sv?.goToImplementation) out.push({ id: 'editor-menu-go-to-implementation', label: `Go to Implementation of ${s}`, title: "An interface's implementations, a method's overrides (Ctrl+F12)", onSelect: () => sv.goToImplementation!(s, { method: cleanMethodName, memberOf }) });
       return out;
     };
+    if (toCase) extract.push(toCase);
     if (!sym) return [...extract, ...callItems(null), format];
     const services = editorServices();
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
@@ -2381,7 +2388,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
           targetSymbol={contextMenu.symbol}
           targetMemberOf={contextMenu.memberOf}
           typeTarget={contextMenu.symbol ? findTypeTarget([declaration, pouDeclaration], contextMenu.symbol, contextMenu.memberOf) : null}
-          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope, contextMenu.selection, contextMenu.expression)}
+          extraItems={methodExtras(contextMenu.symbol, contextMenu.memberOf, contextMenu.sourceScope, contextMenu.selection, contextMenu.expression, contextMenu.line)}
           bookmarks={
             contextMenu.sourceScope === 'implementation' && contextMenu.line
               ? {

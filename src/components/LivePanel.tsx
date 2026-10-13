@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope, X, OctagonPause } from 'lucide-react';
 import { LiveScope } from './LiveScope.tsx';
+import { StateTimeline, type TimelineLane } from './StateTimeline.tsx';
+import { EventLog, type LiveEvent } from './EventLog.tsx';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import { GatewayPlcOverview, GatewayPlcState, RenewLicenseSteps, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import type { PlcActionEntry } from '../utils/plcActionLog.ts';
@@ -96,7 +98,15 @@ interface LivePanelProps {
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
-  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string }[];
+  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string }[];
+  /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
+  onAddWatchExpr?: (text: string) => string | null;
+  /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
+  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void };
+  /** The event log: what happened while live */
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void };
+  /** During a replay: a TcUnit test made from the recording */
+  onTcUnitTest?: () => void;
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
   watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
@@ -321,6 +331,39 @@ const WatchListsBar: React.FC<NonNullable<LivePanelProps['watchLists']> & { hasV
         Import…
         <input id="live-watch-import" type="file" accept=".csv,.txt" className="hidden" onChange={async (e) => { const f = e.target.files?.[0]; if (f) onImport(await f.text()); e.target.value = ''; }} />
       </label>
+    </div>
+  );
+};
+
+/** A watch expression typed (Enter adds it): = bA AND NOT bB, = fPos - fTarget; why not, under it */
+const WatchExprInput: React.FC<{ onAdd: (text: string) => string | null }> = ({ onAdd }) => {
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="mt-0.5">
+      <input
+        id="live-watch-expr-input"
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || !text.trim()) return;
+          const err = onAdd(text.replace(/^\s*=\s*/, ''));
+          setError(err);
+          if (!err) setText('');
+        }}
+        placeholder="+ expression: bA AND NOT bB, fPos - fTarget (Enter)"
+        spellCheck={false}
+        className="w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 font-mono text-[11px] text-slate-200 placeholder:text-slate-600 focus:border-sky-600 outline-none"
+        title="A value computed from watched variables: NOT AND OR XOR, = <> < > <= >=, + - * / MOD, parentheses; it can be charted on the scope"
+      />
+      {error && (
+        <div id="live-watch-expr-error" className="text-[10px] text-rose-300">
+          {error}
+        </div>
+      )}
     </div>
   );
 };
@@ -576,6 +619,10 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onPeerDiff,
   onComparePlc,
   watchList,
+  onAddWatchExpr,
+  timeline,
+  events,
+  onTcUnitTest,
   watchLists,
   scope,
   onUnwatch,
@@ -1190,6 +1237,17 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               <span className="truncate text-[11px] text-slate-400" title={replay.file}>
                 {replay.file}
               </span>
+              {onTcUnitTest && (
+                <button
+                  id="live-replay-tcunit"
+                  type="button"
+                  onClick={onTcUnitTest}
+                  className="ml-auto shrink-0 px-1.5 py-0.5 rounded border border-violet-700 text-[10px] text-violet-200 hover:bg-violet-900/60"
+                  title="A TcUnit test from this recording: its inputs written step by step, the states it went through checked"
+                >
+                  TcUnit test…
+                </button>
+              )}
             </div>
             <input
               id="live-replay-seek"
@@ -1918,13 +1976,19 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* Named watch lists: loaded, saved, removed; CSV out and in */}
       {watchLists && <WatchListsBar {...watchLists} hasVars={!!watchList?.length} />}
       {/* The variables watched from the code */}
-      {watchList && watchList.length > 0 && (
+      {watchList && (watchList.length > 0 || onAddWatchExpr) && (
         <div id="live-watch-list" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5">
           <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">Watched</div>
           {watchList.map((w) => (
-            <div key={w.name} className="live-watch-row flex items-center gap-2 font-mono text-[11px]" data-name={w.name}>
-              <span className="text-slate-300 truncate">{w.name}</span>
-              {onWriteVar && w.value !== undefined ? (
+            <div key={w.name} className={`live-watch-row flex items-center gap-2 font-mono text-[11px]${w.expr ? ' live-watch-expr' : ''}`} data-name={w.name}>
+              <span className={`truncate ${w.expr ? 'text-violet-200' : 'text-slate-300'}`} title={w.expr ? 'A watch expression: computed here from the values watched' : undefined}>
+                {w.name}
+              </span>
+              {w.error ? (
+                <span className="live-watch-value ml-auto text-rose-300 font-sans" title={w.error}>
+                  ?
+                </span>
+              ) : onWriteVar && w.value !== undefined && !w.expr ? (
                 <button
                   type="button"
                   className="live-watch-value live-watch-write ml-auto text-emerald-300 underline decoration-dotted decoration-slate-600 hover:text-sky-300"
@@ -1943,9 +2007,12 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               )}
             </div>
           ))}
+          {onAddWatchExpr && <WatchExprInput onAdd={onAddWatchExpr} />}
         </div>
       )}
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
+      {timeline && <StateTimeline {...timeline} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

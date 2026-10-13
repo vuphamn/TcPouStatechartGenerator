@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Hammer, Loader2, MonitorUp, Upload, X, XCi
 import type { PlcAppInfo, PlcBuildItem, PlcBuildResult, PlcWrite } from '../utils/plcBuild.ts';
 import { buildItemWhere } from '../utils/plcBuild.ts';
 import type { PartDiff } from '../utils/pouDiff.ts';
+import type { OnlineChangeRisks } from '../utils/onlineChangeRisks.ts';
 
 export interface PlcBuildState {
   /** building / writing: running (step: what XAE does now); done: the build's (or the write's) result */
@@ -18,6 +19,8 @@ export interface PlcBuildState {
   target?: string;
   /** What a write changes on the PLC: each file sent against the PLC's own, part by part */
   changes?: { file: string; parts: PartDiff[] }[];
+  /** What an online change of them risks (as XAE's Online Change details): declarations changed, RETAIN / PERSISTENT variables, objects new on the PLC */
+  risks?: OnlineChangeRisks;
   /** Where it was built from: the PLC's sources, the project on this computer (desktop), the page's project folder (web, through Link), XAE's solution */
   via?: 'plc' | 'project' | 'webProject' | 'xae';
   /** The web build from a folder: where its files were sent (Link, the gateway) */
@@ -375,6 +378,26 @@ export const PlcBuildDialog: React.FC<{
                     ))}
                   </div>
                 ))}
+            </div>
+          )}
+          {state.risks && (state.risks.interfaces.length > 0 || state.risks.retain.length > 0 || state.risks.added.length > 0) && (
+            <div id="plc-build-risks" className="rounded bg-amber-950/40 border border-amber-800/70 px-2 py-1 text-[11px] text-amber-100 space-y-0.5">
+              <div className="font-semibold">An online change of these:</div>
+              {state.risks.interfaces.length > 0 && (
+                <div className="plc-build-risk" data-kind="interface">
+                  Declarations changed ({state.risks.interfaces.join(', ')}): their instances are moved in memory; pointers and references to them are invalid until they are assigned again.
+                </div>
+              )}
+              {state.risks.retain.length > 0 && (
+                <div className="plc-build-risk" data-kind="retain">
+                  RETAIN / PERSISTENT: {state.risks.retain.map((r) => `${r.object}.${r.name} (${r.change})`).join(', ')}: their kept values are lost or set to their initial values.
+                </div>
+              )}
+              {state.risks.added.length > 0 && (
+                <div className="plc-build-risk" data-kind="added">
+                  New on the PLC: {state.risks.added.join(', ')}.
+                </div>
+              )}
             </div>
           )}
           <label className="flex items-center gap-2 text-slate-200">

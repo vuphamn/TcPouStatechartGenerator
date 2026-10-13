@@ -232,6 +232,16 @@ export function readStateCode(pouXml: string, state: string): string[] | { error
   return trimBlank(dedent(b.lines.slice(b.bodyStart, b.bodyEnd)));
 }
 
+/** A state's branch body in the state method: its first and last lines (1-based, in the method's code) */
+export function stateBranchLines(pouXml: string, state: string): { start: number; end: number } | { error: string } {
+  const b = branchOf(pouXml, state, stateVarOfPou(pouXml));
+  if ('error' in b) return b;
+  let start = b.bodyStart;
+  while (start < b.bodyEnd && !b.lines[start].trim()) start++;
+  if (start >= b.bodyEnd) return { error: `${state}'s branch has no code` };
+  return { start: start + 1, end: b.bodyEnd };
+}
+
 /** The POU with a state's whole code (its CASE branch's body) replaced, indented as the branch's body was */
 export function writeStateCode(pouXml: string, state: string, code: string): { pou: string; message: string } | { error: string } {
   const b = branchOf(pouXml, state, stateVarOfPou(pouXml));

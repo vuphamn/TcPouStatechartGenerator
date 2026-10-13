@@ -310,6 +310,14 @@ function Open-Kss($r) {
   try { $script:dte.ExecuteCommand('View.ErrorList') } catch { }
   return $true
 }
+function Refresh-Kss($r) {
+  # (the TwinCAT project reloaded while it built (its files rewritten, XAE's question answered Discard): its System
+  # Manager is a new object, the one kept would fail ("Object reference not set"))
+  foreach ($p in $script:sln.Projects) {
+    try { if ($p.FullName -eq $r.tsproj -and $p.Object) { $script:sm = $p.Object } } catch { }
+  }
+  if ($r.netId) { try { $script:sm.SetTargetNetId($r.netId) } catch { } }
+}
 function Build-Kss($r) {
   $opened = Open-Kss $r
   if ($r.netId) { $script:sm.SetTargetNetId($r.netId) }
@@ -322,6 +330,7 @@ function Build-Kss($r) {
   }
   Say @{ kind = 'step'; text = 'Building' }
   $script:sln.SolutionBuild.Build($true)
+  Refresh-Kss $r
   $failed = $script:sln.SolutionBuild.LastBuildInfo
   $list = [KssErrorList]::List($script:dte)
   $counts = @{}
@@ -539,11 +548,14 @@ foreach ($id in ($Pids -split ',' | Where-Object { $_ })) {
     # The questions known, and their answer (each about the build's own copy of the project, never the user's):
     #  - the project opened with the Remote Manager build chosen for it, not its own: OK (only the copy is converted)
     #  - the copy's files rewritten while XAE has it open (the next build or write): Yes, reload it
+    #  - the same with XAE's own unsaved changes in the copy (Conflicting File Modification): Discard them, load the
+    #    files just written (the copy's, as the build wants them)
     # Else a message with OK (or Close) only: OK. Any other question: not answered
     $all = $texts -join ' '
     $want = $null
     if ($all -match 'Open project with the loaded version instead\\?' -and $buttons -contains 'OK') { $want = 'OK' }
     elseif ($all -match 'has been modified outside of TwinCAT XAE.*reload the project' -and $buttons -contains 'Yes') { $want = 'Yes' }
+    elseif ($all -match '(?s)modified outside the environment.*Press Discard to discard the unsaved changes and load the updated project from disk' -and $buttons -contains 'Discard') { $want = 'Discard' }
     elseif (@($buttons | Where-Object { $_ -notmatch '^(OK|Close)$' }).Count -eq 0) { $want = @($buttons)[0] }
     if ($AnswerOk -and $want) {
       $ok = $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { ($_.Current.ControlType -eq [Windows.Automation.ControlType]::Button -or $_.Current.ClassName -eq 'Button') -and $_.Current.Name -eq $want } | Select-Object -First 1

@@ -246,6 +246,15 @@ function createHost({ pouPath, post, ui }) {
         post({ type: 'gitShowResult', requestId, error });
       });
     },
+    // A loaded file's git history (a state's history): its commits, the file at one of them
+    gitLog: async ({ path: p, requestId }) => {
+      if (!p || !lastSeen.has(p)) return post({ type: 'gitLogResult', requestId, error: 'Not a file loaded in MachineScope' });
+      post({ type: 'gitLogResult', requestId, ...(await require('../shared/gitHistory.cjs').gitLog(p)) });
+    },
+    gitShowAt: async ({ path: p, hash, file, requestId }) => {
+      if (!p || !lastSeen.has(p)) return post({ type: 'gitShowAtResult', requestId, error: 'Not a file loaded in MachineScope' });
+      post({ type: 'gitShowAtResult', requestId, ...(await require('../shared/gitHistory.cjs').gitShowAt(p, hash, file)) });
+    },
     // The project's files: its POUs with a CASE (the documentation), its types (completion, the checks), a name's uses (a rename)
     projectPous: () => post({ type: 'projectPous', ...targets().projectPous(pou) }),
     projectSymbols: () => post({ type: 'projectSymbols', ...targets().projectSymbols(pou) }),

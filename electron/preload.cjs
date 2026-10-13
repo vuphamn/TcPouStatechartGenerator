@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   revertProjectFiles: (pouPath, paths) => ipcRenderer.invoke('tc:revert-project-files', pouPath, paths),
   /** The committed (git HEAD) version of a file: { content } or { error } */
   gitShow: (path) => ipcRenderer.invoke('tc:git-show', path),
+  /** A file's git history (a state's history): its commits { commits } and the file at one of them { content } */
+  gitLog: (path) => ipcRenderer.invoke('tc:git-log', path),
+  gitShowAt: (path, hash, file) => ipcRenderer.invoke('tc:git-show-at', path, hash, file),
   /** A POU's layout file beside it (<POU>.machinescope.json): read { text | null } / written { written } or { error } */
   readLayout: (pouPath) => ipcRenderer.invoke('tc:layout-read', pouPath),
   writeLayout: (pouPath, text) => ipcRenderer.invoke('tc:layout-write', pouPath, text),

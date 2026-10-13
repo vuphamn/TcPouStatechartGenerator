@@ -17,6 +17,7 @@ import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
+import { ifToCaseItem } from '../utils/ifToCase.ts';
 
 /**
  * POU Editor (MiddlePanel tab): the POU's own Structured Text, as TwinCAT XAE shows it when the POU is opened: the
@@ -327,7 +328,9 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       onSelect: () => (dirtyRef.current ? showNotice('warning', 'Save first (Ctrl+S): the rename works on the saved POU') : services.rename!(name)),
     };
   };
-  const menuExtras = (sym: string | null, memberOf?: string, scope?: 'declaration' | 'implementation') => {
+  const menuExtras = (sym: string | null, memberOf?: string, scope?: 'declaration' | 'implementation', line?: number) => {
+    // Convert to CASE: the IF / ELSIF chain on the caret's line
+    const toCase = scope === 'implementation' && line ? ifToCaseItem(impl, line, (next) => implRef.current?.replaceText(next, line), (message) => showNotice('warning', message)) : null;
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declRef : implRef).current?.formatDocument()) };
     // (Call Hierarchy: the name's, or the POU body's when on nothing; Go to Implementation: the name's)
     const callItems = (s: string | null) => {
@@ -337,7 +340,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       if (s && sv?.goToImplementation) out.push({ id: 'editor-menu-go-to-implementation', label: `Go to Implementation of ${s}`, title: "An interface's implementations, a method's overrides (Ctrl+F12)", onSelect: () => sv.goToImplementation!(s, { memberOf }) });
       return out;
     };
-    if (!sym) return scope === 'implementation' ? [...callItems(null), format] : [format];
+    if (!sym) return scope === 'implementation' ? [...(toCase ? [toCase] : []), ...callItems(null), format] : [format];
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
     if (isUndeclared(sym, memberOf)) items.push({ id: 'editor-menu-declare', label: `Declare ${sym}…`, title: 'In the declaration (Shift+F2)', onSelect: () => setDeclaring(sym) });
     const r = renameItem(sym);
@@ -356,6 +359,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
       const on = services.isWatched?.(path);
       items.push({ id: 'editor-menu-watch', label: on ? `Stop watching ${path}` : `Watch ${path} in Live`, title: 'Its value, listed in the Live tab while live', onSelect: () => services.watchVariable!(path) });
     }
+    if (toCase) items.push(toCase);
     items.push(format);
     return items;
   };
@@ -697,7 +701,7 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           targetSymbol={menu.symbol}
           targetMemberOf={menu.memberOf}
           typeTarget={menu.symbol ? findTypeTarget([decl], menu.symbol, menu.memberOf) : null}
-          extraItems={menuExtras(menu.symbol, menu.memberOf, menu.scope)}
+          extraItems={menuExtras(menu.symbol, menu.memberOf, menu.scope, menu.line)}
           bookmarks={
             menu.scope === 'implementation'
               ? {
