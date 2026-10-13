@@ -138,6 +138,10 @@ const S = (n) => `TABLEMANAGER_${n}`;
   expect(logged?.state === S('UNCLAMP_START') && logged.ok && logged.reason === 'clamp test after the valve change' && /ann: .* → TABLEMANAGER_UNCLAMP_START on 5\.1\.2\.3\.1\.1:851: clamp test after the valve change/.test(logText ?? ''), `the log, with the reason: ${logText}`);
   await p.click('#text-prompt-submit').catch(() => {});
   await h.sleep(200);
+  // (the commissioning report: an HTML page of the list and the log)
+  await p.click('#live-set-state-report').catch(() => {});
+  const report = await h.until(() => saved.find((m) => /_commissioning\.html$/.test(m.name)) ?? null, 4000);
+  expect(report?.name === 'SM_TableManager_commissioning.html' && report.content.includes('clamp test after the valve change') && report.content.includes('<li>ann: 1</li>'), `the commissioning report: ${report?.name}`);
 
   // 4. The event log: connected, the PLC set to a state; CSV
   await p.click('#live-events-toggle').catch(() => {});

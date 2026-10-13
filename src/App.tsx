@@ -209,7 +209,7 @@ import { ChangesPanel, CompareBase } from './components/ChangesPanel.tsx';
 import { diffCharts } from './utils/chartDiff.ts';
 import { canReadGitVersions, fetchCommittedVersion, fetchFileAt, fetchFileBlame, fetchFileLog } from './utils/hostGit.ts';
 import { methodBlame } from './utils/methodBlame.ts';
-import { evalExpr, exprText, isWatchExpr, parseExpr } from './utils/watchExpr.ts';
+import { evalExpr, exprText, isStateVar, isWatchExpr, parseExpr, withState } from './utils/watchExpr.ts';
 import { inlineMethod, numbersToEnum } from './utils/refactorings.ts';
 import { ifToCase } from './utils/ifToCase.ts';
 import { generateTcUnitProgram, generateTcUnitTest, TEST_PROGRAM, testInstanceName } from './utils/tcunitTest.ts';
@@ -219,6 +219,7 @@ import { recordingLane, type TimelineLane } from './components/StateTimeline.tsx
 import { eventsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
 import { StateHistoryDialog, type StateVersion } from './components/StateHistoryDialog.tsx';
 import { snapshotsCsv, type LiveSnapshot, type SnapshotValue as LiveSnapshotValue } from './components/LiveSnapshots.tsx';
+import { commissioningReport } from './utils/commissioningReport.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
@@ -1769,29 +1770,37 @@ export const App: React.FC = () => {
     }
   };
   // A TcUnit test made (from a recording or a path): added to the PLC project (KssTests, with PRG_KssTests) or saved
-  const offerTcUnit = (t: ReturnType<typeof generateTcUnitTest>, what: string) => {
+  const offerTcUnit = (made: ReturnType<typeof generateTcUnitTest> | ReturnType<typeof generateTcUnitTest>[], what: string) => {
+    const tests = Array.isArray(made) ? made : [made];
+    const t = tests[0];
+    // (several: each saved in turn)
     const save = () =>
-      void saveDocument(`${t.name}.TcPOU`, t.xml, { personal: true }).then((r) => {
-        if (!r?.path) return;
-        showCopyToast(`${t.name} saved (${t.steps} states, ${t.methodName}): add it to a PLC project that references TcUnit (Add Existing Item), and review it. ${r.path}`, 'success', 12000);
-      });
+      void (async () => {
+        let last = '';
+        for (const x of tests) {
+          const r = await saveDocument(`${x.name}.TcPOU`, x.xml, { personal: true });
+          if (!r?.path) return;
+          last = r.path;
+        }
+        showCopyToast(`${tests.length === 1 ? `${t.name} saved (${t.steps} states, ${t.methodName})` : `${tests.length} test suites saved`}: add ${tests.length === 1 ? 'it' : 'them'} to a PLC project that references TcUnit (Add Existing Item), and review ${tests.length === 1 ? 'it' : 'them'}. ${last}`, 'success', 12000);
+      })();
     const canAdd = canAddPlcFiles(pouPath);
     const add = () =>
       void addPlcFiles(pouPath!, 'KssTests', [
-        { name: `${t.name}.TcPOU`, content: t.xml },
-        { name: `${TEST_PROGRAM}.TcPOU`, content: generateTcUnitProgram([t.name]) },
+        ...tests.map((x) => ({ name: `${x.name}.TcPOU`, content: x.xml })),
+        { name: `${TEST_PROGRAM}.TcPOU`, content: generateTcUnitProgram(tests.map((x) => x.name)) },
       ]).then((r) => {
         if (!r.ok) return showCopyToast(`Not added: ${r.error}`, 'error', 9000);
-        keepTcunitSuite({ name: t.name, steps: t.steps });
+        for (const x of tests) keepTcunitSuite({ name: x.name, steps: x.steps });
         showCopyToast(`Added to the PLC project (KssTests): ${(r.written ?? []).join(', ')}. ${r.tcunit ? '' : 'Reference TcUnit first (Library Manager). '}${r.xae ? "In XAE's tree now: Save All keeps them. " : ''}Call ${TEST_PROGRAM} from a task of its own, build and download; live, the Live tab shows its result.`, r.tcunit ? 'success' : 'error', 14000);
       });
     setPromptRequest({
-      title: `TcUnit test ${t.name}`,
+      title: tests.length === 1 ? `TcUnit test ${t.name}` : `${tests.length} TcUnit test suites`,
       label: `${what} ${canAdd ? `Add it to the PLC project (a folder KssTests, with ${TEST_PROGRAM} running TcUnit.RUN()), or save the file.` : 'Save it, then add it to a PLC project that references TcUnit.'} Review it before relying on it.`,
-      details: [`${t.name}.TcPOU: ${t.methodName}`, ...(canAdd ? [`${TEST_PROGRAM}.TcPOU: ${testInstanceName(t.name)} : ${t.name}; TcUnit.RUN()`] : [])],
+      details: [...tests.map((x) => `${x.name}.TcPOU: ${x.methodName}`), ...(canAdd ? [`${TEST_PROGRAM}.TcPOU: ${tests.map((x) => testInstanceName(x.name)).join(', ')}; TcUnit.RUN()`] : [])],
       confirmOnly: true,
       submitLabel: canAdd ? 'Add to the PLC project' : 'Save…',
-      secondaryAction: canAdd ? { id: 'tcunit-save', label: 'Save file…', title: 'The test suite as a .TcPOU file, where you choose', run: save } : undefined,
+      secondaryAction: canAdd ? { id: 'tcunit-save', label: tests.length === 1 ? 'Save file…' : 'Save files…', title: 'The test suite(s) as .TcPOU files, where you choose', run: save } : undefined,
       onSubmit: canAdd ? add : save,
     });
   };
@@ -1805,6 +1814,8 @@ export const App: React.FC = () => {
   const fireAlertRef = useRef<(entry: string, forMs: number) => void>(() => {});
   // (each watch expression's last truth: an alert on its rising edge; Notify, set further down)
   const exprOnRef = useRef(new Map<string, boolean>());
+  // (_state / _inState in expressions: the live state, its start on this computer's clock; set each render)
+  const exprStateRef = useRef<{ name: string; sinceMs: number } | null>(null);
   const notifyOnRef = useRef(false);
   // (set further down: read by the canvas's menu; null while not live with writes)
   const setPlcStateRef = useRef<((state: string) => void) | null>(null);
@@ -1812,7 +1823,16 @@ export const App: React.FC = () => {
   const [stateHistoryOf, setStateHistoryOf] = useState<string | null>(null);
   // (Show commit, a blame bar's click: what that commit changed in a method or the POU's body)
   const [commitView, setCommitView] = useState<{ method: string; hash: string } | null>(null);
-  const addLiveEvent = useCallback((kind: LiveEventKind, text: string) => setLiveEvents((cur) => [...cur.slice(-1999), { t: Date.now(), kind, text }]), []);
+  // (through a gateway: each event also kept there, shared with everyone live on that PLC; sent every few seconds)
+  const gatewayEventsRef = useRef<LiveEvent[]>([]);
+  const gatewayLiveRef = useRef(false);
+  const addLiveEvent = useCallback((kind: LiveEventKind, text: string) => {
+    const e = { t: Date.now(), kind, text };
+    setLiveEvents((cur) => [...cur.slice(-1999), e]);
+    if (gatewayLiveRef.current) gatewayEventsRef.current.push(e);
+  }, []);
+  // (the gateway's shared events of this PLC, when asked: shown instead of this session's)
+  const [sharedEvents, setSharedEvents] = useState<(LiveEvent & { user?: string })[] | null>(null);
   const liveEventsRef = useRef<LiveEvent[]>([]);
   liveEventsRef.current = liveEvents;
   // (each session's events kept beside the PLC project when it ends: an option, kept in this browser)
@@ -1837,6 +1857,9 @@ export const App: React.FC = () => {
   const [replay, setReplay] = useState<ReplayState | null>(null);
   const replayingRef = useRef(false);
   replayingRef.current = !!replay;
+  exprStateRef.current = liveSession.current
+    ? { name: liveSession.current.state, sinceMs: replay ? Date.now() - (replay.pos - liveSession.current.since) : liveSession.current.since + (liveSession.clockOffset ?? 0) }
+    : null;
   // The transitions the PLC took with this POU type (kept in the app): edits and Save that drop one say so first
   const seenPouType = useMemo(() => pouContent.match(/<POU\b[^>]*\bName="([^"]+)"/)?.[1], [pouContent]);
   const [seen, setSeen] = useState<SeenMap>({});
@@ -2043,7 +2066,7 @@ export const App: React.FC = () => {
         if (!isWatchExpr(entry)) continue;
         const p = parseExpr(exprText(entry));
         if ('error' in p) continue;
-        const v = evalExpr(p.node, (n) => shownVarsRef.current[n]);
+        const v = evalExpr(p.node, withState((n) => shownVarsRef.current[n], exprStateRef.current));
         if (v === null) continue;
         const on = v === true || (typeof v === 'number' && v !== 0);
         const wasOn = exprOnRef.current.get(entry);
@@ -2952,6 +2975,22 @@ export const App: React.FC = () => {
       return;
     }
     const t = window.setInterval(() => {
+      for (const entry of watchAlertsRef.current) {
+        if (!/\b_(state|instate)\b/i.test(entry)) continue;
+        const p = parseExpr(exprText(entry));
+        if ('error' in p) continue;
+        const v = evalExpr(p.node, withState((n) => shownVarsRef.current[n], exprStateRef.current));
+        if (v === null) continue;
+        const on = v === true || (typeof v === 'number' && v !== 0);
+        const wasOn = exprOnRef.current.get(entry);
+        exprOnRef.current.set(entry, on);
+        if (on && wasOn === false) {
+          const forMs = watchAlertForRef.current[entry] ?? 0;
+          if (forMs > 0) alertPendingRef.current.set(entry, Date.now());
+          else fireAlertRef.current(entry, 0);
+        }
+        if (!on) alertPendingRef.current.delete(entry);
+      }
       for (const [entry, since] of [...alertPendingRef.current]) {
         const forMs = watchAlertForRef.current[entry] ?? 0;
         if (exprOnRef.current.get(entry) !== true) {
@@ -2966,6 +3005,67 @@ export const App: React.FC = () => {
     }, 500);
     return () => window.clearInterval(t);
   }, [liveStatus.state]);
+  // Alert profiles: named sets of watch expressions with their alerts and durations (a shift's, a test's), kept per POU in
+  // this browser; loading one watches its expressions and makes its alerts the ones on
+  type AlertProfile = { exprs: string[]; alerts: string[]; forMs: Record<string, number> };
+  const profilesKey = `kss.live.alertProfiles.${pouFileName.replace(/\.TcPOU$/i, '')}`;
+  const [alertProfiles, setAlertProfiles] = useState<Record<string, AlertProfile>>({});
+  const [alertProfile, setAlertProfile] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(profilesKey) || '{}');
+      setAlertProfiles(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
+    } catch {
+      setAlertProfiles({});
+    }
+    setAlertProfile(null);
+  }, [profilesKey]);
+  const keepProfiles = (next: Record<string, AlertProfile>) => {
+    setAlertProfiles(next);
+    try {
+      localStorage.setItem(profilesKey, JSON.stringify(next));
+    } catch {
+      // (not kept)
+    }
+  };
+  const alertProfilesProps = {
+    names: Object.keys(alertProfiles).sort((a, b) => a.localeCompare(b)),
+    current: alertProfile,
+    onLoad: (name: string) => {
+      const p = alertProfiles[name];
+      if (!p) return;
+      setUserWatch((cur) => [...cur, ...p.exprs.filter((e) => !cur.includes(e))]);
+      setWatchAlerts(p.alerts);
+      try {
+        localStorage.setItem(`kss.live.alerts.${pouFileName.replace(/\.TcPOU$/i, '')}`, JSON.stringify(p.alerts));
+      } catch {
+        // (not kept)
+      }
+      for (const e of p.alerts) setWatchAlertFor(e, p.forMs[e] ?? 0);
+      setAlertProfile(name);
+      showCopyToast(`Alerts: the profile ${name} (${p.alerts.length} alert${p.alerts.length === 1 ? '' : 's'})`, 'success');
+    },
+    onSave: () =>
+      setPromptRequest({
+        title: 'Save the alerts as a profile',
+        label: `The watch expressions (${userWatch.filter(isWatchExpr).length}), which alert and after how long, under a name (a shift's, a test's):`,
+        initial: alertProfile ?? '',
+        submitLabel: 'Save',
+        validate: (t) => (/^[^\\/:*?"<>|]{1,40}$/.test(t.trim()) ? null : 'A name (40 characters at most)'),
+        onSubmit: (t) => {
+          const exprs = userWatch.filter(isWatchExpr);
+          const alerts = watchAlerts.filter((a) => exprs.includes(a));
+          keepProfiles({ ...alertProfiles, [t.trim()]: { exprs, alerts, forMs: Object.fromEntries(alerts.map((a) => [a, watchAlertFor[a] ?? 0])) } });
+          setAlertProfile(t.trim());
+        },
+      }),
+    onDelete: (name: string) => {
+      const next = { ...alertProfiles };
+      delete next[name];
+      keepProfiles(next);
+      if (alertProfile === name) setAlertProfile(null);
+    },
+  };
   const toggleWatchAlert = (entry: string) =>
     setWatchAlerts((cur) => {
       const next = cur.includes(entry) ? cur.filter((x) => x !== entry) : [...cur, entry];
@@ -6687,18 +6787,24 @@ export const App: React.FC = () => {
         if (!m.methodFound || !names) return showCopyToast('The state enum is not loaded', 'error');
         const r = numbersToEnum(m.code, fix.name, names.enumType, names.names);
         if (!r.count) return showCopyToast('No number to name any more', 'success');
-        const d = lineDiff(m.code.replace(/\r\n/g, '\n').split('\n'), r.code.replace(/\r\n/g, '\n').split('\n'), 1);
+        const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
+        const before = m.code.replace(/\r\n/g, '\n').split('\n');
+        const all = r.code.replace(/\r\n/g, '\n').split('\n');
+        // (this line only; All: every one in the method)
+        const one = fix.line && all[fix.line - 1] !== undefined && all[fix.line - 1] !== before[fix.line - 1] ? before.map((l, i) => (i === fix.line! - 1 ? all[i] : l)) : null;
+        const apply = (lines: string[], what: string) => {
+          const res = handleSaveMethodCode(fix.method, lines.join(eol));
+          if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+          showCopyToast(`${what} named in ${fix.method}()`, 'success');
+        };
         setPromptRequest({
-          title: `Use state names in ${fix.method}()?`,
-          label: `${r.count} number${r.count === 1 ? '' : 's'} of ${fix.name} as ${names.enumType}'s names:`,
-          diff: d.rows,
+          title: one ? `Use the state name on line ${fix.line}?` : `Use state names in ${fix.method}()?`,
+          label: one ? `${fix.method}(), line ${fix.line}:` : `${r.count} number${r.count === 1 ? '' : 's'} of ${fix.name} as ${names.enumType}'s names:`,
+          diff: lineDiff(before, one ?? all, 1).rows,
           confirmOnly: true,
-          submitLabel: 'Use the names',
-          onSubmit: () => {
-            const res = handleSaveMethodCode(fix.method, r.code);
-            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
-            showCopyToast(`${r.count} number${r.count === 1 ? '' : 's'} named in ${fix.method}()`, 'success');
-          },
+          submitLabel: one ? 'Use the name' : 'Use the names',
+          secondaryAction: one && r.count > 1 ? { id: 'numbers-to-enum-all', label: `All ${r.count}`, title: `Every number of ${fix.name} in ${fix.method}() named`, run: () => apply(all, `${r.count} numbers`) } : undefined,
+          onSubmit: () => apply(one ?? all, one ? `Line ${fix.line}` : `${r.count} number${r.count === 1 ? '' : 's'}`),
         });
         return;
       }
@@ -8601,7 +8707,7 @@ export const App: React.FC = () => {
       for (const s of added) {
         const c = parsePauseCondition(s);
         if ('error' in c) return void showCopyToast(c.error, 'error', 6000);
-        const names = c.names ?? [c.name];
+        const names = (c.names ?? [c.name]).filter((n) => !isStateVar(n));
         setUserWatch((cur) => [...cur, ...names.filter((n) => !cur.some((x) => x.toLowerCase() === n.toLowerCase()))]);
       }
       const clean = list.map((s) => (isPauseCondition(s) ? (parsePauseCondition(s) as PauseCondition).text : s));
@@ -8623,6 +8729,19 @@ export const App: React.FC = () => {
     }
     if (hold.vars.length) handleLiveVars(hold.vars);
   }, [handleLiveVars]);
+  gatewayLiveRef.current = liveMode === 'web' && liveStatus.state === 'connected';
+  useEffect(() => {
+    if (liveMode !== 'web' || liveStatus.state !== 'connected') {
+      gatewayEventsRef.current = [];
+      return;
+    }
+    const t = window.setInterval(() => {
+      const list = gatewayEventsRef.current.splice(0);
+      if (list.length) gatewayRef.current?.send({ type: 'liveEventsPut', events: list, pou: pouTypeName ?? pausePou, instance: liveStatus.instance ?? '' });
+    }, 3000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMode, liveStatus.state]);
   // (the event log: connected, stopped)
   const liveWasRef = useRef(liveStatus.state);
   useEffect(() => {
@@ -9628,7 +9747,7 @@ export const App: React.FC = () => {
     const watchedVars = userWatch.flatMap((e) => {
       if (!isWatchExpr(e)) return [e];
       const p = parseExpr(exprText(e));
-      return 'error' in p ? [] : p.vars;
+      return 'error' in p ? [] : p.vars.filter((v) => !isStateVar(v));
     });
     return [...new Set([...guards, ...liveRegions.map((r) => r.variable), ...watchedVars, ...editorWatch])].sort().join('\n');
   }, [liveGuardEdges, liveGuardInputs, liveStatus.state, liveStatus.instance, liveGuardScope, liveRegions, editorWatch, userWatch]);
@@ -11894,10 +12013,11 @@ export const App: React.FC = () => {
               // (an expression: computed from the values watched)
               const p = parseExpr(exprText(n));
               if ('error' in p) return { name: n, expr: true, error: p.error };
-              const v = evalExpr(p.node, (x) => liveVarValues[x]);
+              const v = evalExpr(p.node, withState((x) => liveVarValues[x], exprStateRef.current));
               return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0 };
             })}
             onToggleAlert={toggleWatchAlert}
+            alertProfiles={alertProfilesProps}
             onSetAlertFor={(n) =>
               setPromptRequest({
                 title: 'Alert after how long?',
@@ -11976,6 +12096,18 @@ export const App: React.FC = () => {
                   void postWebhook(alertWebhook, `Kval MachineScope: a test message (${pouFileName.replace(/\.TcPOU$/i, '')})`).then((r) => showCopyToast(r.ok ? 'The webhook was told (a test message)' : `The webhook was not told: ${r.error}`, r.ok ? 'success' : 'error', 7000)),
               },
               onPick: (e) => setTimelineFocus({ t: e.t, nonce: Date.now() }),
+              shared:
+                liveMode === 'web' && liveStatus.state === 'connected'
+                  ? {
+                      list: sharedEvents,
+                      onLoad: () =>
+                        void gatewayRef.current
+                          ?.request<{ events?: (LiveEvent & { user?: string })[]; error?: string }>({ type: 'liveEventsList', requestId: Date.now() % 1e9, hours: 24 }, 'liveEventsListResult', 15000)
+                          .then((r) => (r.error ? showCopyToast(r.error, 'error') : setSharedEvents([...(r.events ?? [])].reverse())))
+                          .catch((e: unknown) => showCopyToast(`The gateway's events: ${String(e)}`, 'error')),
+                      onClose: () => setSharedEvents(null),
+                    }
+                  : undefined,
               onClear: () => setLiveEvents([]),
               onExport: () => void saveDocument(`${pausePou}_events_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventsCsv(liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Events saved: ${r.path}`, 'success')),
             }}
@@ -11992,11 +12124,13 @@ export const App: React.FC = () => {
                 }
                 for (const e of userWatch.filter(isWatchExpr)) {
                   const p = parseExpr(exprText(e));
-                  const v = 'error' in p ? null : evalExpr(p.node, (x) => liveVarValues[x]);
+                  const v = 'error' in p ? null : evalExpr(p.node, withState((x) => liveVarValues[x], exprStateRef.current));
                   if (v !== null) values[e] = v;
                 }
                 const now = Date.now();
-                const s: LiveSnapshot = { id: `${now}`, t: now, label: new Date(now).toLocaleTimeString(), state: liveSession.current?.state ?? null, values };
+                // (a replay's: the recording and its moment, to compare with a live one)
+                const label = replay ? `${replay.file.replace(/\.kssrec\.json$|\.json$/i, '')} @${new Date(replay.pos).toLocaleTimeString()}` : new Date(now).toLocaleTimeString();
+                const s: LiveSnapshot = { id: `${now}`, t: replay ? replay.pos : now, label, state: liveSession.current?.state ?? null, values };
                 keepSnapshots([...snapshots, s].slice(-20));
                 showCopyToast(`Snapshot ${s.label}: ${Object.keys(values).length} values${s.state ? `, in ${s.state}` : ''}`, 'success');
               },
@@ -12004,7 +12138,15 @@ export const App: React.FC = () => {
               onClear: () => keepSnapshots([]),
               onExport: () => void saveDocument(`${pausePou}_snapshots_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, snapshotsCsv(snapshots), { personal: true }).then((r) => r?.path && showCopyToast(`Snapshots saved: ${r.path}`, 'success')),
             }}
-            setStateAllowed={{ list: setStateAllowed, onChange: changeSetStateAllowed, where: commissioning.where, logCount: commissioning.log.length, onShowLog: showCommissioningLog }}
+            setStateAllowed={{
+              list: setStateAllowed,
+              onChange: changeSetStateAllowed,
+              where: commissioning.where,
+              logCount: commissioning.log.length,
+              onShowLog: showCommissioningLog,
+              onReport: () =>
+                void saveDocument(`${commissioningType}_commissioning.html`, commissioningReport({ pouType: commissioningType, allowed: commissioning.allowed, log: commissioning.log, where: commissioning.where }), { personal: true }).then((r) => r?.path && showCopyToast(`The commissioning report: ${r.path}`, 'success', 7000)),
+            }}
             tests={
               liveStatus.state === 'connected'
                 ? tcunitSuites.map((s) => {
@@ -12296,6 +12438,14 @@ export const App: React.FC = () => {
             selected={pathIndex}
             onSelect={setPathIndex}
             onJumpToState={(id) => handleJumpToState(id)}
+            onTcUnitTestAll={() => {
+              const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
+              if (!enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
+              const pou = pouTypeName ?? pausePou;
+              const paths = pathResult.paths.slice(0, 10);
+              const made = paths.map((path, i) => generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test` }));
+              offerTcUnit(made, `Every path from ${pathFrom} to ${pathTo}${pathResult.paths.length > 10 ? ' (the 10 shortest)' : ''}: a test suite each, each guard's inputs written before its step, the states checked in turn.`);
+            }}
             onTcUnitTest={(i) => {
               const path = pathResult.paths[i];
               const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';

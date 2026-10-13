@@ -60,7 +60,7 @@ export type LintFix =
   /** Code that never runs (after a RETURN): removed, to the end of its block; count: exactly these lines */
   | { kind: 'remove-lines'; name: string; method?: string; line: number; count?: number }
   /** The state variable set or compared by a number: the enum's names put in (the state method) */
-  | { kind: 'numbers-to-enum'; name: string; method: string }
+  | { kind: 'numbers-to-enum'; name: string; method: string; line?: number }
   /** The state machine's CASE without ELSE: an ELSE branch put in before END_CASE */
   | { kind: 'add-else'; name: string; method: string; line: number }
   /** A PRIVATE method nothing calls: removed */
@@ -656,8 +656,17 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
     const enumType = /<DUT\b[^>]*\bName="([^"]+)"/.exec(dutContent)?.[1] ?? /\bTYPE\s+([A-Za-z_]\w*)/.exec(dutContent)?.[1];
     if (enumType && values.size) {
       const r = numbersToEnum(stateUnit.lines.join('\n'), variable, enumType, values);
+      // (a finding each line: fixed, or ignored, one by one; its key by its text, so it stays when lines move)
+      const after = r.code.split('\n');
+      const seenKeys = new Map<string, number>();
       if (r.count)
-        add({ key: `state-number:${stateUnit.method}`, rule: 'state-number', method: stateUnit.method, message: `${variable} is set or tested by number ${r.count} time${r.count === 1 ? '' : 's'} in ${sm} where ${enumType} has the name`, fix: { kind: 'numbers-to-enum', name: variable, method: stateUnit.method } });
+        stateUnit.lines.forEach((before, i) => {
+          if (after[i] === undefined || after[i] === before) return;
+          const text = before.trim();
+          const n = (seenKeys.get(text) ?? 0) + 1;
+          seenKeys.set(text, n);
+          add({ key: `state-number:${stateUnit.method}:${text}${n > 1 ? `#${n}` : ''}`, rule: 'state-number', ...at(stateUnit, i), message: `${variable} by number where ${enumType} has the name: ${after[i].trim()}`, fix: { kind: 'numbers-to-enum', name: variable, method: stateUnit.method!, line: i + 1 } });
+        });
     }
   }
 

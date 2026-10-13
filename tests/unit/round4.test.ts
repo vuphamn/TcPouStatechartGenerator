@@ -59,7 +59,7 @@ const clamped = [...enumValueMap(s.dutContent)].find(([, n]) => n === 'TABLEMANA
 const code = readStateCode(s.pouContent, 'TABLEMANAGER_IDLE_FEED_OFF') as string[];
 const w = writeStateCode(s.pouContent, 'TABLEMANAGER_IDLE_FEED_OFF', [...code, `IF bProbe THEN machineState := ${clamped}; END_IF`].join('\n'));
 const found = 'pou' in w ? lintStateMachine(w.pou, s.dutContent).filter((f) => f.rule === 'state-number') : [];
-expect(found.length === 1 && found[0].fix?.kind === 'numbers-to-enum' && /set or tested by number 1 time/.test(found[0].message), `State by number: ${found[0]?.message}`);
+expect(found.length === 1 && found[0].fix?.kind === 'numbers-to-enum' && (found[0].fix as { line?: number }).line === found[0].line && /by number where E_TableManager_States has the name: IF bProbe THEN machineState := E_TableManager_States\.TABLEMANAGER_CLAMPED; END_IF/.test(found[0].message), `State by number, a finding each line: ${found[0]?.message} (line ${found[0]?.line})`);
 expect(lintStateMachine(s.pouContent, s.dutContent).every((f) => f.rule !== 'state-number'), 'the sample as it is: none');
 
 console.log(`${fails} failures`);

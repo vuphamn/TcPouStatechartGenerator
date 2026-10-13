@@ -141,6 +141,29 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const testHook = await h.until(() => sent.find((m) => m.type === 'webhook' && /a test message/.test(m.text)) ?? null, 3000);
   expect(!!testHook, 'the webhook: a test message');
 
+  // 2c. The live state in an expression (_inState, _state: not asked of the PLC); alert profiles saved and loaded
+  await p.type('#live-watch-expr-input', '_inState > T#1S AND _state <> X');
+  await p.keyboard.press('Enter');
+  await h.sleep(600);
+  const stateRow = await p.$eval('.live-watch-expr[data-name="= _inState > T#1S AND _state <> X"] .live-watch-value', (e) => e.textContent.trim()).catch(() => null);
+  const askedState = sent.filter((m) => m.type === 'liveWatch').some((m) => m.vars.some((v) => /_instate|_state/.test(v.id)));
+  expect(['TRUE', 'FALSE', '…'].includes(stateRow ?? '') && !askedState, `_inState / _state: computed here (${stateRow}), not asked of the PLC`);
+  await p.click('#live-alert-profile-save').catch(() => {});
+  await p.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  await p.type('#text-prompt-input', 'Night shift');
+  await p.keyboard.press('Enter');
+  await h.sleep(300);
+  const profiles = await p.$$eval('#live-alert-profile option', (o) => o.map((x) => x.value).filter(Boolean));
+  // (an alert turned off, then the profile loaded: on again)
+  await p.click('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert').catch(() => {});
+  await h.sleep(200);
+  const offNow = await p.$eval('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert', (b) => b.getAttribute('data-on')).catch(() => null);
+  await p.select('#live-alert-profile', 'Night shift').catch(() => {});
+  await h.sleep(300);
+  const onAgain = await p.$eval('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert', (b) => b.getAttribute('data-on')).catch(() => null);
+  const forAgain = await p.$eval('.live-watch-expr[data-name="= nFeedCount > 10"] .live-watch-alert-for', (b) => b.textContent).catch(() => null);
+  expect(JSON.stringify(profiles) === '["Night shift"]' && offNow === 'false' && onAgain === 'true' && forAgain === '1 s', `an alert profile: saved ${JSON.stringify(profiles)}, loaded (${offNow} → ${onAgain}, ${forAgain})`);
+
   // 3. The timeline: zoomed by the wheel (Now comes back), a recording as a lane, CSV and SVG
   const t0 = Date.now() - 40000;
   await toApp({ type: 'liveValues', events: ['IDLE_FEED_OFF', 'CLAMPPING', 'CLAMPED'].map((s, i) => ({ t: t0 + i * 10000, value: sample.values[S(s)] })) });

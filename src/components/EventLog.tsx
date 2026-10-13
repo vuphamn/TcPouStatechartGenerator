@@ -25,7 +25,9 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void }> = ({ events, onExport, onClear, keep, webhook, onPick }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void } }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared }) => {
+  // (the gateway's shared events of this PLC, when loaded: shown instead of this session's, with who)
+  const events: (LiveEvent & { user?: string })[] = shared?.list ?? own;
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<LiveEventKind | 'all'>('all');
   const [find, setFind] = useState('');
@@ -38,6 +40,11 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
         </button>
         {open && (
           <>
+            {shared && (
+              <button id="live-events-shared" type="button" onClick={shared.list ? shared.onClose : shared.onLoad} className={`px-1.5 py-0.5 rounded border text-[10px] ${shared.list ? 'border-sky-600 bg-sky-900/60 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title={shared.list ? "Back to this session's events" : "Everyone's events on this PLC, the last 24 hours (kept by the gateway)"}>
+                {shared.list ? 'Shared ✓' : 'Shared'}
+              </button>
+            )}
             <input id="live-events-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="find…" spellCheck={false} className="ml-auto w-24 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200" title="Only the events with this text" />
             <select id="live-events-kind" value={kind} onChange={(e) => setKind(e.target.value as LiveEventKind | 'all')} className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300">
               <option value="all">all</option>
@@ -94,7 +101,10 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
             <div key={`${e.t}-${i}`} className={`live-event flex items-baseline gap-1.5 ${onPick ? 'cursor-pointer hover:bg-slate-800/60 rounded' : ''}`} data-kind={e.kind} onClick={() => onPick?.(e)} title={onPick ? 'Show it on the timeline' : undefined}>
               <span className="font-mono text-slate-500 shrink-0">{new Date(e.t).toLocaleTimeString()}</span>
               <span className={`shrink-0 px-1 rounded text-[9px] ${KIND[e.kind].cls}`}>{KIND[e.kind].label}</span>
-              <span className="text-slate-300 break-words min-w-0">{e.text}</span>
+              <span className="text-slate-300 break-words min-w-0">
+                {e.user ? <span className="text-sky-300">{e.user}: </span> : null}
+                {e.text}
+              </span>
             </div>
           ))}
         </div>

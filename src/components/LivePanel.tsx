@@ -102,6 +102,8 @@ interface LivePanelProps {
   watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean; alertForMs?: number }[];
   /** How long a watch expression must stay true before its alert (asked) */
   onSetAlertFor?: (name: string) => void;
+  /** Alert profiles: named sets of expressions and their alerts, loaded / saved / removed */
+  alertProfiles?: { names: string[]; current: string | null; onLoad: (name: string) => void; onSave: () => void; onDelete: (name: string) => void };
   /** A watch expression's alert on / off (said when it becomes true) */
   onToggleAlert?: (name: string) => void;
   /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
@@ -109,11 +111,11 @@ interface LivePanelProps {
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
   timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[]; focus?: { t: number; nonce: number } | null };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void } };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
   /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
-  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void };
+  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void; onReport?: () => void };
   /** The TcUnit suites added to the PLC project here, read live: 0 running, 1 passed, 2 failed (at a step) */
   tests?: { name: string; steps: number; result?: number; step?: number; failedStep?: number; error?: string }[];
   onForgetTest?: (name: string) => void;
@@ -636,6 +638,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onAddWatchExpr,
   onToggleAlert,
   onSetAlertFor,
+  alertProfiles,
   timeline,
   events,
   onTcUnitTest,
@@ -1256,6 +1259,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             {setStateAllowed.onShowLog && (
               <button id="live-set-state-log" type="button" onClick={setStateAllowed.onShowLog} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="Who set the PLC to which state, when">
                 Log{setStateAllowed.logCount ? ` (${setStateAllowed.logCount})` : ''}…
+              </button>
+            )}
+            {setStateAllowed.onReport && (
+              <button id="live-set-state-report" type="button" onClick={setStateAllowed.onReport} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="The commissioning report: the states the PLC may be set to and every state set (who, when, why), as an HTML page">
+                Report…
               </button>
             )}
           </div>
@@ -2072,7 +2080,35 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {/* The variables watched from the code */}
       {watchList && (watchList.length > 0 || onAddWatchExpr) && (
         <div id="live-watch-list" className="border-b border-slate-800 shrink-0 px-2.5 py-1.5">
-          <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">Watched</div>
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Watched</span>
+            {alertProfiles && (
+              <span className="ml-auto flex items-center gap-1 text-[10px]">
+                <select
+                  id="live-alert-profile"
+                  value={alertProfiles.current ?? ''}
+                  onChange={(e) => e.target.value && alertProfiles.onLoad(e.target.value)}
+                  className="max-w-[140px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[10px] text-slate-300"
+                  title="Alert profiles: a named set of watch expressions, which alert and after how long (a shift's, a test's)"
+                >
+                  <option value="">{alertProfiles.names.length ? 'alert profile…' : 'no alert profiles'}</option>
+                  {alertProfiles.names.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <button id="live-alert-profile-save" type="button" onClick={alertProfiles.onSave} className="px-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="The expressions and their alerts saved as a profile">
+                  Save as…
+                </button>
+                {alertProfiles.current && (
+                  <button id="live-alert-profile-delete" type="button" onClick={() => alertProfiles.onDelete(alertProfiles.current!)} className="text-slate-500 hover:text-rose-300" title={`Remove the profile ${alertProfiles.current}`}>
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
           {watchList.map((w) => (
             <div key={w.name} className={`live-watch-row flex items-center gap-2 font-mono text-[11px]${w.expr ? ' live-watch-expr' : ''}`} data-name={w.name}>
               <span className={`truncate ${w.expr ? 'text-violet-200' : 'text-slate-300'}`} title={w.expr ? 'A watch expression: computed here from the values watched' : undefined}>
@@ -2123,7 +2159,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
       {snapshots && (snapshots.live || snapshots.list.length > 0) && <LiveSnapshots {...snapshots} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} shared={events.shared} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

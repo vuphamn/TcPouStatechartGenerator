@@ -15,9 +15,11 @@ interface PathsPanelProps {
   onClear: () => void;
   /** A TcUnit test of a path (its index): the guards' inputs before each step */
   onTcUnitTest?: (index: number) => void;
+  /** A TcUnit test suite of each path found */
+  onTcUnitTestAll?: () => void;
 }
 
-export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChange, result, selected, onSelect, onJumpToState, onClear, onTcUnitTest }) => {
+export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChange, result, selected, onSelect, onJumpToState, onClear, onTcUnitTest, onTcUnitTestAll }) => {
   const select = (id: string, value: string, onPick: (v: string) => void, label: string) => (
     <label className="flex items-center gap-2 min-w-0">
       <span className="w-9 text-slate-400 shrink-0">{label}</span>
@@ -65,6 +67,11 @@ export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChan
         {select('paths-to-select', to, (v) => onChange(from, v), 'To')}
       </div>
       <div id="paths-summary" className="px-2.5 py-1.5 border-b border-slate-800 shrink-0 flex items-center gap-2 text-slate-400">
+        {onTcUnitTestAll && result.paths.length > 1 && (
+          <button id="paths-tcunit-all" type="button" onClick={onTcUnitTestAll} className="order-last ml-auto px-1.5 rounded border border-violet-700 text-[10px] text-violet-200 hover:bg-violet-900/50" title="A TcUnit test suite of each path (the 10 shortest), added together">
+            TcUnit tests of all…
+          </button>
+        )}
         {!from || !to ? (
           <span>Choose two states (or right-click a state: Paths from / to here)</span>
         ) : result.paths.length === 0 ? (

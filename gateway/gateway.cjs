@@ -754,6 +754,28 @@ function start() {
         audit.add(user, 'replay', { recording: m.id, machine: m.machine, from: new Date(from).toISOString(), to: new Date(to).toISOString() });
         return send({ type: 'recordingData', requestId, ...recorders.query(m.id, m.machine, from, to) });
       }
+      // The Live tab's events, shared: what happened while a user was live on a PLC (alerts, writes, overruns, pauses,
+      // the PLC set to a state…), kept in the audit log for everyone live on that PLC (liveEventsList: the last hours)
+      if (m.type === 'liveEventsPut') {
+        const plcId = session?.conn.plc?.id ?? null;
+        if (!plcId || !Array.isArray(m.events)) return;
+        for (const e of m.events.slice(0, 50)) {
+          if (!e || typeof e.text !== 'string' || typeof e.kind !== 'string' || !/^[a-z]{1,20}$/.test(e.kind)) continue;
+          audit.add(user, 'live.event', { plc: plcId, pou: String(m.pou ?? '').slice(0, 80), instance: String(m.instance ?? '').slice(0, 200), kind: e.kind, text: e.text.slice(0, 300), at: Number.isFinite(e.t) ? e.t : Date.now() });
+        }
+        return;
+      }
+      if (m.type === 'liveEventsList') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const plcId = session?.conn.plc?.id ?? (typeof m.plc === 'string' ? m.plc : null);
+        if (!plcId) return send({ type: 'liveEventsListResult', requestId, events: [], error: 'Not live on a PLC' });
+        const hours = Math.max(1, Math.min(24 * 31, Number(m.hours) || 24));
+        const events = audit
+          .search({ from: Date.now() - hours * 3600_000, q: 'live.event', limit: 2000 })
+          .filter((e) => e.action === 'live.event' && e.plc === plcId)
+          .map((e) => ({ t: e.at ?? e.t, kind: e.kind, text: e.text, user: e.user, pou: e.pou }));
+        return send({ type: 'liveEventsListResult', requestId, plc: plcId, events });
+      }
       if (m.type === 'alertAck') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const e = typeof m.id === 'string' ? alertLog.ack(m.id, user, typeof m.note === 'string' ? m.note : '') : null;

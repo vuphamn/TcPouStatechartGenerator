@@ -3,7 +3,7 @@
 # configuration (TwinCAT goes to Run) and stops its PLC at the end; this script then puts TwinCAT back in Config when it
 # was in Config before. Each run's output: tests\.output\nightly\<date>.log, the result in last.json; a failure shows
 # a Windows notification (and the exit code is 1, for the Task Scheduler's history).
-# -Full: the whole test suite too, after the real-PLC test (npm run build, then node tests/run.cjs --jobs 2): its
+# -Full: the whole test suite too, after the real-PLC test (npm run build, then node tests/run.cjs --jobs 1): its
 # result in the same log, last.json and history.json.
 param([switch]$NoNotify, [switch]$Full)
 
@@ -34,16 +34,21 @@ try {
   $fullCode = $null
   if ($Full) {
     Remove-Item Env:KSS_REAL_PLC -ErrorAction SilentlyContinue
+    # (at night: the system and the display kept awake while the suite runs, one test at a time: its timing-sensitive
+    # checks (a card's flash, a caret's follow) failed under the night's throttling, 2 at once, on 2026-10-13)
+    if (-not ('KssAwake' -as [type])) { Add-Type -Namespace '' -Name KssAwake -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);' }
+    $null = [KssAwake]::SetThreadExecutionState([uint32]'0x80000003')
     Add-Content -Encoding UTF8 $log '--- the whole suite (npm run build, node tests/run.cjs --jobs 2)'
     $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
     $b = Start-Process -FilePath $npm -ArgumentList 'run', 'build' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
     Get-Content -Encoding UTF8 $outFile, $errFile | Select-Object -Last 5 | Add-Content -Encoding UTF8 $log
     if ($b.ExitCode -eq 0) {
-      $f = Start-Process -FilePath $node -ArgumentList 'tests\run.cjs', '--jobs', '2' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+      $f = Start-Process -FilePath $node -ArgumentList 'tests\run.cjs', '--jobs', '1' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
       $fullCode = $f.ExitCode
       Get-Content -Encoding UTF8 $outFile, $errFile | Add-Content -Encoding UTF8 $log
     } else { $fullCode = $b.ExitCode; Add-Content -Encoding UTF8 $log 'The build failed: the suite not run' }
     Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+    $null = [KssAwake]::SetThreadExecutionState([uint32]'0x80000000')
   }
   Get-Content -Encoding UTF8 $outFile, $errFile | Add-Content -Encoding UTF8 $log
   Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
@@ -82,9 +87,12 @@ try {
   if (Test-Path $configFile) { try { $config = Get-Content -Raw -Encoding UTF8 $configFile | ConvertFrom-Json } catch {} }
   $webhook = if ($env:KSS_NIGHTLY_WEBHOOK) { $env:KSS_NIGHTLY_WEBHOOK } elseif ($config -and $config.webhook) { [string]$config.webhook } else { $null }
   $always = $config -and $config.notify -eq 'always'
-  if ($webhook -and ($code -ne 0 -or $always)) {
-    $summary = (Get-Content -Encoding UTF8 $log | Where-Object { $_ -match 'FAIL|passed' } | Select-Object -First 12) -join "`n"
-    $text = if ($code -eq 0) { "Kval MachineScope real-PLC test passed on $env:COMPUTERNAME ($($result.seconds) s)" } else { "Kval MachineScope real-PLC test FAILED on $env:COMPUTERNAME`n$summary`nLog: $log" }
+  if ($webhook -and (-not $result.passed -or $always)) {
+    # (the runs' summary lines: "N/M passed", the failures; the log as a link a chat client opens)
+    $summary = (Get-Content -Encoding UTF8 $log | Where-Object { $_ -match '^\s*FAIL|\d+/\d+ passed|^flaky' } | Select-Object -First 14) -join "`n"
+    $link = 'file:///' + ($log -replace '\\', '/')
+    $what = if ($Full) { 'real-PLC test and the whole suite' } else { 'real-PLC test' }
+    $text = if ($result.passed) { "Kval MachineScope $what passed on $env:COMPUTERNAME ($($result.seconds) s)`n$summary`n[The log]($link)" } else { "Kval MachineScope $what FAILED on $env:COMPUTERNAME`n$summary`n[The log]($link) ($log)" }
     try {
       Invoke-RestMethod -Method Post -Uri $webhook -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes((@{ text = $text } | ConvertTo-Json))) -TimeoutSec 30 | Out-Null
       Add-Content -Encoding UTF8 $log 'Webhook: sent'

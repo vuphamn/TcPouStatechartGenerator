@@ -214,6 +214,16 @@ export function evalExpr(node: Node, values: (name: string) => ExprValue | undef
   return ev(node);
 }
 
+/**
+ * The live state in an expression: _state (its name, compared as an enum member: _state = TABLEMANAGER_CLAMPED) and
+ * _inState (how long the PLC is in it, ms: _inState > T#30S); not PLC variables (not asked of the PLC)
+ */
+export const isStateVar = (name: string) => /^_(state|instate)$/i.test(name);
+
+/** The values an expression reads: the PLC's (by lower-case name), then _state and _inState */
+export const withState = (values: (name: string) => ExprValue | undefined, state: { name: string; sinceMs: number } | null | undefined) => (name: string): ExprValue | undefined =>
+  name === '_state' ? state?.name : name === '_instate' ? (state ? Math.max(0, Date.now() - state.sinceMs) : undefined) : values(name);
+
 /** A watched entry that is an expression: "= …" */
 export const isWatchExpr = (entry: string) => /^\s*=/.test(entry);
 export const exprText = (entry: string) => entry.replace(/^\s*=\s*/, '');

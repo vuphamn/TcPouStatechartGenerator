@@ -62,6 +62,19 @@ async function session(url, hello, start, label) {
   // Malformed: ignored
   ws.send(JSON.stringify({ type: 'liveWatch', vars: [{ id: 'x', candidates: ['MAIN.x; DROP'] }] }));
   await sleep(400);
+  // The Live tab's events, shared through the gateway (its audit log): put, then listed for this PLC with who
+  if (label === 'gateway') {
+    ws.send(JSON.stringify({ type: 'liveEventsPut', pou: 'SM_TableManager', instance: I, events: [{ t: Date.now() - 1000, kind: 'alert', text: 'nCount > 10 became true' }, { t: Date.now(), kind: 'state', text: 'Set to TABLEMANAGER_IDLE' }, { t: Date.now(), kind: 'BAD KIND', text: 'x' }] }));
+    await sleep(1600);
+    ws.send(JSON.stringify({ type: 'liveEventsList', requestId: 77, hours: 1 }));
+    let list = null;
+    for (let t = 0; t < 4000 && !list; t += 200) {
+      list = got.find((m) => m.type === 'liveEventsListResult' && m.requestId === 77) ?? null;
+      if (!list) await sleep(200);
+    }
+    const texts = (list?.events ?? []).map((e) => `${e.user}:${e.kind}:${e.text}`);
+    expect(list?.plc === 'line202' && texts.includes('tester:alert:nCount > 10 became true') && texts.includes('tester:state:Set to TABLEMANAGER_IDLE') && !texts.some((t) => /BAD KIND/.test(t)), `gateway: the events shared (${JSON.stringify(texts)})`);
+  }
   ws.send(JSON.stringify({ type: 'liveStop' }));
   await sleep(800);
   ws.close();
