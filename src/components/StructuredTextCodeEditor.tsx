@@ -118,6 +118,8 @@ export interface StructuredTextCodeEditorProps {
   bookmarkLines?: number[];
   /** The lines that ran (live coverage): a green mark in the gutter, what ran in its title */
   executedLines?: Map<number, { n: number; title: string; kind: string }> | null;
+  /** Who last changed each line (git blame): a bar in the gutter, brighter for newer commits; its commit in its title */
+  blameLines?: Map<number, { hash: string; age: number | null; title: string }> | null;
   /** A line's own hover text (the Enum Editor: a member's CASE branch), when no problem or name says more */
   lineTitle?: (line: number, text: string) => string | null;
   /** A click on the bookmark margin of a line (its mark, or the faint one a row shows on hover): toggle it */
@@ -156,6 +158,7 @@ export const StructuredTextCodeEditor = forwardRef<
       onContextMenu,
       bookmarkLines,
       executedLines,
+      blameLines,
       onBookmarkClick,
       lineTitle,
       completionScope,
@@ -797,6 +800,15 @@ export const StructuredTextCodeEditor = forwardRef<
 
                 {/* Right: Line Number and Find Match Indicator */}
                 <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
+                  {entry.originalLineNumber !== null && blameLines?.has(entry.originalLineNumber) && (
+                    <span
+                      className="st-blame shrink-0 w-1 h-3 rounded-sm"
+                      data-blame-line={entry.originalLineNumber}
+                      data-blame-hash={blameLines.get(entry.originalLineNumber)!.hash}
+                      style={{ background: blameLines.get(entry.originalLineNumber)!.age === null ? '#f59e0b' : `hsl(200 70% ${22 + Math.round(blameLines.get(entry.originalLineNumber)!.age! * 45)}%)` }}
+                      title={blameLines.get(entry.originalLineNumber)!.title}
+                    />
+                  )}
                   {entry.originalLineNumber !== null && executedLines?.has(entry.originalLineNumber) && (
                     <span className={`st-executed shrink-0 w-1.5 h-1.5 rounded-full ${executedLines.get(entry.originalLineNumber)!.kind === 'state' ? 'bg-emerald-300' : 'bg-emerald-500'}`} data-executed-line={entry.originalLineNumber} title={executedLines.get(entry.originalLineNumber)!.title} />
                   )}

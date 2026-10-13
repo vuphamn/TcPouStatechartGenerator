@@ -52,4 +52,38 @@ async function gitShowAt(filePath, hash, atPath) {
   return r.error ? r : { content: r.out.replace(/^﻿/, '') };
 }
 
-module.exports = { gitLog, gitShowAt };
+/**
+ * Who last changed each line of a loaded file (git blame, as committed and as on disk): { lines: [{ hash, author,
+ * date, summary, text }] } one per line of the file (hash 0000000: not committed yet)
+ */
+async function gitBlame(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { error: 'Not a file of this computer' };
+  const r = await run(path.dirname(filePath), ['blame', '--line-porcelain', '--', path.basename(filePath)]);
+  if (r.error) return r;
+  return { lines: parseBlame(r.out) };
+}
+
+/** git blame --line-porcelain's output → a line each: { hash (7), author, date (YYYY-MM-DD), summary, text } */
+function parseBlame(out) {
+  const lines = [];
+  let cur = null;
+  for (const l of out.split('\n')) {
+    if (l.startsWith('\t')) {
+      if (cur) lines.push({ ...cur, text: l.slice(1).replace(/\r$/, '') });
+      cur = null;
+      continue;
+    }
+    const head = /^([0-9a-f]{40}) \d+ \d+/.exec(l);
+    if (head) {
+      cur = { hash: head[1].slice(0, 7), author: '', date: '', summary: '' };
+      continue;
+    }
+    if (!cur) continue;
+    if (l.startsWith('author ')) cur.author = l.slice(7);
+    else if (l.startsWith('author-time ')) cur.date = new Date(Number(l.slice(12)) * 1000).toISOString().slice(0, 10);
+    else if (l.startsWith('summary ')) cur.summary = l.slice(8, 168);
+  }
+  return lines;
+}
+
+module.exports = { gitLog, gitShowAt, gitBlame, parseBlame };

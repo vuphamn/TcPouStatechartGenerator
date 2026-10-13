@@ -14,6 +14,8 @@
     <Compile Include="..\KvalMachineScope.Xae\UpdateNotice.cs" Link="UpdateNotice.cs" />
     <Compile Include="..\KvalMachineScope.Xae\SaveAllRelay.cs" Link="SaveAllRelay.cs" />
     <Compile Include="..\KvalMachineScope.Xae\TabMemory.cs" Link="TabMemory.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\GitBlame.cs" Link="GitBlame.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\PlcAddFiles.cs" Link="PlcAddFiles.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcSearch.cs" Link="PlcSearch.cs" />
     <Compile Include="..\KvalMachineScope.Xae\LiveMonitor.cs" Link="LiveMonitor.cs" />
   </ItemGroup>

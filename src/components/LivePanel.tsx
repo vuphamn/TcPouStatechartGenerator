@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope, X, OctagonPause } from 'lucide-react';
+import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRight, Loader2, Layers, ExternalLink, ListTree, FolderDown, Hammer, LayoutGrid, Search, Download, FolderOpen, Pause, Database, Timer, GitCompare, ShieldCheck, Stethoscope, X, OctagonPause, Zap, Bell, BellOff } from 'lucide-react';
 import { LiveScope } from './LiveScope.tsx';
 import { StateTimeline, type TimelineLane } from './StateTimeline.tsx';
 import { EventLog, type LiveEvent } from './EventLog.tsx';
@@ -98,15 +98,22 @@ interface LivePanelProps {
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
-  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string }[];
+  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean }[];
+  /** A watch expression's alert on / off (said when it becomes true) */
+  onToggleAlert?: (name: string) => void;
   /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
   onAddWatchExpr?: (text: string) => string | null;
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
-  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void };
+  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void } };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
+  /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
+  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void };
+  /** The TcUnit suites added to the PLC project here, read live: 0 running, 1 passed, 2 failed (at a step) */
+  tests?: { name: string; steps: number; result?: number; step?: number; failedStep?: number; error?: string }[];
+  onForgetTest?: (name: string) => void;
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
   watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
@@ -620,9 +627,13 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   onComparePlc,
   watchList,
   onAddWatchExpr,
+  onToggleAlert,
   timeline,
   events,
   onTcUnitTest,
+  setStateAllowed,
+  tests = [],
+  onForgetTest,
   watchLists,
   scope,
   onUnwatch,
@@ -1164,6 +1175,64 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                 }
               }}
             />
+          </div>
+        )}
+        {tests.length > 0 && (
+          <div id="live-tests" className="flex flex-wrap items-center gap-1 text-[11px]">
+            <span className="text-slate-400" title="The TcUnit tests made from recordings and added to the PLC project (PRG_KssTests), as the PLC runs them">
+              TcUnit
+            </span>
+            {tests.map((t) => {
+              const state = t.error ? 'missing' : t.result === 1 ? 'passed' : t.result === 2 ? 'failed' : 'running';
+              return (
+                <span
+                  key={t.name}
+                  className={`live-test flex items-center gap-1 px-1.5 rounded border font-mono ${state === 'passed' ? 'border-emerald-600 text-emerald-200' : state === 'failed' ? 'border-rose-600 bg-rose-950/60 text-rose-200' : 'border-slate-700 text-slate-300'}`}
+                  data-test={t.name}
+                  data-state={state}
+                  title={t.error ? `Not on the PLC: ${t.error} (built, downloaded, PRG_KssTests called by a task?)` : `${t.name}: ${t.steps} states recorded`}
+                >
+                  {t.name}:{' '}
+                  {state === 'passed' ? '✓ passed' : state === 'failed' ? `✗ failed at step ${t.failedStep ?? '?'}` : state === 'missing' ? 'not on the PLC' : `step ${t.step ?? '?'}/${Math.max(1, t.steps - 1)}`}
+                  {onForgetTest && (
+                    <button type="button" className="text-slate-500 hover:text-white" onClick={() => onForgetTest(t.name)} title="Do not follow this test here">
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        )}
+        {setStateAllowed && pauseStates.length > 0 && (
+          <div id="live-set-state-allowed" className="flex flex-wrap items-center gap-1 text-[11px]">
+            <span className="flex items-center gap-1 text-slate-400" title="Commissioning: the states a state's menu may set the PLC to (Set the PLC to this state…), each asked first; none listed: none">
+              <Zap className="w-3 h-3 text-violet-300" /> May set to
+            </span>
+            {setStateAllowed.list.map((s) => (
+              <span key={s} className="live-set-state-chip flex items-center gap-0.5 pl-1.5 pr-0.5 py-0.5 rounded bg-violet-900/50 text-violet-100 font-mono" data-state={s}>
+                {s}
+                <button type="button" className="p-0.5 text-violet-300 hover:text-white" onClick={() => setStateAllowed.onChange(setStateAllowed.list.filter((x) => x !== s))} title={`The PLC may no longer be set to ${s}`}>
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <select
+              id="live-set-state-add"
+              value=""
+              onChange={(e) => e.target.value && setStateAllowed.onChange([...setStateAllowed.list, e.target.value])}
+              className="max-w-[220px] bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300"
+              title="A state the PLC may be set to from its menu while live (commissioning)"
+            >
+              <option value="">{setStateAllowed.list.length ? '+ a state…' : 'none: a state… (commissioning)'}</option>
+              {pauseStates
+                .filter((s) => !setStateAllowed.list.includes(s))
+                .map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+            </select>
           </div>
         )}
         {tasks.length > 0 && (
@@ -2000,6 +2069,17 @@ export const LivePanel: React.FC<LivePanelProps> = ({
               ) : (
                 <span className="live-watch-value ml-auto text-emerald-300">{w.value === undefined ? '…' : typeof w.value === 'boolean' ? (w.value ? 'TRUE' : 'FALSE') : String(w.value)}</span>
               )}
+              {w.expr && onToggleAlert && (
+                <button
+                  type="button"
+                  className={`live-watch-alert ${w.alert ? 'text-rose-300' : 'text-slate-600 hover:text-slate-300'}`}
+                  data-on={w.alert ? 'true' : 'false'}
+                  onClick={() => onToggleAlert(w.name)}
+                  title={w.alert ? 'Alert on: said when it becomes true (an event, a message; a notification with Notify). A click turns it off' : 'Alert: say so when it becomes true'}
+                >
+                  {w.alert ? <Bell className="w-3 h-3" /> : <BellOff className="w-3 h-3" />}
+                </button>
+              )}
               {onUnwatch && (
                 <button type="button" onClick={() => onUnwatch(w.name)} className="text-slate-500 hover:text-white" title="Stop watching it">
                   ×
@@ -2012,7 +2092,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       )}
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

@@ -53,6 +53,12 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   /** A file's git history (a state's history): its commits { commits } and the file at one of them { content } */
   gitLog: (path) => ipcRenderer.invoke('tc:git-log', path),
   gitShowAt: (path, hash, file) => ipcRenderer.invoke('tc:git-show-at', path, hash, file),
+  /** Who last changed each line of a file (git blame): { lines: [{ hash, author, date, summary, text }] } */
+  gitBlame: (path) => ipcRenderer.invoke('tc:git-blame', path),
+  /** New POUs into the POU's PLC project: { folder, files: [{ name, content }] } → { ok, written, tcunit } or { error } */
+  addPlcFiles: (pouPath, req) => ipcRenderer.invoke('tc:add-plc-files', pouPath, req),
+  /** A live session's events beside the PLC project: { name, csv } → { ok, path } or { error } */
+  eventsSave: (pouPath, req) => ipcRenderer.invoke('tc:events-save', pouPath, req),
   /** A POU's layout file beside it (<POU>.machinescope.json): read { text | null } / written { written } or { error } */
   readLayout: (pouPath) => ipcRenderer.invoke('tc:layout-read', pouPath),
   writeLayout: (pouPath, text) => ipcRenderer.invoke('tc:layout-write', pouPath, text),

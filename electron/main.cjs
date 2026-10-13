@@ -351,6 +351,11 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
 
 // A file's git history (a state's history): its commits, the file at one of them
 ipcMain.handle('tc:git-log', (_event, filePath) => require('../shared/gitHistory.cjs').gitLog(filePath));
+// New POUs into the loaded POU's PLC project (the TcUnit tests): written in a folder of it, listed in its .plcproj
+// A live session's events kept beside the PLC project (MachineScope.events\<name>.csv)
+ipcMain.handle('tc:events-save', (_event, pouPath, req) => require('../shared/eventsFile.cjs').saveEventsFile(pouPath, req));
+ipcMain.handle('tc:add-plc-files', (_event, pouPath, req) => require('../shared/plcAddFiles.cjs').addPlcFiles(pouPath, req));
+ipcMain.handle('tc:git-blame', (_event, filePath) => require('../shared/gitHistory.cjs').gitBlame(filePath));
 ipcMain.handle('tc:git-show-at', (_event, filePath, hash, file) => require('../shared/gitHistory.cjs').gitShowAt(filePath, hash, file));
 
 // Live view: follow a POU's state variable in a PLC on another computer (messages go back on 'tc:live').

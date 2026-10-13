@@ -14,6 +14,8 @@ import { triggerDownload } from './diagramExport.ts';
 interface DesktopProjectApi {
   projectPous: (fromPath: string) => Promise<ProjectFiles & { error?: string }>;
   saveFile: (name: string, content: string, opts?: { personal?: boolean }) => Promise<{ path?: string; error?: string; canceled?: boolean }>;
+  addPlcFiles: (pouPath: string, req: { folder: string; files: { name: string; content: string }[] }) => Promise<AddPlcFilesResult>;
+  eventsSave: (pouPath: string, req: { name: string; csv: string }) => Promise<{ ok: boolean; path?: string; error?: string | null }>;
 }
 const desktop = (): Partial<DesktopProjectApi> | null =>
   (window as unknown as { tcDesktop?: Partial<DesktopProjectApi> }).tcDesktop ?? null;
@@ -374,4 +376,38 @@ export async function resolveInheritance(pouXml: string, fromPath: string | unde
     name = extendsOf(found.content);
   }
   return { bases, dutCandidates };
+}
+
+export interface AddPlcFilesResult {
+  ok: boolean;
+  written?: string[];
+  /** The project references TcUnit */
+  tcunit?: boolean;
+  folder?: string;
+  error?: string | null;
+}
+
+/** New POUs can go into the loaded POU's PLC project here (XAE, VS Code, the desktop app with a POU from a folder) */
+export const canAddPlcFiles = (pouPath: string | undefined) => !!pouPath && (isXaeHost() || !!desktop()?.addPlcFiles);
+
+/** New POUs (.TcPOU) into a folder of the loaded POU's PLC project, listed in its .plcproj */
+export async function addPlcFiles(pouPath: string, folder: string, files: { name: string; content: string }[]): Promise<AddPlcFilesResult> {
+  const d = desktop();
+  if (d?.addPlcFiles) return d.addPlcFiles(pouPath, { folder, files });
+  if (!isXaeHost()) return { ok: false, error: 'Adding files to the PLC project needs TwinCAT XAE, VS Code or the desktop app' };
+  const requestId = Date.now() % 1e9;
+  const r = await hostRequest<AddPlcFilesResult & { requestId?: number }>({ type: 'addPlcFiles', requestId, folder, files }, 'addPlcFilesResult', 60000);
+  return 'ok' in r ? r : { ok: false, error: r.error };
+}
+
+/** A live session's events can be kept beside the PLC project here (XAE, VS Code, the desktop app) */
+export const canKeepEvents = (pouPath: string | undefined) => !!pouPath && (isXaeHost() || !!desktop()?.eventsSave);
+
+/** A live session's events (CSV) into <the PLC project>/MachineScope.events/<name> */
+export async function saveEventsFile(pouPath: string, name: string, csv: string): Promise<{ ok: boolean; path?: string; error?: string | null }> {
+  const d = desktop();
+  if (d?.eventsSave) return d.eventsSave(pouPath, { name, csv });
+  if (!isXaeHost()) return { ok: false, error: 'Keeping the events beside the project needs TwinCAT XAE, VS Code or the desktop app' };
+  const r = await hostRequest<{ ok: boolean; path?: string; error?: string | null }>({ type: 'eventsSave', requestId: Date.now() % 1e9, name, csv }, 'eventsSaveResult', 30000);
+  return 'ok' in r ? r : { ok: false, error: r.error };
 }

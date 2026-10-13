@@ -66,6 +66,8 @@
     <Compile Include="PlcSearch.cs" />
     <Compile Include="XaeBuild.cs" />
     <Compile Include="TabMemory.cs" />
+    <Compile Include="GitBlame.cs" />
+    <Compile Include="PlcAddFiles.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

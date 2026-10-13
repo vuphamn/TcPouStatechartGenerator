@@ -401,6 +401,15 @@ namespace KvalMachineScope.Xae
                     case "gitShowAt":
                         HandleGitShowAt(msg);
                         break;
+                    case "gitBlame":
+                        HandleGitBlame(msg);
+                        break;
+                    case "addPlcFiles":
+                        HandleAddPlcFiles(msg);
+                        break;
+                    case "eventsSave":
+                        HandleEventsSave(msg);
+                        break;
                     case "layoutRead":
                     case "layoutWrite":
                         HandleLayoutFile(msg, type == "layoutWrite");
@@ -1249,6 +1258,73 @@ namespace KvalMachineScope.Xae
                 }
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "gitShowAtResult", requestId, content, error });
+            });
+        }
+
+        /// <summary>A live session's events kept beside the PLC project: MachineScope.events\&lt;name&gt;.csv</summary>
+        private void HandleEventsSave(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var name = msg.TryGetValue("name", out var n) ? n as string : null;
+            var csv = msg.TryGetValue("csv", out var c) ? c as string : null;
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            if (plcproj == null) { Post(new { type = "eventsSaveResult", requestId, ok = false, error = "The PLC project (.plcproj) of the POU was not found" }); return; }
+            if (name == null || csv == null || name.Contains("..") || !System.Text.RegularExpressions.Regex.IsMatch(name, @"^[\w.-]{1,120}\.csv$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                Post(new { type = "eventsSaveResult", requestId, ok = false, error = "Not a file name" });
+                return;
+            }
+            try
+            {
+                var dir = Path.Combine(Path.GetDirectoryName(plcproj), "MachineScope.events");
+                Directory.CreateDirectory(dir);
+                var file = Path.Combine(dir, name);
+                File.WriteAllText(file, csv, new System.Text.UTF8Encoding(true));
+                Log.Write("events kept: " + file);
+                Post(new { type = "eventsSaveResult", requestId, ok = true, path = file });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Post(new { type = "eventsSaveResult", requestId, ok = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>New POUs into the loaded POU's PLC project (the TcUnit tests): a folder of it, listed in its .plcproj</summary>
+        private void HandleAddPlcFiles(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var folder = msg.TryGetValue("folder", out var f) ? f as string : null;
+            var files = new List<KeyValuePair<string, string>>();
+            if (msg.TryGetValue("files", out var raw) && raw is System.Collections.IEnumerable list && !(raw is string))
+                foreach (var item in list.OfType<Dictionary<string, object>>())
+                    files.Add(new KeyValuePair<string, string>(item.TryGetValue("name", out var n) ? n as string : null, item.TryGetValue("content", out var c) ? c as string : null));
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            var result = PlcAddFiles.Add(plcproj, folder, files);
+            Log.Write($"add files ({folder}): {(result.ok ? string.Join(", ", result.written) : result.error)}");
+            Post(new { type = "addPlcFilesResult", requestId, result.ok, result.written, result.tcunit, result.folder, result.error });
+        }
+
+        /// <summary>Who last changed each line of a loaded file (git blame --line-porcelain): a line each</summary>
+        private void HandleGitBlame(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var path = msg.TryGetValue("path", out var p) ? p as string : null;
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            if (path == null || !_lastSeen.ContainsKey(path))
+            {
+                Post(new { type = "gitBlameResult", requestId, error = "Not a file loaded in MachineScope" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                var (output, error) = await RunGitAsync(Path.GetDirectoryName(path), $"blame --line-porcelain -- \"{Path.GetFileName(path)}\"");
+                var lines = error == null ? GitBlame.Parse(output) : null;
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Log.Write($"git: {Path.GetFileName(path)} blame: {(error ?? $"{lines.Count} lines")}");
+                Post(new { type = "gitBlameResult", requestId, lines, error });
             });
         }
 

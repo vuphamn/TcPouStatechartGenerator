@@ -3,7 +3,7 @@
  * run "git show HEAD:<file>" in the file's folder. The web edition has no git access.
  */
 
-import { isXaeHost, onHostMessage, postToHost } from './xaeHost.ts';
+import { isXaeHost, onHostMessage, postToHost, type BlameLine } from './xaeHost.ts';
 
 interface DesktopGitApi {
   gitShow: (path: string) => Promise<{ content?: string; error?: string }>;
@@ -49,6 +49,7 @@ export interface FileCommit {
 interface DesktopGitHistoryApi {
   gitLog: (path: string) => Promise<{ commits?: FileCommit[]; error?: string }>;
   gitShowAt: (path: string, hash: string, file: string) => Promise<{ content?: string; error?: string }>;
+  gitBlame?: (path: string) => Promise<{ lines?: BlameLine[]; error?: string }>;
 }
 const desktopGitHistory = (): DesktopGitHistoryApi | null => {
   const d = (window as unknown as { tcDesktop?: Partial<DesktopGitHistoryApi> }).tcDesktop;
@@ -56,7 +57,7 @@ const desktopGitHistory = (): DesktopGitHistoryApi | null => {
 };
 
 /** (a host request answered with the same requestId: its answer, or no answer in time) */
-function askHost(post: (requestId: number) => void, answer: 'gitLogResult' | 'gitShowAtResult', timeoutMs = 20000): Promise<Record<string, unknown>> {
+function askHost(post: (requestId: number) => void, answer: 'gitLogResult' | 'gitShowAtResult' | 'gitBlameResult', timeoutMs = 20000): Promise<Record<string, unknown>> {
   const requestId = nextRequest++;
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => {
@@ -89,4 +90,14 @@ export async function fetchFileAt(path: string, hash: string, file: string): Pro
   if (!isXaeHost()) return { error: 'The history needs the desktop app, TwinCAT XAE or VS Code' };
   const m = await askHost((requestId) => postToHost({ type: 'gitShowAt', path, hash, file, requestId }), 'gitShowAtResult');
   return { content: (m.content as string | null | undefined) ?? undefined, error: (m.error as string | null | undefined) ?? undefined };
+}
+
+/** Who last changed each line of a loaded file (git blame): a line each, as the file is on disk */
+export async function fetchFileBlame(path: string): Promise<{ lines?: BlameLine[]; error?: string }> {
+  const desktop = desktopGitHistory();
+  if (desktop?.gitBlame) return desktop.gitBlame(path);
+  if (desktop) return { error: 'Update the desktop app: it cannot show who changed the lines' };
+  if (!isXaeHost()) return { error: 'Who changed the lines needs the desktop app, TwinCAT XAE or VS Code' };
+  const m = await askHost((requestId) => postToHost({ type: 'gitBlame', path, requestId }), 'gitBlameResult');
+  return { lines: (m.lines as BlameLine[] | null | undefined) ?? undefined, error: (m.error as string | null | undefined) ?? undefined };
 }

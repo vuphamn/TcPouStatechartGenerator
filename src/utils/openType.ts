@@ -32,6 +32,12 @@ export interface OpenTypeHandler {
   extractAction?: (method: string, startLine: number, endLine: number) => void;
   /** An expression of one line (its columns) into a new property */
   extractProperty?: (method: string, line: number, from: number, to: number) => void;
+  /** Blame: who last changed each line of a method's code (git), or why not */
+  blame?: (method: string, code: string) => Promise<Map<number, import('./methodBlame.ts').BlameMark> | { error: string }>;
+  /** Inline Method: the call on a line (1-based, the saved POU's) replaced by the method's code */
+  inlineMethod?: (method: string, line: number) => void;
+  /** The state variable, its enum type and the enum's names by value (state names for numbers); null: not known */
+  stateNames?: () => { stateVar: string; enumType: string; names: Map<number, string> } | null;
   /** Rename a method / property of the POU (and where other POUs call it): asks for the name, previews */
   renameMethod?: (name: string, inline?: InlineRename) => void;
   /** Declare variables in the POU's declaration (written at once); false: not done (the reason was shown) */

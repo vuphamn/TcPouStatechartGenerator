@@ -22,6 +22,8 @@ export interface TextPromptRequest {
   onSubmit: (value: string, declarations?: NewVariable[]) => void;
   /** A confirmation: no text field (Enter / the button confirms) */
   confirmOnly?: boolean;
+  /** A box to tick before the answer can be given (what the user vouches for: "The machine is safe for this")*/
+  confirmCheck?: string;
   /** Lines listed under the label (what the action changes) */
   details?: string[];
   /** The button in red (a deletion) */
@@ -166,8 +168,11 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
   const text = request.multiline ? value.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/\s+$/, '') : value.trim();
   const syntax = request.condition ? checkConditionSyntax(text) : null;
   const error = request.confirmOnly ? null : (request.validate ? request.validate(text) : null) ?? syntax;
+  const [checked, setChecked] = useState(false);
+  useEffect(() => setChecked(false), [request]);
+  const unchecked = !!request.confirmCheck && !checked;
   const submit = () => {
-    if (error || declaring) return;
+    if (error || declaring || unchecked) return;
     if (picker) request.onSubmit(text, pending);
     else request.onSubmit(text);
     onClose();
@@ -265,6 +270,12 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
                 </li>
               ))}
             </ul>
+          )}
+          {request.confirmCheck && (
+            <label className="flex items-center gap-2 text-slate-200">
+              <input id="text-prompt-check" type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+              {request.confirmCheck}
+            </label>
           )}
           {request.sideAction && (
             <button id={request.sideAction.id} type="button" onClick={request.sideAction.run} title={request.sideAction.title} className="text-sky-300 hover:text-sky-100 underline underline-offset-2">
@@ -491,7 +502,7 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
             id="text-prompt-submit"
             ref={submitRef}
             onClick={submit}
-            disabled={!!error || !!declaring}
+            disabled={!!error || !!declaring || unchecked}
             className={`px-3 py-1 rounded-md text-white font-semibold disabled:opacity-40 ${request.danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-sky-600 hover:bg-sky-500'}`}
           >
             {request.submitLabel ?? 'OK'}

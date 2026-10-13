@@ -251,6 +251,14 @@ function createHost({ pouPath, post, ui }) {
       if (!p || !lastSeen.has(p)) return post({ type: 'gitLogResult', requestId, error: 'Not a file loaded in MachineScope' });
       post({ type: 'gitLogResult', requestId, ...(await require('../shared/gitHistory.cjs').gitLog(p)) });
     },
+    // New POUs into the POU's PLC project (the TcUnit tests): a folder of it, listed in its .plcproj
+    // A live session's events kept beside the PLC project (MachineScope.events)
+    eventsSave: ({ requestId, name, csv }) => post({ type: 'eventsSaveResult', requestId, ...require('../shared/eventsFile.cjs').saveEventsFile(pou, { name, csv }) }),
+    addPlcFiles: ({ requestId, folder, files }) => post({ type: 'addPlcFilesResult', requestId, ...require('../shared/plcAddFiles.cjs').addPlcFiles(pou, { folder, files }) }),
+    gitBlame: async ({ path: p, requestId }) => {
+      if (!p || !lastSeen.has(p)) return post({ type: 'gitBlameResult', requestId, error: 'Not a file loaded in MachineScope' });
+      post({ type: 'gitBlameResult', requestId, ...(await require('../shared/gitHistory.cjs').gitBlame(p)) });
+    },
     gitShowAt: async ({ path: p, hash, file, requestId }) => {
       if (!p || !lastSeen.has(p)) return post({ type: 'gitShowAtResult', requestId, error: 'Not a file loaded in MachineScope' });
       post({ type: 'gitShowAtResult', requestId, ...(await require('../shared/gitHistory.cjs').gitShowAt(p, hash, file)) });

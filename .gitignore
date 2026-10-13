@@ -27,3 +27,6 @@ tests/.output/
 
 # The demo clips recorded anew (scripts/demo-gifs.cjs --out demo-out: CI)
 demo-out/
+
+# The nightly real-PLC run's webhook (scripts/nightly-real-plc.ps1): this computer's own
+scripts/nightly.config.json

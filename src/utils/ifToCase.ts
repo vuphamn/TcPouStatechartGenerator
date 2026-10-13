@@ -151,3 +151,97 @@ export function ifToCase(code: string, line: number): { code: string; variable: 
   const next = [...lines.slice(0, line), ...out, ...lines.slice(found.endIf + 1)];
   return { code: next.join(eol), variable };
 }
+
+// ---- Convert to IF: a CASE as an IF / ELSIF chain (the other way) ----
+
+const OPENS = /^\s*(IF|CASE|FOR|WHILE|REPEAT)\b/i;
+const CLOSES = /\b(END_IF|END_CASE|END_FOR|END_WHILE|UNTIL)\b/gi;
+const LABEL_LINE = /^(\s*)((?:[A-Za-z_][\w.]*|-?\d[\w#]*)(?:\s*\.\.\s*(?:[A-Za-z_][\w.]*|-?\d[\w#]*))?(?:\s*,\s*(?:[A-Za-z_][\w.]*|-?\d[\w#]*)(?:\s*\.\.\s*(?:[A-Za-z_][\w.]*|-?\d[\w#]*))?)*)\s*:(?!=)(.*)$/;
+
+/** The arms of the CASE at a line (0-based): each one's labels (null: ELSE) and code lines; END_CASE's line */
+function caseArmsOf(lines: string[], at: number): { variable: string; arms: { labels: string[] | null; code: string[] }[]; end: number } | null {
+  const head = /^\s*CASE\s+([\s\S]+?)\s+OF\s*$/i.exec(strip(lines[at]));
+  if (!head) return null;
+  const arms: { labels: string[] | null; code: string[] }[] = [];
+  let depth = 0;
+  for (let i = at + 1; i < lines.length; i++) {
+    const l = strip(lines[i]);
+    if (depth === 0) {
+      if (/^\s*END_CASE\b/i.test(l)) return { variable: head[1].trim(), arms, end: i };
+      if (/^\s*ELSE\b/i.test(l)) {
+        const rest = lines[i].replace(/^\s*ELSE\b/i, '');
+        arms.push({ labels: null, code: rest.trim() ? [rest.trim()] : [] });
+        continue;
+      }
+      const lab = LABEL_LINE.exec(l);
+      if (lab) {
+        // (the code after "A:" on its line: the arm's first line)
+        const rest = lines[i].slice(lines[i].indexOf(':', lab[1].length + lab[2].length) + 1);
+        arms.push({ labels: lab[2].split(',').map((x) => x.trim()), code: rest.trim() ? [rest.trim()] : [] });
+        continue;
+      }
+    }
+    if (!arms.length) {
+      if (l.trim()) return null;
+      continue;
+    }
+    arms[arms.length - 1].code.push(lines[i]);
+    if (OPENS.test(l)) depth++;
+    depth -= (l.match(CLOSES) ?? []).length;
+  }
+  return null;
+}
+
+/** The lines re-indented to `indent` (their common indentation taken off) */
+function reindent(code: string[], indent: string): string[] {
+  const body = [...code];
+  while (body.length && !body[body.length - 1].trim()) body.pop();
+  const ind = body.filter((l) => l.trim()).map((l) => l.match(/^[ \t]*/)![0]);
+  const common = ind.length ? ind.reduce((m, x) => (x.length < m.length ? x : m)) : '';
+  return body.map((l) => (l.trim() ? indent + (l.startsWith(common) ? l.slice(common.length) : l.trimStart()) : ''));
+}
+
+/** The CASE at a line (0-based) as an IF / ELSIF chain → the new code, or { error } */
+export function caseToIf(code: string, line: number): { code: string; variable: string } | { error: string } {
+  const eol = code.includes('\r\n') ? '\r\n' : '\n';
+  const lines = code.split(/\r?\n/);
+  const found = caseArmsOf(lines, line);
+  if (!found) return { error: 'No CASE … END_CASE starts on this line (or a label is not understood)' };
+  const labelled = found.arms.filter((a) => a.labels);
+  if (!labelled.length) return { error: 'The CASE has no labels' };
+  const indent = lines[line].match(/^[ \t]*/)![0];
+  const step = indent.includes(' ') && !indent.includes('\t') ? '  ' : '\t';
+  const v = found.variable;
+  const test = (label: string) => {
+    const range = /^(.+?)\s*\.\.\s*(.+)$/.exec(label);
+    return range ? `(${v} >= ${range[1]} AND ${v} <= ${range[2]})` : `${v} = ${label}`;
+  };
+  const out: string[] = [];
+  let first = true;
+  for (const a of found.arms) {
+    if (a.labels) {
+      out.push(`${indent}${first ? 'IF' : 'ELSIF'} ${a.labels.map(test).join(' OR ')} THEN`);
+      first = false;
+    } else out.push(`${indent}ELSE`);
+    const body = reindent(a.code, indent + step);
+    out.push(...(body.length ? body : [`${indent}${step};`]));
+  }
+  out.push(`${indent}END_IF`);
+  return { code: [...lines.slice(0, line), ...out, ...lines.slice(found.end + 1)].join(eol), variable: v };
+}
+
+/** The code editors' menu item (the caret's line, 1-based, starting a CASE): Convert to IF */
+export function caseToIfItem(code: string, line: number, apply: (code: string) => void, fail: (message: string) => void): { id: string; label: string; title: string; onSelect: () => void } | null {
+  const text = code.split(/\r?\n/)[line - 1];
+  if (text === undefined || !/^\s*CASE\b/i.test(strip(text))) return null;
+  return {
+    id: 'editor-menu-case-to-if',
+    label: 'Convert to IF',
+    title: 'This CASE as an IF / ELSIF chain (a range a..b as two comparisons); Ctrl+Z undoes',
+    onSelect: () => {
+      const r = caseToIf(code, line - 1);
+      if ('error' in r) fail(`Not converted: ${r.error}`);
+      else apply(r.code);
+    },
+  };
+}

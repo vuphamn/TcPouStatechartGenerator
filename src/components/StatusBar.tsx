@@ -238,6 +238,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       <input id="status-follow-selection" type="checkbox" className="w-3 h-3" checked={followSelection} onChange={(e) => onFollowSelectionChange(e.target.checked)} />
       Follow selection
     </label>
+    {import.meta.env.DEV && <NightlyChip />}
     <button
       id="status-version"
       type="button"
@@ -250,3 +251,37 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     </button>
   </footer>
 );
+
+/**
+ * Development (npm run dev) only: the last nightly real-PLC run (scripts/nightly-real-plc.ps1's
+ * tests/.output/nightly/last.json, served by the dev server): passed or failed, when; read every 10 minutes
+ */
+const NightlyChip: React.FC = () => {
+  const [last, setLast] = React.useState<{ when: string; passed: boolean; seconds: number; log: string } | null>(null);
+  React.useEffect(() => {
+    let alive = true;
+    const read = () =>
+      void fetch('/tests/.output/nightly/last.json', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.text() : null))
+        .then((t) => alive && t && setLast(JSON.parse(t.replace(/^\uFEFF/, ''))))
+        .catch(() => {});
+    read();
+    const t = window.setInterval(read, 600_000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
+  if (!last) return null;
+  const when = new Date(last.when);
+  return (
+    <span
+      id="status-nightly"
+      data-passed={last.passed ? 'true' : 'false'}
+      className={`shrink-0 font-mono ${last.passed ? 'text-emerald-400' : 'text-rose-400'}`}
+      title={`The nightly real-PLC test (development): ${last.passed ? 'passed' : 'FAILED'} ${when.toLocaleString()}, ${last.seconds} s. Log: ${last.log}`}
+    >
+      nightly {last.passed ? '✓' : '✗'} {when.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} {when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+    </span>
+  );
+};

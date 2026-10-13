@@ -84,26 +84,7 @@ END_VAR
 }
 
 /** The .plcproj with a file added (relPath: POUs\Folder\FB_X.TcPOU) and its folders; unchanged when already there */
-function addToPlcproj(proj, relPath) {
-  const rel = relPath.replace(/\//g, '\\');
-  if (new RegExp(`<Compile\\s+Include="${rel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'i').test(proj)) return proj;
-  const nl = proj.includes('\r\n') ? '\r\n' : '\n';
-  // (an empty project written <Project/>: opened, its items put in)
-  proj = proj.replace(/<Project(\s[^>]*)?\/>/, (m, attrs = '') => `<Project${attrs}>${nl}</Project>`);
-  const compile = `    <Compile Include="${rel}">${nl}      <SubType>Code</SubType>${nl}    </Compile>${nl}`;
-  // (after the last Compile; else in a new ItemGroup before </Project>)
-  const lastCompile = [...proj.matchAll(/<Compile\s+Include="[^"]*"\s*(?:\/>|>[\s\S]*?<\/Compile>)\r?\n/g)].pop();
-  let out = lastCompile ? proj.slice(0, lastCompile.index + lastCompile[0].length) + compile + proj.slice(lastCompile.index + lastCompile[0].length) : proj.replace(/<\/Project>/, `  <ItemGroup>${nl}${compile}  </ItemGroup>${nl}</Project>`);
-  // Its folders (each level), when not listed
-  const parts = rel.split('\\').slice(0, -1);
-  for (let i = 1; i <= parts.length; i++) {
-    const folder = parts.slice(0, i).join('\\');
-    if (new RegExp(`<Folder\\s+Include="${folder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'i').test(out)) continue;
-    const lastFolder = [...out.matchAll(/<Folder\s+Include="[^"]*"\s*\/>\r?\n/g)].pop();
-    const line = `    <Folder Include="${folder}" />${nl}`;
-    out = lastFolder ? out.slice(0, lastFolder.index + lastFolder[0].length) + line + out.slice(lastFolder.index + lastFolder[0].length) : out.replace(/<\/Project>/, `  <ItemGroup>${nl}${line}  </ItemGroup>${nl}</Project>`);
-  }
-  return out;
-}
+// (shared with the desktop app's Add to the PLC project: shared/plcAddFiles.cjs)
+const { addToPlcproj } = require('../shared/plcAddFiles.cjs');
 
 module.exports = { checkName, newPouXml, newDutXml, addMethod, addProperty, addToPlcproj };

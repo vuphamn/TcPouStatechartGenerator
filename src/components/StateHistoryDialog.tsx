@@ -15,7 +15,7 @@ export interface StateVersion {
  * The history of a state (its canvas menu): the commits that changed its CASE branch, newest first, each with its
  * author, date, message and what changed in the branch (against the version before it)
  */
-export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{ versions: StateVersion[]; error?: string }>; onClose: () => void }> = ({ state, load, onClose }) => {
+export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{ versions: StateVersion[]; error?: string }>; onClose: () => void; onRestore?: (v: StateVersion) => void }> = ({ state, load, onClose, onRestore }) => {
   const [r, setR] = useState<{ versions: StateVersion[]; error?: string } | null>(null);
   useEffect(() => {
     void load().then(setR);
@@ -50,6 +50,16 @@ export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{
                 <span className="font-mono text-sky-300">{v.hash}</span>
                 <span className="truncate text-slate-200" title={v.subject}>{v.subject}</span>
                 <span className="ml-auto shrink-0 text-[10px] text-slate-500">{v.author} · {v.date}</span>
+                {onRestore && v.code !== null && v.hash !== 'working' && i > 0 && (
+                  <button
+                    type="button"
+                    className="state-history-restore shrink-0 px-1.5 rounded border border-slate-700 text-[10px] text-slate-300 hover:bg-slate-800"
+                    title={`The state's branch as it was in ${v.hash} (an edit here: Save writes it, Ctrl+Z undoes)`}
+                    onClick={() => onRestore(v)}
+                  >
+                    Restore
+                  </button>
+                )}
               </div>
               <pre className="state-history-diff px-2 py-1 font-mono text-[10px] leading-snug whitespace-pre-wrap">
                 {v.code === null

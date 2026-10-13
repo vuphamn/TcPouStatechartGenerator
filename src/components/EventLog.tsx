@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Download, ListChecks, Trash2 } from 'lucide-react';
 
-export type LiveEventKind = 'connect' | 'overrun' | 'hold' | 'stuck' | 'write' | 'state';
+export type LiveEventKind = 'connect' | 'overrun' | 'hold' | 'stuck' | 'write' | 'state' | 'alert';
 export interface LiveEvent {
   /** This computer's time (ms) */
   t: number;
@@ -15,6 +15,7 @@ const KIND: Record<LiveEventKind, { label: string; cls: string }> = {
   stuck: { label: 'stuck', cls: 'bg-orange-900/70 text-orange-200' },
   write: { label: 'write', cls: 'bg-sky-900/70 text-sky-200' },
   state: { label: 'set state', cls: 'bg-violet-900/70 text-violet-200' },
+  alert: { label: 'alert', cls: 'bg-rose-800/80 text-rose-100' },
 };
 
 /** The events as CSV: time (ISO), kind, text */
@@ -24,7 +25,7 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void }> = ({ events, onExport, onClear }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void } }> = ({ events, onExport, onClear, keep }) => {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<LiveEventKind | 'all'>('all');
   const shown = [...events].reverse().filter((e) => kind === 'all' || e.kind === kind);
@@ -53,6 +54,12 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
           </>
         )}
       </div>
+      {open && keep && (
+        <label className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400" title="When a session ends, its events are written beside the PLC project: MachineScope.events\<POU>_<date>.csv (for the next shift)">
+          <input id="live-events-keep" type="checkbox" checked={keep.on} onChange={(e) => keep.onChange(e.target.checked)} />
+          Keep each session's log beside the project (MachineScope.events)
+        </label>
+      )}
       {open && (
         <div className="mt-1 max-h-40 overflow-y-auto space-y-0.5">
           {shown.length === 0 && <div className="text-slate-500">Nothing yet.</div>}

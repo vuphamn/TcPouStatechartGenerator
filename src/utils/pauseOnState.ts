@@ -4,6 +4,7 @@
  * Resume). The states chosen are kept per POU in this browser.
  */
 import { liveStateName } from './liveView.ts';
+import { evalExpr, parseExpr } from './watchExpr.ts';
 
 const KEY = (pou: string) => `kss.pauseOn|${pou.toLowerCase()}`;
 
@@ -72,12 +73,25 @@ export interface PauseCondition {
   id: string;
   op: PauseOp;
   value: boolean | number | string;
+  /** An expression (bA AND nCount > 3, fPos - fTarget > 2): its tree and every variable it reads (ids lower case) */
+  expr?: ReturnType<typeof parseExpr> & { node: unknown };
+  ids?: string[];
+  names?: string[];
 }
+
+/** A Pause on entry that is a condition (a comparison or logic: bError = TRUE, bA AND NOT bB), not a state */
+export const isPauseCondition = (s: string) => /[<>=]|\s(AND|OR|XOR|AND_THEN|OR_ELSE)\s|^\s*NOT\b/i.test(s);
 
 /** "bError = TRUE", "fbAxis.nCount >= 10", "eMode <> E_Mode.Auto" → the condition, or { error } */
 export function parsePauseCondition(text: string): PauseCondition | { error: string } {
-  const m = /^\s*([A-Za-z_][\w.[\]]*)\s*(<>|<=|>=|==|!=|=|<|>)\s*(.+?)\s*$/.exec(text);
-  if (!m) return { error: 'A variable, a comparison (=, <>, <, >, <=, >=) and a value: bError = TRUE' };
+  const m = /^\s*([A-Za-z_][\w.[\]]*)\s*(<>|<=|>=|==|!=|=|<|>)\s*([^()]+?)\s*$/.exec(text);
+  // (more than one comparison: an expression, as the watch expressions: bA AND nCount > 3)
+  if (!m || /\b(AND|OR|XOR|NOT|MOD|AND_THEN|OR_ELSE)\b|[-+*/()]/i.test(m[3])) {
+    const e = parseExpr(text);
+    if ('error' in e) return { error: m ? e.error : 'A variable, a comparison (=, <>, <, >, <=, >=) and a value (bError = TRUE), or an expression (bA AND nCount > 3)' };
+    if (!e.vars.length) return { error: 'The condition reads no variable' };
+    return { text: text.trim().replace(/\s+/g, ' '), name: e.vars[0], id: e.vars[0].toLowerCase(), op: '=', value: true, expr: e as never, ids: e.vars.map((v) => v.toLowerCase()), names: e.vars };
+  }
   const op = (m[2] === '!=' ? '<>' : m[2] === '==' ? '=' : m[2]) as PauseOp;
   const raw = m[3].replace(/^'(.*)'$/, '$1');
   const value: boolean | number | string = /^(TRUE|FALSE)$/i.test(raw) ? /^TRUE$/i.test(raw) : /^[-+]?\d+(\.\d+)?(e[-+]?\d+)?$/i.test(raw) ? Number(raw) : raw;
@@ -85,7 +99,11 @@ export function parsePauseCondition(text: string): PauseCondition | { error: str
 }
 
 /** Does a value meet the condition (an enum's value by its name, the type's name before it not counted) */
-export function meetsCondition(c: PauseCondition, v: boolean | number | string | null | undefined): boolean {
+export function meetsCondition(c: PauseCondition, v: boolean | number | string | null | undefined, all?: Record<string, boolean | number | string>): boolean {
+  if (c.expr) {
+    const r = evalExpr((c.expr as { node: Parameters<typeof evalExpr>[0] }).node, (n) => all?.[n]);
+    return r === true || (typeof r === 'number' && r !== 0);
+  }
   if (v === null || v === undefined) return false;
   const num = (x: unknown) => (typeof x === 'boolean' ? (x ? 1 : 0) : typeof x === 'number' ? x : Number.NaN);
   if (typeof c.value === 'boolean' || typeof v === 'boolean') {
@@ -112,9 +130,10 @@ export function conditionMetIn(values: { id: string; v: boolean | number | strin
   const now = { ...before };
   for (const s of values) {
     const was = now[s.id];
+    const before = { ...now };
     if (s.v === null) delete now[s.id];
     else now[s.id] = s.v;
-    for (const c of conditions) if (c.id === s.id && !meetsCondition(c, was) && meetsCondition(c, s.v)) return c;
+    for (const c of conditions) if ((c.ids ?? [c.id]).includes(s.id) && !meetsCondition(c, was, before) && meetsCondition(c, s.v, now)) return c;
   }
   return null;
 }
@@ -122,16 +141,17 @@ export function conditionMetIn(values: { id: string; v: boolean | number | strin
 /** A replay's step from pos to next: the first moment a condition becomes met (its recorded values) → { t, text }, or null */
 export function replayConditionStopIn(vars: { id: string; t: number; v: boolean | number | string | null }[], pos: number, next: number, conditions: PauseCondition[]): { t: number; text: string } | null {
   if (!conditions.length || next <= pos) return null;
-  const ids = new Set(conditions.map((c) => c.id));
+  const ids = new Set(conditions.flatMap((c) => c.ids ?? [c.id]));
   const at: Record<string, boolean | number | string> = {};
   for (const s of vars) {
     if (s.t > next) break;
     if (!ids.has(s.id)) continue;
     const was = at[s.id];
+    const before = { ...at };
     if (s.v === null) delete at[s.id];
     else at[s.id] = s.v;
     if (s.t <= pos) continue;
-    for (const c of conditions) if (c.id === s.id && !meetsCondition(c, was) && meetsCondition(c, s.v)) return { t: s.t, text: c.text };
+    for (const c of conditions) if ((c.ids ?? [c.id]).includes(s.id) && !meetsCondition(c, was, before) && meetsCondition(c, s.v, at)) return { t: s.t, text: c.text };
   }
   return null;
 }

@@ -77,13 +77,14 @@ import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
 import { caseStateAt, publishCodeFocus, usePersistedFlag, type CodeFocus } from '../utils/codeFocus.ts';
 import { subMachinesOf } from '../generator.ts';
-import { GitCompare } from 'lucide-react';
+import { GitCommitHorizontal, GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { markersFor } from '../utils/variableLint.ts';
 import { getProjectSymbols } from '../utils/projectSymbols.ts';
 import { useDockableWindow } from '../hooks/useDockableWindow.ts';
 import { DockableResizeHandles } from './DockableResizeHandles.tsx';
-import { ifToCaseItem } from '../utils/ifToCase.ts';
+import { caseToIfItem, ifToCaseItem } from '../utils/ifToCase.ts';
+import { callOnLine, numbersToEnumItem } from '../utils/refactorings.ts';
 
 const VARIABLE_GROUPS: { source: SearchVariable['source']; label: string }[] = [
   { source: 'state', label: 'State variable' },
@@ -1021,10 +1022,25 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   const methodExtras = (sym: string | null, memberOf?: string, scope?: 'implementation' | 'declaration', selection?: { start: number; end: number }, expression?: { line: number; from: number; to: number; text: string }, line?: number) => {
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declEditorRef : implEditorRef).current?.formatDocument()) };
     // Convert to CASE: the IF / ELSIF chain on the caret's line (each comparing one variable with a value)
-    const toCase = scope === 'implementation' && line ? ifToCaseItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), (message) => {
+    const warn = (message: string) => {
       setDefinitionNotification({ type: 'warning', message });
       setTimeout(() => setDefinitionNotification(null), 5000);
-    }) : null;
+    };
+    const toCase = scope === 'implementation' && line ? ifToCaseItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), warn) : null;
+    // (and the other way: Convert to IF; Inline Method on a call's line; state names for numbers)
+    const toIf = scope === 'implementation' && line ? caseToIfItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), warn) : null;
+    const called = scope === 'implementation' && line ? callOnLine(code.split(/\r?\n/)[line - 1] ?? '') : null;
+    const inline =
+      called && editorServices()?.inlineMethod && availableMethods.some((m) => m.replace(/\(\)$/, '').toLowerCase() === called.toLowerCase())
+        ? {
+            id: 'editor-menu-inline-method',
+            label: `Inline Method ${called}()`,
+            title: `This call replaced by ${called}()'s code (a method that takes, keeps and returns nothing); Ctrl+Z undoes`,
+            onSelect: () => (isDirty ? warn('Save first (Ctrl+S): Inline Method works on the saved POU') : editorServices()!.inlineMethod!(cleanMethodName, line!)),
+          }
+        : null;
+    const named = scope === 'implementation' ? numbersToEnumItem(code, editorServices()?.stateNames?.(), (next) => implEditorRef.current?.replaceText(next, line)) : null;
+    const refactors = [toIf, inline, named].filter((x): x is NonNullable<typeof x> => !!x);
     // Extract Method: the selected lines into a new method
     const extract =
       selection && editorServices()?.extractMethod
@@ -1082,6 +1098,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       return out;
     };
     if (toCase) extract.push(toCase);
+    extract.push(...refactors);
     if (!sym) return [...extract, ...callItems(null), format];
     const services = editorServices();
     const items: { id: string; label: string; title?: string; onSelect: () => void }[] = [];
@@ -1183,6 +1200,18 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
   }, [liveNow?.active, liveNow?.values]);
 
   // The outline: the method's blocks and calls, the one around the caret marked; a click goes there
+  // Blame: who last changed each line (git), asked of the host when turned on; off when another method opens
+  const [blame, setBlame] = useState<Map<number, { hash: string; age: number | null; title: string }> | null>(null);
+  useEffect(() => setBlame(null), [cleanMethodName]);
+  const toggleBlame = () => {
+    if (blame) return setBlame(null);
+    void editorServices()?.blame?.(cleanMethodName, code).then((r) => {
+      if ('error' in r) {
+        setDefinitionNotification({ type: 'warning', message: r.error });
+        setTimeout(() => setDefinitionNotification(null), 5000);
+      } else setBlame(r);
+    });
+  };
   const [outlineOpen, setOutlineOpen] = useState<boolean>(() => {
     try {
       return localStorage.getItem('kss.method.outline') === '1';
@@ -2241,6 +2270,18 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
                   <ListTree className="w-3 h-3 text-violet-400" />
                   <span className="hidden lg:inline">Outline</span>
                 </button>
+                {editorServices()?.blame && (
+                  <button
+                    type="button"
+                    id="method-blame-btn"
+                    onClick={toggleBlame}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer ${blame ? 'bg-sky-900/60 text-sky-200' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
+                    title="Who last changed each line (git): a bar in the gutter, its commit, author and date on hover (amber: not committed or not saved)"
+                  >
+                    <GitCommitHorizontal className="w-3 h-3 text-amber-300" />
+                    <span className="hidden lg:inline">Blame</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2256,6 +2297,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               onContextMenu={handleImplContextMenu}
               bookmarkLines={bookmarkLines}
               executedLines={editorServices()?.executedLines?.(cleanMethodName, code) ?? null}
+              blameLines={blame}
               onBookmarkClick={toggleBookmarkAt}
               inlineValues={inlineValues}
               completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}

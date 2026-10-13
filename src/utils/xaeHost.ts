@@ -1,5 +1,13 @@
 import { DutCandidate } from './dutMatcher.ts';
 import { PouSource } from './sourceFileAccess.ts';
+/** A line of git blame: who last changed it (hash 0000000: not committed yet) */
+export interface BlameLine {
+  hash: string;
+  author: string;
+  date: string;
+  summary: string;
+  text: string;
+}
 
 /**
  * Bridge to the TwinCAT XAE extension (xae-extension/), which shows this app in a WebView2 document tab.
@@ -58,6 +66,9 @@ export type HostMessage =
   | { type: 'gitShowResult'; requestId: number; content?: string | null; error?: string | null }
   | { type: 'gitLogResult'; requestId: number; commits?: { hash: string; date: string; author: string; subject: string; file: string }[] | null; error?: string | null }
   | { type: 'gitShowAtResult'; requestId: number; content?: string | null; error?: string | null }
+  | { type: 'gitBlameResult'; requestId: number; lines?: BlameLine[] | null; error?: string | null }
+  | { type: 'eventsSaveResult'; requestId: number; ok: boolean; path?: string; error?: string | null }
+  | { type: 'addPlcFilesResult'; requestId: number; ok: boolean; written?: string[]; tcunit?: boolean; folder?: string; error?: string | null }
   /** A POU's layout file (<POU>.machinescope.json): read (text; null: none yet) or written */
   | { type: 'layoutResult'; requestId: number; text?: string | null; written?: boolean; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
@@ -194,6 +205,11 @@ export type AppMessage =
   /** A loaded file's git history (a state's history): its commits (gitLogResult), the file at one (gitShowAtResult) */
   | { type: 'gitLog'; path: string; requestId: number }
   | { type: 'gitShowAt'; path: string; hash: string; file: string; requestId: number }
+  | { type: 'gitBlame'; path: string; requestId: number }
+  /** New POUs into the loaded POU's PLC project (answered with addPlcFilesResult) */
+  | { type: 'addPlcFiles'; requestId: number; folder: string; files: { name: string; content: string }[] }
+  /** A live session's events kept beside the PLC project (answered with eventsSaveResult) */
+  | { type: 'eventsSave'; requestId: number; name: string; csv: string }
   /** A loaded POU's layout file beside it: read, or written (text; null: removed) */
   | { type: 'layoutRead'; path: string; requestId: number }
   | { type: 'layoutWrite'; path: string; requestId: number; text: string | null }
