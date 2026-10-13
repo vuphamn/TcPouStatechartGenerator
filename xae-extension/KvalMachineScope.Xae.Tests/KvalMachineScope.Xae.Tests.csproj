@@ -16,10 +16,12 @@
     <Compile Include="..\KvalMachineScope.Xae\TabMemory.cs" Link="TabMemory.cs" />
     <Compile Include="..\KvalMachineScope.Xae\GitBlame.cs" Link="GitBlame.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcAddFiles.cs" Link="PlcAddFiles.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\CommissioningFile.cs" Link="CommissioningFile.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcSearch.cs" Link="PlcSearch.cs" />
     <Compile Include="..\KvalMachineScope.Xae\LiveMonitor.cs" Link="LiveMonitor.cs" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="MSTest.TestAdapter" Version="3.6.1" />
     <PackageReference Include="MSTest.TestFramework" Version="3.6.1" />

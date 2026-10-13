@@ -5,7 +5,7 @@
  */
 
 import type { ProjectFiles } from './projectDocumentation.ts';
-import { isXaeHost, onHostMessage, postToHost, type ProjectFileVersion } from './xaeHost.ts';
+import { isVsCodeHost, isXaeHost, onHostMessage, postToHost, type CommissioningEntry, type CommissioningEntryRequest, type ProjectFileVersion } from './xaeHost.ts';
 import { webFindEnumType, webFindPou, type PouSource } from './sourceFileAccess.ts';
 import type { DutCandidate } from './dutMatcher.ts';
 import { extendsOf, hasOwnMethod, pouNameOf, type InheritedSource } from './pouInheritance.ts';
@@ -385,6 +385,8 @@ export interface AddPlcFilesResult {
   tcunit?: boolean;
   folder?: string;
   error?: string | null;
+  /** Added in XAE's open project (its tree, through its Automation Interface): kept with XAE's Save All */
+  xae?: boolean;
 }
 
 /** New POUs can go into the loaded POU's PLC project here (XAE, VS Code, the desktop app with a POU from a folder) */
@@ -410,4 +412,85 @@ export async function saveEventsFile(pouPath: string, name: string, csv: string)
   if (!isXaeHost()) return { ok: false, error: 'Keeping the events beside the project needs TwinCAT XAE, VS Code or the desktop app' };
   const r = await hostRequest<{ ok: boolean; path?: string; error?: string | null }>({ type: 'eventsSave', requestId: Date.now() % 1e9, name, csv }, 'eventsSaveResult', 30000);
   return 'ok' in r ? r : { ok: false, error: r.error };
+}
+
+/** The TcUnit tests can be run from here (TwinCAT XAE: its project open there) */
+export const canRunPlcTests = () => isXaeHost() && !isVsCodeHost();
+
+/** The TcUnit tests run on the PLC: PRG_KssTests called by the PLC project's task, built, downloaded and started */
+export async function runPlcTests(): Promise<{ ok: boolean; message: string }> {
+  if (!canRunPlcTests()) return { ok: false, message: 'Running the tests needs TwinCAT XAE' };
+  const r = await hostRequest<{ ok: boolean; message: string }>({ type: 'runPlcTests', requestId: Date.now() % 1e9 }, 'runPlcTestsResult', 15 * 60 * 1000);
+  return 'ok' in r ? r : { ok: false, message: r.error };
+}
+
+export interface Commissioning {
+  allowed: string[];
+  log: CommissioningEntry[];
+  /** Kept beside the PLC project (shared through git) or in this browser */
+  where: 'project' | 'browser';
+}
+const webCommissioning = (pouType: string): Commissioning => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(`kss.setStateAllowed|${pouType.toLowerCase()}`) || '[]');
+    const log = JSON.parse(localStorage.getItem(`kss.setStateLog|${pouType.toLowerCase()}`) || '[]');
+    return { allowed: Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [], log: Array.isArray(log) ? log : [], where: 'browser' };
+  } catch {
+    return { allowed: [], log: [], where: 'browser' };
+  }
+};
+
+/** The POU type's commissioning: the states the PLC may be set to, who set which (the project's file, else this browser) */
+export async function fetchCommissioning(pouPath: string | undefined, pouType: string): Promise<Commissioning> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[] }>({ type: 'commissioning', pouType }, 'commissioningResult');
+    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+  }
+  const d = (window as unknown as { tcDesktop?: { commissioning?: (p: string, t: string) => Promise<{ allowed: string[]; log: CommissioningEntry[] }> } }).tcDesktop;
+  if (d?.commissioning && pouPath) {
+    const r = await d.commissioning(pouPath, pouType).catch(() => null);
+    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+  }
+  return webCommissioning(pouType);
+}
+
+/** Saved: the list (allowed) and / or a state set (entry, logged with the user) → the commissioning now, or { error } */
+export async function saveCommissioning(pouPath: string | undefined, pouType: string, req: { allowed?: string[]; entry?: CommissioningEntryRequest }): Promise<Commissioning | { error: string }> {
+  if (isXaeHost()) {
+    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[]; error?: string }>({ type: 'commissioningSave', pouType, ...req }, 'commissioningSaveResult');
+    if (r) return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+  }
+  const d = (window as unknown as { tcDesktop?: { commissioningSave?: (p: string, t: string, q: unknown) => Promise<{ allowed?: string[]; log?: CommissioningEntry[]; error?: string }> } }).tcDesktop;
+  if (d?.commissioningSave && pouPath) {
+    const r: { allowed?: string[]; log?: CommissioningEntry[]; error?: string } = await d.commissioningSave(pouPath, pouType, req).catch((e: unknown) => ({ error: String(e) }));
+    return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+  }
+  const cur = webCommissioning(pouType);
+  if (req.allowed) cur.allowed = req.allowed;
+  if (req.entry) cur.log = [...cur.log, { ...req.entry, t: new Date().toISOString(), user: '(this browser)' }].slice(-500);
+  try {
+    localStorage.setItem(`kss.setStateAllowed|${pouType.toLowerCase()}`, JSON.stringify(cur.allowed));
+    localStorage.setItem(`kss.setStateLog|${pouType.toLowerCase()}`, JSON.stringify(cur.log));
+  } catch {
+    return { error: 'Not kept (this browser keeps nothing)' };
+  }
+  return cur;
+}
+
+/** An alert told to a webhook (Teams, Slack: { text } POSTed; https only): by the host, or the page (no answer read) */
+export async function postWebhook(url: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  if (!/^https:\/\//i.test(url)) return { ok: false, error: 'Only an https:// webhook' };
+  if (isXaeHost()) {
+    const r = await hostAsk<{ ok: boolean; error?: string }>({ type: 'webhook', url, text }, 'webhookResult', 20000);
+    if (r) return r;
+  }
+  const d = (window as unknown as { tcDesktop?: { webhook?: (u: string, t: string) => Promise<{ ok: boolean; error?: string }> } }).tcDesktop;
+  if (d?.webhook) return d.webhook(url, text).catch((e: unknown) => ({ ok: false, error: String(e) }));
+  // (the web edition: sent as is, its answer not readable)
+  try {
+    await fetch(url, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ text }) });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
 }

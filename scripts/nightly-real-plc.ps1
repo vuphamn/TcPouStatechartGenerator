@@ -48,6 +48,13 @@ try {
     log = $log
   }
   $result | ConvertTo-Json | Out-File -Encoding utf8 (Join-Path $dir 'last.json')
+  # The last 30 runs (history.json, oldest first): when, passed, how long, for the trend
+  $historyFile = Join-Path $dir 'history.json'
+  $history = @()
+  if (Test-Path $historyFile) { try { $parsed = Get-Content -Raw -Encoding UTF8 $historyFile | ConvertFrom-Json; $history = @($parsed | ForEach-Object { $_ }) } catch { $history = @() } }
+  $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds })
+  if ($history.Count -gt 30) { $history = $history[($history.Count - 30)..($history.Count - 1)] }
+  ConvertTo-Json -InputObject @($history) | Out-File -Encoding utf8 $historyFile
   # Keep the last 30 logs
   Get-ChildItem $dir -Filter '*.log' | Sort-Object Name -Descending | Select-Object -Skip 30 | Remove-Item -ErrorAction SilentlyContinue
   # A webhook (Teams, Slack: a JSON { text } POSTed): KSS_NIGHTLY_WEBHOOK, or scripts\nightly.config.json

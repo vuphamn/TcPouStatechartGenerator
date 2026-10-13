@@ -15,7 +15,7 @@ export interface StateVersion {
  * The history of a state (its canvas menu): the commits that changed its CASE branch, newest first, each with its
  * author, date, message and what changed in the branch (against the version before it)
  */
-export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{ versions: StateVersion[]; error?: string }>; onClose: () => void; onRestore?: (v: StateVersion) => void }> = ({ state, load, onClose, onRestore }) => {
+export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{ versions: StateVersion[]; error?: string }>; onClose: () => void; onRestore?: (v: StateVersion) => void; title?: string; only?: number }> = ({ state, load, onClose, onRestore, title, only }) => {
   const [r, setR] = useState<{ versions: StateVersion[]; error?: string } | null>(null);
   useEffect(() => {
     void load().then(setR);
@@ -31,7 +31,7 @@ export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{
       <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800">
         <History className="w-3.5 h-3.5 text-sky-300 shrink-0" />
         <span className="font-semibold text-slate-100 truncate">
-          History of <span className="font-mono text-amber-200">{state}</span>
+          {title ?? 'History of'} <span className="font-mono text-amber-200">{state}</span>
         </span>
         {!r && <Loader2 className="w-3 h-3 animate-spin text-slate-400" />}
         <button onClick={onClose} className="ml-auto p-0.5 text-slate-400 hover:text-white rounded" title="Close (Esc)">
@@ -41,7 +41,7 @@ export const StateHistoryDialog: React.FC<{ state: string; load: () => Promise<{
       <div id="state-history-list" className="overflow-y-auto p-2 space-y-2">
         {r?.error && <div className="text-slate-400 px-1">{r.error}</div>}
         {r && !r.error && r.versions.length === 0 && <div className="text-slate-500 px-1">No commit changed its branch (or the POU is not committed yet).</div>}
-        {r?.versions.map((v, i) => {
+        {r?.versions.slice(0, only ?? r.versions.length).map((v, i) => {
           const older = r.versions[i + 1];
           const d = lineDiff((older?.code ?? '').split(/\r?\n/), (v.code ?? '').split(/\r?\n/), 1);
           return (

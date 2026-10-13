@@ -44,7 +44,7 @@ async function gitLog(filePath) {
 
 async function gitShowAt(filePath, hash, atPath) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { error: 'Not a file of this computer' };
-  if (!/^[0-9a-f]{4,40}$/i.test(String(hash)) || typeof atPath !== 'string' || !atPath || /^[-/]|\.\.|["\0]/.test(atPath)) return { error: 'Not a commit of the file' };
+  if (!/^[0-9a-f]{4,40}\^?$/i.test(String(hash)) || typeof atPath !== 'string' || !atPath || /^[-/]|\.\.|["\0]/.test(atPath)) return { error: 'Not a commit of the file' };
   // (the path from the repository's root: run in the root)
   const top = await run(path.dirname(filePath), ['rev-parse', '--show-toplevel']);
   if (top.error) return top;

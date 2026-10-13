@@ -24,6 +24,8 @@ export interface TextPromptRequest {
   confirmOnly?: boolean;
   /** A box to tick before the answer can be given (what the user vouches for: "The machine is safe for this")*/
   confirmCheck?: string;
+  /** A change shown before it is made: rows of a line diff ("+ line", "- line", "  line", "…") */
+  diff?: string[];
   /** Lines listed under the label (what the action changes) */
   details?: string[];
   /** The button in red (a deletion) */
@@ -270,6 +272,15 @@ export const TextPromptDialog: React.FC<{ request: TextPromptRequest; onClose: (
                 </li>
               ))}
             </ul>
+          )}
+          {request.diff && request.diff.length > 0 && (
+            <div id="text-prompt-diff" className="max-h-72 overflow-auto rounded bg-slate-950 border border-slate-800 px-2 py-1 font-mono text-[11px] leading-snug">
+              {request.diff.map((r, i) => (
+                <div key={i} className={`whitespace-pre ${r.startsWith('+') ? 'text-emerald-300' : r.startsWith('-') ? 'text-rose-300' : 'text-slate-500'}`}>
+                  {r}
+                </div>
+              ))}
+            </div>
           )}
           {request.confirmCheck && (
             <label className="flex items-center gap-2 text-slate-200">

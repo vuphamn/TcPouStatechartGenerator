@@ -25,7 +25,7 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void } }> = ({ events, onExport, onClear, keep }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void } }> = ({ events, onExport, onClear, keep, webhook }) => {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<LiveEventKind | 'all'>('all');
   const shown = [...events].reverse().filter((e) => kind === 'all' || e.kind === kind);
@@ -58,6 +58,20 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
         <label className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400" title="When a session ends, its events are written beside the PLC project: MachineScope.events\<POU>_<date>.csv (for the next shift)">
           <input id="live-events-keep" type="checkbox" checked={keep.on} onChange={(e) => keep.onChange(e.target.checked)} />
           Keep each session's log beside the project (MachineScope.events)
+        </label>
+      )}
+      {open && webhook && (
+        <label className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400" title="Alerts also told to a webhook (Teams, Slack: a JSON { text } POSTed; https only). Empty: none">
+          Alerts to
+          <input
+            id="live-alerts-webhook"
+            defaultValue={webhook.url}
+            onBlur={(e) => webhook.onChange(e.target.value.trim())}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            placeholder="https://… (a webhook)"
+            spellCheck={false}
+            className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded px-1 py-0.5 font-mono text-[10px] text-slate-200"
+          />
         </label>
       )}
       {open && (

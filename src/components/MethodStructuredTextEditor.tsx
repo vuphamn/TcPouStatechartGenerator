@@ -1026,9 +1026,15 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
       setDefinitionNotification({ type: 'warning', message });
       setTimeout(() => setDefinitionNotification(null), 5000);
     };
-    const toCase = scope === 'implementation' && line ? ifToCaseItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), warn) : null;
+    // (a refactoring's change shown first when the app can, then made)
+    const shown = (title: string) => (next: string) => {
+      const sv = editorServices();
+      if (sv?.preview) sv.preview(title, code, next, () => implEditorRef.current?.replaceText(next, line));
+      else implEditorRef.current?.replaceText(next, line);
+    };
+    const toCase = scope === 'implementation' && line ? ifToCaseItem(code, line, shown('Convert to CASE'), warn) : null;
     // (and the other way: Convert to IF; Inline Method on a call's line; state names for numbers)
-    const toIf = scope === 'implementation' && line ? caseToIfItem(code, line, (next) => implEditorRef.current?.replaceText(next, line), warn) : null;
+    const toIf = scope === 'implementation' && line ? caseToIfItem(code, line, shown('Convert to IF'), warn) : null;
     const called = scope === 'implementation' && line ? callOnLine(code.split(/\r?\n/)[line - 1] ?? '') : null;
     const inline =
       called && editorServices()?.inlineMethod && availableMethods.some((m) => m.replace(/\(\)$/, '').toLowerCase() === called.toLowerCase())
@@ -1039,7 +1045,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
             onSelect: () => (isDirty ? warn('Save first (Ctrl+S): Inline Method works on the saved POU') : editorServices()!.inlineMethod!(cleanMethodName, line!)),
           }
         : null;
-    const named = scope === 'implementation' ? numbersToEnumItem(code, editorServices()?.stateNames?.(), (next) => implEditorRef.current?.replaceText(next, line)) : null;
+    const named = scope === 'implementation' ? numbersToEnumItem(code, editorServices()?.stateNames?.(), shown('Use state names for numbers')) : null;
     const refactors = [toIf, inline, named].filter((x): x is NonNullable<typeof x> => !!x);
     // Extract Method: the selected lines into a new method
     const extract =
@@ -2298,6 +2304,7 @@ export const MethodStructuredTextEditor: React.FC<MethodStructuredTextEditorProp
               bookmarkLines={bookmarkLines}
               executedLines={editorServices()?.executedLines?.(cleanMethodName, code) ?? null}
               blameLines={blame}
+              onBlameClick={(_l, hash) => hash && !/^0+$/.test(hash) && editorServices()?.showCommit?.(cleanMethodName, hash)}
               onBookmarkClick={toggleBookmarkAt}
               inlineValues={inlineValues}
               completionScope={() => editorServices()?.scope?.(cleanMethodName) ?? null}

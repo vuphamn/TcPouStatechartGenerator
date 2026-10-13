@@ -220,7 +220,7 @@ import { StateHistoryDialog, type StateVersion } from './components/StateHistory
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
-import { addPlcFiles, canAddPlcFiles, canKeepEvents, fetchWatchLists, loadProjectFiles, saveDocument, saveEventsFile, saveWatchList } from './utils/projectFiles.ts';
+import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveWatchList, type Commissioning } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -1751,6 +1751,10 @@ export const App: React.FC = () => {
   const [timelineExtra, setTimelineExtra] = useState<TimelineLane[]>([]);
   // (the state variable's watch id: sym:<instance>.<state variable>, followed to set the PLC to a state)
   const stateVarWatchIdRef = useRef('');
+  // (alerts that must last a time: since when each is true; how long each must last; the alert said, set further down)
+  const alertPendingRef = useRef(new Map<string, number>());
+  const watchAlertForRef = useRef<Record<string, number>>({});
+  const fireAlertRef = useRef<(entry: string, forMs: number) => void>(() => {});
   // (each watch expression's last truth: an alert on its rising edge; Notify, set further down)
   const exprOnRef = useRef(new Map<string, boolean>());
   const notifyOnRef = useRef(false);
@@ -1758,6 +1762,8 @@ export const App: React.FC = () => {
   const setPlcStateRef = useRef<((state: string) => void) | null>(null);
   // (the state's history, its menu: the state shown in the dialog)
   const [stateHistoryOf, setStateHistoryOf] = useState<string | null>(null);
+  // (Show commit, a blame bar's click: what that commit changed in a method or the POU's body)
+  const [commitView, setCommitView] = useState<{ method: string; hash: string } | null>(null);
   const addLiveEvent = useCallback((kind: LiveEventKind, text: string) => setLiveEvents((cur) => [...cur.slice(-1999), { t: Date.now(), kind, text }]), []);
   const liveEventsRef = useRef<LiveEvent[]>([]);
   liveEventsRef.current = liveEvents;
@@ -1995,11 +2001,11 @@ export const App: React.FC = () => {
         const wasOn = exprOnRef.current.get(entry);
         exprOnRef.current.set(entry, on);
         if (on && wasOn === false && watchAlertsRef.current.includes(entry)) {
-          const what = `${exprText(entry)} became true`;
-          addLiveEvent('alert', what);
-          showCopyToast(`Alert: ${what}`, 'error', 8000);
-          if (notifyOnRef.current) void notifyStuck('Kval MachineScope: alert', what, `kss-alert-${entry}`);
+          const forMs = watchAlertForRef.current[entry] ?? 0;
+          if (forMs > 0) alertPendingRef.current.set(entry, Date.now());
+          else fireAlertRef.current(entry, 0);
         }
+        if (!on) alertPendingRef.current.delete(entry);
         const list = varHistoryRef.current.get(entry.toLowerCase()) ?? [];
         list.push({ t: lastT, v });
         while (list.length > 6000 || (list.length > 1 && list[0].t < lastT - 600_000)) list.shift();
@@ -2819,6 +2825,73 @@ export const App: React.FC = () => {
       setWatchAlerts([]);
     }
   }, [pouFileName]);
+  // (how long each alert's expression must stay true first, ms; 0: at once) and the webhook told (Teams, Slack)
+  const [watchAlertFor, setWatchAlertForState] = useState<Record<string, number>>({});
+  watchAlertForRef.current = watchAlertFor;
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(`kss.live.alertsFor.${pouFileName.replace(/\.TcPOU$/i, '')}`) || '{}');
+      setWatchAlertForState(raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {});
+    } catch {
+      setWatchAlertForState({});
+    }
+  }, [pouFileName]);
+  const setWatchAlertFor = (entry: string, ms: number) =>
+    setWatchAlertForState((cur) => {
+      const next = { ...cur, [entry]: ms };
+      if (!ms) delete next[entry];
+      try {
+        localStorage.setItem(`kss.live.alertsFor.${pouFileName.replace(/\.TcPOU$/i, '')}`, JSON.stringify(next));
+      } catch {
+        // (not kept)
+      }
+      return next;
+    });
+  const [alertWebhook, setAlertWebhookState] = useState(() => {
+    try {
+      return localStorage.getItem('kss.alerts.webhook') ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const setAlertWebhook = (url: string) => {
+    setAlertWebhookState(url);
+    try {
+      localStorage.setItem('kss.alerts.webhook', url);
+    } catch {
+      // (not kept)
+    }
+  };
+  const alertWebhookRef = useRef('');
+  alertWebhookRef.current = alertWebhook;
+  fireAlertRef.current = (entry: string, forMs: number) => {
+    const what = `${exprText(entry)} became true${forMs ? ` (for ${forMs / 1000} s)` : ''}`;
+    addLiveEvent('alert', what);
+    showCopyToast(`Alert: ${what}`, 'error', 8000);
+    if (notifyOnRef.current) void notifyStuck('Kval MachineScope: alert', what, `kss-alert-${entry}`);
+    if (alertWebhookRef.current) void postWebhook(alertWebhookRef.current, `Kval MachineScope alert (${pouFileName.replace(/\.TcPOU$/i, '')}${liveStatus.target ? ` on ${liveStatus.target}` : ''}): ${what}`).then((r) => !r.ok && addLiveEvent('alert', `The webhook was not told: ${r.error}`));
+  };
+  // (an alert that must last a time: said when it has, still true; checked twice a second while live)
+  useEffect(() => {
+    if (liveStatus.state !== 'connected') {
+      alertPendingRef.current.clear();
+      return;
+    }
+    const t = window.setInterval(() => {
+      for (const [entry, since] of [...alertPendingRef.current]) {
+        const forMs = watchAlertForRef.current[entry] ?? 0;
+        if (exprOnRef.current.get(entry) !== true) {
+          alertPendingRef.current.delete(entry);
+          continue;
+        }
+        if (Date.now() - since >= forMs) {
+          alertPendingRef.current.delete(entry);
+          fireAlertRef.current(entry, forMs);
+        }
+      }
+    }, 500);
+    return () => window.clearInterval(t);
+  }, [liveStatus.state]);
   const toggleWatchAlert = (entry: string) =>
     setWatchAlerts((cur) => {
       const next = cur.includes(entry) ? cur.filter((x) => x !== entry) : [...cur, entry];
@@ -5381,8 +5454,20 @@ export const App: React.FC = () => {
     (method: string, line: number) => {
       const r = inlineMethod(pouContent, method, line);
       if ('error' in r) return showCopyToast(r.error, 'error', 7000);
-      handleReplaceSources(r.pou, null);
-      showCopyToast(`Inlined ${r.name}(): ${r.lines} line${r.lines === 1 ? '' : 's'}${r.calls ? `; ${r.calls} other call${r.calls === 1 ? '' : 's'} of it left` : `; nothing calls ${r.name}() now (Problems: Remove method)`}`, 'success', 7000);
+      const before = getMethodCodeFromPou(pouContent, method).code;
+      const after = getMethodCodeFromPou(r.pou, method).code;
+      const d = lineDiff(before.replace(/\r\n/g, '\n').split('\n'), after.replace(/\r\n/g, '\n').split('\n'), 2);
+      setPromptRequest({
+        title: `Inline Method ${r.name}()`,
+        label: `In ${method}(): the call replaced by ${r.name}()'s ${r.lines} line${r.lines === 1 ? '' : 's'}${r.calls ? ` (${r.calls} other call${r.calls === 1 ? '' : 's'} of it stay)` : ''}:`,
+        diff: d.rows,
+        confirmOnly: true,
+        submitLabel: 'Inline',
+        onSubmit: () => {
+          handleReplaceSources(r.pou, null);
+          showCopyToast(`Inlined ${r.name}(): ${r.lines} line${r.lines === 1 ? '' : 's'}${r.calls ? `; ${r.calls} other call${r.calls === 1 ? '' : 's'} of it left` : `; nothing calls ${r.name}() now (Problems: Remove method)`}`, 'success', 7000);
+        },
+      });
     },
     [pouContent, handleReplaceSources, showCopyToast]
   );
@@ -5803,12 +5888,17 @@ export const App: React.FC = () => {
       renameMethod: handleRenameMethod,
       extractMethod: handleExtractMethod,
       inlineMethod: handleInlineMethod,
+      showCommit: (method, hash) => setCommitView({ method, hash }),
+      preview: (title, before, after, apply) => {
+        const d = lineDiff(before.replace(/\r\n/g, '\n').split('\n'), after.replace(/\r\n/g, '\n').split('\n'), 2);
+        setPromptRequest({ title, label: `${d.added} line${d.added === 1 ? '' : 's'} in, ${d.removed} out (Ctrl+Z undoes it after):`, diff: d.rows, confirmOnly: true, submitLabel: 'Apply', onSubmit: apply });
+      },
       // (Blame: the .TcPOU's git blame, matched to the method's lines; the state method by its own name)
       blame: canReadGitVersions() && pouPath
         ? async (method, code) => {
             const r = await fetchFileBlame(pouPath);
             if (r.error || !r.lines) return { error: r.error ?? 'No answer' };
-            return methodBlame(r.lines, resolveStateMethod(pouContent, method.replace(/\(\)$/, '')), code);
+            return methodBlame(r.lines, method ? resolveStateMethod(pouContent, method.replace(/\(\)$/, '')) : '', code);
           }
         : undefined,
       stateNames: () => stateNamesRef.current,
@@ -9751,26 +9841,36 @@ export const App: React.FC = () => {
       .map((e) => ({ edgeId: e.edgeId, to: e.to, ...liveGuardViews[e.edgeId] }));
   }, [liveGuardViews, liveGuardEdges]);
 
-  // Commissioning: the states the PLC may be set to, per POU type (in this browser); none listed: none
-  const [setStateAllowed, setSetStateAllowedState] = useState<string[]>([]);
-  const allowedKey = `kss.setStateAllowed|${(pouTypeName ?? pausePou).toLowerCase()}`;
+  // Commissioning: the states the PLC may be set to and who set which, per POU type: beside the PLC project
+  // (MachineScope.commissioning.json, shared through git) in XAE, VS Code and the desktop app, else in this browser;
+  // none listed: none
+  const [commissioning, setCommissioning] = useState<Commissioning>({ allowed: [], log: [], where: 'browser' });
+  const setStateAllowed = commissioning.allowed;
+  const commissioningType = pouTypeName ?? pausePou;
   useEffect(() => {
-    try {
-      const raw = JSON.parse(localStorage.getItem(allowedKey) || '[]');
-      setSetStateAllowedState(Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []);
-    } catch {
-      setSetStateAllowedState([]);
-    }
-  }, [allowedKey]);
+    let alive = true;
+    void fetchCommissioning(pouPath, commissioningType).then((c) => alive && setCommissioning(c));
+    return () => {
+      alive = false;
+    };
+  }, [pouPath, commissioningType]);
   const changeSetStateAllowed = (list: string[]) => {
-    setSetStateAllowedState(list);
-    try {
-      if (list.length) localStorage.setItem(allowedKey, JSON.stringify(list));
-      else localStorage.removeItem(allowedKey);
-    } catch {
-      // (not kept)
-    }
+    setCommissioning((c) => ({ ...c, allowed: list }));
+    void saveCommissioning(pouPath, commissioningType, { allowed: list }).then((r) => {
+      if ('error' in r) return showCopyToast(`May set to: not kept (${r.error})`, 'error', 7000);
+      setCommissioning(r);
+      if (r.where === 'project') setMsFilesTick((n) => n + 1);
+    });
   };
+  const showCommissioningLog = () =>
+    setPromptRequest({
+      title: `Set to a state: ${commissioningType}`,
+      label: commissioning.log.length ? `Who set the PLC to which state, newest first (${commissioning.where === 'project' ? 'MachineScope.commissioning.json, beside the PLC project' : 'this browser'}):` : 'Nobody set the PLC to a state from here yet.',
+      details: [...commissioning.log].reverse().slice(0, 100).map((e) => `${e.t.slice(0, 19).replace('T', ' ')}  ${e.user}: ${e.from || '?'} → ${e.state}${e.plc ? ` on ${e.plc}` : ''}${e.ok ? '' : ` (not written: ${e.message ?? ''})`}`),
+      confirmOnly: true,
+      submitLabel: 'Close',
+      onSubmit: () => {},
+    });
   // Set the PLC to a state (commissioning: a state's menu while live): its state variable written with the state's
   // value, asked first with what it means for the machine
   const handleSetPlcState = useCallback(
@@ -9796,6 +9896,8 @@ export const App: React.FC = () => {
         onSubmit: () => {
           void writeLiveVar(liveMode, id, value).then((res) => {
             addLiveEvent('state', res.ok ? `Set to ${state}: ${symbol} := ${value} (was ${liveSession.current?.state ?? '?'})` : `Not set to ${state}: ${res.message}`);
+            // (who set which state: logged beside the project, the host naming the user)
+            void saveCommissioning(pouPath, commissioningType, { entry: { state, from: liveSession.current?.state ?? '', plc: liveStatus.target ?? '', ok: res.ok, ...(res.ok ? {} : { message: res.message }) } }).then((r) => !('error' in r) && setCommissioning(r));
             showCopyToast(res.ok ? `The PLC set to ${state}` : `Not set: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 4000 : 9000);
           });
         },
@@ -11695,9 +11797,20 @@ export const App: React.FC = () => {
               const p = parseExpr(exprText(n));
               if ('error' in p) return { name: n, expr: true, error: p.error };
               const v = evalExpr(p.node, (x) => liveVarValues[x]);
-              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n) };
+              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0 };
             })}
             onToggleAlert={toggleWatchAlert}
+            onSetAlertFor={(n) =>
+              setPromptRequest({
+                title: 'Alert after how long?',
+                label: `Said when ${exprText(n)} has been true this long (seconds; 0: at once, as soon as it becomes true):`,
+                initial: String((watchAlertFor[n] ?? 0) / 1000),
+                monospace: true,
+                submitLabel: 'Set',
+                validate: (t) => (/^\d+(\.\d+)?$/.test(t.trim()) && Number(t) <= 86400 ? null : 'Seconds: 0 to 86400'),
+                onSubmit: (t) => setWatchAlertFor(n, Math.round(Number(t) * 1000)),
+              })
+            }
             onAddWatchExpr={(text) => {
               const p = parseExpr(text);
               if ('error' in p) return p.error;
@@ -11747,16 +11860,19 @@ export const App: React.FC = () => {
                         setTimelineExtra((cur) => [...cur.filter((l) => l.label !== label), recordingLane(label, rec.values, (v) => liveStateName(v, liveNamesRef.current))]);
                       }),
                     onRemoveLane: (label) => setTimelineExtra((cur) => cur.filter((l) => l.label !== label)),
+                    // (the events, on this computer's clock as the lanes: not on a replay's)
+                    markers: replay ? [] : liveEvents,
                   }
                 : undefined
             }
             events={{
               list: liveEvents,
               keep: canKeepEvents(pouPath) ? { on: keepEvents, onChange: setKeepEvents } : undefined,
+              webhook: { url: alertWebhook, onChange: setAlertWebhook },
               onClear: () => setLiveEvents([]),
               onExport: () => void saveDocument(`${pausePou}_events_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventsCsv(liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Events saved: ${r.path}`, 'success')),
             }}
-            setStateAllowed={{ list: setStateAllowed, onChange: changeSetStateAllowed }}
+            setStateAllowed={{ list: setStateAllowed, onChange: changeSetStateAllowed, where: commissioning.where, logCount: commissioning.log.length, onShowLog: showCommissioningLog }}
             tests={
               liveStatus.state === 'connected'
                 ? tcunitSuites.map((s) => {
@@ -11765,6 +11881,27 @@ export const App: React.FC = () => {
                     return { name: s.name, steps: s.steps, result: num('nresult'), step: num('nstep'), failedStep: num('nfailedstep'), error: liveWatched[id('nresult')]?.error };
                   })
                 : []
+            }
+            onRunTests={
+              canRunPlcTests()
+                ? () =>
+                    setPromptRequest({
+                      title: 'Run the TcUnit tests on the PLC?',
+                      label: `XAE builds the project, adds PRG_KssTests to the PLC task when it is not called yet, then downloads it (the PLC's program stops while it loads) and starts it on ${liveStatus.target ?? 'the PLC'}. The tests then run with the machine's program: only on a machine that is safe for it (a test bench, nothing moving).`,
+                      details: tcunitSuites.map((s) => `${s.name}: ${s.steps} states`),
+                      confirmOnly: true,
+                      danger: true,
+                      confirmCheck: 'The machine is safe for this, and I may change its PLC',
+                      submitLabel: 'Build, download and run',
+                      onSubmit: () => {
+                        showCopyToast('Building, downloading, starting the tests… (XAE)', 'success', 6000);
+                        void runPlcTests().then((r) => {
+                          addLiveEvent('write', r.ok ? `The TcUnit tests run: ${r.message}` : `The TcUnit tests not run: ${r.message}`);
+                          showCopyToast(r.message, r.ok ? 'success' : 'error', 10000);
+                        });
+                      },
+                    })
+                : undefined
             }
             onForgetTest={(name) => {
               setTcunitSuites((cur) => {
@@ -11805,7 +11942,7 @@ export const App: React.FC = () => {
                       ]).then((r) => {
                         if (!r.ok) return showCopyToast(`Not added: ${r.error}`, 'error', 9000);
                         keepTcunitSuite({ name: t.name, steps: t.steps });
-                        showCopyToast(`Added to the PLC project (KssTests): ${(r.written ?? []).join(', ')}. ${r.tcunit ? '' : 'Reference TcUnit first (Library Manager). '}Call ${TEST_PROGRAM} from a task of its own, build and download${isXaeHost() && !isVsCodeHost() ? ' (XAE asks to reload the project: Yes)' : ''}; live, the Live tab shows its result.`, r.tcunit ? 'success' : 'error', 14000);
+                        showCopyToast(`Added to the PLC project (KssTests): ${(r.written ?? []).join(', ')}. ${r.tcunit ? '' : 'Reference TcUnit first (Library Manager). '}${r.xae ? "In XAE's tree now: Save All keeps them. " : ''}Call ${TEST_PROGRAM} from a task of its own, build and download; live, the Live tab shows its result.`, r.tcunit ? 'success' : 'error', 14000);
                       });
                     setPromptRequest({
                       title: `TcUnit test ${t.name}`,
@@ -12294,6 +12431,35 @@ export const App: React.FC = () => {
         );
       })()}
       {symbolSearchOpen && <CommandPalette id="symbol-search" label="Go to symbol" placeholder="Go to a symbol: a type, a GVL variable, a method, a member, a state…" commands={symbolCommands()} onClose={() => setSymbolSearchOpen(false)} />}
+      {commitView && (
+        <StateHistoryDialog
+          state={commitView.method ? `${commitView.method.replace(/\(\)$/, '')}()` : "the POU's body"}
+          title={`Commit ${commitView.hash}:`}
+          only={1}
+          onClose={() => setCommitView(null)}
+          load={async () => {
+            const { method, hash } = commitView;
+            const log = await fetchFileLog(pouPath ?? '');
+            if (log.error || !log.commits?.length) return { versions: [], error: log.error ?? 'No history' };
+            const c = log.commits.find((x) => hash.startsWith(x.hash) || x.hash.startsWith(hash));
+            const file = c?.file ?? log.commits[0].file;
+            // (the method's code, or the body's, in a version of the file)
+            const codeOf = (xml: string | undefined) => {
+              if (!xml) return null;
+              if (!method) return getPouBody(xml).implementation.replace(/\r\n/g, '\n').trimEnd();
+              const m = getMethodCodeFromPou(xml, resolveStateMethod(xml, method.replace(/\(\)$/, '')));
+              return m.methodFound ? m.code.replace(/\r\n/g, '\n').trimEnd() : null;
+            };
+            const [now, before] = await Promise.all([fetchFileAt(pouPath ?? '', hash, file), fetchFileAt(pouPath ?? '', `${hash}^`, file)]);
+            return {
+              versions: [
+                { hash, date: c?.date ?? '', author: c?.author ?? '', subject: c?.subject ?? '', code: now.error ? null : codeOf(now.content) },
+                { hash: `${hash}^`, date: '', author: '', subject: 'the commit before', code: before.error ? null : codeOf(before.content) },
+              ],
+            };
+          }}
+        />
+      )}
       {stateHistoryOf && (
         <StateHistoryDialog
           state={stateHistoryOf}

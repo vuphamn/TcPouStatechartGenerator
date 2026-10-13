@@ -59,6 +59,11 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   addPlcFiles: (pouPath, req) => ipcRenderer.invoke('tc:add-plc-files', pouPath, req),
   /** A live session's events beside the PLC project: { name, csv } → { ok, path } or { error } */
   eventsSave: (pouPath, req) => ipcRenderer.invoke('tc:events-save', pouPath, req),
+  /** Commissioning beside the PLC project: { allowed, log }; saved with { allowed?, entry? } */
+  /** An alert told to a webhook (Teams, Slack; https only): { ok } or { error } */
+  webhook: (url, text) => ipcRenderer.invoke('tc:webhook', url, text),
+  commissioning: (pouPath, pouType) => ipcRenderer.invoke('tc:commissioning', pouPath, pouType),
+  commissioningSave: (pouPath, pouType, req) => ipcRenderer.invoke('tc:commissioning-save', pouPath, pouType, req),
   /** A POU's layout file beside it (<POU>.machinescope.json): read { text | null } / written { written } or { error } */
   readLayout: (pouPath) => ipcRenderer.invoke('tc:layout-read', pouPath),
   writeLayout: (pouPath, text) => ipcRenderer.invoke('tc:layout-write', pouPath, text),

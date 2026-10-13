@@ -120,6 +120,8 @@ export interface StructuredTextCodeEditorProps {
   executedLines?: Map<number, { n: number; title: string; kind: string }> | null;
   /** Who last changed each line (git blame): a bar in the gutter, brighter for newer commits; its commit in its title */
   blameLines?: Map<number, { hash: string; age: number | null; title: string }> | null;
+  /** A click on a line's blame bar (its commit: Show commit) */
+  onBlameClick?: (line: number, hash: string) => void;
   /** A line's own hover text (the Enum Editor: a member's CASE branch), when no problem or name says more */
   lineTitle?: (line: number, text: string) => string | null;
   /** A click on the bookmark margin of a line (its mark, or the faint one a row shows on hover): toggle it */
@@ -159,6 +161,7 @@ export const StructuredTextCodeEditor = forwardRef<
       bookmarkLines,
       executedLines,
       blameLines,
+      onBlameClick,
       onBookmarkClick,
       lineTitle,
       completionScope,
@@ -802,7 +805,13 @@ export const StructuredTextCodeEditor = forwardRef<
                 <div className="flex items-center justify-end flex-1 pr-0.5 select-none font-mono gap-1" style={{ fontSize: `${10 * zoom}px` }}>
                   {entry.originalLineNumber !== null && blameLines?.has(entry.originalLineNumber) && (
                     <span
-                      className="st-blame shrink-0 w-1 h-3 rounded-sm"
+                      className={`st-blame shrink-0 w-1 h-3 rounded-sm ${onBlameClick ? 'cursor-pointer hover:w-1.5' : ''}`}
+                      onMouseDown={(e) => onBlameClick && e.preventDefault()}
+                      onClick={(e) => {
+                        if (!onBlameClick) return;
+                        e.stopPropagation();
+                        onBlameClick(entry.originalLineNumber!, blameLines.get(entry.originalLineNumber!)!.hash);
+                      }}
                       data-blame-line={entry.originalLineNumber}
                       data-blame-hash={blameLines.get(entry.originalLineNumber)!.hash}
                       style={{ background: blameLines.get(entry.originalLineNumber)!.age === null ? '#f59e0b' : `hsl(200 70% ${22 + Math.round(blameLines.get(entry.originalLineNumber)!.age! * 45)}%)` }}

@@ -12,21 +12,25 @@ export interface BlameMark {
   title: string;
 }
 
-/** The method's lines (1-based, its code as shown) → their marks; { error } when the method is not in the file */
+/**
+ * The method's lines (1-based, its code as shown; method '': the POU's body) → their marks; { error } when it is not in
+ * the file
+ */
 export function methodBlame(blame: BlameLine[], method: string, code: string): Map<number, BlameMark> | { error: string } {
   const file = blame.map((b) => b.text);
   const esc = method.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const at = file.findIndex((l) => new RegExp(`<Method\\b[^>]*\\bName="${esc}"`, 'i').test(l));
-  if (at < 0) return { error: `${method}() is not in the committed file (saved?)` };
+  const at = method ? file.findIndex((l) => new RegExp(`<Method\\b[^>]*\\bName="${esc}"`, 'i').test(l)) : file.findIndex((l) => /<POU\b/i.test(l));
+  const what = method ? `${method}()` : "The POU's body";
+  if (at < 0) return { error: `${what} is not in the committed file (saved?)` };
   let start = -1;
   for (let i = at; i < file.length; i++) {
     if (file[i].includes('<ST><![CDATA[')) {
       start = i;
       break;
     }
-    if (/<\/Method>/i.test(file[i])) break;
+    if (method ? /<\/Method>/i.test(file[i]) : /<(Method|Action|Property)\b|<\/POU>/i.test(file[i])) break;
   }
-  if (start < 0) return { error: `${method}() has no Structured Text in the file` };
+  if (start < 0) return { error: `${what} has no Structured Text in the file` };
   const lines = code.split(/\r?\n/);
   const dated = blame.filter((b) => !/^0+$/.test(b.hash)).map((b) => b.date).sort();
   const oldest = dated[0] ?? '';

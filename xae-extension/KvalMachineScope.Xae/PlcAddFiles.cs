@@ -24,7 +24,42 @@ namespace KvalMachineScope.Xae
             public bool tcunit { get; set; }
             public string folder { get; set; }
             public string error { get; set; }
+            /// <summary>Added in XAE's open project (its tree): saved with XAE's Save All</summary>
+            public bool xae { get; set; }
         }
+
+        /// <summary>
+        /// The files as they go in: checked (names, a file there already not made by MachineScope refused), the test
+        /// program merged with the one there already; null with the error otherwise
+        /// </summary>
+        public static List<KeyValuePair<string, string>> Prepare(string plcproj, string folder, IList<KeyValuePair<string, string>> files, out string error)
+        {
+            error = null;
+            if (plcproj == null || !File.Exists(plcproj)) { error = "The PLC project (.plcproj) of the POU was not found"; return null; }
+            if (folder == null || !Regex.IsMatch(folder, @"^[A-Za-z_][\w ]{0,40}$")) { error = "Not a folder name"; return null; }
+            if (files == null || files.Count == 0 || files.Any(f => f.Key == null || f.Value == null || !Regex.IsMatch(f.Key, @"^[A-Za-z_]\w{0,80}\.TcPOU$", RegexOptions.IgnoreCase)))
+            {
+                error = "Not a POU file";
+                return null;
+            }
+            var dir = Path.Combine(Path.GetDirectoryName(plcproj), folder);
+            var output = new List<KeyValuePair<string, string>>();
+            foreach (var f in files)
+            {
+                var full = Path.Combine(dir, f.Key);
+                var content = f.Value;
+                if (File.Exists(full))
+                {
+                    var was = File.ReadAllText(full);
+                    if (string.Equals(f.Key, "PRG_KssTests.TcPOU", StringComparison.OrdinalIgnoreCase)) content = MergeTestProgram(was, content);
+                    else if (!was.Contains(Mark)) { error = folder + "\\" + f.Key + " is there already, not made by MachineScope: not replaced"; return null; }
+                }
+                output.Add(new KeyValuePair<string, string>(f.Key, content));
+            }
+            return output;
+        }
+
+        public static bool ReferencesTcUnit(string plcproj) => plcproj != null && File.Exists(plcproj) && Regex.IsMatch(File.ReadAllText(plcproj), "Include=\"TcUnit[\",]", RegexOptions.IgnoreCase);
 
         public static Result Add(string plcproj, string folder, IList<KeyValuePair<string, string>> files)
         {

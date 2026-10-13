@@ -108,11 +108,16 @@ export const StateTimeline: React.FC<{
   onExport?: (kind: 'csv' | 'svg', text: string) => void;
   onAddRecording?: (file: File) => void;
   onRemoveLane?: (label: string) => void;
-}> = ({ lanes, now: nowOf, live, onSelectState, onExport, onAddRecording, onRemoveLane }) => {
+  /** Events drawn as ticks over the lanes (this computer's time): alerts, writes, overruns, pauses … */
+  markers?: { t: number; kind: string; text: string }[];
+}> = ({ lanes, now: nowOf, live, onSelectState, onExport, onAddRecording, onRemoveLane, markers = [] }) => {
   const [span, setSpan] = useState(600_000);
   // (zoomed or panned: the window's own span and end; null: the span chosen, up to now)
   const [view, setView] = useState<{ span: number; end: number } | null>(null);
   const drag = useRef<{ x: number; end: number; width: number } | null>(null);
+  // (Shift+drag: a measure between two moments; a click elsewhere or Esc clears it)
+  const [measure, setMeasure] = useState<{ a: number; b: number } | null>(null);
+  const measuring = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const lanesRef = useRef<HTMLDivElement>(null);
   // (the wheel: a native listener, not passive, so the page does not scroll while zooming)
@@ -142,6 +147,12 @@ export const StateTimeline: React.FC<{
   const from = view ? view.end - view.span : span ? to - span : first;
   const x = (t: number) => ((Math.max(from, Math.min(to, t)) - from) / Math.max(1, to - from)) * 100;
   if (!all.some((l) => l.segs.length)) return null;
+  // (a time at a pointer's x: by the lanes' track)
+  const timeAt = (clientX: number) => {
+    const track = lanesRef.current?.querySelector('.live-timeline-track')?.getBoundingClientRect();
+    if (!track) return from;
+    return from + Math.max(0, Math.min(1, (clientX - track.left) / Math.max(1, track.width))) * (to - from);
+  };
   zoomRef.current = (e: WheelEvent) => {
     const r = lanesRef.current!.getBoundingClientRect();
     const at = from + ((e.clientX - r.left) / Math.max(1, r.width)) * (to - from);
@@ -217,16 +228,54 @@ export const StateTimeline: React.FC<{
         className="space-y-1 select-none"
         onMouseDown={(e) => {
           if (e.button !== 0) return;
+          if (e.shiftKey) {
+            const t = timeAt(e.clientX);
+            measuring.current = true;
+            setMeasure({ a: t, b: t });
+            return;
+          }
+          setMeasure(null);
           drag.current = { x: e.clientX, end: to, width: e.currentTarget.getBoundingClientRect().width - 88 };
         }}
         onMouseMove={(e) => {
+          if (measuring.current) {
+            const t = timeAt(e.clientX);
+            setMeasure((m) => (m ? { ...m, b: t } : m));
+            return;
+          }
           const d = drag.current;
           if (!d || Math.abs(e.clientX - d.x) < 3) return;
           setView({ span: to - from, end: d.end - ((e.clientX - d.x) / Math.max(1, d.width)) * (to - from) });
         }}
-        onMouseUp={() => (drag.current = null)}
-        onMouseLeave={() => (drag.current = null)}
+        onMouseUp={() => {
+          drag.current = null;
+          measuring.current = false;
+        }}
+        onMouseLeave={() => {
+          drag.current = null;
+          measuring.current = false;
+        }}
+        onKeyDown={(e) => e.key === 'Escape' && setMeasure(null)}
+        tabIndex={-1}
       >
+        {markers.some((m) => m.t >= from && m.t <= to) && (
+          <div className="flex items-center gap-1.5 text-[10px]">
+            <span className="w-20 text-slate-500">events</span>
+            <div id="live-timeline-markers" className="live-timeline-track relative flex-1 h-2.5">
+              {markers
+                .filter((m) => m.t >= from && m.t <= to)
+                .map((m, i) => (
+                  <span
+                    key={`${m.t}-${i}`}
+                    className="live-timeline-marker absolute top-0 h-full w-0.5 rounded-sm"
+                    data-kind={m.kind}
+                    style={{ left: `${x(m.t)}%`, background: m.kind === 'alert' || m.kind === 'overrun' ? '#fb7185' : m.kind === 'write' || m.kind === 'state' ? '#38bdf8' : m.kind === 'stuck' ? '#fb923c' : m.kind === 'hold' ? '#fbbf24' : '#94a3b8' }}
+                    title={`${new Date(m.t).toLocaleTimeString()} ${m.kind}: ${m.text}`}
+                  />
+                ))}
+            </div>
+          </div>
+        )}
         {all.map(({ lane, segs }) => (
           <div key={lane.label} className="live-timeline-lane flex items-center gap-1.5 text-[10px]" data-lane={lane.label}>
             <span className="w-20 truncate text-slate-400 flex items-center gap-0.5" title={lane.label}>
@@ -237,7 +286,7 @@ export const StateTimeline: React.FC<{
               )}
               {lane.label}
             </span>
-            <div className="relative flex-1 h-4 bg-slate-950/70 rounded overflow-hidden">
+            <div className="live-timeline-track relative flex-1 h-4 bg-slate-950/70 rounded overflow-hidden">
               {segs
                 .filter((s) => s.to > from && s.from < to)
                 .map((s, i) => (
@@ -248,16 +297,25 @@ export const StateTimeline: React.FC<{
                     data-state={s.state}
                     style={{ left: `${x(s.from)}%`, width: `${Math.max(0.3, x(s.to) - x(s.from))}%`, background: colorOf(s.state) }}
                     title={`${s.state}: ${dur(s.to - s.from)} (${new Date(s.from).toLocaleTimeString()} – ${new Date(s.to).toLocaleTimeString()})`}
-                    onClick={() => onSelectState?.(s.state)}
+                    onClick={(e) => !e.shiftKey && onSelectState?.(s.state)}
                   />
                 ))}
+              {measure && Math.abs(measure.b - measure.a) > 0 && (
+                <span className="live-timeline-measure-band absolute top-0 h-full bg-white/20 border-x border-white/70 pointer-events-none" style={{ left: `${x(Math.min(measure.a, measure.b))}%`, width: `${Math.max(0.2, x(Math.max(measure.a, measure.b)) - x(Math.min(measure.a, measure.b)))}%` }} />
+              )}
             </div>
           </div>
         ))}
       </div>
       <div className="flex justify-between text-[9px] text-slate-500 font-mono pl-[5.5rem]">
         <span id="live-timeline-from">{new Date(from).toLocaleTimeString()}</span>
-        <span>{dur(to - from)}</span>
+        {measure && Math.abs(measure.b - measure.a) > 0 ? (
+          <span id="live-timeline-measure" className="text-white">
+            ⟷ {dur(Math.abs(measure.b - measure.a))} ({new Date(Math.min(measure.a, measure.b)).toLocaleTimeString()} – {new Date(Math.max(measure.a, measure.b)).toLocaleTimeString()})
+          </span>
+        ) : (
+          <span>{dur(to - from)}</span>
+        )}
         <span id="live-timeline-to">{new Date(to).toLocaleTimeString()}</span>
       </div>
     </div>

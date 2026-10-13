@@ -1,6 +1,17 @@
 import { DutCandidate } from './dutMatcher.ts';
 import { PouSource } from './sourceFileAccess.ts';
 /** A line of git blame: who last changed it (hash 0000000: not committed yet) */
+/** A state set from a state's menu (commissioning), as the project's file logs it: the host names the user */
+export interface CommissioningEntry {
+  t: string;
+  user: string;
+  state: string;
+  from: string;
+  plc: string;
+  ok: boolean;
+  message?: string;
+}
+export type CommissioningEntryRequest = Omit<CommissioningEntry, 't' | 'user'>;
 export interface BlameLine {
   hash: string;
   author: string;
@@ -68,7 +79,11 @@ export type HostMessage =
   | { type: 'gitShowAtResult'; requestId: number; content?: string | null; error?: string | null }
   | { type: 'gitBlameResult'; requestId: number; lines?: BlameLine[] | null; error?: string | null }
   | { type: 'eventsSaveResult'; requestId: number; ok: boolean; path?: string; error?: string | null }
-  | { type: 'addPlcFilesResult'; requestId: number; ok: boolean; written?: string[]; tcunit?: boolean; folder?: string; error?: string | null }
+  | { type: 'runPlcTestsResult'; requestId: number; ok: boolean; message: string }
+  | { type: 'webhookResult'; requestId: number; ok: boolean; status?: number; error?: string }
+  | { type: 'commissioningResult'; requestId: number; allowed?: string[]; log?: CommissioningEntry[]; error?: string }
+  | { type: 'commissioningSaveResult'; requestId: number; allowed?: string[]; log?: CommissioningEntry[]; error?: string }
+  | { type: 'addPlcFilesResult'; requestId: number; ok: boolean; written?: string[]; tcunit?: boolean; folder?: string; error?: string | null; xae?: boolean }
   /** A POU's layout file (<POU>.machinescope.json): read (text; null: none yet) or written */
   | { type: 'layoutResult'; requestId: number; text?: string | null; written?: boolean; error?: string | null }
   /** Project documentation: the PLC project's state machine POUs and all its enums */
@@ -210,6 +225,13 @@ export type AppMessage =
   | { type: 'addPlcFiles'; requestId: number; folder: string; files: { name: string; content: string }[] }
   /** A live session's events kept beside the PLC project (answered with eventsSaveResult) */
   | { type: 'eventsSave'; requestId: number; name: string; csv: string }
+  /** The TcUnit tests run on the PLC (XAE: PRG_KssTests called by the task, built, downloaded, started) */
+  | { type: 'runPlcTests'; requestId: number }
+  /** Commissioning beside the PLC project (answered with commissioningResult / commissioningSaveResult) */
+  | { type: 'commissioning'; requestId: number; pouType: string }
+  /** An alert told to a webhook (answered with webhookResult) */
+  | { type: 'webhook'; requestId: number; url: string; text: string }
+  | { type: 'commissioningSave'; requestId: number; pouType: string; allowed?: string[]; entry?: CommissioningEntryRequest }
   /** A loaded POU's layout file beside it: read, or written (text; null: removed) */
   | { type: 'layoutRead'; path: string; requestId: number }
   | { type: 'layoutWrite'; path: string; requestId: number; text: string | null }

@@ -68,6 +68,7 @@
     <Compile Include="$(Src)TabMemory.cs" Link="TabMemory.cs" />
     <Compile Include="$(Src)GitBlame.cs" Link="GitBlame.cs" />
     <Compile Include="$(Src)PlcAddFiles.cs" Link="PlcAddFiles.cs" />
+    <Compile Include="$(Src)CommissioningFile.cs" Link="CommissioningFile.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="source.extension.vsixmanifest">

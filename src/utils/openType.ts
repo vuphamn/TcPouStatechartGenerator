@@ -34,6 +34,10 @@ export interface OpenTypeHandler {
   extractProperty?: (method: string, line: number, from: number, to: number) => void;
   /** Blame: who last changed each line of a method's code (git), or why not */
   blame?: (method: string, code: string) => Promise<Map<number, import('./methodBlame.ts').BlameMark> | { error: string }>;
+  /** A refactoring's change shown first (rows of a line diff), made with Apply */
+  preview?: (title: string, before: string, after: string, apply: () => void) => void;
+  /** Show commit: what a commit changed in a method ('': the POU's body), against the commit before it */
+  showCommit?: (method: string, hash: string) => void;
   /** Inline Method: the call on a line (1-based, the saved POU's) replaced by the method's code */
   inlineMethod?: (method: string, line: number) => void;
   /** The state variable, its enum type and the enum's names by value (state names for numbers); null: not known */

@@ -353,6 +353,11 @@ ipcMain.handle('tc:git-show', async (_event, filePath) => {
 ipcMain.handle('tc:git-log', (_event, filePath) => require('../shared/gitHistory.cjs').gitLog(filePath));
 // New POUs into the loaded POU's PLC project (the TcUnit tests): written in a folder of it, listed in its .plcproj
 // A live session's events kept beside the PLC project (MachineScope.events\<name>.csv)
+// Commissioning beside the PLC project (MachineScope.commissioning.json): the states the PLC may be set to, who set which
+// An alert told to a webhook (https only)
+ipcMain.handle('tc:webhook', (_event, url, text) => require('../shared/webhook.cjs').postWebhook(url, text));
+ipcMain.handle('tc:commissioning', (_event, pouPath, pouType) => require('../shared/commissioningFile.cjs').readCommissioning(pouPath, pouType));
+ipcMain.handle('tc:commissioning-save', (_event, pouPath, pouType, req) => require('../shared/commissioningFile.cjs').saveCommissioning(pouPath, pouType, req));
 ipcMain.handle('tc:events-save', (_event, pouPath, req) => require('../shared/eventsFile.cjs').saveEventsFile(pouPath, req));
 ipcMain.handle('tc:add-plc-files', (_event, pouPath, req) => require('../shared/plcAddFiles.cjs').addPlcFiles(pouPath, req));
 ipcMain.handle('tc:git-blame', (_event, filePath) => require('../shared/gitHistory.cjs').gitBlame(filePath));

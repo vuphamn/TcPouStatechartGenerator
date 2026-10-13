@@ -98,22 +98,26 @@ interface LivePanelProps {
   /** While live: the same POU and instance live on another PLC (Browse's Compare) */
   onComparePlc?: (plc: { netId: string; ip?: string; name?: string }) => void;
   /** The variables watched from the code (right-click > Watch in Live), with their values */
-  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean }[];
+  watchList?: { name: string; value?: boolean | number | string; symbol?: string; type?: string; expr?: boolean; error?: string; alert?: boolean; alertForMs?: number }[];
+  /** How long a watch expression must stay true before its alert (asked) */
+  onSetAlertFor?: (name: string) => void;
   /** A watch expression's alert on / off (said when it becomes true) */
   onToggleAlert?: (name: string) => void;
   /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
   onAddWatchExpr?: (text: string) => string | null;
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
-  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void };
+  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[] };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void } };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void } };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
   /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
-  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void };
+  setStateAllowed?: { list: string[]; onChange: (list: string[]) => void; where?: 'project' | 'browser'; logCount?: number; onShowLog?: () => void };
   /** The TcUnit suites added to the PLC project here, read live: 0 running, 1 passed, 2 failed (at a step) */
   tests?: { name: string; steps: number; result?: number; step?: number; failedStep?: number; error?: string }[];
   onForgetTest?: (name: string) => void;
+  /** XAE: the tests run on the PLC (asked first) */
+  onRunTests?: () => void;
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
   watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
@@ -628,12 +632,14 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   watchList,
   onAddWatchExpr,
   onToggleAlert,
+  onSetAlertFor,
   timeline,
   events,
   onTcUnitTest,
   setStateAllowed,
   tests = [],
   onForgetTest,
+  onRunTests,
   watchLists,
   scope,
   onUnwatch,
@@ -1182,6 +1188,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
             <span className="text-slate-400" title="The TcUnit tests made from recordings and added to the PLC project (PRG_KssTests), as the PLC runs them">
               TcUnit
             </span>
+            {onRunTests && (
+              <button id="live-tests-run" type="button" onClick={onRunTests} className="px-1.5 rounded border border-sky-700 text-sky-200 hover:bg-sky-900/50" title="XAE: PRG_KssTests called by the PLC's task, the project built, downloaded and started (asked first): the results come in here">
+                Run…
+              </button>
+            )}
             {tests.map((t) => {
               const state = t.error ? 'missing' : t.result === 1 ? 'passed' : t.result === 2 ? 'failed' : 'running';
               return (
@@ -1233,6 +1244,16 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   </option>
                 ))}
             </select>
+            {setStateAllowed.where && (
+              <span id="live-set-state-where" className="text-[10px] text-slate-500" title={setStateAllowed.where === 'project' ? 'Kept beside the PLC project (MachineScope.commissioning.json): commit it to share it' : 'Kept in this browser'}>
+                {setStateAllowed.where === 'project' ? 'project' : 'browser'}
+              </span>
+            )}
+            {setStateAllowed.onShowLog && (
+              <button id="live-set-state-log" type="button" onClick={setStateAllowed.onShowLog} className="px-1 rounded text-[10px] text-slate-400 hover:text-sky-300" title="Who set the PLC to which state, when">
+                Log{setStateAllowed.logCount ? ` (${setStateAllowed.logCount})` : ''}…
+              </button>
+            )}
           </div>
         )}
         {tasks.length > 0 && (
@@ -2080,6 +2101,11 @@ export const LivePanel: React.FC<LivePanelProps> = ({
                   {w.alert ? <Bell className="w-3 h-3" /> : <BellOff className="w-3 h-3" />}
                 </button>
               )}
+              {w.expr && w.alert && onSetAlertFor && (
+                <button type="button" className="live-watch-alert-for text-[10px] text-rose-300 hover:text-white font-sans" onClick={() => onSetAlertFor(w.name)} title="How long it must stay true before the alert (a click changes it)">
+                  {w.alertForMs ? `${w.alertForMs / 1000} s` : 'at once'}
+                </button>
+              )}
               {onUnwatch && (
                 <button type="button" onClick={() => onUnwatch(w.name)} className="text-slate-500 hover:text-white" title="Stop watching it">
                   ×
@@ -2092,7 +2118,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
       )}
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

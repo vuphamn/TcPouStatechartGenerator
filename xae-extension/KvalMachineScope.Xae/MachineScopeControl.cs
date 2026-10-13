@@ -410,6 +410,16 @@ namespace KvalMachineScope.Xae
                     case "eventsSave":
                         HandleEventsSave(msg);
                         break;
+                    case "runPlcTests":
+                        HandleRunPlcTests(msg);
+                        break;
+                    case "webhook":
+                        HandleWebhook(msg);
+                        break;
+                    case "commissioning":
+                    case "commissioningSave":
+                        HandleCommissioning(msg, type == "commissioningSave");
+                        break;
                     case "layoutRead":
                     case "layoutWrite":
                         HandleLayoutFile(msg, type == "layoutWrite");
@@ -1239,7 +1249,7 @@ namespace KvalMachineScope.Xae
                 Post(new { type = "gitShowAtResult", requestId, error = "Not a file loaded in MachineScope" });
                 return;
             }
-            if (hash == null || !System.Text.RegularExpressions.Regex.IsMatch(hash, "^[0-9a-fA-F]{4,40}$") || string.IsNullOrEmpty(file)
+            if (hash == null || !System.Text.RegularExpressions.Regex.IsMatch(hash, "^[0-9a-fA-F]{4,40}\\^?$") || string.IsNullOrEmpty(file)
                 || file.StartsWith("-") || file.StartsWith("/") || file.Contains("..") || file.Contains("\"") || file.Contains("\0"))
             {
                 Post(new { type = "gitShowAtResult", requestId, error = "Not a commit of the file" });
@@ -1259,6 +1269,112 @@ namespace KvalMachineScope.Xae
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
                 Post(new { type = "gitShowAtResult", requestId, content, error });
             });
+        }
+
+        /// <summary>
+        /// The TcUnit tests run on the PLC (the Live tab's Run the tests, asked first): PRG_KssTests called by the PLC
+        /// project's task (its call added when missing: CreateChild(name, 650) on the task, as XAE's Add Program Call),
+        /// the project built, downloaded and started (PlcDownload); their results come in live
+        /// </summary>
+        private void HandleRunPlcTests(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            void Answer(bool ok, string message) => Post(new { type = "runPlcTestsResult", requestId, ok, message });
+            try
+            {
+                object sysManager = null;
+                object item = null;
+                if (_pouPath != null) item = TwinCATProject.FindTreeItem(_pane, _pouPath, out sysManager);
+                if (item == null || sysManager == null) { Answer(false, "The POU's TwinCAT project is not open in XAE"); return; }
+                dynamic project = ((dynamic)item).Parent;
+                while (project != null && ((string)project.PathName).Split('^').Length > 3) project = project.Parent;
+                var plc = ((string)project.PathName).Split('^')[1];
+                try { project.LookupChild("KssTests^PRG_KssTests"); }
+                catch (System.Runtime.InteropServices.COMException) { Answer(false, "PRG_KssTests is not in the project: add a test to it first (TcUnit test…, Add to the PLC project)"); return; }
+                // (the task: the one calling MAIN, else the first)
+                dynamic task = null;
+                for (var i = 1; i <= (int)project.ChildCount; i++)
+                {
+                    dynamic c = project.Child(i);
+                    if ((int)c.ItemType != 621) continue;
+                    if (task == null) task = c;
+                    for (var k = 1; k <= (int)c.ChildCount; k++) if (string.Equals((string)c.Child(k).Name, "MAIN", StringComparison.OrdinalIgnoreCase)) task = c;
+                }
+                if (task == null) { Answer(false, $"{plc} has no task to call PRG_KssTests"); return; }
+                var added = false;
+                try { task.LookupChild("PRG_KssTests"); }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    task.CreateChild("PRG_KssTests", 650, "", null);
+                    added = true;
+                }
+                if (!(Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte)) { Answer(false, "XAE's automation is not available"); return; }
+                dte.Solution.SolutionBuild.Build(true);
+                if (dte.Solution.SolutionBuild.LastBuildInfo > 0) { Answer(false, "The project has build errors (XAE's Error List): fix them first. Nothing was downloaded"); return; }
+                PlcDownload.Run(sysManager, new[] { plc }, Log.Write);
+                Answer(true, $"{plc}: built{(added ? $", PRG_KssTests called by {(string)task.Name}" : "")}, downloaded and started: the tests run (their results in the Live tab, live)");
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException || ex is InvalidOperationException || ex is System.Reflection.TargetInvocationException)
+            {
+                Log.Write("run tests: " + ex.Message);
+                Answer(false, (ex.InnerException ?? ex).Message);
+            }
+        }
+
+        /// <summary>An alert told to a webhook (Teams, Slack: a JSON { text } POSTed; https only)</summary>
+        private void HandleWebhook(Dictionary<string, object> msg)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var url = msg.TryGetValue("url", out var u) ? u as string : null;
+            var text = msg.TryGetValue("text", out var t) ? t as string ?? "" : "";
+            if (url == null || !Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            {
+                Post(new { type = "webhookResult", requestId, ok = false, error = "Only an https:// webhook" });
+                return;
+            }
+            _ = ThreadHelper.JoinableTaskFactory.RunAsync(async () =>
+            {
+                await TaskScheduler.Default;
+                bool ok;
+                string error = null;
+                try
+                {
+                    System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+                    using (var client = new System.Net.WebClient { Encoding = System.Text.Encoding.UTF8 })
+                    {
+                        client.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json; charset=utf-8";
+                        var body = new JavaScriptSerializer().Serialize(new { text = text.Length > 4000 ? text.Substring(0, 4000) : text });
+                        await client.UploadStringTaskAsync(uri, "POST", body);
+                        ok = true;
+                    }
+                }
+                catch (System.Net.WebException ex)
+                {
+                    ok = false;
+                    error = ex.Message;
+                }
+                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+                Post(new { type = "webhookResult", requestId, ok, error });
+            });
+        }
+
+        /// <summary>Commissioning beside the PLC project (CommissioningFile): read, or saved (the list and / or a state set, logged with this Windows user)</summary>
+        private void HandleCommissioning(Dictionary<string, object> msg, bool save)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var pouType = msg.TryGetValue("pouType", out var t) ? t as string : null;
+            var allowed = msg.TryGetValue("allowed", out var a) && a is object[] list ? list.OfType<string>().ToList() : null;
+            CommissioningFile.Entry entry = null;
+            if (msg.TryGetValue("entry", out var e) && e is Dictionary<string, object> d)
+                entry = new CommissioningFile.Entry { state = d.TryGetValue("state", out var s) ? s as string : null, from = d.TryGetValue("from", out var f) ? f as string : "", plc = d.TryGetValue("plc", out var p) ? p as string : "", ok = !(d.TryGetValue("ok", out var o) && o is bool b && !b), message = d.TryGetValue("message", out var m) ? m as string : null };
+            var dir = string.IsNullOrEmpty(_pouPath) ? null : FolderWith(_pouPath, ".plcproj");
+            string error = null;
+            var result = save ? CommissioningFile.Save(dir, pouType, allowed, entry, Environment.UserName, out error) : CommissioningFile.Read(dir, pouType);
+            if (save) Log.Write($"commissioning ({pouType}): {(error ?? (entry != null ? $"{entry.user} set {entry.state}" : "list saved"))}");
+            Post(new { type = save ? "commissioningSaveResult" : "commissioningResult", requestId, allowed = result?.allowed, log = result?.log, error });
         }
 
         /// <summary>A live session's events kept beside the PLC project: MachineScope.events\&lt;name&gt;.csv</summary>
@@ -1301,9 +1417,71 @@ namespace KvalMachineScope.Xae
                 foreach (var item in list.OfType<Dictionary<string, object>>())
                     files.Add(new KeyValuePair<string, string>(item.TryGetValue("name", out var n) ? n as string : null, item.TryGetValue("content", out var c) ? c as string : null));
             var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
-            var result = PlcAddFiles.Add(plcproj, folder, files);
-            Log.Write($"add files ({folder}): {(result.ok ? string.Join(", ", result.written) : result.error)}");
-            Post(new { type = "addPlcFilesResult", requestId, result.ok, result.written, result.tcunit, result.folder, result.error });
+            // The project open in XAE: imported through its Automation Interface (a PLC folder, the files as existing
+            // items: CreateChild(null, 58, null, paths)), XAE keeping its .plcproj (no reload asked); else on disk
+            var viaXae = AddThroughXae(plcproj, folder, files, out var xaeResult);
+            var result = viaXae ? xaeResult : PlcAddFiles.Add(plcproj, folder, files);
+            Log.Write($"add files ({folder}, {(viaXae ? "XAE" : "disk")}): {(result.ok ? string.Join(", ", result.written) : result.error)}");
+            Post(new { type = "addPlcFilesResult", requestId, result.ok, result.written, result.tcunit, result.folder, result.error, result.xae });
+        }
+
+        /// <summary>
+        /// The files into the PLC project open in XAE: the loaded POU's PLC project node found, its folder (made when
+        /// missing, 601), an older copy of each file deleted, the new ones imported from a temporary folder (58). False
+        /// when the project is not open here (the caller writes the files on disk instead)
+        /// </summary>
+        private bool AddThroughXae(string plcproj, string folder, IList<KeyValuePair<string, string>> files, out PlcAddFiles.Result result)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            result = null;
+            if (_pouPath == null || plcproj == null) return false;
+            object item;
+            try { item = TwinCATProject.FindTreeItem(_pane, _pouPath, out _); }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is InvalidOperationException) { return false; }
+            if (item == null) return false;
+            var prepared = PlcAddFiles.Prepare(plcproj, folder, files, out var error);
+            if (prepared == null)
+            {
+                result = new PlcAddFiles.Result { ok = false, error = error };
+                return true;
+            }
+            var temp = Path.Combine(Path.GetTempPath(), "kss-add-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                // (TIPC^<PLC>^<PLC> Project: the first three parts of the item's path)
+                var parts = ((string)((dynamic)item).PathName).Split('^');
+                if (parts.Length < 4) return false;
+                dynamic project = ((dynamic)item).Parent;
+                while (project != null && ((string)project.PathName).Split('^').Length > 3) project = project.Parent;
+                if (project == null) return false;
+                dynamic target;
+                try { target = project.LookupChild(folder); }
+                catch (System.Runtime.InteropServices.COMException) { target = null; }
+                if (target == null) target = project.CreateChild(folder, 601, "", null);
+                Directory.CreateDirectory(temp);
+                var paths = new List<string>();
+                foreach (var f in prepared)
+                {
+                    var name = Path.GetFileNameWithoutExtension(f.Key);
+                    try { target.DeleteChild(name); } catch (System.Runtime.InteropServices.COMException) { }
+                    var p = Path.Combine(temp, f.Key);
+                    File.WriteAllText(p, f.Value, new System.Text.UTF8Encoding(true));
+                    paths.Add(p);
+                }
+                target.CreateChild(null, 58, null, paths.ToArray());
+                result = new PlcAddFiles.Result { ok = true, xae = true, written = prepared.Select(f => f.Key).ToList(), tcunit = PlcAddFiles.ReferencesTcUnit(plcproj), folder = Path.Combine(Path.GetDirectoryName(plcproj), folder) };
+                return true;
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is Microsoft.CSharp.RuntimeBinder.RuntimeBinderException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Log.Write("add files through XAE: " + ex.Message);
+                result = new PlcAddFiles.Result { ok = false, error = "XAE did not add them: " + ex.Message };
+                return true;
+            }
+            finally
+            {
+                try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (IOException) { }
+            }
         }
 
         /// <summary>Who last changed each line of a loaded file (git blame --line-porcelain): a line each</summary>
@@ -2335,7 +2513,7 @@ namespace KvalMachineScope.Xae
         }
 
         // The files MachineScope keeps beside the PLC project (as shared/projectVersions.cjs)
-        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json", "MachineScope.watch.json" };
+        private static readonly string[] MachineScopeFiles = { "MachineScope.builds.json", "MachineScope.coverage.json", "MachineScope.watch.json", "MachineScope.commissioning.json" };
 
         /// <summary>Those files there and how git sees them: (dir, git, [(name, path, state: tracked | ignored | untracked)])</summary>
         private static (string dir, bool git, List<(string name, string path, string state)> files) MachineScopeFileStates(string pouPath)

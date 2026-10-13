@@ -15,7 +15,7 @@ import { DeclareVariableDialog } from './DeclareVariableForm.tsx';
 import { markersFor } from '../utils/variableLint.ts';
 import { SaveToFileButton } from './SaveToFileButton.tsx';
 import { SHOW_EDITOR_DIFF_EVENT, openDiff, showFileDiff, useFileChanged } from './DiffDialog.tsx';
-import { GitCompare } from 'lucide-react';
+import { GitCommitHorizontal, GitCompare } from 'lucide-react';
 import { BODY, bookmarkedLines, clearBookmarks, declarationKey, toggleLineBookmark, useBookmarks } from '../utils/bookmarks.ts';
 import { caseToIfItem, ifToCaseItem } from '../utils/ifToCase.ts';
 import { numbersToEnumItem } from '../utils/refactorings.ts';
@@ -173,6 +173,12 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   }, [query, matchCase, wholeWord]);
   const declRef = useRef<StructuredTextCodeEditorRef>(null);
   const implRef = useRef<StructuredTextCodeEditorRef>(null);
+  // Blame: who last changed each line of the body (git), asked of the host when turned on
+  const [blame, setBlame] = useState<Map<number, { hash: string; age: number | null; title: string }> | null>(null);
+  const toggleBlame = () => {
+    if (blame) return setBlame(null);
+    void editorServices()?.blame?.('', impl).then((r) => ('error' in r ? showNotice('warning', r.error) : setBlame(r)));
+  };
   const [lastFocus, setLastFocus] = useState<'declaration' | 'implementation'>('implementation');
   const goTo = useCallback(
     (index: number) => {
@@ -331,9 +337,15 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
   };
   const menuExtras = (sym: string | null, memberOf?: string, scope?: 'declaration' | 'implementation', line?: number) => {
     // Convert to CASE: the IF / ELSIF chain on the caret's line
-    const toCase = scope === 'implementation' && line ? ifToCaseItem(impl, line, (next) => implRef.current?.replaceText(next, line), (message) => showNotice('warning', message)) : null;
-    const toIf = scope === 'implementation' && line ? caseToIfItem(impl, line, (next) => implRef.current?.replaceText(next, line), (message) => showNotice('warning', message)) : null;
-    const named = scope === 'implementation' ? numbersToEnumItem(impl, editorServices()?.stateNames?.(), (next) => implRef.current?.replaceText(next, line)) : null;
+    // (a refactoring's change shown first when the app can, then made)
+    const shown = (title: string) => (next: string) => {
+      const sv = editorServices();
+      if (sv?.preview) sv.preview(title, impl, next, () => implRef.current?.replaceText(next, line));
+      else implRef.current?.replaceText(next, line);
+    };
+    const toCase = scope === 'implementation' && line ? ifToCaseItem(impl, line, shown('Convert to CASE'), (message) => showNotice('warning', message)) : null;
+    const toIf = scope === 'implementation' && line ? caseToIfItem(impl, line, shown('Convert to IF'), (message) => showNotice('warning', message)) : null;
+    const named = scope === 'implementation' ? numbersToEnumItem(impl, editorServices()?.stateNames?.(), shown('Use state names for numbers')) : null;
     const refactors = [toCase, toIf, named].filter((x): x is NonNullable<typeof x> => !!x);
     const format = { id: 'editor-menu-format', label: 'Format Document (Shift+Alt+F)', title: 'Re-indent the code by its blocks', onSelect: () => ((scope === 'declaration' ? declRef : implRef).current?.formatDocument()) };
     // (Call Hierarchy: the name's, or the POU body's when on nothing; Go to Implementation: the name's)
@@ -528,6 +540,11 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
           </button>
           <button type="button" id="pou-editor-diff" onClick={() => (((dirty)) ? setDiffOpen(true) : showFileDiff('pou'))} disabled={!((dirty) || fileChanged)} className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium transition-colors disabled:opacity-40" title={((dirty)) ? "This editor's edits, line by line (against what is in the POU now)" : "The POU's changes since it was saved (the canvas' edits too); this editor has none of its own"}><GitCompare className="w-3.5 h-3.5" /><span>Diff</span></button>
           <SaveToFileButton id="pou-editor-save-file" what="the POU" />
+          {editorServices()?.blame && (
+            <button type="button" id="pou-blame-btn" onClick={toggleBlame} className={`flex items-center gap-1 px-2 py-1 rounded border text-xs ${blame ? 'border-sky-700 bg-sky-900/60 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title="Who last changed each line of the body (git): a bar in the gutter; a click on it shows that commit's change">
+              <GitCommitHorizontal className="w-3.5 h-3.5 text-amber-300" /> Blame
+            </button>
+          )}
         </div>
       </div>
 
@@ -642,6 +659,8 @@ export const PouCodeEditor: React.FC<PouCodeEditorProps> = ({ pouContent, pouFil
               <StructuredTextCodeEditor
                 ref={implRef}
                 id="pou-implementation-editor"
+                blameLines={blame}
+                onBlameClick={(_l, hash) => hash && !/^0+$/.test(hash) && editorServices()?.showCommit?.('', hash)}
                 value={impl}
                 onChange={setImpl}
                 completionScope={() => editorServices()?.scope?.() ?? null}

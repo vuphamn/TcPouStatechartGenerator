@@ -253,6 +253,11 @@ function createHost({ pouPath, post, ui }) {
     },
     // New POUs into the POU's PLC project (the TcUnit tests): a folder of it, listed in its .plcproj
     // A live session's events kept beside the PLC project (MachineScope.events)
+    // Commissioning beside the PLC project (MachineScope.commissioning.json)
+    // An alert told to a webhook (https only)
+    webhook: async ({ requestId, url, text }) => post({ type: 'webhookResult', requestId, ...(await require('../shared/webhook.cjs').postWebhook(url, text)) }),
+    commissioning: ({ requestId, pouType }) => post({ type: 'commissioningResult', requestId, ...require('../shared/commissioningFile.cjs').readCommissioning(pou, pouType) }),
+    commissioningSave: ({ requestId, pouType, allowed, entry }) => post({ type: 'commissioningSaveResult', requestId, ...require('../shared/commissioningFile.cjs').saveCommissioning(pou, pouType, { allowed, entry }) }),
     eventsSave: ({ requestId, name, csv }) => post({ type: 'eventsSaveResult', requestId, ...require('../shared/eventsFile.cjs').saveEventsFile(pou, { name, csv }) }),
     addPlcFiles: ({ requestId, folder, files }) => post({ type: 'addPlcFilesResult', requestId, ...require('../shared/plcAddFiles.cjs').addPlcFiles(pou, { folder, files }) }),
     gitBlame: async ({ path: p, requestId }) => {
