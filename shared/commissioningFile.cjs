@@ -31,7 +31,7 @@ const cleanType = (v) => {
   const log = Array.isArray(v?.log)
     ? v.log
         .filter((e) => e && typeof e.t === 'string' && typeof e.state === 'string')
-        .map((e) => ({ t: e.t, user: String(e.user ?? ''), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }))
+        .map((e) => ({ t: e.t, user: String(e.user ?? ''), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.reason ? { reason: String(e.reason).slice(0, 300) } : {}), ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }))
         .slice(-MAX_LOG)
     : [];
   return { allowed, log };
@@ -68,7 +68,7 @@ function saveCommissioning(pouPath, pouType, req, user = os.userInfo().username)
   if (Array.isArray(req?.allowed)) mine.allowed = cleanType({ allowed: req.allowed }).allowed;
   const e = req?.entry;
   if (e && typeof e.state === 'string' && STATE_RX.test(e.state)) {
-    mine.log = [...mine.log, { t: new Date().toISOString(), user: String(user || '?'), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }].slice(-MAX_LOG);
+    mine.log = [...mine.log, { t: new Date().toISOString(), user: String(user || '?'), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.reason ? { reason: String(e.reason).slice(0, 300) } : {}), ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }].slice(-MAX_LOG);
   }
   pous[pouType] = mine;
   const text = `${JSON.stringify({ note: "Commissioning of Kval MachineScope: each POU type's states the PLC may be set to from a state's menu (live), and who set which state when. Commit it with the project to share it.", pous }, null, 2)}\n`;

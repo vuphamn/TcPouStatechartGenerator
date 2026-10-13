@@ -121,6 +121,26 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('#live-hold-resume').catch(() => {});
   await h.sleep(300);
 
+  // 2b. Snapshots: two taken, the values that differ first; the events found by text; the webhook's test message
+  await vars([['nfeedcount', 30], ['bfeedon', false]]);
+  await h.sleep(200);
+  await p.click('#live-snapshot-take').catch(() => {});
+  await h.sleep(1100);
+  await vars([['nfeedcount', 31]]);
+  await h.sleep(200);
+  await p.click('#live-snapshot-take').catch(() => {});
+  await h.sleep(300);
+  await p.$$eval('.live-snapshot input', (x) => x.forEach((i) => i.click()));
+  const diffRows = await h.until(() => p.$$eval('#live-snapshots-compare .live-snapshot-row', (x) => x.map((r) => `${r.getAttribute('data-name')}:${r.getAttribute('data-same')}`)).then((x) => (x.length ? x : null)), 3000);
+  expect(!!diffRows && diffRows[0] === 'nFeedCount:false' && diffRows.includes('bFeedOn:true'), `snapshots compared: ${JSON.stringify(diffRows)}`);
+  await p.type('#live-events-find', 'became');
+  await h.sleep(200);
+  const found = await p.$$eval('.live-event', (x) => x.map((e) => e.getAttribute('data-kind')));
+  expect(found.length > 0 && found.every((k) => k === 'alert' || k === 'hold'), `the events found by text: ${JSON.stringify(found)}`);
+  await p.click('#live-alerts-webhook-test').catch(() => {});
+  const testHook = await h.until(() => sent.find((m) => m.type === 'webhook' && /a test message/.test(m.text)) ?? null, 3000);
+  expect(!!testHook, 'the webhook: a test message');
+
   // 3. The timeline: zoomed by the wheel (Now comes back), a recording as a lane, CSV and SVG
   const t0 = Date.now() - 40000;
   await toApp({ type: 'liveValues', events: ['IDLE_FEED_OFF', 'CLAMPPING', 'CLAMPED'].map((s, i) => ({ t: t0 + i * 10000, value: sample.values[S(s)] })) });
@@ -147,6 +167,12 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const svg = await h.until(() => saved.find((m) => /_timeline_.*\.svg$/.test(m.name)) ?? null, 4000);
   expect(!!csv && csv.content.startsWith('lane;state;from;to;ms') && /\nnight;TABLEMANAGER_IDLE_FEED_OFF;/.test(csv.content), `the timeline's CSV (${csv?.content.split('\n').length} rows)`);
   expect(!!svg && svg.content.startsWith('<svg') && svg.content.includes('TABLEMANAGER_CLAMPPING'), 'the timeline as SVG');
+  await p.click('.live-event').catch(() => {});
+  await h.sleep(300);
+  expect(!!(await p.$('#live-timeline-now')) && /1 min|60/.test(await p.$eval('#live-timeline', (e) => e.textContent).catch(() => '')), 'an event picked: the timeline shows the minute around it');
+  await p.click('#live-timeline-now').catch(() => {});
+  await p.evaluate(() => { const i = document.getElementById('live-events-find'); if (i) { const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ''); i.dispatchEvent(new Event('input', { bubbles: true })); } });
+  await h.sleep(200);
   const markers = await p.$$eval('#live-timeline-markers .live-timeline-marker', (x) => x.map((e) => e.getAttribute('data-kind')));
   expect(markers.includes('alert') && markers.includes('connect'), `the events on the timeline: ${JSON.stringify([...new Set(markers)])}`);
   const track = await p.evaluate(() => { const r = document.querySelectorAll('#live-timeline-lanes .live-timeline-track')[1].getBoundingClientRect(); return { x: r.x, y: r.y + r.height / 2, w: r.width }; });
@@ -192,6 +218,19 @@ const S = (n) => `TABLEMANAGER_${n}`;
   expect(!!ran && !!ranEvent, `Run the tests: asked, then XAE told (${ranEvent})`);
   await p.click('#live-stop-btn').catch(() => {});
   await h.sleep(300);
+
+  // 5b. A TcUnit test of a path (the Paths tab): its guards' inputs, saved
+  await p.evaluate(() => document.getElementById('dock-tab-paths')?.click());
+  await p.waitForSelector('#paths-from-select', { timeout: 8000 }).catch(() => {});
+  await p.select('#paths-from-select', S('IDLE_FEED_OFF')).catch(() => {});
+  await p.select('#paths-to-select', S('CLAMPED')).catch(() => {});
+  await p.waitForSelector('.paths-tcunit', { timeout: 4000 }).catch(() => {});
+  await p.click('.paths-tcunit').catch(() => {});
+  await p.waitForSelector('#tcunit-save', { timeout: 3000 }).catch(() => {});
+  const pathLabel = await p.$eval('#text-prompt-dialog', (e) => e.textContent).catch(() => '');
+  await p.click('#tcunit-save').catch(() => {});
+  const pathTest = await h.until(() => saved.find((m) => /_Path1_Test\.TcPOU$/.test(m.name)) ?? null, 4000);
+  expect(/The path TABLEMANAGER_IDLE_FEED_OFF → /.test(pathLabel) && pathTest?.name === 'FB_SM_TableManager_Path1_Test.TcPOU' && /METHOD PRIVATE Path_/.test(pathTest.content) && /E_TableManager_States\.TABLEMANAGER_CLAMPED/.test(pathTest.content), `a path's TcUnit test: ${pathTest?.name}`);
 
   // 6. Blame in the Method Editor: who changed each line
   await p.evaluate(() => document.getElementById('dock-tab-method')?.click());

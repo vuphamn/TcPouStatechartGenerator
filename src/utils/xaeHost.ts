@@ -10,6 +10,8 @@ export interface CommissioningEntry {
   plc: string;
   ok: boolean;
   message?: string;
+  /** Why (said by the one who set it) */
+  reason?: string;
 }
 export type CommissioningEntryRequest = Omit<CommissioningEntry, 't' | 'user'>;
 export interface BlameLine {

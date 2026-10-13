@@ -3,6 +3,7 @@ import { Radio, Play, Square, Trash2, History, Crosshair, AlertTriangle, ArrowRi
 import { LiveScope } from './LiveScope.tsx';
 import { StateTimeline, type TimelineLane } from './StateTimeline.tsx';
 import { EventLog, type LiveEvent } from './EventLog.tsx';
+import { LiveSnapshots, type LiveSnapshot } from './LiveSnapshots.tsx';
 import { PlcBrowser, useRememberedChecks, type PickedPlc } from './PlcBrowser.tsx';
 import { GatewayPlcOverview, GatewayPlcState, RenewLicenseSteps, type PlcControlMode, type PlcControlResult, type PlcState } from './PlcControls.tsx';
 import type { PlcActionEntry } from '../utils/plcActionLog.ts';
@@ -106,9 +107,9 @@ interface LivePanelProps {
   /** A watch expression added (= bA AND NOT bB, = fPos - fTarget): why not, or null when added */
   onAddWatchExpr?: (text: string) => string | null;
   /** The state timeline: this PLC's (or the recording's) states over time, and the compared PLCs' */
-  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[] };
+  timeline?: { lanes: TimelineLane[]; now: () => number; live: boolean; onSelectState?: (state: string) => void; onExport?: (kind: 'csv' | 'svg', text: string) => void; onAddRecording?: (file: File) => void; onRemoveLane?: (label: string) => void; markers?: { t: number; kind: string; text: string }[]; focus?: { t: number; nonce: number } | null };
   /** The event log: what happened while live */
-  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void } };
+  events?: { list: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void };
   /** During a replay: a TcUnit test made from the recording */
   onTcUnitTest?: () => void;
   /** Commissioning: the states the PLC may be set to (a state's menu: Set the PLC to this state); empty: none */
@@ -118,6 +119,8 @@ interface LivePanelProps {
   onForgetTest?: (name: string) => void;
   /** XAE: the tests run on the PLC (asked first) */
   onRunTests?: () => void;
+  /** Snapshots: the watched values and the state at moments, compared */
+  snapshots?: { list: LiveSnapshot[]; live: boolean; onTake: () => void; onRemove: (id: string) => void; onClear: () => void; onExport: () => void };
   /** Named watch lists (the project's MachineScope.watch.json; the web edition: this browser's): load, save, delete, CSV */
   watchLists?: { names: string[]; where: 'project' | 'browser'; shared?: 'tracked' | 'ignored' | 'untracked' | 'unwritten' | 'no-git' | null; onLoad: (name: string) => void; onSave: (name: string) => void; onDelete: (name: string) => void; onExport: () => void; onImport: (text: string) => void };
   /** The scope: the watched variables charted over time (live) */
@@ -640,6 +643,7 @@ export const LivePanel: React.FC<LivePanelProps> = ({
   tests = [],
   onForgetTest,
   onRunTests,
+  snapshots,
   watchLists,
   scope,
   onUnwatch,
@@ -2117,8 +2121,9 @@ export const LivePanel: React.FC<LivePanelProps> = ({
         </div>
       )}
       {scope && (scope.watched.length > 0 || scope.chosen.length > 0) && <LiveScope {...scope} />}
+      {snapshots && (snapshots.live || snapshots.list.length > 0) && <LiveSnapshots {...snapshots} />}
       {timeline && <StateTimeline {...timeline} />}
-      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} />}
+      {events && <EventLog events={events.list} onExport={events.onExport} onClear={events.onClear} keep={events.keep} webhook={events.webhook} onPick={events.onPick} />}
 
       {/* Guard values of the transitions out of the current state */}
       {onGuardScopeChange && (

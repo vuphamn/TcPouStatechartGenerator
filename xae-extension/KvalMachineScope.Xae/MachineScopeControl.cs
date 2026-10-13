@@ -1369,7 +1369,7 @@ namespace KvalMachineScope.Xae
             var allowed = msg.TryGetValue("allowed", out var a) && a is object[] list ? list.OfType<string>().ToList() : null;
             CommissioningFile.Entry entry = null;
             if (msg.TryGetValue("entry", out var e) && e is Dictionary<string, object> d)
-                entry = new CommissioningFile.Entry { state = d.TryGetValue("state", out var s) ? s as string : null, from = d.TryGetValue("from", out var f) ? f as string : "", plc = d.TryGetValue("plc", out var p) ? p as string : "", ok = !(d.TryGetValue("ok", out var o) && o is bool b && !b), message = d.TryGetValue("message", out var m) ? m as string : null };
+                entry = new CommissioningFile.Entry { state = d.TryGetValue("state", out var s) ? s as string : null, from = d.TryGetValue("from", out var f) ? f as string : "", plc = d.TryGetValue("plc", out var p) ? p as string : "", ok = !(d.TryGetValue("ok", out var o) && o is bool b && !b), message = d.TryGetValue("message", out var m) ? m as string : null, reason = d.TryGetValue("reason", out var rs) ? rs as string : null };
             var dir = string.IsNullOrEmpty(_pouPath) ? null : FolderWith(_pouPath, ".plcproj");
             string error = null;
             var result = save ? CommissioningFile.Save(dir, pouType, allowed, entry, Environment.UserName, out error) : CommissioningFile.Read(dir, pouType);

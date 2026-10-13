@@ -21,6 +21,7 @@ import {
   AlertCircle,
   Play,
   Bookmark,
+  Zap,
 } from 'lucide-react';
 import { IdentifiedPouState } from '../utils/pouStateExtractor.ts';
 import { CustomNodeStylesMap } from '../types.ts';
@@ -62,6 +63,8 @@ export interface IdentifiedStatesSidebarSectionProps {
   subMachines?: { parent: string; method: string; states: string[]; start: string | null; transitions: { from: string; to: string }[]; expanded: boolean }[];
   /** A card's menu: its state's CASE label in the Method Editor */
   onGoToCode?: (stateId: string) => void;
+  /** A card's menu, live: the PLC set to this state (asked first) */
+  onSetPlcState?: (stateId: string) => void;
   /** Expand / collapse a sub-machine (the canvas too) */
   onToggleSubMachine?: (parent: string, method: string, expanded: boolean) => void;
   /** Live or simulated: the sub-machines' states current inside the current state (their full ids, outer first) */
@@ -94,6 +97,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
   onToggleSubMachine,
   liveSubStateIds,
   onGoToCode,
+  onSetPlcState,
 }) => {
   // (a sub-machine state's id: its state's card holds it)
   // (the outermost: its card is in the list; a nested one's inside its sub-machine's)
@@ -1032,6 +1036,22 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
             >
               <Code2 className="w-3.5 h-3.5 text-slate-400" />
               Go to code
+            </button>
+          )}
+          {onSetPlcState && !cardMenu.id.includes('__') && (
+            <button
+              id="state-list-set-plc-state-btn"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onSetPlcState(cardMenu.id);
+                setCardMenu(null);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-left text-slate-300 hover:text-white hover:bg-slate-800"
+              title="Commissioning: the PLC's state variable written with this state, asked first"
+            >
+              <Zap className="w-3.5 h-3.5 text-violet-300" />
+              Set the PLC to this state…
             </button>
           )}
           {onToggleBookmark && (

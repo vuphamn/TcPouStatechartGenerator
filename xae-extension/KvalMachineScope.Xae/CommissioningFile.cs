@@ -28,6 +28,7 @@ namespace KvalMachineScope.Xae
             public string plc { get; set; }
             public bool ok { get; set; }
             public string message { get; set; }
+            public string reason { get; set; }
         }
 
         public sealed class Type
@@ -52,7 +53,7 @@ namespace KvalMachineScope.Xae
                     if (v.TryGetValue("allowed", out var a) && a is object[] list) t.allowed = list.OfType<string>().Where(x => StateRx.IsMatch(x)).Distinct().Take(500).ToList();
                     if (v.TryGetValue("log", out var l) && l is object[] entries)
                         t.log = entries.OfType<Dictionary<string, object>>().Where(e => S(e, "t") != "" && S(e, "state") != "")
-                            .Select(e => new Entry { t = S(e, "t"), user = S(e, "user"), state = S(e, "state"), from = S(e, "from"), plc = S(e, "plc"), ok = !(e.TryGetValue("ok", out var o) && o is bool b && !b), message = e.TryGetValue("message", out var m) && m != null ? m.ToString() : null })
+                            .Select(e => new Entry { t = S(e, "t"), user = S(e, "user"), state = S(e, "state"), from = S(e, "from"), plc = S(e, "plc"), ok = !(e.TryGetValue("ok", out var o) && o is bool b && !b), message = e.TryGetValue("message", out var m) && m != null ? m.ToString() : null, reason = e.TryGetValue("reason", out var rs) && rs != null ? rs.ToString() : null })
                             .Skip(Math.Max(0, entries.Length - MaxLog)).ToList();
                     pous[ty.Key] = t;
                 }
@@ -82,6 +83,7 @@ namespace KvalMachineScope.Xae
                 entry.t = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'");
                 entry.user = string.IsNullOrEmpty(user) ? "?" : user;
                 if (entry.message != null && entry.message.Length > 300) entry.message = entry.message.Substring(0, 300);
+                if (entry.reason != null && entry.reason.Length > 300) entry.reason = entry.reason.Substring(0, 300);
                 mine.log.Add(entry);
                 if (mine.log.Count > MaxLog) mine.log = mine.log.Skip(mine.log.Count - MaxLog).ToList();
             }

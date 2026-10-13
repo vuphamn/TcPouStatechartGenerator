@@ -40,6 +40,7 @@ const FIX_LABEL: Record<NonNullable<LintFinding['fix']>['kind'], string> = {
   'insert-call': 'Insert call',
   'remove-lines': 'Remove the lines',
   'add-else': 'Add ELSE',
+  'numbers-to-enum': 'Use state names',
   'remove-method': 'Remove method',
   'delete-state': 'Delete state…',
   'remove-enum-member': 'Remove from enum',

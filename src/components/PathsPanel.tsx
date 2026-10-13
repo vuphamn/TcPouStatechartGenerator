@@ -13,9 +13,11 @@ interface PathsPanelProps {
   onSelect: (index: number | null) => void;
   onJumpToState: (stateId: string) => void;
   onClear: () => void;
+  /** A TcUnit test of a path (its index): the guards' inputs before each step */
+  onTcUnitTest?: (index: number) => void;
 }
 
-export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChange, result, selected, onSelect, onJumpToState, onClear }) => {
+export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChange, result, selected, onSelect, onJumpToState, onClear, onTcUnitTest }) => {
   const select = (id: string, value: string, onPick: (v: string) => void, label: string) => (
     <label className="flex items-center gap-2 min-w-0">
       <span className="w-9 text-slate-400 shrink-0">{label}</span>
@@ -99,6 +101,11 @@ export const PathsPanel: React.FC<PathsPanelProps> = ({ states, from, to, onChan
           >
             <div className="flex items-center gap-1.5 mb-1 text-slate-400">
               <Route className="w-3 h-3 text-violet-300" /> #{i + 1} · {path.length} step{path.length === 1 ? '' : 's'}
+              {onTcUnitTest && (
+                <button type="button" className="paths-tcunit ml-auto px-1.5 rounded border border-violet-700 text-[10px] text-violet-200 hover:bg-violet-900/50" onClick={(e) => { e.stopPropagation(); onTcUnitTest(i); }} title="A TcUnit test of this path: each guard's inputs written before its step, the states checked in turn">
+                  TcUnit test…
+                </button>
+              )}
             </div>
             <div className="font-mono text-[11px] leading-snug">
               {path.map((step, k) => (

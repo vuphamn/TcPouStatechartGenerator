@@ -124,6 +124,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   expect(/Set the PLC to this state/.test(setItem) && /without the steps that normally lead to it/.test(prompt ?? '') && /machineState := .*UNCLAMP_START/.test(prompt ?? ''), `asked first: ${(prompt ?? '').slice(0, 120)}`);
   expect(!sent.some((m) => m.type === 'liveWrite'), 'nothing written before the answer');
   const disabledFirst = await p.$eval('#text-prompt-submit', (b) => b.disabled).catch(() => null);
+  await p.type('#text-prompt-input', 'clamp test after the valve change').catch(() => {});
   await p.click('#text-prompt-check').catch(() => {});
   const enabledAfter = await p.$eval('#text-prompt-submit', (b) => !b.disabled).catch(() => null);
   expect(disabledFirst === true && enabledAfter === true, 'the machine-is-safe box ticked first');
@@ -134,7 +135,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
   const logged = await h.until(() => (comm.log.length ? comm.log[0] : null), 4000);
   await p.click('#live-set-state-log').catch(() => {});
   const logText = await h.until(() => p.$eval('#text-prompt-details', (e) => e.textContent).catch(() => null), 3000);
-  expect(logged?.state === S('UNCLAMP_START') && logged.ok && /ann: .* → TABLEMANAGER_UNCLAMP_START on 5\.1\.2\.3\.1\.1:851/.test(logText ?? ''), `the log: ${logText}`);
+  expect(logged?.state === S('UNCLAMP_START') && logged.ok && logged.reason === 'clamp test after the valve change' && /ann: .* → TABLEMANAGER_UNCLAMP_START on 5\.1\.2\.3\.1\.1:851: clamp test after the valve change/.test(logText ?? ''), `the log, with the reason: ${logText}`);
   await p.click('#text-prompt-submit').catch(() => {});
   await h.sleep(200);
 

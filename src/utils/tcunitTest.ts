@@ -33,6 +33,14 @@ export function generateTcUnitTest(o: {
   /** At the cycle time (ms) the cycles allowed per step are counted from (default 10 ms) */
   cycleMs?: number;
   title?: string;
+  /** Strings written as they are (an enum member, a literal from a guard), not as STRING literals */
+  rawStrings?: boolean;
+  /** Comments in a step (1-based): what the test cannot set */
+  notes?: Record<number, string[]>;
+  /** The test method's name before its time (default RecordedRun) */
+  methodPrefix?: string;
+  /** The suite's name (default FB_<POU>_Test) */
+  suiteName?: string;
 }): { name: string; xml: string; steps: number; declaration: string; methodName: string; methodCode: string; instance: string } {
   const cycleMs = o.cycleMs ?? 10;
   // The states one after another (the same one twice: once)
@@ -60,8 +68,8 @@ export function generateTcUnitTest(o: {
     const input = inputOf(id);
     return !!input && input.toLowerCase() !== o.stateVar.toLowerCase();
   });
-  const name = ident(`FB_${o.pou.replace(/^FB_/i, '')}_Test`);
-  const methodName = ident(`RecordedRun_${new Date(o.run.started ?? steps[0]?.t ?? Date.now()).toISOString().slice(0, 16).replace(/[-:T]/g, '')}`);
+  const name = ident(o.suiteName ?? `FB_${o.pou.replace(/^FB_/i, '')}_Test`);
+  const methodName = ident(`${o.methodPrefix ?? 'RecordedRun'}_${new Date(o.run.started ?? steps[0]?.t ?? Date.now()).toISOString().slice(0, 16).replace(/[-:T]/g, '')}`);
   const n = Math.max(1, steps.length - 1);
   // (each step's cycles allowed: twice its recorded time at the cycle time, at least 100)
   const maxCycles = steps.slice(1).map((s, i) => Math.max(100, Math.ceil(((s.t - steps[i].t) * 2) / cycleMs)));
@@ -85,7 +93,8 @@ export function generateTcUnitTest(o: {
     const writes = ids
       .map((id) => ({ id, v: valueAt(id, steps[k].t), was: valueAt(id, steps[k - 1].t) }))
       .filter((w) => w.v !== null && w.v !== undefined && (k === 1 || w.v !== w.was))
-      .map((w) => `\t\tfbUut.${inputOf(w.id)} := ${stLiteral(w.v as boolean | number | string)};`);
+      .map((w) => `\t\tfbUut.${inputOf(w.id)} := ${o.rawStrings && typeof w.v === 'string' ? w.v : stLiteral(w.v as boolean | number | string)};`);
+    for (const n of o.notes?.[k] ?? []) writes.push(`\t\t// ${n.replace(/\r?\n/g, ' ')}`);
     arms.push(`\t${k}: // ${steps[k - 1].state} -> ${steps[k].state} (after ${((steps[k].t - steps[k - 1].t) / 1000).toFixed(1)} s recorded)`, ...(writes.length ? writes : ['\t\t;']));
   }
   const methodCode = [

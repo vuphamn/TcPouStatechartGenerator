@@ -110,7 +110,9 @@ export const StateTimeline: React.FC<{
   onRemoveLane?: (label: string) => void;
   /** Events drawn as ticks over the lanes (this computer's time): alerts, writes, overruns, pauses … */
   markers?: { t: number; kind: string; text: string }[];
-}> = ({ lanes, now: nowOf, live, onSelectState, onExport, onAddRecording, onRemoveLane, markers = [] }) => {
+  /** A moment to show (an event picked): the minute around it */
+  focus?: { t: number; nonce: number } | null;
+}> = ({ lanes, now: nowOf, live, onSelectState, onExport, onAddRecording, onRemoveLane, markers = [], focus }) => {
   const [span, setSpan] = useState(600_000);
   // (zoomed or panned: the window's own span and end; null: the span chosen, up to now)
   const [view, setView] = useState<{ span: number; end: number } | null>(null);
@@ -118,6 +120,9 @@ export const StateTimeline: React.FC<{
   // (Shift+drag: a measure between two moments; a click elsewhere or Esc clears it)
   const [measure, setMeasure] = useState<{ a: number; b: number } | null>(null);
   const measuring = useRef(false);
+  useEffect(() => {
+    if (focus) setView({ span: 60_000, end: focus.t + 30_000 });
+  }, [focus?.nonce]); // eslint-disable-line react-hooks/exhaustive-deps
   const fileRef = useRef<HTMLInputElement>(null);
   const lanesRef = useRef<HTMLDivElement>(null);
   // (the wheel: a native listener, not passive, so the page does not scroll while zooming)

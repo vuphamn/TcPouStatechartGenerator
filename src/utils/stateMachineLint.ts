@@ -4,6 +4,8 @@
  * implementation, as sourceLocation.ts) and may carry a fix.
  */
 
+import { enumValueMap } from './liveView.ts';
+import { numbersToEnum } from './refactorings.ts';
 import { isBodyMethod, resolveStateMethod, stateMethodName, stateMethodText, STATE_METHOD } from './stateMethod.ts';
 import { getPouBody } from './pouBody.ts';
 import type { EdgeInfo } from '../types.ts';
@@ -42,6 +44,7 @@ export type LintRuleId =
   | 'empty-if'
   | 'output-never-set'
   | 'no-description'
+  | 'state-number'
   | 'build-error'
   | 'build-warning';
 
@@ -56,6 +59,8 @@ export type LintFix =
   | { kind: 'insert-call'; name: string; type: string }
   /** Code that never runs (after a RETURN): removed, to the end of its block; count: exactly these lines */
   | { kind: 'remove-lines'; name: string; method?: string; line: number; count?: number }
+  /** The state variable set or compared by a number: the enum's names put in (the state method) */
+  | { kind: 'numbers-to-enum'; name: string; method: string }
   /** The state machine's CASE without ELSE: an ELSE branch put in before END_CASE */
   | { kind: 'add-else'; name: string; method: string; line: number }
   /** A PRIVATE method nothing calls: removed */
@@ -194,6 +199,11 @@ export const LINT_RULES: Record<LintRuleId, { severity: LintSeverity; title: str
     severity: 'warning',
     title: 'Trigger on a constant',
     description: "An R_TRIG or F_TRIG whose CLK is always the same (TRUE, FALSE or a constant): its Q is never TRUE, or only in the first cycle. Where removing the call changes nothing, the fix removes it.",
+  },
+  'state-number': {
+    severity: 'info',
+    title: 'State by number',
+    description: "The state variable set, compared or its CASE labelled by a number (machineState := 30;) where the enum names that state: the code reads better (and stays right when the enum's values change) with the name. The fix puts the names in (shown first).",
   },
   'empty-if': {
     severity: 'info',
@@ -638,6 +648,17 @@ export function lintStateMachine(pouXml: string, dutContent: string, edges: Edge
       for (const state of labelled.keys())
         if (!described.has(state.toUpperCase()))
           add({ key: `no-description:${state}`, rule: 'no-description', stateId: state, message: `${state} has no line in getStateDescription()`, fix: { kind: 'add-description', name: state } });
+  }
+
+  // The state variable by numbers its enum names (machineState := 30;): the names offered
+  if (stateUnit.method && enumItems.length) {
+    const values = enumValueMap(dutContent);
+    const enumType = /<DUT\b[^>]*\bName="([^"]+)"/.exec(dutContent)?.[1] ?? /\bTYPE\s+([A-Za-z_]\w*)/.exec(dutContent)?.[1];
+    if (enumType && values.size) {
+      const r = numbersToEnum(stateUnit.lines.join('\n'), variable, enumType, values);
+      if (r.count)
+        add({ key: `state-number:${stateUnit.method}`, rule: 'state-number', method: stateUnit.method, message: `${variable} is set or tested by number ${r.count} time${r.count === 1 ? '' : 's'} in ${sm} where ${enumType} has the name`, fix: { kind: 'numbers-to-enum', name: variable, method: stateUnit.method } });
+    }
   }
 
   if (mainCase.elseLine === null && mainCase.endCaseLine !== null) {

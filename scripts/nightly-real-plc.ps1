@@ -3,7 +3,9 @@
 # configuration (TwinCAT goes to Run) and stops its PLC at the end; this script then puts TwinCAT back in Config when it
 # was in Config before. Each run's output: tests\.output\nightly\<date>.log, the result in last.json; a failure shows
 # a Windows notification (and the exit code is 1, for the Task Scheduler's history).
-param([switch]$NoNotify)
+# -Full: the whole test suite too, after the real-PLC test (npm run build, then node tests/run.cjs --jobs 2): its
+# result in the same log, last.json and history.json.
+param([switch]$NoNotify, [switch]$Full)
 
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -28,6 +30,21 @@ try {
   $errFile = Join-Path $dir "$stamp.err.tmp"
   $p = Start-Process -FilePath $node -ArgumentList 'tests\run.cjs', 'plc' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
   $code = $p.ExitCode
+  # (-Full: the build and the whole suite, after it)
+  $fullCode = $null
+  if ($Full) {
+    Remove-Item Env:KSS_REAL_PLC -ErrorAction SilentlyContinue
+    Add-Content -Encoding UTF8 $log '--- the whole suite (npm run build, node tests/run.cjs --jobs 2)'
+    $npm = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+    $b = Start-Process -FilePath $npm -ArgumentList 'run', 'build' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    Get-Content -Encoding UTF8 $outFile, $errFile | Select-Object -Last 5 | Add-Content -Encoding UTF8 $log
+    if ($b.ExitCode -eq 0) {
+      $f = Start-Process -FilePath $node -ArgumentList 'tests\run.cjs', '--jobs', '2' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+      $fullCode = $f.ExitCode
+      Get-Content -Encoding UTF8 $outFile, $errFile | Add-Content -Encoding UTF8 $log
+    } else { $fullCode = $b.ExitCode; Add-Content -Encoding UTF8 $log 'The build failed: the suite not run' }
+    Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+  }
   Get-Content -Encoding UTF8 $outFile, $errFile | Add-Content -Encoding UTF8 $log
   Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
   Remove-Item Env:KSS_REAL_PLC -ErrorAction SilentlyContinue
@@ -41,8 +58,9 @@ try {
   $result = [ordered]@{
     when = $started.ToString('o')
     seconds = [int]((Get-Date) - $started).TotalSeconds
-    passed = ($code -eq 0)
+    passed = ($code -eq 0 -and ($null -eq $fullCode -or $fullCode -eq 0))
     exitCode = $code
+    full = $(if ($null -eq $fullCode) { $null } else { $fullCode -eq 0 })
     twinCatBefore = $before
     twinCatAfter = $after
     log = $log
@@ -52,7 +70,7 @@ try {
   $historyFile = Join-Path $dir 'history.json'
   $history = @()
   if (Test-Path $historyFile) { try { $parsed = Get-Content -Raw -Encoding UTF8 $historyFile | ConvertFrom-Json; $history = @($parsed | ForEach-Object { $_ }) } catch { $history = @() } }
-  $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds })
+  $history = @($history) + @([pscustomobject]@{ when = $result.when; passed = $result.passed; seconds = $result.seconds; full = $result.full })
   if ($history.Count -gt 30) { $history = $history[($history.Count - 30)..($history.Count - 1)] }
   ConvertTo-Json -InputObject @($history) | Out-File -Encoding utf8 $historyFile
   # Keep the last 30 logs
@@ -85,7 +103,7 @@ try {
       $n.Dispose()
     } catch {}
   }
-  exit $(if ($code -eq 0) { 0 } else { 1 })
+  exit $(if ($result.passed) { 0 } else { 1 })
 } finally {
   Pop-Location
 }

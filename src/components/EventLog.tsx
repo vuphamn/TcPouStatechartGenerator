@@ -25,10 +25,11 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void } }> = ({ events, onExport, onClear, keep, webhook }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void }> = ({ events, onExport, onClear, keep, webhook, onPick }) => {
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<LiveEventKind | 'all'>('all');
-  const shown = [...events].reverse().filter((e) => kind === 'all' || e.kind === kind);
+  const [find, setFind] = useState('');
+  const shown = [...events].reverse().filter((e) => (kind === 'all' || e.kind === kind) && (!find.trim() || e.text.toLowerCase().includes(find.trim().toLowerCase())));
   return (
     <div id="live-events" className="rounded border border-slate-700/70 bg-slate-900/40 px-2 py-1 text-[11px]">
       <div className="flex items-center gap-1.5">
@@ -37,7 +38,8 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
         </button>
         {open && (
           <>
-            <select id="live-events-kind" value={kind} onChange={(e) => setKind(e.target.value as LiveEventKind | 'all')} className="ml-auto bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300">
+            <input id="live-events-find" value={find} onChange={(e) => setFind(e.target.value)} placeholder="find…" spellCheck={false} className="ml-auto w-24 bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200" title="Only the events with this text" />
+            <select id="live-events-kind" value={kind} onChange={(e) => setKind(e.target.value as LiveEventKind | 'all')} className="bg-slate-950 border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-300">
               <option value="all">all</option>
               {(Object.keys(KIND) as LiveEventKind[]).map((k) => (
                 <option key={k} value={k}>
@@ -72,13 +74,24 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
             spellCheck={false}
             className="flex-1 min-w-0 bg-slate-950 border border-slate-800 rounded px-1 py-0.5 font-mono text-[10px] text-slate-200"
           />
+          {webhook.onTest && (
+            <button id="live-alerts-webhook-test" type="button" onClick={webhook.onTest} disabled={!webhook.url} className="px-1 rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-40" title="A test message to the webhook now">
+              Test
+            </button>
+          )}
+          {webhook.onAllChange && (
+            <span className="flex items-center gap-1" title="Stuck states and task overruns told too, not only alerts">
+              <input id="live-alerts-webhook-all" type="checkbox" checked={!!webhook.all} onChange={(e) => webhook.onAllChange!(e.target.checked)} />
+              + stuck, overruns
+            </span>
+          )}
         </label>
       )}
       {open && (
         <div className="mt-1 max-h-40 overflow-y-auto space-y-0.5">
           {shown.length === 0 && <div className="text-slate-500">Nothing yet.</div>}
           {shown.map((e, i) => (
-            <div key={`${e.t}-${i}`} className="live-event flex items-baseline gap-1.5" data-kind={e.kind}>
+            <div key={`${e.t}-${i}`} className={`live-event flex items-baseline gap-1.5 ${onPick ? 'cursor-pointer hover:bg-slate-800/60 rounded' : ''}`} data-kind={e.kind} onClick={() => onPick?.(e)} title={onPick ? 'Show it on the timeline' : undefined}>
               <span className="font-mono text-slate-500 shrink-0">{new Date(e.t).toLocaleTimeString()}</span>
               <span className={`shrink-0 px-1 rounded text-[9px] ${KIND[e.kind].cls}`}>{KIND[e.kind].label}</span>
               <span className="text-slate-300 break-words min-w-0">{e.text}</span>

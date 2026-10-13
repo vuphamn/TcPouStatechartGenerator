@@ -210,13 +210,15 @@ import { diffCharts } from './utils/chartDiff.ts';
 import { canReadGitVersions, fetchCommittedVersion, fetchFileAt, fetchFileBlame, fetchFileLog } from './utils/hostGit.ts';
 import { methodBlame } from './utils/methodBlame.ts';
 import { evalExpr, exprText, isWatchExpr, parseExpr } from './utils/watchExpr.ts';
-import { inlineMethod } from './utils/refactorings.ts';
+import { inlineMethod, numbersToEnum } from './utils/refactorings.ts';
 import { ifToCase } from './utils/ifToCase.ts';
 import { generateTcUnitProgram, generateTcUnitTest, TEST_PROGRAM, testInstanceName } from './utils/tcunitTest.ts';
+import { generateTcUnitPathTest, guardInputs } from './utils/pathTest.ts';
 import { onlineChangeRisks } from './utils/onlineChangeRisks.ts';
 import { recordingLane, type TimelineLane } from './components/StateTimeline.tsx';
 import { eventsCsv, type LiveEvent, type LiveEventKind } from './components/EventLog.tsx';
 import { StateHistoryDialog, type StateVersion } from './components/StateHistoryDialog.tsx';
+import { snapshotsCsv, type LiveSnapshot, type SnapshotValue as LiveSnapshotValue } from './components/LiveSnapshots.tsx';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
@@ -1747,6 +1749,52 @@ export const App: React.FC = () => {
       }
       return next;
     });
+  // Snapshots (the Live tab): the watched values and the state at moments, kept per POU in this browser to compare
+  const [snapshots, setSnapshots] = useState<LiveSnapshot[]>([]);
+  const snapshotsKey = `kss.live.snapshots.${pouFileName.replace(/\.TcPOU$/i, '')}`;
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(snapshotsKey) || '[]');
+      setSnapshots(Array.isArray(raw) ? raw : []);
+    } catch {
+      setSnapshots([]);
+    }
+  }, [snapshotsKey]);
+  const keepSnapshots = (next: LiveSnapshot[]) => {
+    setSnapshots(next);
+    try {
+      localStorage.setItem(snapshotsKey, JSON.stringify(next));
+    } catch {
+      // (not kept)
+    }
+  };
+  // A TcUnit test made (from a recording or a path): added to the PLC project (KssTests, with PRG_KssTests) or saved
+  const offerTcUnit = (t: ReturnType<typeof generateTcUnitTest>, what: string) => {
+    const save = () =>
+      void saveDocument(`${t.name}.TcPOU`, t.xml, { personal: true }).then((r) => {
+        if (!r?.path) return;
+        showCopyToast(`${t.name} saved (${t.steps} states, ${t.methodName}): add it to a PLC project that references TcUnit (Add Existing Item), and review it. ${r.path}`, 'success', 12000);
+      });
+    const canAdd = canAddPlcFiles(pouPath);
+    const add = () =>
+      void addPlcFiles(pouPath!, 'KssTests', [
+        { name: `${t.name}.TcPOU`, content: t.xml },
+        { name: `${TEST_PROGRAM}.TcPOU`, content: generateTcUnitProgram([t.name]) },
+      ]).then((r) => {
+        if (!r.ok) return showCopyToast(`Not added: ${r.error}`, 'error', 9000);
+        keepTcunitSuite({ name: t.name, steps: t.steps });
+        showCopyToast(`Added to the PLC project (KssTests): ${(r.written ?? []).join(', ')}. ${r.tcunit ? '' : 'Reference TcUnit first (Library Manager). '}${r.xae ? "In XAE's tree now: Save All keeps them. " : ''}Call ${TEST_PROGRAM} from a task of its own, build and download; live, the Live tab shows its result.`, r.tcunit ? 'success' : 'error', 14000);
+      });
+    setPromptRequest({
+      title: `TcUnit test ${t.name}`,
+      label: `${what} ${canAdd ? `Add it to the PLC project (a folder KssTests, with ${TEST_PROGRAM} running TcUnit.RUN()), or save the file.` : 'Save it, then add it to a PLC project that references TcUnit.'} Review it before relying on it.`,
+      details: [`${t.name}.TcPOU: ${t.methodName}`, ...(canAdd ? [`${TEST_PROGRAM}.TcPOU: ${testInstanceName(t.name)} : ${t.name}; TcUnit.RUN()`] : [])],
+      confirmOnly: true,
+      submitLabel: canAdd ? 'Add to the PLC project' : 'Save…',
+      secondaryAction: canAdd ? { id: 'tcunit-save', label: 'Save file…', title: 'The test suite as a .TcPOU file, where you choose', run: save } : undefined,
+      onSubmit: canAdd ? add : save,
+    });
+  };
   // (the timeline's recordings added as lanes of their own)
   const [timelineExtra, setTimelineExtra] = useState<TimelineLane[]>([]);
   // (the state variable's watch id: sym:<instance>.<state variable>, followed to set the PLC to a state)
@@ -2862,6 +2910,32 @@ export const App: React.FC = () => {
       // (not kept)
     }
   };
+  const [webhookAll, setWebhookAllState] = useState(() => {
+    try {
+      return localStorage.getItem('kss.alerts.webhookAll') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const setWebhookAll = (on: boolean) => {
+    setWebhookAllState(on);
+    try {
+      localStorage.setItem('kss.alerts.webhookAll', on ? '1' : '0');
+    } catch {
+      // (not kept)
+    }
+  };
+  const webhookAllRef = useRef(false);
+  webhookAllRef.current = webhookAll;
+  // (the webhook told of anything: an alert, or with "+ stuck, overruns" those too)
+  const tellWebhook = (what: string) => {
+    if (!alertWebhookRef.current) return;
+    void postWebhook(alertWebhookRef.current, `Kval MachineScope (${pouFileName.replace(/\.TcPOU$/i, '')}${liveStatus.target ? ` on ${liveStatus.target}` : ''}): ${what}`).then((r) => !r.ok && addLiveEvent('alert', `The webhook was not told: ${r.error}`));
+  };
+  const tellWebhookRef = useRef(tellWebhook);
+  tellWebhookRef.current = tellWebhook;
+  // (an event picked: the timeline shows the minute around it)
+  const [timelineFocus, setTimelineFocus] = useState<{ t: number; nonce: number } | null>(null);
   const alertWebhookRef = useRef('');
   alertWebhookRef.current = alertWebhook;
   fireAlertRef.current = (entry: string, forMs: number) => {
@@ -2869,7 +2943,7 @@ export const App: React.FC = () => {
     addLiveEvent('alert', what);
     showCopyToast(`Alert: ${what}`, 'error', 8000);
     if (notifyOnRef.current) void notifyStuck('Kval MachineScope: alert', what, `kss-alert-${entry}`);
-    if (alertWebhookRef.current) void postWebhook(alertWebhookRef.current, `Kval MachineScope alert (${pouFileName.replace(/\.TcPOU$/i, '')}${liveStatus.target ? ` on ${liveStatus.target}` : ''}): ${what}`).then((r) => !r.ok && addLiveEvent('alert', `The webhook was not told: ${r.error}`));
+    tellWebhook(`alert: ${what}`);
   };
   // (an alert that must last a time: said when it has, still true; checked twice a second while live)
   useEffect(() => {
@@ -6607,6 +6681,27 @@ export const App: React.FC = () => {
         });
         return;
       }
+      if (fix.kind === 'numbers-to-enum') {
+        const m = getMethodCodeFromPou(pouContent, fix.method);
+        const names = stateNamesRef.current;
+        if (!m.methodFound || !names) return showCopyToast('The state enum is not loaded', 'error');
+        const r = numbersToEnum(m.code, fix.name, names.enumType, names.names);
+        if (!r.count) return showCopyToast('No number to name any more', 'success');
+        const d = lineDiff(m.code.replace(/\r\n/g, '\n').split('\n'), r.code.replace(/\r\n/g, '\n').split('\n'), 1);
+        setPromptRequest({
+          title: `Use state names in ${fix.method}()?`,
+          label: `${r.count} number${r.count === 1 ? '' : 's'} of ${fix.name} as ${names.enumType}'s names:`,
+          diff: d.rows,
+          confirmOnly: true,
+          submitLabel: 'Use the names',
+          onSubmit: () => {
+            const res = handleSaveMethodCode(fix.method, r.code);
+            if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
+            showCopyToast(`${r.count} number${r.count === 1 ? '' : 's'} named in ${fix.method}()`, 'success');
+          },
+        });
+        return;
+      }
       if (fix.kind === 'add-else') {
         const m = getMethodCodeFromPou(pouContent, fix.method);
         const lines = m.code.split(/\r?\n/);
@@ -9316,6 +9411,7 @@ export const App: React.FC = () => {
     notifiedStuckRef.current = key;
     const who = liveStatus.instance ?? (pouTypeName || 'The state machine');
     addLiveEvent('stuck', `${who} stuck in ${liveSession.current.state} (more than ${formatLimit(liveLimit)})`);
+    if (webhookAllRef.current) tellWebhookRef.current(`${who} stuck in ${liveSession.current.state} (more than ${formatLimit(liveLimit)})`);
     if (!notifyOn) return;
     void notifyStuck(`Kval MachineScope: ${who} is stuck`, `In ${liveSession.current.state} for more than ${formatLimit(liveLimit)}`, `kss-stuck-${who}`);
   }, [liveStuck, notifyOn, liveSession, liveLimit, liveStatus.instance, pouTypeName]);
@@ -9614,6 +9710,7 @@ export const App: React.FC = () => {
         peak.overruns++;
         setTaskOverruns((n) => n + 1);
         addLiveEvent('overrun', `Task ${name}: its cycle time exceeded${typeof exec === 'number' ? ` (last execution ${(exec / 10000).toFixed(3)} ms)` : ''}`);
+        if (webhookAllRef.current) tellWebhookRef.current(`task ${name} overran its cycle time`);
         showCopyToast(`Task ${name}: its cycle time was exceeded (${typeof exec === 'number' ? `last execution ${(exec / 10000).toFixed(3)} ms` : 'an overrun'})`, 'error', 8000);
         if (notifyOn) void notifyStuck(`Kval MachineScope: ${name} overran its cycle`, 'Its cycle time was exceeded', `kss-task-${name}`);
       }
@@ -9866,7 +9963,7 @@ export const App: React.FC = () => {
     setPromptRequest({
       title: `Set to a state: ${commissioningType}`,
       label: commissioning.log.length ? `Who set the PLC to which state, newest first (${commissioning.where === 'project' ? 'MachineScope.commissioning.json, beside the PLC project' : 'this browser'}):` : 'Nobody set the PLC to a state from here yet.',
-      details: [...commissioning.log].reverse().slice(0, 100).map((e) => `${e.t.slice(0, 19).replace('T', ' ')}  ${e.user}: ${e.from || '?'} → ${e.state}${e.plc ? ` on ${e.plc}` : ''}${e.ok ? '' : ` (not written: ${e.message ?? ''})`}`),
+      details: [...commissioning.log].reverse().slice(0, 100).map((e) => `${e.t.slice(0, 19).replace('T', ' ')}  ${e.user}: ${e.from || '?'} → ${e.state}${e.plc ? ` on ${e.plc}` : ''}${e.reason ? `: ${e.reason}` : ''}${e.ok ? '' : ` (not written: ${e.message ?? ''})`}`),
       confirmOnly: true,
       submitLabel: 'Close',
       onSubmit: () => {},
@@ -9889,15 +9986,15 @@ export const App: React.FC = () => {
         title: `Set the PLC to ${state}?`,
         label: `The machine's program goes on from ${state} at once, in its next cycle: that state's actions run, without the steps that normally lead to it (its outputs, interlocks, what the states before it set up). Only when the machine is safe for it (commissioning, nothing moving, nobody in it).`,
         details: [`${symbol} := ${enumType ? `${enumType}.` : ''}${state} (${value})`, `on ${liveStatus.target ?? 'the PLC'}, now in ${liveSession.current?.state ?? 'a state not known'}`],
-        confirmOnly: true,
         danger: true,
+        placeholder: 'Why (logged with your name; optional)',
         confirmCheck: 'The machine is safe for this (nothing moving, nobody in it), and I may change its PLC',
         submitLabel: `Set to ${state}`,
-        onSubmit: () => {
+        onSubmit: (reason: string) => {
           void writeLiveVar(liveMode, id, value).then((res) => {
             addLiveEvent('state', res.ok ? `Set to ${state}: ${symbol} := ${value} (was ${liveSession.current?.state ?? '?'})` : `Not set to ${state}: ${res.message}`);
             // (who set which state: logged beside the project, the host naming the user)
-            void saveCommissioning(pouPath, commissioningType, { entry: { state, from: liveSession.current?.state ?? '', plc: liveStatus.target ?? '', ok: res.ok, ...(res.ok ? {} : { message: res.message }) } }).then((r) => !('error' in r) && setCommissioning(r));
+            void saveCommissioning(pouPath, commissioningType, { entry: { state, from: liveSession.current?.state ?? '', plc: liveStatus.target ?? '', ok: res.ok, ...(reason.trim() ? { reason: reason.trim().slice(0, 300) } : {}), ...(res.ok ? {} : { message: res.message }) } }).then((r) => !('error' in r) && setCommissioning(r));
             showCopyToast(res.ok ? `The PLC set to ${state}` : `Not set: ${res.message}`, res.ok ? 'success' : 'error', res.ok ? 4000 : 9000);
           });
         },
@@ -11085,6 +11182,7 @@ export const App: React.FC = () => {
               subMachines={identifiedSubMachines}
               onToggleSubMachine={setSubMachineExpanded}
               onGoToCode={pouContent ? handleGoToStateCode : undefined}
+              onSetPlcState={liveStatus.state === 'connected' && (liveMode === 'xae' || liveMode === 'desktop') ? (id) => setPlcStateRef.current?.(id) : undefined}
               liveSubStateIds={(liveActive ? liveRegionStates : simHighlight?.regionStates ?? []).filter((x) => x.includes('__'))}
               selectedStateId={selectedStateId}
               focusStateId={codeFocus?.state ?? null}
@@ -11862,15 +11960,49 @@ export const App: React.FC = () => {
                     onRemoveLane: (label) => setTimelineExtra((cur) => cur.filter((l) => l.label !== label)),
                     // (the events, on this computer's clock as the lanes: not on a replay's)
                     markers: replay ? [] : liveEvents,
+                    focus: timelineFocus,
                   }
                 : undefined
             }
             events={{
               list: liveEvents,
               keep: canKeepEvents(pouPath) ? { on: keepEvents, onChange: setKeepEvents } : undefined,
-              webhook: { url: alertWebhook, onChange: setAlertWebhook },
+              webhook: {
+                url: alertWebhook,
+                onChange: setAlertWebhook,
+                all: webhookAll,
+                onAllChange: setWebhookAll,
+                onTest: () =>
+                  void postWebhook(alertWebhook, `Kval MachineScope: a test message (${pouFileName.replace(/\.TcPOU$/i, '')})`).then((r) => showCopyToast(r.ok ? 'The webhook was told (a test message)' : `The webhook was not told: ${r.error}`, r.ok ? 'success' : 'error', 7000)),
+              },
+              onPick: (e) => setTimelineFocus({ t: e.t, nonce: Date.now() }),
               onClear: () => setLiveEvents([]),
               onExport: () => void saveDocument(`${pausePou}_events_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, eventsCsv(liveEvents), { personal: true }).then((r) => r?.path && showCopyToast(`Events saved: ${r.path}`, 'success')),
+            }}
+            snapshots={{
+              list: snapshots,
+              live: liveStatus.state === 'connected' || !!replay,
+              onTake: () => {
+                // (the values the PLC gave: the watched ones by their names, the guards' and the scope's by id; the
+                // expressions as computed; not the tasks', the tests' or the symbols' window)
+                const values: Record<string, LiveSnapshotValue> = {};
+                for (const [id, v] of Object.entries(liveVarValues)) {
+                  if (/^(task|test|sym|ov):/.test(id) || v === null || v === undefined) continue;
+                  values[userWatch.find((n) => n.toLowerCase() === id) ?? id] = v;
+                }
+                for (const e of userWatch.filter(isWatchExpr)) {
+                  const p = parseExpr(exprText(e));
+                  const v = 'error' in p ? null : evalExpr(p.node, (x) => liveVarValues[x]);
+                  if (v !== null) values[e] = v;
+                }
+                const now = Date.now();
+                const s: LiveSnapshot = { id: `${now}`, t: now, label: new Date(now).toLocaleTimeString(), state: liveSession.current?.state ?? null, values };
+                keepSnapshots([...snapshots, s].slice(-20));
+                showCopyToast(`Snapshot ${s.label}: ${Object.keys(values).length} values${s.state ? `, in ${s.state}` : ''}`, 'success');
+              },
+              onRemove: (id) => keepSnapshots(snapshots.filter((s) => s.id !== id)),
+              onClear: () => keepSnapshots([]),
+              onExport: () => void saveDocument(`${pausePou}_snapshots_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, snapshotsCsv(snapshots), { personal: true }).then((r) => r?.path && showCopyToast(`Snapshots saved: ${r.path}`, 'success')),
             }}
             setStateAllowed={{ list: setStateAllowed, onChange: changeSetStateAllowed, where: commissioning.where, logCount: commissioning.log.length, onShowLog: showCommissioningLog }}
             tests={
@@ -11929,30 +12061,7 @@ export const App: React.FC = () => {
                       title: `The recording ${replay.file}`,
                     });
                     if (t.steps < 2) return showCopyToast('The recording has one state only: nothing to test', 'error', 6000);
-                    const save = () =>
-                      void saveDocument(`${t.name}.TcPOU`, t.xml, { personal: true }).then((r) => {
-                        if (!r?.path) return;
-                        showCopyToast(`${t.name} saved (${t.steps} states, ${t.methodName}): add it to a PLC project that references TcUnit (Add Existing Item), and review it. ${r.path}`, 'success', 12000);
-                      });
-                    const canAdd = canAddPlcFiles(pouPath);
-                    const add = () =>
-                      void addPlcFiles(pouPath!, 'KssTests', [
-                        { name: `${t.name}.TcPOU`, content: t.xml },
-                        { name: `${TEST_PROGRAM}.TcPOU`, content: generateTcUnitProgram([t.name]) },
-                      ]).then((r) => {
-                        if (!r.ok) return showCopyToast(`Not added: ${r.error}`, 'error', 9000);
-                        keepTcunitSuite({ name: t.name, steps: t.steps });
-                        showCopyToast(`Added to the PLC project (KssTests): ${(r.written ?? []).join(', ')}. ${r.tcunit ? '' : 'Reference TcUnit first (Library Manager). '}${r.xae ? "In XAE's tree now: Save All keeps them. " : ''}Call ${TEST_PROGRAM} from a task of its own, build and download; live, the Live tab shows its result.`, r.tcunit ? 'success' : 'error', 14000);
-                      });
-                    setPromptRequest({
-                      title: `TcUnit test ${t.name}`,
-                      label: `From the recording ${replay.file}: its inputs written step by step, the ${t.steps} states it went through checked in turn. ${canAdd ? `Add it to the PLC project (a folder KssTests, with ${TEST_PROGRAM} running TcUnit.RUN()), or save the file.` : 'Save it, then add it to a PLC project that references TcUnit.'} Review it before relying on it.`,
-                      details: [`${t.name}.TcPOU: ${t.methodName}`, ...(canAdd ? [`${TEST_PROGRAM}.TcPOU: ${testInstanceName(t.name)} : ${t.name}; TcUnit.RUN()`] : [])],
-                      confirmOnly: true,
-                      submitLabel: canAdd ? 'Add to the PLC project' : 'Save…',
-                      secondaryAction: canAdd ? { id: 'tcunit-save', label: 'Save file…', title: 'The test suite as a .TcPOU file, where you choose', run: save } : undefined,
-                      onSubmit: canAdd ? add : save,
-                    });
+                    offerTcUnit(t, `From the recording ${replay.file}: its inputs written step by step, the ${t.steps} states it went through checked in turn.`);
                   }
                 : undefined
             }
@@ -12187,6 +12296,15 @@ export const App: React.FC = () => {
             selected={pathIndex}
             onSelect={setPathIndex}
             onJumpToState={(id) => handleJumpToState(id)}
+            onTcUnitTest={(i) => {
+              const path = pathResult.paths[i];
+              const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
+              if (!path || !enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
+              const pou = pouTypeName ?? pausePou;
+              const t = generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path, suiteName: `FB_${pou.replace(/^FB_/i, '')}_Path${i + 1}_Test` });
+              const notes = path.map((p) => guardInputs(p.guard).notes.length).reduce((a, b) => a + b, 0);
+              offerTcUnit(t, `The path ${path[0].from} → ${path.map((p) => p.to).join(' → ')}: each guard's inputs written before its step (from the guards: ${notes ? `${notes} condition${notes === 1 ? '' : 's'} it cannot set, said in comments there` : 'all of them set'}), the states checked in turn.`);
+            }}
             onClear={() => {
               setPathFrom('');
               setPathTo('');
