@@ -100,6 +100,9 @@ jobs:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v5
+        with:
+          # (the whole history: What's New lists the feature commits since a version, from git; a shallow clone has one)
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
