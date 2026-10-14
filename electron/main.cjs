@@ -362,6 +362,10 @@ ipcMain.handle('tc:webhook', (_event, url, text) => require('../shared/webhook.c
 ipcMain.handle('tc:commissioning', (_event, pouPath, pouType) => require('../shared/commissioningFile.cjs').readCommissioning(pouPath, pouType));
 ipcMain.handle('tc:commissioning-save', (_event, pouPath, pouType, req) => require('../shared/commissioningFile.cjs').saveCommissioning(pouPath, pouType, req));
 ipcMain.handle('tc:events-save', (_event, pouPath, req) => require('../shared/eventsFile.cjs').saveEventsFile(pouPath, req));
+// Reports beside the PLC project (MachineScope.reports): saved, listed, read
+ipcMain.handle('tc:report-file-save', (_event, pouPath, req) => require('../shared/reportsFile.cjs').saveReportFile(pouPath, req));
+ipcMain.handle('tc:report-files', (_event, pouPath) => require('../shared/reportsFile.cjs').listReportFiles(pouPath));
+ipcMain.handle('tc:report-file-read', (_event, pouPath, name) => require('../shared/reportsFile.cjs').readReportFile(pouPath, name));
 ipcMain.handle('tc:add-plc-files', (_event, pouPath, req) => require('../shared/plcAddFiles.cjs').addPlcFiles(pouPath, req));
 ipcMain.handle('tc:git-blame', (_event, filePath) => require('../shared/gitHistory.cjs').gitBlame(filePath));
 ipcMain.handle('tc:git-show-at', (_event, filePath, hash, file) => require('../shared/gitHistory.cjs').gitShowAt(filePath, hash, file));

@@ -58,7 +58,7 @@ export const eventsCsv = (events: LiveEvent[]) => ['time;kind;event', ...events.
  * The event log (the Live tab): what happened while live, newest first: connected / stopped, overruns, pauses (a state
  * or a condition), stuck alarms, values written or held, the PLC set to a state; a filter by kind; CSV; Clear
  */
-export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void; valueStats?: () => { name: string; shift: string; min: number; max: number; avg: number; n: number }[]; onAddNote?: () => void }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared, onExportStats, valueStats, onAddNote }) => {
+export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onClear: () => void; keep?: { on: boolean; onChange: (on: boolean) => void }; webhook?: { url: string; onChange: (url: string) => void; all?: boolean; onAllChange?: (on: boolean) => void; onTest?: () => void }; onPick?: (e: LiveEvent) => void; shared?: { list: (LiveEvent & { user?: string })[] | null; onLoad: () => void; onClose: () => void }; onExportStats?: () => void; valueStats?: () => { name: string; shift: string; min: number; max: number; avg: number; n: number }[]; onAddNote?: () => void; shiftReport?: { on: boolean; onChange: (on: boolean) => void; onNow?: () => void; where: 'project' | 'download' } }> = ({ events: own, onExport, onClear, keep, webhook, onPick, shared, onExportStats, valueStats, onAddNote, shiftReport }) => {
   // (the gateway's shared events of this PLC, when loaded: shown instead of this session's, with who)
   const events: (LiveEvent & { user?: string })[] = shared?.list ?? own;
   const [open, setOpen] = useState(false);
@@ -110,6 +110,19 @@ export const EventLog: React.FC<{ events: LiveEvent[]; onExport: () => void; onC
           <input id="live-events-keep" type="checkbox" checked={keep.on} onChange={(e) => keep.onChange(e.target.checked)} />
           Keep each session's log beside the project (MachineScope.events)
         </label>
+      )}
+      {open && shiftReport && (
+        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400">
+          <label className="flex items-center gap-1.5" title={`At each shift's end (06–14, 14–22, 22–06) while live: one page of the shift (time in each state, alerts, notes, values, the transitions first taken) ${shiftReport.where === 'project' ? 'beside the PLC project: MachineScope.reports\\<POU>_shift_<date>_<shift>.html' : 'saved as a download'}`}>
+            <input id="live-shift-report-keep" type="checkbox" checked={shiftReport.on} onChange={(e) => shiftReport.onChange(e.target.checked)} />
+            Shift report at each shift's end{shiftReport.where === 'project' ? ' (MachineScope.reports)' : ''}
+          </label>
+          {shiftReport.onNow && (
+            <button id="live-shift-report-now" type="button" onClick={shiftReport.onNow} className="px-1.5 rounded border border-slate-700 text-slate-300 hover:bg-slate-800" title="This shift's report so far, now">
+              Now…
+            </button>
+          )}
+        </div>
       )}
       {open && webhook && (
         <label className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400" title="Alerts also told to a webhook (Teams, Slack: a JSON { text } POSTed; https only). Empty: none">

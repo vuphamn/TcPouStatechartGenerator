@@ -24,7 +24,7 @@ const dur = (ms: number) => {
 export const LiveDashboard: React.FC<{
   title: string;
   tiles: DashboardTile[];
-  alerts: { text: string; snoozedUntil?: number }[];
+  alerts: { text: string; snoozedUntil?: number; snoozedIn?: string }[];
   events: { t: number; kind: string; text: string }[];
   onClose: () => void;
 }> = ({ title, tiles, alerts, events, onClose }) => {
@@ -67,9 +67,9 @@ export const LiveDashboard: React.FC<{
           </div>
           {alerts.length === 0 && <div className="text-slate-500 text-lg">none</div>}
           {alerts.map((a) => (
-            <div key={a.text} className={`live-dashboard-alert text-xl font-mono ${a.snoozedUntil ? 'text-amber-300' : 'text-rose-300'}`}>
+            <div key={a.text} className={`live-dashboard-alert text-xl font-mono ${a.snoozedUntil || a.snoozedIn ? 'text-amber-300' : 'text-rose-300'}`}>
               {a.text}
-              {a.snoozedUntil ? <span className="text-sm text-slate-500"> (snoozed until {new Date(a.snoozedUntil).toLocaleTimeString()})</span> : null}
+              {a.snoozedIn ? <span className="text-sm text-slate-500"> (snoozed while in {a.snoozedIn})</span> : a.snoozedUntil ? <span className="text-sm text-slate-500"> (snoozed until {new Date(a.snoozedUntil).toLocaleTimeString()})</span> : null}
             </div>
           ))}
         </div>

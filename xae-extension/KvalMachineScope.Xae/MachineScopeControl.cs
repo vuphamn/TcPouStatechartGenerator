@@ -410,6 +410,11 @@ namespace KvalMachineScope.Xae
                     case "eventsSave":
                         HandleEventsSave(msg);
                         break;
+                    case "reportFileSave":
+                    case "reportFiles":
+                    case "reportFileRead":
+                        HandleReportFile(msg, type);
+                        break;
                     case "runPlcTests":
                         HandleRunPlcTests(msg);
                         break;
@@ -1397,9 +1402,10 @@ namespace KvalMachineScope.Xae
                 entry = new CommissioningFile.Entry { state = d.TryGetValue("state", out var s) ? s as string : null, from = d.TryGetValue("from", out var f) ? f as string : "", plc = d.TryGetValue("plc", out var p) ? p as string : "", ok = !(d.TryGetValue("ok", out var o) && o is bool b && !b), message = d.TryGetValue("message", out var m) ? m as string : null, reason = d.TryGetValue("reason", out var rs) ? rs as string : null };
             var dir = string.IsNullOrEmpty(_pouPath) ? null : FolderWith(_pouPath, ".plcproj");
             string error = null;
-            var result = save ? CommissioningFile.Save(dir, pouType, allowed, entry, Environment.UserName, out error) : CommissioningFile.Read(dir, pouType);
+            var sequences = msg.TryGetValue("sequences", out var sq) ? CommissioningFile.SequencesFrom(sq) : null;
+            var result = save ? CommissioningFile.Save(dir, pouType, allowed, entry, Environment.UserName, out error, sequences) : CommissioningFile.Read(dir, pouType);
             if (save) Log.Write($"commissioning ({pouType}): {(error ?? (entry != null ? $"{entry.user} set {entry.state}" : "list saved"))}");
-            Post(new { type = save ? "commissioningSaveResult" : "commissioningResult", requestId, allowed = result?.allowed, log = result?.log, error });
+            Post(new { type = save ? "commissioningSaveResult" : "commissioningResult", requestId, allowed = result?.allowed, log = result?.log, sequences = result?.sequences, error });
         }
 
         /// <summary>A live session's events kept beside the PLC project: MachineScope.events\&lt;name&gt;.csv</summary>
@@ -1429,6 +1435,31 @@ namespace KvalMachineScope.Xae
             {
                 Post(new { type = "eventsSaveResult", requestId, ok = false, error = ex.Message });
             }
+        }
+
+        /// <summary>Reports beside the PLC project (ReportsFolder: MachineScope.reports\): one saved, the list, one read</summary>
+        private void HandleReportFile(Dictionary<string, object> msg, string type)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            var name = msg.TryGetValue("name", out var n) ? n as string : null;
+            var plcproj = _pouPath != null ? LiveTargets.PlcProjectFile(_pouPath) : null;
+            var dir = plcproj != null ? Path.GetDirectoryName(plcproj) : null;
+            string error;
+            if (type == "reportFiles")
+            {
+                Post(new { type = "reportFilesResult", requestId, files = ReportsFolder.List(dir), error = dir == null ? "The PLC project (.plcproj) of the POU was not found" : null });
+                return;
+            }
+            if (type == "reportFileRead")
+            {
+                var content = ReportsFolder.Read(dir, name, out error);
+                Post(new { type = "reportFileReadResult", requestId, ok = content != null, content, error });
+                return;
+            }
+            var file = ReportsFolder.Save(dir, name, msg.TryGetValue("content", out var c) ? c as string : null, out error);
+            if (file != null) Log.Write("report kept: " + file);
+            Post(new { type = "reportFileSaveResult", requestId, ok = file != null, path = file, error });
         }
 
         /// <summary>New POUs into the loaded POU's PLC project (the TcUnit tests): a folder of it, listed in its .plcproj</summary>

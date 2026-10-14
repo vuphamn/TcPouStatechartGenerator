@@ -9,6 +9,7 @@ node tests/run.cjs web --filter pou     # only the tests whose file name contain
 node tests/run.cjs web --shard 1/2      # every other web test, from the first (CI runs 1/2 and 2/2 side by side)
 node tests/run.cjs web --preview        # against the built app (npm run build first): what CI does, pages load at once
 node tests/run.cjs web --jobs 2         # the web tests two at a time (each has its own ports and browser): about half the time
+node tests/run.cjs --quarantine q.json  # those tests ("web/editor-intel"; the nightly run's quarantine.json) alone, after the others, not counted
 ```
 
 The runner prints one line per test and a summary. It exits with 1 when a test fails. Each test's output is in

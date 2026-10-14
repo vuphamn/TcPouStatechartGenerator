@@ -35,5 +35,37 @@ namespace KvalMachineScope.Xae.Tests
                 Directory.Delete(dir, true);
             }
         }
+
+        [TestMethod]
+        public void KeepsSavedSequencesByName()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "kss-comm-" + System.Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                var seqs = new List<CommissioningFile.Sequence>
+                {
+                    new CommissioningFile.Sequence { name = "Clamp test", states = new List<string> { "IDLE", "CLAMP", "bad state!", "UNCLAMP" } },
+                    new CommissioningFile.Sequence { name = "clamp TEST", states = new List<string> { "A", "B" } },
+                    new CommissioningFile.Sequence { name = "Too short", states = new List<string> { "A" } },
+                    new CommissioningFile.Sequence { name = "bad:name", states = new List<string> { "A", "B" } },
+                };
+                var t = CommissioningFile.Save(dir, "SM_A", null, null, "ann", out var e, seqs);
+                Assert.IsNull(e);
+                Assert.AreEqual(1, t.sequences.Count);
+                CollectionAssert.AreEqual(new[] { "IDLE", "CLAMP", "UNCLAMP" }, t.sequences[0].states);
+                // (a state set later keeps them; read back from the file)
+                CommissioningFile.Save(dir, "SM_A", null, new CommissioningFile.Entry { state = "IDLE", ok = true }, "ann", out _);
+                var back = CommissioningFile.Read(dir, "SM_A");
+                Assert.AreEqual("Clamp test", back.sequences[0].name);
+                Assert.AreEqual(3, back.sequences[0].states.Count);
+                Assert.AreEqual(1, back.log.Count);
+                Assert.AreEqual(0, CommissioningFile.Save(dir, "SM_A", null, null, "ann", out _, new List<CommissioningFile.Sequence>()).sequences.Count);
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        }
     }
 }

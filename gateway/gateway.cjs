@@ -456,7 +456,22 @@ function start() {
   // Audit log: who did what (audit-YYYY-MM.jsonl next to config.json)
   const audit = createAudit({ dir: baseDir, log });
   const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf, audit });
-  const boards = createBoards({ connectionFor, plcOf, rules: rulesNow, log, retryMs: config.alertRetryMs ?? 30000, maintenance });
+  // The notes written live through this gateway (the Live tab's + Note: the audit log's live.event "note"), the last
+  // 24 h per PLC, newest first: on the board's PLCs (a minute's cache; a new one drops it)
+  let notesCache = null;
+  const notesOf = (plcId) => {
+    if (!notesCache || Date.now() - notesCache.at > 60000) {
+      const by = new Map();
+      for (const e of audit.search({ from: Date.now() - 24 * 3600_000, q: '"kind":"note"', limit: 500 })) {
+        if (e.action !== 'live.event' || e.kind !== 'note' || typeof e.plc !== 'string') continue;
+        if (!by.has(e.plc)) by.set(e.plc, []);
+        if (by.get(e.plc).length < 5) by.get(e.plc).push({ t: e.at ?? e.t, user: e.user, text: e.text, pou: e.pou || undefined });
+      }
+      notesCache = { at: Date.now(), by };
+    }
+    return notesCache.by.get(plcId) ?? [];
+  };
+  const boards = createBoards({ connectionFor, plcOf, rules: rulesNow, log, retryMs: config.alertRetryMs ?? 30000, maintenance, notesOf });
   alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id) });
   alerts.apply(config.alerts ?? []);
   // Escalation: open alerts not acknowledged in time, posted again
@@ -467,7 +482,13 @@ function start() {
   recorders.apply(config.recordings ?? []);
   // Shift reports (config.shifts, config.reports.webhook): posted when a shift ends; the board downloads them
   const maintenanceOfAll = (from, to) => [...plcs.keys()].flatMap((id) => maintenance.windowsBetween(id, from, to).map((w) => ({ plc: id, from: new Date(w.from).toISOString(), until: new Date(w.until).toISOString() })));
-  const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit });
+  // (the notes written live through this gateway in a report's window: the audit log's live.event "note")
+  const notesBetween = (from, to) =>
+    audit
+      .search({ from, to, q: '"kind":"note"', limit: 1000 })
+      .filter((e) => e.action === 'live.event' && e.kind === 'note')
+      .map((e) => ({ t: e.at ?? e.t, user: e.user, plc: e.plc, pou: e.pou, text: e.text }));
+  const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween });
   // Run at startup (Windows): the gateway as a scheduled task
   const service = createService({ configPath, log, audit });
   const admin = createAdmin({
@@ -536,6 +557,8 @@ function start() {
     let alertsOff = null;
     const boardViewer = {};
     let user = null;
+    // (a view-only token: a display, the operator board only)
+    let viewOnly = false;
     let session = null; // { conn, entry, vars }
     // (Build from the page's project folder: its files mirrored on this computer, only with allowBuild)
     const mirror = new ProjectMirror();
@@ -623,10 +646,18 @@ function start() {
           return ws.close(4401, 'denied');
         }
         user = hit.name;
+        viewOnly = hit.view === true;
         clearTimeout(helloTimer);
-        log(`auth: ${user} connected from ${ip}`);
-        audit.add(user, 'sign-in', { ip, how: 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features() });
+        log(`auth: ${user} connected from ${ip}${viewOnly ? ' (view only)' : ''}`);
+        audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}) });
+      }
+      // A display (view-only token): the board, its saved boards and the alerts, nothing else
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList'].includes(m.type)) {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const message = 'A view-only display token: the operator board only';
+        if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
+        return send({ type: `${String(m.type).replace(/[^\w]/g, '').slice(0, 40)}Result`, requestId, ok: false, error: message });
       }
 
       // Before going live on one of its PLCs (over connections of their own, closed after): a POU type's instances
@@ -762,6 +793,7 @@ function start() {
         for (const e of m.events.slice(0, 50)) {
           if (!e || typeof e.text !== 'string' || typeof e.kind !== 'string' || !/^[a-z]{1,20}$/.test(e.kind)) continue;
           audit.add(user, 'live.event', { plc: plcId, pou: String(m.pou ?? '').slice(0, 80), instance: String(m.instance ?? '').slice(0, 200), kind: e.kind, text: e.text.slice(0, 300), at: Number.isFinite(e.t) ? e.t : Date.now() });
+          if (e.kind === 'note') notesCache = null;
         }
         return;
       }

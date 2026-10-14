@@ -257,7 +257,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
  * tests/.output/nightly/last.json, served by the dev server): passed or failed, when; read every 10 minutes
  */
 const NightlyChip: React.FC = () => {
-  const [last, setLast] = React.useState<{ when: string; passed: boolean; seconds: number; log: string } | null>(null);
+  const [last, setLast] = React.useState<{ when: string; passed: boolean; seconds: number; log: string; quarantine?: string[]; quarantined?: string[]; released?: string[] } | null>(null);
   // (the last 30 runs: history.json, oldest first)
   const [history, setHistory] = React.useState<{ when: string; passed: boolean; seconds: number; full?: boolean | null; failed?: string[]; newFailures?: string[]; flaky?: string[] }[]>([]);
   React.useEffect(() => {
@@ -307,11 +307,12 @@ const NightlyChip: React.FC = () => {
           const worst = [...m].sort((a, b) => b[1].failed * 2 + b[1].flaky - (a[1].failed * 2 + a[1].flaky)).slice(0, 5);
           return worst.length ? `\nMost often over ${history.length} runs: ${worst.map(([t, c]) => `${t} (${c.failed} failed, ${c.flaky} flaky)`).join(', ')}` : '';
         })()}`;
-      })()}`}
+      })()}${last.quarantined?.length ? `\nQuarantined tonight (flaky 3 full runs running): ${last.quarantined.join(', ')}` : ''}${last.released?.length ? `\nReleased from quarantine: ${last.released.join(', ')}` : ''}${last.quarantine?.length ? `\nIn quarantine (run alone, not counted; tests/.output/nightly/quarantine.json): ${last.quarantine.join(', ')}` : ''}`}
       data-history={history.map((h) => (h.passed ? '1' : '0')).join('')}
       data-new-failures={(history[history.length - 1]?.newFailures ?? []).join(',')}
+      data-quarantine={(last.quarantine ?? []).join(',')}
     >
-      nightly {last.passed ? '✓' : '✗'}{history[history.length - 1]?.newFailures?.length ? ` +${history[history.length - 1].newFailures!.length} new` : ''}{history.length > 1 ? ` ${history.filter((h) => h.passed).length}/${history.length}` : ''} {when.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} {when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+      nightly {last.passed ? '✓' : '✗'}{history[history.length - 1]?.newFailures?.length ? ` +${history[history.length - 1].newFailures!.length} new` : ''}{history.length > 1 ? ` ${history.filter((h) => h.passed).length}/${history.length}` : ''}{last.quarantine?.length ? ` ⧗${last.quarantine.length}` : ''} {when.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })} {when.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
     </span>
   );
 };

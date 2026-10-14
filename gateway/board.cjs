@@ -246,7 +246,7 @@ function mutedFor(maintenance) {
 }
 
 /** One monitor per PLC for the boards (the alert rules' limits and error patterns apply when a rule covers the PLC) */
-function createBoards({ connectionFor, plcOf, rules, log, retryMs, maintenance }) {
+function createBoards({ connectionFor, plcOf, rules, log, retryMs, maintenance, notesOf }) {
   const monitors = new Map(); // plc id -> { monitor, users: Set, idle }
   const ruleFor = (plcId, root) => rules().find((r) => r.enabled !== false && r.plc === plcId && r.root === root);
 
@@ -293,7 +293,7 @@ function createBoards({ connectionFor, plcOf, rules, log, retryMs, maintenance }
             const plc = plcOf(k.split('|')[0]);
             const id = plc?.id ?? k.split('|')[0];
             // (its PLC's ADS state: Run, Stop, Invalid (no program) …; null while not connected)
-            return { id, name: plc?.name ?? id, state: m?.state ?? 'stopped', message: m?.message ?? '', plcState: m?.state === 'watching' ? m.conn?.plcState ?? null : null, machines: m?.snapshot() ?? [], maintenance: maintenance?.get(id) ?? null, planned: maintenance?.planned(id) ?? [] };
+            return { id, name: plc?.name ?? id, state: m?.state ?? 'stopped', message: m?.message ?? '', plcState: m?.state === 'watching' ? m.conn?.plcState ?? null : null, machines: m?.snapshot() ?? [], maintenance: maintenance?.get(id) ?? null, planned: maintenance?.planned(id) ?? [], notes: notesOf?.(id) ?? [] };
           }),
         });
       };

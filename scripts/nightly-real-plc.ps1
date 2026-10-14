@@ -4,7 +4,8 @@
 # was in Config before. Each run's output: tests\.output\nightly\<date>.log, the result in last.json; a failure shows
 # a Windows notification (and the exit code is 1, for the Task Scheduler's history).
 # -Full: the whole test suite too, after the real-PLC test (npm run build, then node tests/run.cjs --jobs 1): its
-# result in the same log, last.json and history.json.
+# result in the same log, last.json and history.json. A test flaky 3 full runs running is quarantined
+# (quarantine.json: run alone, not counted: it no longer fails the night) until it passes alone 3 runs running.
 param([switch]$NoNotify, [switch]$Full)
 
 $ErrorActionPreference = 'Continue'
@@ -43,7 +44,10 @@ try {
     $b = Start-Process -FilePath $npm -ArgumentList 'run', 'build' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
     Get-Content -Encoding UTF8 $outFile, $errFile | Select-Object -Last 5 | Add-Content -Encoding UTF8 $log
     if ($b.ExitCode -eq 0) {
-      $f = Start-Process -FilePath $node -ArgumentList 'tests\run.cjs', '--jobs', '1' -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+      $runArgs = @('tests\run.cjs', '--jobs', '1')
+      $quarantineFile = Join-Path $dir 'quarantine.json'
+      if (Test-Path $quarantineFile) { $runArgs += @('--quarantine', $quarantineFile) }
+      $f = Start-Process -FilePath $node -ArgumentList $runArgs -WorkingDirectory $repo -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outFile -RedirectStandardError $errFile
       $fullCode = $f.ExitCode
       Get-Content -Encoding UTF8 $outFile, $errFile | Add-Content -Encoding UTF8 $log
     } else { $fullCode = $b.ExitCode; Add-Content -Encoding UTF8 $log 'The build failed: the suite not run' }
@@ -64,6 +68,9 @@ try {
   $logText = Get-Content -Raw -Encoding UTF8 $log
   $failedTests = @([regex]::Matches($logText, '\d+/\d+ passed; failed: ([^\r\n(]+)') | ForEach-Object { $_.Groups[1].Value -split ',\s*' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
   $flakyTests = @([regex]::Matches($logText, '(?m)^flaky \([^)]*\): (.+)$') | ForEach-Object { $_.Groups[1].Value -split ',\s*' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Sort-Object -Unique)
+  # (the quarantined tests' runs tonight: "web/a passed, web/b failed")
+  $heldRuns = @{}
+  foreach ($m in [regex]::Matches($logText, '(?m)^quarantined \([^)]*\): (.+)$')) { foreach ($x in ($m.Groups[1].Value -split ',\s*')) { if ($x -match '^(\S+) (passed|failed)$') { $heldRuns[$Matches[1]] = ($Matches[2] -eq 'passed') } } }
   $result = [ordered]@{
     when = $started.ToString('o')
     seconds = [int]((Get-Date) - $started).TotalSeconds
@@ -96,6 +103,39 @@ try {
   }
   $worstText = @($worst.GetEnumerator() | Sort-Object { -($_.Value.failed * 2 + $_.Value.flaky) } | Select-Object -First 5 | ForEach-Object { "$($_.Key) ($($_.Value.failed) failed, $($_.Value.flaky) flaky)" }) -join ', '
   if ($worstText) { Add-Content -Encoding UTF8 $log "Most often failed or flaky over $($history.Count) runs: $worstText" }
+  # Quarantine (full runs only): a test flaky in each of the last 3 full runs is quarantined; one quarantined that
+  # passed alone 3 runs running is released; quarantine.json: { tests: [{ id, since, passes }] }
+  $quarantineFile = Join-Path $dir 'quarantine.json'
+  $held = @()
+  if (Test-Path $quarantineFile) { try { $held = @((Get-Content -Raw -Encoding UTF8 $quarantineFile | ConvertFrom-Json).tests | Where-Object { $_.id }) } catch { $held = @() } }
+  $quarantined = @()
+  $released = @()
+  if ($null -ne $fullCode) {
+    $kept = @()
+    foreach ($q in $held) {
+      $passes = [int]$q.passes
+      if ($heldRuns.ContainsKey($q.id)) { $passes = if ($heldRuns[$q.id]) { $passes + 1 } else { 0 } }
+      if ($passes -ge 3) { $released += $q.id } else { $kept += [pscustomobject]@{ id = $q.id; since = $q.since; passes = $passes } }
+    }
+    $fullRuns = @($history | Where-Object { $null -ne $_.full })
+    if ($fullRuns.Count -ge 3) {
+      $last3 = $fullRuns[($fullRuns.Count - 3)..($fullRuns.Count - 1)]
+      foreach ($t in @($last3[-1].flaky | Where-Object { $_ })) {
+        $every = @($last3 | Where-Object { @($_.flaky) -contains $t }).Count -eq 3
+        if ($every -and -not ($kept | Where-Object { $_.id -eq $t })) { $kept += [pscustomobject]@{ id = $t; since = $result.when; passes = 0 }; $quarantined += $t }
+      }
+    }
+    ConvertTo-Json -InputObject @{ note = 'Tests quarantined by the nightly run (flaky 3 full runs running): run alone, not counted, until they pass alone 3 runs running. Remove one to count it again.'; tests = @($kept) } -Depth 4 | Out-File -Encoding utf8 $quarantineFile
+    $held = $kept
+    if ($quarantined.Count) { Add-Content -Encoding UTF8 $log "Quarantined (flaky 3 full runs running): $($quarantined -join ', ')" }
+    if ($released.Count) { Add-Content -Encoding UTF8 $log "Released from quarantine (passed alone 3 runs running): $($released -join ', ')" }
+  }
+  $heldText = @($held | ForEach-Object { "$($_.id)$(if ($heldRuns.ContainsKey($_.id)) { if ($heldRuns[$_.id]) { ' (passed tonight)' } else { ' (failed tonight)' } })" }) -join ', '
+  if ($heldText) { Add-Content -Encoding UTF8 $log "In quarantine: $heldText" }
+  $result.quarantine = @($held | ForEach-Object { $_.id })
+  $result.quarantined = $quarantined
+  $result.released = $released
+  $result | ConvertTo-Json | Out-File -Encoding utf8 (Join-Path $dir 'last.json')
   # Keep the last 30 logs
   Get-ChildItem $dir -Filter '*.log' | Sort-Object Name -Descending | Select-Object -Skip 30 | Remove-Item -ErrorAction SilentlyContinue
   # A webhook (Teams, Slack: a JSON { text } POSTed): KSS_NIGHTLY_WEBHOOK, or scripts\nightly.config.json
@@ -115,6 +155,9 @@ try {
     if ($stillFailing.Count) { $compare += 'Failing the run before too: ' + ($stillFailing -join ', ') }
     if ($flakyTests.Count) { $compare += 'Flaky (passed alone): ' + ($flakyTests -join ', ') }
     if ($worstText) { $compare += "Most often over $($history.Count) runs: $worstText" }
+    if ($quarantined.Count) { $compare += 'Quarantined tonight (flaky 3 runs running): ' + ($quarantined -join ', ') }
+    if ($released.Count) { $compare += 'Released from quarantine: ' + ($released -join ', ') }
+    if ($heldText) { $compare += "In quarantine: $heldText" }
     if ($compare.Count) { $summary = ($compare -join "`n") + "`n" + $summary }
     $text = if ($result.passed) { "Kval MachineScope $what passed on $env:COMPUTERNAME ($($result.seconds) s)`n$summary`n[The log]($link)" } else { "Kval MachineScope $what FAILED on $env:COMPUTERNAME`n$summary`n[The log]($link) ($log)" }
     try {

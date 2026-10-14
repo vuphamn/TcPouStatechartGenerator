@@ -222,11 +222,12 @@ import { LiveDashboard } from './components/LiveDashboard.tsx';
 import { snapshotsCsv, type LiveSnapshot, type SnapshotValue as LiveSnapshotValue } from './components/LiveSnapshots.tsx';
 import { commissioningReport, commissioningReportPdf } from './utils/commissioningReport.ts';
 import { addGuardResults, guardCoverageSummary, loadGuardCoverage, saveGuardCoverage, type GuardCoverage } from './utils/guardCoverage.ts';
-import { testReportHtml, testReportPdf } from './utils/testReport.ts';
+import { testReportHtml, testReportPdf, compareTestReports, keptTestReportJson, keptTestReportName, parseKeptTestReport, type TestReportInput } from './utils/testReport.ts';
+import { shiftReportHtml, shiftReportName, shiftWindow, stateTimesIn, type ShiftReportInput } from './utils/shiftReport.ts';
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
-import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, type Commissioning } from './utils/projectFiles.ts';
+import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, canKeepReports, saveReportFile, listReportFiles, readReportFile, type Commissioning, type StateSequence } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
@@ -3016,9 +3017,22 @@ export const App: React.FC = () => {
   }, [snoozeKey]);
   const alertSnoozeRef = useRef<Record<string, number>>({});
   alertSnoozeRef.current = alertSnooze;
-  // (a click: snoozed 15 min, again: 1 h, again: not)
+  // (snoozed while the PLC is in a state: until it leaves it; this session only)
+  const [snoozeIn, setSnoozeIn] = useState<Record<string, string>>({});
+  const snoozeInRef = useRef<Record<string, string>>({});
+  snoozeInRef.current = snoozeIn;
+  // (a click: snoozed 15 min, again: 1 h, again: until the PLC leaves the state it is in, again: not)
   const cycleAlertSnooze = (entry: string) => {
     const now = Date.now();
+    if (snoozeIn[entry]) {
+      setSnoozeIn((cur) => {
+        const next = { ...cur };
+        delete next[entry];
+        return next;
+      });
+      addLiveEvent('alert', `Not snoozed any more: ${exprText(entry)}`);
+      return;
+    }
     const left = (alertSnooze[entry] ?? 0) - now;
     const ms = left <= 0 ? 15 * 60_000 : left <= 15 * 60_000 ? 60 * 60_000 : 0;
     const next = { ...alertSnooze };
@@ -3030,10 +3044,25 @@ export const App: React.FC = () => {
     } catch {
       // (not kept)
     }
+    const here = !ms && liveStatus.state === 'connected' ? exprStateRef.current?.name : undefined;
+    if (here) {
+      setSnoozeIn((cur) => ({ ...cur, [entry]: here }));
+      return addLiveEvent('alert', `Snoozed while in ${here}: ${exprText(entry)}`);
+    }
     addLiveEvent('alert', ms ? `Snoozed for ${ms / 60_000} min: ${exprText(entry)}` : `Not snoozed any more: ${exprText(entry)}`);
   };
+  // (the PLC left a snoozed alert's state: said again from now; live ended: none)
+  const stateForSnooze = liveStatus.state === 'connected' ? liveSession.current?.state ?? '' : '';
+  useEffect(() => {
+    const gone = Object.entries(snoozeInRef.current).filter(([, s]) => s !== stateForSnooze);
+    if (!gone.length) return;
+    setSnoozeIn((cur) => Object.fromEntries(Object.entries(cur).filter(([, s]) => s === stateForSnooze)));
+    if (stateForSnooze) for (const [entry, s] of gone) addLiveEvent('alert', `Not snoozed any more (left ${s}): ${exprText(entry)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateForSnooze]);
   fireAlertRef.current = (entry: string, forMs: number) => {
     if ((alertSnoozeRef.current[entry] ?? 0) > Date.now()) return;
+    if (snoozeInRef.current[entry] && snoozeInRef.current[entry] === exprStateRef.current?.name) return;
     const what = `${exprText(entry)} became true${forMs ? ` (for ${forMs / 1000} s)` : ''}`;
     addLiveEvent('alert', what);
     showCopyToast(`Alert: ${what}`, 'error', 8000);
@@ -9518,7 +9547,9 @@ export const App: React.FC = () => {
     const initial = initialStateOf(pouContent, liveStateVar) || identifiedStatesResult.states[0]?.id || '';
     const untaken = liveCoverage.rows.filter((r) => r.n === 0);
     // (from the initial state, else the live one, else the first state that leads there)
-    const found = untakenPaths(availableEdges, [initial, liveSession.current?.state ?? '', ...identifiedStatesResult.states.map((s) => s.id)], untaken, 10);
+    // (the enum's states only: a transition to a composite has no state value to expect)
+    const members = new Set(liveEnumNames.values());
+    const found = untakenPaths(availableEdges, [initial, liveSession.current?.state ?? '', ...identifiedStatesResult.states.map((s) => s.id)], untaken, 10).filter((f) => !members.size || [f.from, f.to, ...f.path.flatMap((s) => [s.from, s.to])].every((s) => members.has(s)));
     if (!found.length) return showCopyToast(untaken.length ? 'The transitions not taken are not on the chart' : 'Every transition was taken', untaken.length ? 'error' : 'success', 7000);
     const pou = pouTypeName ?? pausePou;
     const limitMs = measuredLimits();
@@ -9970,6 +10001,186 @@ export const App: React.FC = () => {
     () => guardCoverageSummary(guardCov, availableEdges.filter((e) => e.from && e.to && e.from !== '[*]' && e.from !== e.to).map((e) => ({ from: e.from, to: e.to, conditional: !!(e.condition || e.label)?.trim(), condition: e.condition }))),
     [guardCov, availableEdges]
   );
+  // TcUnit tests of the guard coverage's gaps: a condition never seen true, the path to its state then the transition
+  // (its guard's inputs written true); one never seen false, the path to its state, then the guard's inputs made false
+  // and the transition must not be taken for 100 cycles
+  const handleTcUnitGaps = () => {
+    const enumType = stateNamesRef.current?.enumType || stateEnumTypeOf(pouContent) || '';
+    if (!enumType) return showCopyToast("A TcUnit test needs the state's enum (load its .TcDUT)", 'error', 7000);
+    const initial = initialStateOf(pouContent, liveStateVar) || identifiedStatesResult.states[0]?.id || '';
+    const starts = [initial, liveSession.current?.state ?? '', ...identifiedStatesResult.states.map((s) => s.id)];
+    // (only the states the enum has: a transition to a composite (its region) has no state value to expect)
+    const members = new Set(liveEnumNames.values());
+    const inEnum = (f: { path: { from: string; to: string }[]; from: string; to: string }) => !members.size || [f.from, f.to, ...f.path.flatMap((s) => [s.from, s.to])].every((s) => members.has(s));
+    const nt = untakenPaths(availableEdges, starts, guardSummary.neverTrue.filter((e) => !members.size || (members.has(e.from) && members.has(e.to))), 10).filter(inEnum);
+    const nf = untakenPaths(availableEdges, starts, guardSummary.neverFalse.filter((e) => !members.size || (members.has(e.from) && members.has(e.to))), 10).filter(inEnum);
+    if (!nt.length && !nf.length) return showCopyToast(guardSummary.neverTrue.length + guardSummary.neverFalse.length ? 'The gaps are not on the chart' : 'Every condition was seen both ways', guardSummary.neverTrue.length + guardSummary.neverFalse.length ? 'error' : 'success', 7000);
+    const pou = pouTypeName ?? pausePou;
+    const base = pou.replace(/^FB_/i, '');
+    const limitMs = measuredLimits();
+    const made = [
+      ...nt.map((f, i) => generateTcUnitPathTest({ pou, enumType, stateVar: liveStateVar, path: f.path, suiteName: `FB_${base}_NeverTrue${i + 1}_Test`, limitMs, title: `${f.from} → ${f.to}: its condition never seen true live (from ${f.start})` })),
+      ...nf.map((f, i) =>
+        generateTcUnitPathTest({
+          pou,
+          enumType,
+          stateVar: liveStateVar,
+          path: f.path.slice(0, -1),
+          start: f.from,
+          hold: { to: f.to, guard: f.path[f.path.length - 1]?.guard ?? '' },
+          suiteName: `FB_${base}_NeverFalse${i + 1}_Test`,
+          limitMs,
+          title: `${f.from} → ${f.to}: its condition never seen false live: made false, the transition must not be taken (from ${f.start})`,
+        })
+      ),
+    ];
+    offerTcUnit(made, `The conditions seen only one way live: ${nt.length} never true (the path there, the guard's inputs made true, the transition expected), ${nf.length} never false (the path there, the guard's inputs made false, the transition must not be taken for 100 cycles)${guardSummary.neverTrue.length > 10 || guardSummary.neverFalse.length > 10 ? '; the first 10 of each' : ''}.`);
+  };
+  // Each test report kept (beside the PLC project: MachineScope.reports, its HTML and its data as JSON; the web
+  // edition: this browser, the last 20) to compare two later (History…)
+  const keepTestReport = (input: TestReportInput) => {
+    const made = input.made ?? new Date();
+    const name = keptTestReportName(input.pou, made);
+    const json = keptTestReportJson({ ...input, made });
+    if (canKeepReports() && pouPath) {
+      void saveReportFile(pouPath, `${name}.json`, json).then((r) => {
+        if (!r.ok) return showCopyToast(`The test report was not kept beside the project: ${r.error}`, 'error', 7000);
+        void saveReportFile(pouPath, `${name}.html`, testReportHtml({ ...input, made }));
+        setMsFilesTick((n) => n + 1);
+      });
+      return;
+    }
+    try {
+      const key = `kss.testReports|${input.pou.toLowerCase()}`;
+      const list = JSON.parse(localStorage.getItem(key) || '[]');
+      localStorage.setItem(key, JSON.stringify([...(Array.isArray(list) ? list : []), json].slice(-20)));
+    } catch {
+      // (not kept)
+    }
+  };
+  const showTestReportHistory = async () => {
+    const pou = pouTypeName ?? pausePou;
+    let kept: TestReportInput[] = [];
+    if (canKeepReports() && pouPath) {
+      const l = await listReportFiles(pouPath);
+      const safe = pou.replace(/[^\w.-]/g, '_').toLowerCase();
+      const names = l.files.filter((f) => f.name.toLowerCase().startsWith(`${safe}_test_report_`) && f.name.toLowerCase().endsWith('.json')).slice(0, 12);
+      for (const f of names) {
+        const r = await readReportFile(pouPath, f.name);
+        const p = r.ok && r.content ? parseKeptTestReport(r.content) : null;
+        if (p) kept.push(p);
+      }
+    } else {
+      try {
+        const list = JSON.parse(localStorage.getItem(`kss.testReports|${pou.toLowerCase()}`) || '[]');
+        kept = (Array.isArray(list) ? list : []).map((t: string) => parseKeptTestReport(t)).filter((x): x is TestReportInput => !!x).reverse();
+      } catch {
+        kept = [];
+      }
+    }
+    // (newest first)
+    kept.sort((a, b) => (b.made?.getTime() ?? 0) - (a.made?.getTime() ?? 0));
+    if (kept.length < 2) return showCopyToast(`${kept.length ? 'One test report kept' : 'No test report kept yet'}: each Test report… keeps one${canKeepReports() ? ' beside the PLC project (MachineScope.reports)' : ' in this browser'}; two are compared`, 'error', 8000);
+    const summary = (o: TestReportInput, i: number) => `${i + 1}. ${o.made?.toLocaleString() ?? '?'}: suites ${o.suites.filter((s) => s.result === 1).length} / ${o.suites.length} passed, transitions ${o.coverage ? `${o.coverage.taken} / ${o.coverage.total}` : '—'}, conditions both ways ${o.guards ? `${o.guards.both} / ${o.guards.total}` : '—'}${o.plc ? ` (${o.plc})` : ''}`;
+    const parse = (t: string) => t.split(/[,;\s]+/).filter(Boolean).map(Number);
+    setPromptRequest({
+      title: `Test reports kept: ${pou} (${kept.length})`,
+      label: 'Compare which two? Their numbers, the older first (newest is 1):',
+      details: kept.map(summary),
+      initial: '2, 1',
+      monospace: true,
+      validate: (t) => {
+        const n = parse(t);
+        return n.length === 2 && n.every((x) => Number.isInteger(x) && x >= 1 && x <= kept.length) && n[0] !== n[1] ? null : `Two different numbers from 1 to ${kept.length}`;
+      },
+      submitLabel: 'Compare',
+      onSubmit: (t) => {
+        const [i, j] = parse(t);
+        const c = compareTestReports(kept[i - 1], kept[j - 1]);
+        setPromptRequest({
+          title: `Compared: ${c.better} better, ${c.worse} worse`,
+          label: `${kept[i - 1].made?.toLocaleString() ?? '?'} → ${kept[j - 1].made?.toLocaleString() ?? '?'}`,
+          details: c.lines,
+          confirmOnly: true,
+          submitLabel: 'Save as HTML…',
+          onSubmit: () => void saveDocument(`${pou}_test_reports_compared.html`, c.html, { personal: true }).then((r) => r?.path && showCopyToast(`The comparison: ${r.path}`, 'success', 7000)),
+        });
+      },
+    });
+  };
+  // The shift report: at each shift's end while live (an option, on by default), or now; beside the PLC project
+  // (MachineScope.reports) where it can be, else a download
+  const [shiftReportOn, setShiftReportOnState] = useState(() => {
+    try {
+      return localStorage.getItem('kss.shiftReport.keep') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const setShiftReportOn = (on: boolean) => {
+    setShiftReportOnState(on);
+    try {
+      localStorage.setItem('kss.shiftReport.keep', on ? '1' : '0');
+    } catch {
+      // (this session only)
+    }
+  };
+  // (what was taken and seen both ways when the shift began here: the report says what was first taken in it)
+  const shiftStartRef = useRef<{ from: number; taken: Set<string>; both: number } | null>(null);
+  const takenNow = () => new Set((liveCoverage?.rows ?? []).filter((r) => r.n > 0).map((r) => `${r.from}->${r.to}`));
+  const makeShiftReport = (win: { shift: ShiftReportInput['shift']; from: number; to: number }, upTo: number): ShiftReportInput => {
+    const offset = plcClockOffsetRef.current;
+    const values = recorderRef.current.values.map((v) => ({ t: v.t + offset, value: v.value }));
+    const start = shiftStartRef.current;
+    const newly = (liveCoverage?.rows ?? []).filter((r) => r.n > 0 && start && start.from <= win.from + 1000 && !start.taken.has(`${r.from}->${r.to}`));
+    return {
+      pou: pouTypeName ?? pausePou,
+      plc: liveStatus.target,
+      shift: win.shift,
+      from: win.from,
+      to: Math.min(win.to, upTo),
+      states: stateTimesIn(values, win.from, win.to, (v) => liveStateName(v, liveNamesRef.current), upTo),
+      events: liveEventsRef.current.filter((e) => e.t >= win.from && e.t < win.to),
+      values: shiftValues().filter((v) => v.shift === win.shift),
+      coverage: liveCoverage ? { newly: newly.map((r) => ({ from: r.from, to: r.to })), taken: liveCoverage.taken, total: liveCoverage.total } : null,
+      guards: guardSummary.total ? { both: guardSummary.both, total: guardSummary.total, newly: Math.max(0, guardSummary.both - (start?.both ?? guardSummary.both)) } : null,
+    };
+  };
+  const saveShiftReport = async (input: ShiftReportInput, auto: boolean) => {
+    const name = shiftReportName(input.pou, input.from, input.shift);
+    const html = shiftReportHtml(input);
+    if (canKeepReports() && pouPath) {
+      const r = await saveReportFile(pouPath, name, html);
+      if (r.ok) setMsFilesTick((n) => n + 1);
+      return showCopyToast(r.ok ? `The shift report (${input.shift}): ${r.path}` : `The shift report was not kept: ${r.error}`, r.ok ? 'success' : 'error', 7000);
+    }
+    const r = await saveDocument(name, html, { personal: true });
+    if (r?.path && !auto) showCopyToast(`The shift report: ${r.path}`, 'success', 7000);
+  };
+  const shiftReportOnRef = useRef(shiftReportOn);
+  shiftReportOnRef.current = shiftReportOn;
+  const shiftTickRef = useRef<() => void>(() => {});
+  shiftTickRef.current = () => {
+    const now = Date.now();
+    const w = shiftWindow(now);
+    const start = shiftStartRef.current;
+    if (start && start.from !== w.from) {
+      // (the shift ended while live: its report, then the next one begins)
+      const ended = shiftWindow(start.from);
+      if (shiftReportOnRef.current) void saveShiftReport(makeShiftReport(ended, ended.to), true);
+    }
+    if (!start || start.from !== w.from) shiftStartRef.current = { from: w.from, taken: takenNow(), both: guardSummary.both };
+  };
+  useEffect(() => {
+    if (liveStatus.state !== 'connected' || replay) {
+      shiftStartRef.current = null;
+      return;
+    }
+    shiftTickRef.current();
+    const t = window.setInterval(() => shiftTickRef.current(), 20000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveStatus.state, !!replay]);
   // The test report (for sign-off): the suites' results, the coverage, the guard coverage
   const testReportInput = () => ({
     pou: pouTypeName ?? pausePou,
@@ -10267,32 +10478,31 @@ export const App: React.FC = () => {
   setPlcStateRef.current = liveStatus.state === 'connected' && (liveMode === 'xae' || liveMode === 'desktop') ? handleSetPlcState : null;
   // A sequence of states (commissioning): typed, all among May set to; asked once with the reason and the box ticked,
   // then each step confirmed before it is written (Stop ends it); each one logged with the reason and its step
-  const handleSetPlcSequence = () => {
+  // (preset: a saved sequence, run without asking for the states again)
+  const handleSetPlcSequence = (preset?: StateSequence) => {
     if (liveStatus.state !== 'connected' || !liveStatus.instance || (liveMode !== 'xae' && liveMode !== 'desktop')) return showCopyToast('Go live first (TwinCAT XAE, VS Code or the desktop app)', 'error');
     const names = [...liveEnumNames.entries(), ...Object.entries(liveStatus.plcStateNames ?? {}).map(([v, n]) => [Number(v), n] as [number, string])];
     const valueOf = (s: string) => names.find(([, n]) => n.toLowerCase() === s.toLowerCase())?.[0];
     const id = stateVarWatchIdRef.current;
     const symbol = `${liveStatus.instance}.${liveStateVar}`;
     if (!id || liveWatched[id]?.error) return showCopyToast(`${symbol} is not followed on the PLC`, 'error', 7000);
-    const parse = (t: string) => t.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
-    setPromptRequest({
-      title: 'Set the PLC to a sequence of states',
-      label: `The states one after another (each among May set to: ${setStateAllowed.join(', ') || 'none yet'}), separated by commas:`,
-      monospace: true,
-      initial: setStateAllowed.slice(0, 3).join(', '),
-      validate: (t) => {
-        const list = parse(t);
-        if (list.length < 2) return 'Two states at least';
-        const bad = list.find((s) => !setStateAllowed.some((a) => a.toLowerCase() === s.toLowerCase()));
-        if (bad) return `${bad} is not under May set to`;
-        const unknown = list.find((s) => valueOf(s) === undefined);
-        return unknown ? `${unknown}: its value is not known` : null;
-      },
-      submitLabel: 'Next',
-      onSubmit: (t) => {
-        const list = parse(t).map((s) => setStateAllowed.find((a) => a.toLowerCase() === s.toLowerCase())!);
+    // ("Name: A, B, C": kept under that name; "A, B, C": run only)
+    const parse = (t: string) => {
+      const m = /^\s*([^:,]+?)\s*:\s*([\s\S]*)$/.exec(t);
+      return { name: m ? m[1].trim() : '', list: (m ? m[2] : t).split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) };
+    };
+    const check = (list: string[]) => {
+      if (list.length < 2) return 'Two states at least';
+      if (list.length > 20) return 'At most 20 states';
+      const bad = list.find((s) => !setStateAllowed.some((a) => a.toLowerCase() === s.toLowerCase()));
+      if (bad) return `${bad} is not under May set to`;
+      const unknown = list.find((s) => valueOf(s) === undefined);
+      return unknown ? `${unknown}: its value is not known` : null;
+    };
+    const canonical = (list: string[]) => list.map((s) => setStateAllowed.find((a) => a.toLowerCase() === s.toLowerCase())!);
+    const confirmSequence = (list: string[], savedName?: string) => {
         setPromptRequest({
-          title: `Set the PLC to ${list.length} states, one after another?`,
+          title: `Set the PLC to ${list.length} states, one after another${savedName ? ` (${savedName})` : ''}?`,
           label: `Each written to ${symbol} on ${liveStatus.target ?? 'the PLC'} when you confirm its step: the program goes on from it at once, without the steps that normally lead there. Only when the machine is safe for it.`,
           details: list.map((s, i) => `${i + 1}. ${s} (${valueOf(s)})`),
           danger: true,
@@ -10327,9 +10537,53 @@ export const App: React.FC = () => {
             step(0);
           },
         });
+    };
+    if (preset) {
+      const error = check(preset.states);
+      if (error) return showCopyToast(`${preset.name}: ${error}`, 'error', 8000);
+      return confirmSequence(canonical(preset.states), preset.name);
+    }
+    setPromptRequest({
+      title: 'Set the PLC to a sequence of states',
+      label: `The states one after another (each among May set to: ${setStateAllowed.join(', ') || 'none yet'}), separated by commas. A name and a colon first keeps it to run again (Saved…), e.g. Clamp test: A, B, C:`,
+      monospace: true,
+      initial: setStateAllowed.slice(0, 3).join(', '),
+      validate: (t) => {
+        const p = parse(t);
+        if (p.name && !/^[\w .()+-]{1,60}$/.test(p.name)) return 'A name of letters, digits, spaces and . ( ) + - _ (up to 60)';
+        return check(p.list);
+      },
+      submitLabel: 'Next',
+      onSubmit: (t) => {
+        const p = parse(t);
+        const list = canonical(p.list);
+        if (p.name) {
+          const sequences = [...(commissioning.sequences ?? []).filter((s) => s.name.toLowerCase() !== p.name.toLowerCase()), { name: p.name, states: list }];
+          void saveCommissioning(pouPath, commissioningType, { sequences }).then((r) => {
+            if ('error' in r) return showCopyToast(`${p.name}: not kept (${r.error})`, 'error', 7000);
+            setCommissioning(r);
+            if (r.where === 'project') setMsFilesTick((n) => n + 1);
+          });
+        }
+        confirmSequence(list, p.name || undefined);
       },
     });
   };
+  // (a saved sequence removed, asked first)
+  const removeSequence = (name: string) =>
+    setPromptRequest({
+      title: `Remove the sequence ${name}?`,
+      label: `${(commissioning.sequences ?? []).find((s) => s.name === name)?.states.join(' → ') ?? ''}`,
+      confirmOnly: true,
+      danger: true,
+      submitLabel: 'Remove',
+      onSubmit: () =>
+        void saveCommissioning(pouPath, commissioningType, { sequences: (commissioning.sequences ?? []).filter((s) => s.name !== name) }).then((r) => {
+          if ('error' in r) return showCopyToast(`Not removed (${r.error})`, 'error', 7000);
+          setCommissioning(r);
+          if (r.where === 'project') setMsFilesTick((n) => n + 1);
+        }),
+    });
   // Prepared values (XAE's Prepare Value, then Write Values: Ctrl+F7): by watch id; written together, asked first
   const [preparedValues, setPreparedValues] = useState<{ id: string; name: string; symbol?: string; text: string; value: boolean | number | string }[]>([]);
   useEffect(() => {
@@ -12201,14 +12455,17 @@ export const App: React.FC = () => {
                       setGuardCov({});
                       saveGuardCoverage(pouTypeName, {});
                     },
+                    onTcUnit: guardSummary.neverTrue.length + guardSummary.neverFalse.length ? handleTcUnitGaps : undefined,
                   }
                 : undefined
             }
             onTestReport={(kind) => {
               const input = testReportInput();
               const name = `${input.pou}_test_report.${kind}`;
+              keepTestReport(input);
               void saveDocument(name, kind === 'html' ? testReportHtml(input) : testReportPdf(input), { personal: true }).then((r) => r?.path && showCopyToast(`The test report: ${r.path}`, 'success', 7000));
             }}
+            onTestReportHistory={() => void showTestReportHistory()}
             coverageOnChart={coverageOnChart}
             onCoverageOnChart={setCoverageOnChart}
             onResetCoverage={handleResetCoverage}
@@ -12238,7 +12495,7 @@ export const App: React.FC = () => {
               const p = parseExpr(exprText(n));
               if ('error' in p) return { name: n, expr: true, error: p.error };
               const v = evalExpr(p.node, withState((x) => liveVarValues[x], exprStateRef.current));
-              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0, snoozedUntil: (alertSnooze[n] ?? 0) > Date.now() ? alertSnooze[n] : undefined };
+              return { name: n, expr: true, value: v === null ? undefined : v, alert: watchAlerts.includes(n), alertForMs: watchAlertFor[n] ?? 0, snoozedUntil: (alertSnooze[n] ?? 0) > Date.now() ? alertSnooze[n] : undefined, snoozedIn: snoozeIn[n] };
             })}
             onToggleAlert={toggleWatchAlert}
             onSnoozeAlert={cycleAlertSnooze}
@@ -12336,6 +12593,12 @@ export const App: React.FC = () => {
               onPick: (e) => setTimelineFocus({ t: e.t, nonce: Date.now() }),
               valueStats: shiftValues,
               onAddNote: liveStatus.state === 'connected' && !replay ? addRecordingNote : undefined,
+              shiftReport: {
+                on: shiftReportOn,
+                onChange: setShiftReportOn,
+                where: canKeepReports() && pouPath ? 'project' : 'download',
+                onNow: liveStatus.state === 'connected' && !replay ? () => void saveShiftReport(makeShiftReport(shiftWindow(Date.now()), Date.now()), false) : undefined,
+              },
               onExportStats: () => void saveDocument(`${pausePou}_events_stats_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`, `${eventStatsCsv(sharedEvents ?? liveEvents)}\n${shiftValues().map((v) => `value;${v.name.replace(/;/g, ',')} @ ${v.shift};min ${v.min} max ${v.max} avg ${Number(v.avg.toFixed(3))} n ${v.n}`).join('\n')}`, { personal: true }).then((r) => r?.path && showCopyToast(`Statistics saved: ${r.path}`, 'success')),
               shared:
                 liveMode === 'web' && liveStatus.state === 'connected'
@@ -12416,7 +12679,13 @@ export const App: React.FC = () => {
               where: commissioning.where,
               logCount: commissioning.log.length,
               onShowLog: showCommissioningLog,
-              onSequence: handleSetPlcSequence,
+              onSequence: () => handleSetPlcSequence(),
+              sequences: commissioning.sequences ?? [],
+              onRunSequence: (name) => {
+                const s = (commissioning.sequences ?? []).find((x) => x.name === name);
+                if (s) handleSetPlcSequence(s);
+              },
+              onRemoveSequence: removeSequence,
               onReportPdf: () =>
                 void saveDocument(`${commissioningType}_commissioning.pdf`, commissioningReportPdf({ pouType: commissioningType, allowed: commissioning.allowed, log: commissioning.log, where: commissioning.where }), { personal: true }).then((r) => r?.path && showCopyToast(`The commissioning report (PDF): ${r.path}`, 'success', 7000)),
               onReport: () =>
@@ -12993,7 +13262,7 @@ export const App: React.FC = () => {
             },
             ...livePeers.map((p) => ({ label: p.plc, state: p.state, sinceMs: p.since, stuck: !!(p.state && p.since != null && liveLimit && Date.now() - p.since > liveLimit), limitMs: liveLimit })),
           ]}
-          alerts={watchAlerts.filter((a) => exprOnRef.current.get(a)).map((a) => ({ text: exprText(a), snoozedUntil: (alertSnooze[a] ?? 0) > Date.now() ? alertSnooze[a] : undefined }))}
+          alerts={watchAlerts.filter((a) => exprOnRef.current.get(a)).map((a) => ({ text: exprText(a), snoozedUntil: (alertSnooze[a] ?? 0) > Date.now() ? alertSnooze[a] : undefined, snoozedIn: snoozeIn[a] }))}
           events={liveEvents}
           onClose={() => setDashboardOpen(false)}
         />

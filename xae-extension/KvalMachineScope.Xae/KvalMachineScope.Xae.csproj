@@ -69,6 +69,7 @@
     <Compile Include="GitBlame.cs" />
     <Compile Include="PlcAddFiles.cs" />
     <Compile Include="CommissioningFile.cs" />
+    <Compile Include="ReportsFolder.cs" />
     <Compile Include="ProjectStore.cs" />
   </ItemGroup>
   <ItemGroup>

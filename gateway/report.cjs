@@ -1,6 +1,6 @@
 // Shift report: per shift (config.json "shifts": [{ "name": "Early", "from": "06:00", "to": "14:00" }, ...]; default:
 // the whole day), the alerts: how many of each kind, how long until acknowledged and resolved, the machines with the
-// most, what is still open, the maintenance windows. Posted to "reports.webhook" when a shift ends; the board
+// most, what is still open, the maintenance windows, the notes written live (the Live tab's + Note). Posted to "reports.webhook" when a shift ends; the board
 // downloads it (CSV) for the last shift, today or yesterday.
 const fs = require('fs');
 const { postWebhook } = require('./alerts.cjs');
@@ -45,8 +45,9 @@ function shiftWindows(shifts, from, to) {
 
 const mins = (ms) => (ms < 60000 ? `${Math.round(ms / 1000)} s` : ms < 3600000 ? `${Math.round(ms / 60000)} min` : `${(ms / 3600000).toFixed(1)} h`);
 
-/** The report of [from, to] from the alert history and the maintenance windows */
-function buildReport({ name, from, to }, events, maintenanceWindows = []) {
+/** The report of [from, to] from the alert history, the maintenance windows and the notes written live ({ t, user, plc, pou, text }) */
+function buildReport({ name, from, to }, events, maintenanceWindows = [], notes = []) {
+  const notesIn = notes.filter((n) => n && n.t >= from && n.t < to).sort((a, b) => a.t - b.t);
   const inWindow = events.filter((e) => Date.parse(e.at) >= from && Date.parse(e.at) < to);
   // (muted ones, in maintenance or quiet hours: not counted)
   const alerts = inWindow.filter((e) => e.event !== 'recovered' && !e.muted);
@@ -64,17 +65,19 @@ function buildReport({ name, from, to }, events, maintenanceWindows = []) {
     name, from, to, alerts: alerts.length, kinds, acknowledged: acked.length, escalated: alerts.filter((e) => e.escalatedAt).length,
     ackAvgMs: avg(ackTimes), ackMaxMs: ackTimes.length ? Math.max(...ackTimes) : null, resolvedAvgMs: avg(resolvedTimes), resolvedMaxMs: resolvedTimes.length ? Math.max(...resolvedTimes) : null,
     open: open.length, top, maintenance: maintenanceWindows,
+    notes: notesIn.length, noteList: notesIn.slice(-5).map((n) => ({ t: n.t, user: n.user, plc: n.plc, text: n.text })),
   };
+  const noteText = notesIn.length ? `; ${notesIn.length} note${notesIn.length === 1 ? '' : 's'}: ${notesIn.slice(-3).map((n) => `"${String(n.text).slice(0, 60)}" (${n.user})`).join(', ')}` : '';
   const time = (t) => new Date(t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' });
   const kindText = Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(', ');
   summary.text = alerts.length
-    ? `📋 ${name} (${time(from)} to ${time(to)}): ${alerts.length} alert${alerts.length === 1 ? '' : 's'} (${kindText}); acknowledged ${acked.length}${summary.ackAvgMs !== null ? ` in ${mins(summary.ackAvgMs)} on average (longest ${mins(summary.ackMaxMs)})` : ''}; ${summary.escalated ? `${summary.escalated} escalated; ` : ''}${open.length ? `${open.length} still open; ` : ''}most: ${top.map((t) => `${t.machine.split('.').pop()} (${t.n})`).join(', ')}${maintenanceWindows.length ? `; ${maintenanceWindows.length} maintenance window(s)` : ''}`
-    : `📋 ${name} (${time(from)} to ${time(to)}): no alerts${maintenanceWindows.length ? `; ${maintenanceWindows.length} maintenance window(s)` : ''}`;
-  return { summary, alerts: inWindow };
+    ? `📋 ${name} (${time(from)} to ${time(to)}): ${alerts.length} alert${alerts.length === 1 ? '' : 's'} (${kindText}); acknowledged ${acked.length}${summary.ackAvgMs !== null ? ` in ${mins(summary.ackAvgMs)} on average (longest ${mins(summary.ackMaxMs)})` : ''}; ${summary.escalated ? `${summary.escalated} escalated; ` : ''}${open.length ? `${open.length} still open; ` : ''}most: ${top.map((t) => `${t.machine.split('.').pop()} (${t.n})`).join(', ')}${maintenanceWindows.length ? `; ${maintenanceWindows.length} maintenance window(s)` : ''}${noteText}`
+    : `📋 ${name} (${time(from)} to ${time(to)}): no alerts${maintenanceWindows.length ? `; ${maintenanceWindows.length} maintenance window(s)` : ''}${noteText}`;
+  return { summary, alerts: inWindow, notes: notesIn };
 }
 
 /** The report as CSV: a summary line, then one row per alert */
-function reportCsv({ summary, alerts }) {
+function reportCsv({ summary, alerts, notes = [] }) {
   const q = (v) => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -84,12 +87,13 @@ function reportCsv({ summary, alerts }) {
     ['report', summary.name, iso(summary.from), iso(summary.to), `${summary.alerts} alerts`, `${summary.acknowledged} acknowledged`, `${summary.open} open`].map(q).join(','),
     ['at', 'event', 'plc', 'machine', 'state', 'acknowledged by', 'acknowledged at', 'note', 'resolved at', 'escalated at', 'text'].map(q).join(','),
     ...alerts.map((e) => [e.at, e.event, e.plcName ?? e.plc, e.machine, e.state, e.ack?.by, e.ack?.at, e.ack?.note, e.resolvedAt, e.escalatedAt, e.text].map(q).join(',')),
+    ...(notes.length ? [['note at', 'by', 'plc', 'pou', 'note'].map(q).join(','), ...notes.map((n) => [iso(n.t), n.user, n.plc, n.pou, n.text].map(q).join(','))] : []),
   ];
   return rows.join('\r\n') + '\r\n';
 }
 
 /** Posts each shift's report when it ends (reports.webhook); the last one sent is kept in reports.json */
-function createReports({ file, getConfig, events, maintenanceOf, log, audit }) {
+function createReports({ file, getConfig, events, maintenanceOf, log, audit, notes = () => [] }) {
   let last = 0;
   try {
     last = JSON.parse(fs.readFileSync(file, 'utf8')).lastEnd ?? 0;
@@ -116,7 +120,7 @@ function createReports({ file, getConfig, events, maintenanceOf, log, audit }) {
     } catch {
       // sent again after a restart, at worst
     }
-    const r = buildReport(w, events(), maintenanceOf(w.from, w.to));
+    const r = buildReport(w, events(), maintenanceOf(w.from, w.to), notes(w.from, w.to));
     log(`reports: ${w.name} report posted (${r.summary.alerts} alerts)`);
     audit?.add('gateway', 'report.posted', { shift: w.name, from: new Date(w.from).toISOString(), alerts: r.summary.alerts });
     void postWebhook(cfg.reports.webhook, cfg.reports.format || 'teams', { event: 'report', ...r.summary }, log);
@@ -144,7 +148,7 @@ function createReports({ file, getConfig, events, maintenanceOf, log, audit }) {
         // (no shift has ended in two days: today so far)
         w = ended[ended.length - 1] ?? { name: 'Today', from: new Date(new Date(now).setHours(0, 0, 0, 0)).getTime(), to: now };
       }
-      const r = buildReport(w, events(), maintenanceOf(w.from, w.to));
+      const r = buildReport(w, events(), maintenanceOf(w.from, w.to), notes(w.from, w.to));
       return { ...r, csv: reportCsv(r) };
     },
     /** The report posted now to reports.webhook (the setup page's "Send now") */

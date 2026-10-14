@@ -260,8 +260,12 @@ function createHost({ pouPath, post, ui }) {
     projectStoreSave: ({ requestId, kind, pouType, value }) => post({ type: 'projectStoreSaveResult', requestId, ...require('../shared/projectStore.cjs').saveStore(pou, kind, pouType, value ?? null) }),
     webhook: async ({ requestId, url, text }) => post({ type: 'webhookResult', requestId, ...(await require('../shared/webhook.cjs').postWebhook(url, text)) }),
     commissioning: ({ requestId, pouType }) => post({ type: 'commissioningResult', requestId, ...require('../shared/commissioningFile.cjs').readCommissioning(pou, pouType) }),
-    commissioningSave: ({ requestId, pouType, allowed, entry }) => post({ type: 'commissioningSaveResult', requestId, ...require('../shared/commissioningFile.cjs').saveCommissioning(pou, pouType, { allowed, entry }) }),
+    commissioningSave: ({ requestId, pouType, allowed, entry, sequences }) => post({ type: 'commissioningSaveResult', requestId, ...require('../shared/commissioningFile.cjs').saveCommissioning(pou, pouType, { allowed, entry, sequences }) }),
     eventsSave: ({ requestId, name, csv }) => post({ type: 'eventsSaveResult', requestId, ...require('../shared/eventsFile.cjs').saveEventsFile(pou, { name, csv }) }),
+    // Reports beside the PLC project (MachineScope.reports): saved, listed, read
+    reportFileSave: ({ requestId, name, content }) => post({ type: 'reportFileSaveResult', requestId, ...require('../shared/reportsFile.cjs').saveReportFile(pou, { name, content }) }),
+    reportFiles: ({ requestId }) => post({ type: 'reportFilesResult', requestId, ...require('../shared/reportsFile.cjs').listReportFiles(pou) }),
+    reportFileRead: ({ requestId, name }) => post({ type: 'reportFileReadResult', requestId, ...require('../shared/reportsFile.cjs').readReportFile(pou, name) }),
     addPlcFiles: ({ requestId, folder, files }) => post({ type: 'addPlcFilesResult', requestId, ...require('../shared/plcAddFiles.cjs').addPlcFiles(pou, { folder, files }) }),
     gitBlame: async ({ path: p, requestId }) => {
       if (!p || !lastSeen.has(p)) return post({ type: 'gitBlameResult', requestId, error: 'Not a file loaded in MachineScope' });

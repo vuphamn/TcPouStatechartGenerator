@@ -59,6 +59,9 @@ contextBridge.exposeInMainWorld('tcDesktop', {
   addPlcFiles: (pouPath, req) => ipcRenderer.invoke('tc:add-plc-files', pouPath, req),
   /** A live session's events beside the PLC project: { name, csv } → { ok, path } or { error } */
   eventsSave: (pouPath, req) => ipcRenderer.invoke('tc:events-save', pouPath, req),
+  reportFileSave: (pouPath, req) => ipcRenderer.invoke('tc:report-file-save', pouPath, req),
+  reportFiles: (pouPath) => ipcRenderer.invoke('tc:report-files', pouPath),
+  reportFileRead: (pouPath, name) => ipcRenderer.invoke('tc:report-file-read', pouPath, name),
   /** Commissioning beside the PLC project: { allowed, log }; saved with { allowed?, entry? } */
   /** An alert told to a webhook (Teams, Slack; https only): { ok } or { error } */
   webhook: (url, text) => ipcRenderer.invoke('tc:webhook', url, text),

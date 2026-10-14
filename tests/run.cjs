@@ -11,6 +11,9 @@
 //   A test that failed while the computer slept (a laptop's lid closed) is run once more. A hidden XAE (the Automation
 //   Interface's) a test left running is stopped after it
 //   --retry: the failed web tests run once more without --jobs too (CI: its shards)
+//   --quarantine <file>: a JSON list of tests ("web/editor-intel", or { "tests": [{ "id": … }] }: the nightly run's
+//   quarantine.json): each runs alone after its suite's others, said in the summary, not counted (a flaky test kept
+//   from failing the run while it is looked at)
 //   desktop on a locked Windows screen: skipped (Electron does not draw then: every test would time out);
 //   KSS_DESKTOP_WHEN_LOCKED=1 runs it anyway
 //   suites: unit (logic, no browser), web (the app in a headless browser), live (gateway / Link / ADS against a
@@ -84,11 +87,22 @@ let shard = null;
 let preview = false;
 let jobs = 1;
 let retry = false;
+let quarantine = new Set();
 let suites = [];
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--filter') filter = argv[++i];
   else if (argv[i] === '--preview') preview = true;
   else if (argv[i] === '--retry') retry = true;
+  else if (argv[i] === '--quarantine') {
+    const file = argv[++i];
+    try {
+      const j = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+      const ids = Array.isArray(j) ? j : Array.isArray(j?.tests) ? j.tests.map((t) => (typeof t === 'string' ? t : t?.id)) : [];
+      quarantine = new Set(ids.filter((x) => typeof x === 'string' && /^\w+\/[\w.-]+$/.test(x)));
+    } catch (e) {
+      console.log(`--quarantine: ${file} not read (${e.message}): none quarantined`);
+    }
+  }
   else if (argv[i] === '--jobs') jobs = Math.max(1, Math.min(6, parseInt(argv[++i], 10) || 1));
   else if (argv[i] === '--shard') {
     const [k, n] = String(argv[++i]).split('/').map(Number);
@@ -257,6 +271,10 @@ function failuresOf(log) {
       let list = suite === 'unit' ? files('unit', '.test.ts') : files(suite, '.test.cjs');
       if (shard) list = list.filter((_, i) => i % shard.n === shard.k - 1);
       if (!list.length) continue;
+      // (the quarantined ones: alone, after the others)
+      const isQuarantined = (f) => quarantine.has(`${suite}/${f.replace(/\.test\.(ts|cjs)$/, '')}`);
+      const held = list.filter(isQuarantined);
+      list = list.filter((f) => !isQuarantined(f));
       console.log(`\n${suite} (${list.length}${shard ? `, shard ${shard.k}/${shard.n}` : ''})`);
       // Everything but the logic and protocol tests runs against the app
       // (vscode: VS Code itself, with the extension: no app server)
@@ -309,8 +327,9 @@ function failuresOf(log) {
           return runOne(f, true);
         }
         const skipped = ok && /^skipped/m.test(text);
-        results.push({ suite, name, file: f, ok, ms: r.ms, log, flaky: again && ok });
-        console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s${again ? ', run again alone' : ''})`}`);
+        const quarantined = isQuarantined(f);
+        results.push({ suite, name, file: f, ok, ms: r.ms, log, flaky: again && ok, quarantined });
+        console.log(`  ${ok ? (skipped ? '-' : '✓') : 'x'} ${name} ${skipped ? '(skipped)' : `(${(r.ms / 1000).toFixed(1)} s${again ? ', run again alone' : ''}${quarantined ? ', quarantined: not counted' : ''})`}`);
         if (!ok) console.log(failuresOf(log));
       };
       const n = suite === 'web' ? Math.min(jobs, list.length) : 1;
@@ -328,7 +347,7 @@ function failuresOf(log) {
       // the memory the web tests left in use; guards-gw on 2026-10-12 and 13): once more, alone; the first run's log
       // kept (.first.log)
       if ((suite === 'web' && (n > 1 || retry)) || suite === 'live') {
-        const failedHere = results.filter((r) => r.suite === suite && !r.ok && r.file);
+        const failedHere = results.filter((r) => r.suite === suite && !r.ok && r.file && !r.quarantined);
         if (failedHere.length) console.log(`  (${failedHere.length} failed: run again, one at a time)`);
         for (const r of failedHere) {
           fs.copyFileSync(r.log, r.log.replace(/\.log$/, '.first.log'));
@@ -336,6 +355,8 @@ function failuresOf(log) {
           await runOne(r.file, true);
         }
       }
+      if (held.length) console.log(`  (${held.length} quarantined: alone, not counted)`);
+      for (const f of held) await runOne(f);
     }
   } finally {
     app?.stop();
@@ -347,7 +368,9 @@ function failuresOf(log) {
     const left = parseInt((ps.stdout || '').trim(), 10);
     if (left > 0) console.log(`\n(${left} test browser processes were still running: stopped)`);
   }
-  const failed = results.filter((r) => !r.ok);
+  const held = results.filter((r) => r.quarantined);
+  const counted = results.filter((r) => !r.quarantined);
+  const failed = counted.filter((r) => !r.ok);
   // In GitHub Actions: an annotation per failed test (shown on the run's page, and readable without signing in)
   if (process.env.GITHUB_ACTIONS) {
     const esc = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
@@ -362,7 +385,8 @@ function failuresOf(log) {
   if (sleptRuns.length) console.log(`\nrun again (the computer slept while they ran; the first run: its .first.log): ${sleptRuns.join(', ')}`);
   const flaky = results.filter((r) => r.flaky);
   if (flaky.length) console.log(`\nflaky (failed beside other tests, passed alone; the first run: its .first.log): ${flaky.map((r) => `${r.suite}/${r.name}`).join(', ')}`);
-  console.log(`\n${results.length - failed.length}/${results.length} passed${failed.length ? `; failed: ${failed.map((r) => `${r.suite}/${r.name}`).join(', ')} (logs in tests/.output/logs)` : ''}`);
+  if (held.length) console.log(`\nquarantined (run alone after the others, not counted): ${held.map((r) => `${r.suite}/${r.name} ${r.ok ? 'passed' : 'failed'}`).join(', ')}`);
+  console.log(`\n${counted.length - failed.length}/${counted.length} passed${failed.length ? `; failed: ${failed.map((r) => `${r.suite}/${r.name}`).join(', ')} (logs in tests/.output/logs)` : ''}`);
   process.exit(failed.length ? 1 : 0);
 })().catch((e) => {
   console.error(e);

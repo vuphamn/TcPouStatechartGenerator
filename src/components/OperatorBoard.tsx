@@ -56,6 +56,8 @@ interface BoardPlc {
   maintenance?: Maintenance | null;
   /** Planned maintenance windows (not started yet) */
   planned?: (Maintenance & { id: string; from: string })[];
+  /** The notes written live on this PLC (the Live tab's + Note, through this gateway), the last 24 h, newest first */
+  notes?: { t: number; user: string; text: string; pou?: string }[];
 }
 
 export interface AlertEvent {
@@ -111,6 +113,9 @@ export const OperatorBoard: React.FC = () => {
   const [origin, setOrigin] = useState<string | null>(params.get('gateway'));
   const [sso, setSso] = useState<GatewaySso | null>(null);
   const [token, setToken, remember, setRemember] = useStoredSecret('kss.gateway.token');
+  // A display (a TV by the line): &view=<a view-only token> from the gateway's setup page: the board only, no actions
+  const viewToken = params.get('view') || '';
+  const viewOnly = !!viewToken;
   const [tokenDraft, setTokenDraft] = useState('');
   const [status, setStatus] = useState<{ state: 'idle' | 'connecting' | 'connected' | 'error'; message: string }>({ state: 'idle', message: '' });
   const [plcs, setPlcs] = useState<BoardPlc[]>([]);
@@ -185,8 +190,9 @@ export const OperatorBoard: React.FC = () => {
 
   const connect = useCallback(() => {
     if (!origin) return;
-    const useSso = !!sso?.user;
-    if (!useSso && !token) {
+    const useSso = !viewOnly && !!sso?.user;
+    const useToken = viewToken || token;
+    if (!useSso && !useToken) {
       setStatus({ state: 'idle', message: '' });
       return;
     }
@@ -213,9 +219,9 @@ export const OperatorBoard: React.FC = () => {
     });
     conn.current = c;
     setStatus({ state: 'connecting', message: 'Connecting to the gateway...' });
-    c.connect(origin, token, useSso)
+    c.connect(origin, useToken, useSso)
       .then(({ user }) => {
-        setStatus({ state: 'connected', message: `Signed in as ${user}` });
+        setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
       })
@@ -224,7 +230,7 @@ export const OperatorBoard: React.FC = () => {
         // A wall screen: keep trying while the gateway or the network is away
         if (!/not accepted|denied|Sign in/i.test(err.message)) window.setTimeout(() => connectRef.current(), 10000);
       });
-  }, [origin, sso, token]);
+  }, [origin, sso, token, viewToken]);
   const connectRef = useRef(connect);
   connectRef.current = connect;
   useEffect(() => {
@@ -307,7 +313,7 @@ export const OperatorBoard: React.FC = () => {
     setNote('');
   };
 
-  const needsSignIn = status.state !== 'connected' && !sso?.user && !token;
+  const needsSignIn = status.state !== 'connected' && !sso?.user && !token && !viewOnly;
   return (
     <div id="operator-board" className="fixed inset-0 flex flex-col bg-slate-950 text-slate-100 select-none">
       <header className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-800 bg-slate-900 ${narrow ? 'px-3 py-2' : 'px-5 py-3'} ${open.length && Object.values(flashing).some((t) => t > now) ? 'board-header-flash' : ''}`}>
@@ -375,7 +381,12 @@ export const OperatorBoard: React.FC = () => {
             {(kioskIdx % kioskList.length) + 1} / {kioskList.length}
           </span>
         )}
-        {status.state === 'connected' && (
+        {viewOnly && (
+          <span id="board-view-only" className="px-2 py-0.5 rounded-full border border-slate-600 text-xs text-slate-400" title="A display: this board only, nothing can be done from it (a view-only token)">
+            view only
+          </span>
+        )}
+        {status.state === 'connected' && !viewOnly && (
           <select
             id="board-report"
             value=""
@@ -465,11 +476,13 @@ export const OperatorBoard: React.FC = () => {
                     <span className="board-maintenance ml-auto flex items-center gap-2 px-3 py-0.5 rounded-full bg-violet-800 text-violet-100 text-sm">
                       <Wrench className="w-4 h-4" /> Maintenance until {new Date(p.maintenance.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({p.maintenance.by}
                       {p.maintenance.note ? `: ${p.maintenance.note}` : ''}), alerts muted
-                      <button className="board-maintenance-end ml-1 px-2 rounded bg-violet-600 hover:bg-violet-500" onClick={() => void setMaintenance(p.id, 0, '')}>
-                        End
-                      </button>
+                      {!viewOnly && (
+                        <button className="board-maintenance-end ml-1 px-2 rounded bg-violet-600 hover:bg-violet-500" onClick={() => void setMaintenance(p.id, 0, '')}>
+                          End
+                        </button>
+                      )}
                     </span>
-                  ) : (
+                  ) : viewOnly ? null : (
                     <button className="board-maintenance-btn ml-auto flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-sm text-slate-300 hover:bg-slate-800" onClick={() => setMaintFor(maintFor === p.id ? null : p.id)} title="Mute this PLC's alerts during planned work">
                       <Wrench className="w-4 h-4" /> Maintenance...
                     </button>
@@ -481,14 +494,27 @@ export const OperatorBoard: React.FC = () => {
                       <span key={w.id} className="board-planned-item flex items-center gap-2 px-2.5 py-0.5 rounded-full border border-violet-700 text-violet-200">
                         🗓️ Planned {new Date(w.from).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} to {new Date(w.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} ({w.by}
                         {w.note ? `: ${w.note}` : ''})
-                        <button className="board-planned-remove px-1.5 rounded hover:bg-violet-800" onClick={() => void setMaintenance(p.id, 0, '', undefined, w.id)} title="Remove this planned window">
-                          ×
-                        </button>
+                        {!viewOnly && (
+                          <button className="board-planned-remove px-1.5 rounded hover:bg-violet-800" onClick={() => void setMaintenance(p.id, 0, '', undefined, w.id)} title="Remove this planned window">
+                            ×
+                          </button>
+                        )}
                       </span>
                     ))}
                   </div>
                 )}
-                {maintFor === p.id && (
+                {(p.notes ?? []).length > 0 && (
+                  <div className="board-notes mb-2 flex flex-col gap-0.5 text-sm">
+                    {(p.notes ?? []).slice(0, 3).map((n, i) => (
+                      <div key={`${n.t}-${i}`} className="board-note flex gap-2 text-emerald-200" title={n.pou ? `Written live on ${n.pou}` : undefined}>
+                        <span className="text-slate-400 font-mono shrink-0">{new Date(n.t).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="truncate">📝 {n.text}</span>
+                        <span className="text-slate-400 shrink-0">— {n.user}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {maintFor === p.id && !viewOnly && (
                   <form
                     className="board-maintenance-form mb-3 flex flex-wrap items-center gap-2 p-2 rounded border border-violet-800 bg-violet-950/40 text-sm"
                     onSubmit={(e) => {
@@ -516,11 +542,11 @@ export const OperatorBoard: React.FC = () => {
                   {p.machines.map((m) => (
                     <a
                       key={m.path}
-                      href={watchUrl(p, m)}
+                      href={viewOnly ? undefined : watchUrl(p, m)}
                       target="_blank"
                       rel="noreferrer"
-                      title={`${m.path} (${m.type}): open its diagram, live`}
-                      className={`board-tile block rounded-lg border-2 cursor-pointer hover:brightness-125 ${narrow ? 'px-2.5 py-2' : 'px-4 py-3'} ${flashOn(m.path) ? 'board-tile-flash' : ''} ${m.error ? 'bg-rose-800 border-rose-500' : m.stuck ? 'bg-amber-500 border-amber-300 text-slate-950' : m.state ? 'bg-emerald-950 border-emerald-800' : 'bg-slate-900 border-slate-800 text-slate-400'}`}
+                      title={viewOnly ? `${m.path} (${m.type})` : `${m.path} (${m.type}): open its diagram, live`}
+                      className={`board-tile block rounded-lg border-2 ${viewOnly ? '' : 'cursor-pointer hover:brightness-125'} ${narrow ? 'px-2.5 py-2' : 'px-4 py-3'} ${flashOn(m.path) ? 'board-tile-flash' : ''} ${m.error ? 'bg-rose-800 border-rose-500' : m.stuck ? 'bg-amber-500 border-amber-300 text-slate-950' : m.state ? 'bg-emerald-950 border-emerald-800' : 'bg-slate-900 border-slate-800 text-slate-400'}`}
                       data-path={m.path}
                       data-kind={m.error ? 'error' : m.stuck ? 'stuck' : m.state ? 'ok' : 'unknown'}
                     >
@@ -579,9 +605,11 @@ export const OperatorBoard: React.FC = () => {
                             <button className="board-ack-send px-2 rounded bg-sky-700 hover:bg-sky-600">OK</button>
                           </form>
                         ) : (
-                          <button className="board-ack-btn mt-2 px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => setNoteFor(a.id)}>
-                            Acknowledge
-                          </button>
+                          !viewOnly && (
+                            <button className="board-ack-btn mt-2 px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => setNoteFor(a.id)}>
+                              Acknowledge
+                            </button>
+                          )
                         ))}
                     </div>
                   );

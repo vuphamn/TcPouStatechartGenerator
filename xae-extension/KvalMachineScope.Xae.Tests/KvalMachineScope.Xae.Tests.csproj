@@ -17,6 +17,7 @@
     <Compile Include="..\KvalMachineScope.Xae\GitBlame.cs" Link="GitBlame.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcAddFiles.cs" Link="PlcAddFiles.cs" />
     <Compile Include="..\KvalMachineScope.Xae\CommissioningFile.cs" Link="CommissioningFile.cs" />
+    <Compile Include="..\KvalMachineScope.Xae\ReportsFolder.cs" Link="ReportsFolder.cs" />
     <Compile Include="..\KvalMachineScope.Xae\ProjectStore.cs" Link="ProjectStore.cs" />
     <Compile Include="..\KvalMachineScope.Xae\PlcSearch.cs" Link="PlcSearch.cs" />
     <Compile Include="..\KvalMachineScope.Xae\LiveMonitor.cs" Link="LiveMonitor.cs" />

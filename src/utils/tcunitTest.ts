@@ -43,6 +43,11 @@ export function generateTcUnitTest(o: {
   suiteName?: string;
   /** How long each state may last before the test fails there (ms: as measured live); else twice its recorded time */
   limitMs?: Record<string, number>;
+  /**
+   * Once the last state is reached: these inputs written (a guard made false), then the POU run for some cycles; the
+   * test fails when it goes to `to` (the transition that condition guards), passes when it has not by then
+   */
+  hold?: { to: string; set: { name: string; value: boolean | number | string }[]; notes?: string[]; cycles?: number; why: string };
 }): { name: string; xml: string; steps: number; declaration: string; methodName: string; methodCode: string; instance: string } {
   const cycleMs = o.cycleMs ?? 10;
   // The states one after another (the same one twice: once)
@@ -100,10 +105,46 @@ export function generateTcUnitTest(o: {
     for (const n of o.notes?.[k] ?? []) writes.push(`\t\t// ${n.replace(/\r?\n/g, ' ')}`);
     arms.push(`\t${k}: // ${steps[k - 1].state} -> ${steps[k].state} (after ${((steps[k].t - steps[k - 1].t) / 1000).toFixed(1)} s recorded)`, ...(writes.length ? writes : ['\t\t;']));
   }
+  // (with a hold: its step after the last state; a path of one state holds at once)
+  const H = steps.length;
+  const holdCycles = Math.max(10, Math.round(o.hold?.cycles ?? 100));
+  if (o.hold) {
+    const writes = o.hold.set.map((s) => `\t\tfbUut.${s.name} := ${o.rawStrings && typeof s.value === 'string' ? s.value : stLiteral(s.value)};`);
+    for (const x of o.hold.notes ?? []) writes.push(`\t\t// ${x.replace(/\r?\n/g, ' ')}`);
+    arms.push(`\t${H}: // ${o.hold.why.replace(/\r?\n/g, ' ')}: in ${steps[H - 1]?.state ?? '?'}, not to ${o.hold.to} for ${holdCycles} cycles`, ...(writes.length ? writes : ['\t\t;']));
+  }
+  const holdCode = o.hold
+    ? [
+        `IF nStep = ${H} THEN`,
+        '\tnCycles := nCycles + 1;',
+        `\tIF TO_DINT(fbUut.${o.stateVar}) = TO_DINT(${q(o.hold.to)}) THEN`,
+        `\t\tAssertEquals_DINT(Expected := TO_DINT(${q(steps[H - 1]?.state ?? o.hold.to)}), Actual := TO_DINT(fbUut.${o.stateVar}), Message := 'Step ${H}: went to ${o.hold.to} with its condition false');`,
+        '\t\tnResult := 2;',
+        `\t\tnFailedStep := ${H};`,
+        `\t\tnStep := ${H} + 1;`,
+        '\t\tTEST_FINISHED();',
+        `\tELSIF nCycles >= ${holdCycles} THEN`,
+        '\t\tnResult := 1;',
+        `\t\tnStep := ${H} + 1;`,
+        '\t\tTEST_FINISHED();',
+        '\tEND_IF',
+        '\tRETURN;',
+        'END_IF',
+      ]
+    : [];
+  // (a path of one state with a hold: no step to reach)
+  const pathDone = o.hold
+    ? [`IF nStep > ${n} THEN`, `\tnStep := ${H};`, '\tnCycles := 0;']
+    : [
+        `IF nStep > ${n} THEN`,
+        `\tAssertEquals_DINT(Expected := TO_DINT(aExpected[${n}]), Actual := TO_DINT(fbUut.${o.stateVar}), Message := 'The recorded run: its last state');`,
+        '\tnResult := 1;',
+        '\tTEST_FINISHED();',
+      ];
   const methodCode = [
     `TEST('${methodName}: ${steps.length} states recorded');`,
     '// (a Kval state machine: enable it first, as its base class needs, e.g. fbUut.enable())',
-    `IF nStep > ${n} THEN`,
+    `IF nStep > ${o.hold ? H : n} THEN`,
     '\tRETURN;',
     'END_IF',
     '// The inputs as recorded before this step',
@@ -111,16 +152,14 @@ export function generateTcUnitTest(o: {
     ...arms,
     'END_CASE',
     'fbUut();',
+    ...holdCode,
     `IF TO_DINT(fbUut.${o.stateVar}) = TO_DINT(aExpected[nStep]) THEN`,
     '\tnStep := nStep + 1;',
     '\tnCycles := 0;',
     'ELSE',
     '\tnCycles := nCycles + 1;',
     'END_IF',
-    `IF nStep > ${n} THEN`,
-    `\tAssertEquals_DINT(Expected := TO_DINT(aExpected[${n}]), Actual := TO_DINT(fbUut.${o.stateVar}), Message := 'The recorded run: its last state');`,
-    '\tnResult := 1;',
-    '\tTEST_FINISHED();',
+    ...pathDone,
     'ELSIF nCycles > aMaxCycles[nStep] THEN',
     `\tAssertEquals_DINT(Expected := TO_DINT(aExpected[nStep]), Actual := TO_DINT(fbUut.${o.stateVar}), Message := CONCAT('Step ', INT_TO_STRING(nStep)));`,
     '\tnResult := 2;',

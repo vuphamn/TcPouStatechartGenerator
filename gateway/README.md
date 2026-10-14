@@ -75,7 +75,7 @@ Requires Node.js 20 or later on the gateway machine.
 - **This gateway's AMS NetId** (`localNetId`), with suggestions from the machine's networks (each IP + `.1.1`).
 - **Find PLCs on the network:** the TwinCAT device search (UDP 48899), the one the XAE's *Add Route* dialog uses. It lists each device's name, AMS NetId, address, TwinCAT version and OS. PLCs behind a router don't get the broadcast: enter their addresses in the field next to the button. Tick the PLCs and click **Add the ticked ones**; check their ids and names. **Check** on a found device runs the step-by-step check (below) before you add it. The search only asks: it changes nothing on the devices.
 - **PLCs:** edit the list (id, name, AMS NetId, address, ADS port), add one by hand, remove one. **Test** connects to the PLC and reports its TwinCAT state and the PLC runtimes it finds on ports 851 to 854. When the PLC doesn't answer, it says which ADS route to add on the PLC. **Check** goes step by step, as the Live tab's Check does, from the gateway with its NetId: its address and network profile, ping, TwinCAT's search, the ADS port, the PLC's own NetId, the route. It shows the steps under the PLC's row. **Save to config.json** writes the list. The running gateway applies it at once: viewers of a PLC whose settings changed go live again.
-- **Access tokens:** the names and creation dates; **Create token** shows the new token once, with a *Copy* button; **Revoke** stops a token at once.
+- **Access tokens:** the names and creation dates; **Create token** shows the new token once, with a *Copy* button; **Revoke** stops a token at once. **View only (a display)** makes a token for a screen by the line: with it, the link to open on that screen (`/?board&view=<token>`). Signed in with it, the gateway answers the operator board only (its machines, saved boards and alerts); acknowledging, maintenance, reports and going live are refused.
 - **Alerts:** add, change and remove alert rules, **Send a test message** to a webhook, and see each rule's state (watching how many machines, the last alert).
 - **Operator boards:** saved boards (id, title, PLCs, root, a default limit), each with its link `/?board=<id>`.
 - **Recordings:** what the gateway records all day, for how many days, the disk it uses, and **Check for slowdowns now**.
@@ -136,7 +136,8 @@ Every alert is kept in `alerts-history.json` next to `config.json` (the latest 1
 
 Per shift (`"shifts": [{ "name": "Early", "from": "06:00", "to": "14:00" }, { "name": "Late", "from": "14:00", "to": "22:00" }, { "name": "Night", "from": "22:00", "to": "06:00" }]`; none: one per day), a report of the alerts: how many of each kind, how many acknowledged and how long it took (average, longest), how long until resolved, escalations, what is still open, the machines with the most, and the maintenance windows.
 - **Posted** to `"reports": { "webhook": "https://...", "format": "teams" }` when each shift ends (the setup page sets both).
-- **On the board:** **Report...** (the last shift, today, yesterday) shows it, with **Download CSV** (a summary line, then every alert with who acknowledged it and when).
+- **On the board:** **Report...** (the last shift, today, yesterday) shows it, with **Download CSV** (a summary line, then every alert with who acknowledged it and when, then the notes).
+- **Notes:** the notes written live through the gateway in the shift (the web app's Live tab, **+ Note**: kept in the audit log) are counted, the last three quoted with who wrote them.
 
 ## Operator board
 
@@ -150,6 +151,8 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
 - **On a phone** (a narrow screen), the board shows **Machines** or **Alerts**, with a tab for each and the count of open alerts, and smaller tiles.
 - **Watching:** the gateway follows the machines itself: one monitor per PLC, shared by every board, stopped a minute after the last board closes. The limits and error names come from an alert rule for that PLC and root when there is one.
 - **Signing in:** the board asks for a token (kept in that browser, for a wall screen), or offers **Sign in** when company sign-in is set up. After a lost connection it connects again by itself.
+- **A display:** `/?board&view=<token>` with a view-only token (the setup page): no sign-in, **view only** in the header, no Acknowledge, Maintenance or Report, and the tiles do not open diagrams.
+- **Notes:** under each PLC's name, the notes written live on it in the last 24 h (the web app's Live tab, **+ Note**), newest first, with who wrote them: "jam cleared here — ann".
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
 - **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles, and its planned windows are listed.
 - **The header** also counts the **escalated** alerts, and has **Report...** (see [Shift reports](#shift-reports)).

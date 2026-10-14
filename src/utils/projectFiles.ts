@@ -414,6 +414,39 @@ export async function saveEventsFile(pouPath: string, name: string, csv: string)
   return 'ok' in r ? r : { ok: false, error: r.error };
 }
 
+/** Reports can be kept beside the PLC project here (MachineScope.reports: XAE, VS Code, the desktop app) */
+export const canKeepReports = () => !!(desktop() as unknown as { reportFileSave?: unknown } | null)?.reportFileSave || isXaeHost();
+type ReportDesktop = { reportFileSave?: (p: string, q: { name: string; content: string }) => Promise<{ ok: boolean; path?: string; error?: string }>; reportFiles?: (p: string) => Promise<{ files: ReportFileInfo[]; error?: string }>; reportFileRead?: (p: string, n: string) => Promise<{ ok: boolean; content?: string; error?: string }> };
+export interface ReportFileInfo {
+  name: string;
+  size: number;
+  mtime: number;
+}
+/** A report kept beside the PLC project: MachineScope.reports/<name> (.html or .json) */
+export async function saveReportFile(pouPath: string, name: string, content: string): Promise<{ ok: boolean; path?: string; error?: string | null }> {
+  const d = desktop() as unknown as ReportDesktop | null;
+  if (d?.reportFileSave) return d.reportFileSave(pouPath, { name, content });
+  if (!isXaeHost()) return { ok: false, error: 'Keeping reports beside the project needs TwinCAT XAE, VS Code or the desktop app' };
+  const r = await hostRequest<{ ok: boolean; path?: string; error?: string | null }>({ type: 'reportFileSave', requestId: Date.now() % 1e9, name, content }, 'reportFileSaveResult', 30000);
+  return 'ok' in r ? r : { ok: false, error: r.error };
+}
+/** The reports kept beside the PLC project, newest first */
+export async function listReportFiles(pouPath: string): Promise<{ files: ReportFileInfo[]; error?: string | null }> {
+  const d = desktop() as unknown as ReportDesktop | null;
+  if (d?.reportFiles) return d.reportFiles(pouPath);
+  if (!isXaeHost()) return { files: [], error: 'Reports beside the project need TwinCAT XAE, VS Code or the desktop app' };
+  const r = await hostRequest<{ files?: ReportFileInfo[]; error?: string | null }>({ type: 'reportFiles', requestId: Date.now() % 1e9 }, 'reportFilesResult', 30000);
+  return 'files' in r ? { files: r.files ?? [], error: r.error ?? null } : { files: [], error: r.error };
+}
+/** One report's text */
+export async function readReportFile(pouPath: string, name: string): Promise<{ ok: boolean; content?: string; error?: string | null }> {
+  const d = desktop() as unknown as ReportDesktop | null;
+  if (d?.reportFileRead) return d.reportFileRead(pouPath, name);
+  if (!isXaeHost()) return { ok: false, error: 'Reports beside the project need TwinCAT XAE, VS Code or the desktop app' };
+  const r = await hostRequest<{ ok?: boolean; content?: string; error?: string | null }>({ type: 'reportFileRead', requestId: Date.now() % 1e9, name }, 'reportFileReadResult', 30000);
+  return 'ok' in r || 'content' in r ? { ok: !!(r as { ok?: boolean }).ok, content: (r as { content?: string }).content, error: r.error ?? null } : { ok: false, error: r.error };
+}
+
 /** The TcUnit tests can be run from here (TwinCAT XAE: its project open there) */
 export const canRunPlcTests = () => isXaeHost() && !isVsCodeHost();
 
@@ -424,9 +457,15 @@ export async function runPlcTests(): Promise<{ ok: boolean; message: string }> {
   return 'ok' in r ? r : { ok: false, message: r.error };
 }
 
+/** A saved sequence of states (Sequence…), by name */
+export interface StateSequence {
+  name: string;
+  states: string[];
+}
 export interface Commissioning {
   allowed: string[];
   log: CommissioningEntry[];
+  sequences?: StateSequence[];
   /** Kept beside the PLC project (shared through git) or in this browser */
   where: 'project' | 'browser';
 }
@@ -434,7 +473,8 @@ const webCommissioning = (pouType: string): Commissioning => {
   try {
     const raw = JSON.parse(localStorage.getItem(`kss.setStateAllowed|${pouType.toLowerCase()}`) || '[]');
     const log = JSON.parse(localStorage.getItem(`kss.setStateLog|${pouType.toLowerCase()}`) || '[]');
-    return { allowed: Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [], log: Array.isArray(log) ? log : [], where: 'browser' };
+    const seq = JSON.parse(localStorage.getItem(`kss.setStateSequences|${pouType.toLowerCase()}`) || '[]');
+    return { allowed: Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [], log: Array.isArray(log) ? log : [], sequences: Array.isArray(seq) ? seq.filter((s) => s && typeof s.name === 'string' && Array.isArray(s.states)) : [], where: 'browser' };
   } catch {
     return { allowed: [], log: [], where: 'browser' };
   }
@@ -443,34 +483,36 @@ const webCommissioning = (pouType: string): Commissioning => {
 /** The POU type's commissioning: the states the PLC may be set to, who set which (the project's file, else this browser) */
 export async function fetchCommissioning(pouPath: string | undefined, pouType: string): Promise<Commissioning> {
   if (isXaeHost()) {
-    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[] }>({ type: 'commissioning', pouType }, 'commissioningResult');
-    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[]; sequences?: StateSequence[] }>({ type: 'commissioning', pouType }, 'commissioningResult');
+    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], sequences: r.sequences ?? [], where: 'project' };
   }
-  const d = (window as unknown as { tcDesktop?: { commissioning?: (p: string, t: string) => Promise<{ allowed: string[]; log: CommissioningEntry[] }> } }).tcDesktop;
+  const d = (window as unknown as { tcDesktop?: { commissioning?: (p: string, t: string) => Promise<{ allowed: string[]; log: CommissioningEntry[]; sequences?: StateSequence[] }> } }).tcDesktop;
   if (d?.commissioning && pouPath) {
     const r = await d.commissioning(pouPath, pouType).catch(() => null);
-    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+    if (r) return { allowed: r.allowed ?? [], log: r.log ?? [], sequences: r.sequences ?? [], where: 'project' };
   }
   return webCommissioning(pouType);
 }
 
 /** Saved: the list (allowed) and / or a state set (entry, logged with the user) → the commissioning now, or { error } */
-export async function saveCommissioning(pouPath: string | undefined, pouType: string, req: { allowed?: string[]; entry?: CommissioningEntryRequest }): Promise<Commissioning | { error: string }> {
+export async function saveCommissioning(pouPath: string | undefined, pouType: string, req: { allowed?: string[]; entry?: CommissioningEntryRequest; sequences?: StateSequence[] }): Promise<Commissioning | { error: string }> {
   if (isXaeHost()) {
-    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[]; error?: string }>({ type: 'commissioningSave', pouType, ...req }, 'commissioningSaveResult');
-    if (r) return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+    const r = await hostAsk<{ allowed?: string[]; log?: CommissioningEntry[]; sequences?: StateSequence[]; error?: string }>({ type: 'commissioningSave', pouType, ...req }, 'commissioningSaveResult');
+    if (r) return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], sequences: r.sequences ?? [], where: 'project' };
   }
-  const d = (window as unknown as { tcDesktop?: { commissioningSave?: (p: string, t: string, q: unknown) => Promise<{ allowed?: string[]; log?: CommissioningEntry[]; error?: string }> } }).tcDesktop;
+  const d = (window as unknown as { tcDesktop?: { commissioningSave?: (p: string, t: string, q: unknown) => Promise<{ allowed?: string[]; log?: CommissioningEntry[]; sequences?: StateSequence[]; error?: string }> } }).tcDesktop;
   if (d?.commissioningSave && pouPath) {
-    const r: { allowed?: string[]; log?: CommissioningEntry[]; error?: string } = await d.commissioningSave(pouPath, pouType, req).catch((e: unknown) => ({ error: String(e) }));
-    return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], where: 'project' };
+    const r: { allowed?: string[]; log?: CommissioningEntry[]; sequences?: StateSequence[]; error?: string } = await d.commissioningSave(pouPath, pouType, req).catch((e: unknown) => ({ error: String(e) }));
+    return r.error ? { error: r.error } : { allowed: r.allowed ?? [], log: r.log ?? [], sequences: r.sequences ?? [], where: 'project' };
   }
   const cur = webCommissioning(pouType);
   if (req.allowed) cur.allowed = req.allowed;
+  if (req.sequences) cur.sequences = req.sequences.slice(0, 50);
   if (req.entry) cur.log = [...cur.log, { ...req.entry, t: new Date().toISOString(), user: '(this browser)' }].slice(-500);
   try {
     localStorage.setItem(`kss.setStateAllowed|${pouType.toLowerCase()}`, JSON.stringify(cur.allowed));
     localStorage.setItem(`kss.setStateLog|${pouType.toLowerCase()}`, JSON.stringify(cur.log));
+    localStorage.setItem(`kss.setStateSequences|${pouType.toLowerCase()}`, JSON.stringify(cur.sequences ?? []));
   } catch {
     return { error: 'Not kept (this browser keeps nothing)' };
   }

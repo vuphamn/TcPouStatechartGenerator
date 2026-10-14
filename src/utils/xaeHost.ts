@@ -229,6 +229,9 @@ export type AppMessage =
   | { type: 'addPlcFiles'; requestId: number; folder: string; files: { name: string; content: string }[] }
   /** A live session's events kept beside the PLC project (answered with eventsSaveResult) */
   | { type: 'eventsSave'; requestId: number; name: string; csv: string }
+  | { type: 'reportFileSave'; requestId: number; name: string; content: string }
+  | { type: 'reportFiles'; requestId: number }
+  | { type: 'reportFileRead'; requestId: number; name: string }
   /** The TcUnit tests run on the PLC (XAE: PRG_KssTests called by the task, built, downloaded, started) */
   | { type: 'runPlcTests'; requestId: number }
   /** Commissioning beside the PLC project (answered with commissioningResult / commissioningSaveResult) */

@@ -9,6 +9,7 @@ const path = require('path');
 const FILE = 'MachineScope.commissioning.json';
 const STATE_RX = /^[A-Za-z_][\w.]{0,120}$/;
 const MAX_LOG = 500;
+const NAME_RX = /^[\w .()+-]{1,60}$/;
 
 function plcProjectDir(pouPath, levels = 8) {
   if (typeof pouPath !== 'string' || !path.isAbsolute(pouPath)) return null;
@@ -34,7 +35,15 @@ const cleanType = (v) => {
         .map((e) => ({ t: e.t, user: String(e.user ?? ''), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.reason ? { reason: String(e.reason).slice(0, 300) } : {}), ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }))
         .slice(-MAX_LOG)
     : [];
-  return { allowed, log };
+  // (sequences kept by name: states one after another, 2 to 20; at most 50)
+  const sequences = Array.isArray(v?.sequences)
+    ? v.sequences
+        .filter((s) => s && typeof s.name === 'string' && NAME_RX.test(s.name.trim()) && Array.isArray(s.states))
+        .map((s) => ({ name: s.name.trim(), states: s.states.filter((x) => typeof x === 'string' && STATE_RX.test(x)).slice(0, 20) }))
+        .filter((s, i, all) => s.states.length >= 2 && all.findIndex((o) => o.name.toLowerCase() === s.name.toLowerCase()) === i)
+        .slice(0, 50)
+    : [];
+  return { allowed, log, sequences };
 };
 
 function readAll(dir) {
@@ -51,12 +60,12 @@ function readAll(dir) {
 /** A POU type's commissioning: { allowed: [states], log: [{ t, user, state, from, plc, ok }] } */
 function readCommissioning(pouPath, pouType) {
   const dir = plcProjectDir(pouPath);
-  if (!dir || !/^\w+$/.test(String(pouType))) return { allowed: [], log: [] };
-  return readAll(dir)[pouType] ?? { allowed: [], log: [] };
+  if (!dir || !/^\w+$/.test(String(pouType))) return { allowed: [], log: [], sequences: [] };
+  return readAll(dir)[pouType] ?? { allowed: [], log: [], sequences: [] };
 }
 
 /**
- * Saved: req { allowed?: [states] (the new list), entry?: { state, from, plc, ok, message } (a state set: logged with
+ * Saved: req { allowed?: [states] (the new list), sequences?: [{ name, states }] (the new list), entry?: { state, from, plc, ok, message } (a state set: logged with
  * this computer's user and the time) } → { allowed, log } as the file has them now, or { error }
  */
 function saveCommissioning(pouPath, pouType, req, user = os.userInfo().username) {
@@ -64,14 +73,15 @@ function saveCommissioning(pouPath, pouType, req, user = os.userInfo().username)
   if (!dir) return { error: 'No PLC project (.plcproj) above the POU' };
   if (!/^\w+$/.test(String(pouType))) return { error: 'Not a POU type' };
   const pous = readAll(dir);
-  const mine = pous[pouType] ?? { allowed: [], log: [] };
+  const mine = pous[pouType] ?? { allowed: [], log: [], sequences: [] };
   if (Array.isArray(req?.allowed)) mine.allowed = cleanType({ allowed: req.allowed }).allowed;
+  if (Array.isArray(req?.sequences)) mine.sequences = cleanType({ sequences: req.sequences }).sequences;
   const e = req?.entry;
   if (e && typeof e.state === 'string' && STATE_RX.test(e.state)) {
     mine.log = [...mine.log, { t: new Date().toISOString(), user: String(user || '?'), state: e.state, from: String(e.from ?? ''), plc: String(e.plc ?? ''), ok: e.ok !== false, ...(e.reason ? { reason: String(e.reason).slice(0, 300) } : {}), ...(e.message ? { message: String(e.message).slice(0, 300) } : {}) }].slice(-MAX_LOG);
   }
   pous[pouType] = mine;
-  const text = `${JSON.stringify({ note: "Commissioning of Kval MachineScope: each POU type's states the PLC may be set to from a state's menu (live), and who set which state when. Commit it with the project to share it.", pous }, null, 2)}\n`;
+  const text = `${JSON.stringify({ note: "Commissioning of Kval MachineScope: each POU type's states the PLC may be set to from a state's menu (live), its saved sequences of them, and who set which state when. Commit it with the project to share it.", pous }, null, 2)}\n`;
   try {
     fs.writeFileSync(path.join(dir, FILE), text);
   } catch (err) {

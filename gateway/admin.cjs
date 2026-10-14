@@ -80,7 +80,7 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       localNetId: config.localNetId ?? '',
       networks: localNetworks(),
       plcs: (config.plcs ?? []).map((p) => ({ ...p, status: plcStatus(p.id) })),
-      tokens: (config.tokens ?? []).map((t) => ({ name: t.name, created: t.created ?? null })),
+      tokens: (config.tokens ?? []).map((t) => ({ name: t.name, created: t.created ?? null, ...(t.view ? { view: true } : {}) })),
     };
   };
 
@@ -118,11 +118,15 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (!/^[\w .@-]{1,60}$/.test(name)) throw new Error('A name for the token: letters, digits, space, . @ - or _');
       if ((getConfig().tokens ?? []).some((t) => t.name.toLowerCase() === name.toLowerCase())) throw new Error(`A token named "${name}" exists: revoke it first`);
       const token = crypto.randomBytes(24).toString('base64url');
+      // (view only: a display, a TV by the line: the operator board, nothing else; its link carries it)
+      const view = body.view === true;
       update((c) => {
-        c.tokens = [...(c.tokens ?? []), { name, sha256: sha256(token), created: new Date().toISOString() }];
+        c.tokens = [...(c.tokens ?? []), { name, sha256: sha256(token), created: new Date().toISOString(), ...(view ? { view: true } : {}) }];
       });
-      log(`admin: token "${name}" created`);
-      return { name, token, state: state() };
+      log(`admin: ${view ? 'view-only ' : ''}token "${name}" created`);
+      audit?.add('setup page', 'token.create', { name, view });
+      const s = state();
+      return { name, token, view, ...(view ? { boardUrl: `${s.scheme}://${s.host}:${s.port}/?board&view=${token}` } : {}), state: s };
     },
     'GET alerts': async () => ({ rules: getConfig().alerts ?? [], status: alerts?.status() ?? [], plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) }),
     'POST alerts': async (body) => {
@@ -348,7 +352,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
 <section>
   <h2>Access tokens</h2>
   <div class="scroll"><table><thead><tr><th>Name</th><th>Created</th><th></th></tr></thead><tbody id="admin-tokens"></tbody></table></div>
-  <div class="row mt"><input type="text" id="admin-token-name" placeholder="Who is it for? (a person or team)" maxlength="60"><button class="primary" id="admin-token-create">Create token</button></div>
+  <div class="row mt"><input type="text" id="admin-token-name" placeholder="Who is it for? (a person or team)" maxlength="60"><label title="A display (a TV by the line): the operator board only, no actions; its link carries the token"><input type="checkbox" id="admin-token-view"> View only (a display)</label><button class="primary" id="admin-token-create">Create token</button></div>
   <div id="admin-token-new"></div>
   <div class="msg" id="admin-token-msg"></div>
   <p class="hint">Only a token's hash is kept: a new token is shown once. People enter it in the web app's Live tab. A revoked token stops working at once.</p>
@@ -536,7 +540,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     if (!tokens.length) body.append(el('tr', {}, el('td', { colSpan: 3, class: 'status' }, 'No tokens yet: nobody can go live through this gateway.')));
     for (const t of tokens) {
       body.append(el('tr', { 'data-token': t.name },
-        el('td', {}, t.name), el('td', {}, t.created ? new Date(t.created).toLocaleString() : ''),
+        el('td', {}, t.name, t.view ? el('span', { class: 'tag admin-token-view-tag', title: 'A display: the operator board only, no actions' }, ' view only') : ''), el('td', {}, t.created ? new Date(t.created).toLocaleString() : ''),
         el('td', { class: 'right' }, el('button', { class: 'danger admin-revoke', on: { click: () => revoke(t.name) } }, 'Revoke'))));
     }
   }
@@ -599,13 +603,15 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     const name = $('admin-token-name').value.trim();
     if (!name) return say('admin-token-msg', 'Enter who the token is for.', false);
     try {
-      const r = await call('tokens', { name });
+      const r = await call('tokens', { name, view: $('admin-token-view').checked });
       $('admin-token-name').value = '';
+      $('admin-token-view').checked = false;
       renderTokens(r.state.tokens);
       const copy = el('button', { id: 'admin-token-copy', on: { click: async () => { try { await navigator.clipboard.writeText(r.token); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select and copy it'; } } } }, 'Copy');
       $('admin-token-new').replaceChildren(el('div', { class: 'token' },
         el('div', { class: 'status' }, 'Token for "' + r.name + '": shown only now. Give it to that person.'),
-        el('div', { class: 'row mt6' }, el('span', { class: 'mono', id: 'admin-token-value' }, r.token), copy)));
+        el('div', { class: 'row mt6' }, el('span', { class: 'mono', id: 'admin-token-value' }, r.token), copy),
+        r.boardUrl ? el('div', { class: 'mt6' }, el('div', { class: 'status' }, 'The link for the display (open it on the TV; it shows the operator board, nothing can be done from it):'), el('a', { class: 'mono', id: 'admin-token-board-url', href: r.boardUrl, target: '_blank' }, r.boardUrl)) : ''));
       say('admin-token-msg', '');
     } catch (err) { say('admin-token-msg', err.message, false); }
   });

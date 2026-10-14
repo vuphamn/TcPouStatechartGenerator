@@ -114,14 +114,18 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('.live-watch-expr .live-watch-alert-snooze').catch(() => {});
   await h.sleep(200);
   const until60 = Number(await p.$eval('.live-watch-expr .live-watch-alert-snooze', (b) => b.getAttribute('data-until')).catch(() => 0));
+  // (then until the PLC leaves its state, then not snoozed)
   await p.click('.live-watch-expr .live-watch-alert-snooze').catch(() => {});
   await h.sleep(200);
-  const untilOff = await p.$eval('.live-watch-expr .live-watch-alert-snooze', (b) => b.getAttribute('data-until')).catch(() => null);
+  const snoozedIn = await p.$eval('.live-watch-expr .live-watch-alert-snooze', (b) => b.getAttribute('data-in')).catch(() => null);
+  await p.click('.live-watch-expr .live-watch-alert-snooze').catch(() => {});
+  await h.sleep(200);
+  const untilOff = await p.$eval('.live-watch-expr .live-watch-alert-snooze', (b) => (b.getAttribute('data-until') || '') + (b.getAttribute('data-in') || '')).catch(() => null);
   await vars([['nfeedcount', 4]]);
   await h.sleep(300);
   await vars([['nfeedcount', 14]]);
   const fired = await h.until(() => p.$$eval('.live-event[data-kind="alert"]', (x) => x.map((e) => e.textContent)).then((x) => x.find((t) => /became true/.test(t)) ?? null), 4000);
-  expect(Math.abs(until60 - Date.now() - 60 * 60_000) < 30_000 && untilOff === '' && !!fired, `then 1 h, then not snoozed: said again (${fired?.slice(-40)})`);
+  expect(Math.abs(until60 - Date.now() - 60 * 60_000) < 30_000 && !!snoozedIn && untilOff === '' && !!fired, `then 1 h, then while in ${snoozedIn}, then not snoozed: said again (${fired?.slice(-40)})`);
 
   // 3. A note now (an event); the values by shift (the counts)
   await p.click('#live-events-note').catch(() => {});
