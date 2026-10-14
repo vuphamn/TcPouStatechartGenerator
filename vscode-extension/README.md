@@ -204,7 +204,10 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
 - **Theme:** one for every MachineScope tab, kept for the next time. A theme chosen in a statechart's **Appearance** also applies to its
   code tabs (Kval MachineScope Code: the Method, POU and Enum editors) and its other statecharts at once. Tabs opened
-  later start with it too.
+  later start with it too. A `.TcDUT`'s, a `.TcGVL`'s editor is VS Code's own and takes VS Code's color theme, so
+  choosing a MachineScope theme also offers to set VS Code's to the same one (Dark+, Light+, Visual Studio Dark / Light,
+  Monokai, Solarized; Darcula, One Dark Pro, Dracula, GitHub or Nord when such a theme is installed, else **Find it**
+  searches for one): **Yes**, **Always**, **Not now** or **Never** (the setting `kvalMachineScope.syncColorTheme`).
 - **Live view** of the statechart (the desktop app's live session): its target is the one picked in VS Code's status
   bar, unless given in the Live tab; Browse lists this computer's routes and the TwinCAT devices answering on the
   network. **Build…** is the TwinCAT view's build.

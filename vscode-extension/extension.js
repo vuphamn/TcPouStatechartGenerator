@@ -107,6 +107,8 @@ function activate(context) {
           if (typeof theme !== 'string' || !/^[\w-]{1,40}$/.test(theme)) return;
           void context.globalState.update('kss.appearance', { theme });
           for (const set of charts.values()) for (const p of set) if (p !== from) p({ type: 'appearance', theme });
+          // (VS Code's own editors (a .TcDUT's, a .TcGVL's) take VS Code's theme: set to match, asked first)
+          void require('./colorThemeSync.cjs').syncColorTheme(vscode, theme).catch(() => {});
         },
       },
       // (bookmarks: this POU's from the extension's store; the app's changes kept there, the other panels told)

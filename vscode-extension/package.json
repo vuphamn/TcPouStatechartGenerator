@@ -920,6 +920,13 @@
           "default": "auto",
           "markdownDescription": "The language of the Structured Text sections (TwinCAT files opened without their XML). `auto`: `st` when an extension provides it (Structured Text language Support), else this extension's own grammar (`kval-st`). Or a language id (`st`, `twincat-st`, `kval-st`)."
         },
+        "kvalMachineScope.syncColorTheme": {
+          "type": "string",
+          "enum": ["ask", "always", "never"],
+          "enumDescriptions": ["Ask each time a MachineScope theme is chosen", "Set VS Code's color theme to match, without asking", "Leave VS Code's color theme as it is"],
+          "default": "ask",
+          "markdownDescription": "A theme chosen in MachineScope (a statechart's Theme & Preset) also sets VS Code's color theme to the same one (VS Code Dark+, Light+, Visual Studio Dark / Light, Monokai, Solarized; Darcula, One Dark Pro, Dracula, GitHub, Nord when installed), so VS Code's own editors (a `.TcDUT`'s, a `.TcGVL`'s) match it. `ask`: asked each time; `always`; `never`."
+        },
         "kvalMachineScope.twincat.confirmStartStop": {
           "type": "boolean",
           "default": true,
