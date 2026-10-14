@@ -197,19 +197,30 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   await p.evaluate(() => document.getElementById('dock-tab-problems')?.click());
   await h.sleep(700);
   expect(/Add PT/.test(await clickFix('fbNoTime : TON is called without PT')), 'fbNoTime without PT: Add PT');
-  await p.waitForSelector('#text-prompt-submit', { timeout: 3000 }).catch(() => {});
+  // (its time typed: T#1S proposed; a wrong one said why)
+  await p.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const ptProposed = await p.$eval('#text-prompt-input', (e) => e.value).catch(() => null);
+  await p.evaluate(() => { const i = document.getElementById('text-prompt-input'); i.select(); });
+  await p.keyboard.type('one second');
+  const ptRefused = await p.$eval('#text-prompt-submit', (b) => b.disabled).catch(() => null);
+  await p.evaluate(() => { const i = document.getElementById('text-prompt-input'); i.select(); });
+  await p.keyboard.type('T#500MS');
   await p.click('#text-prompt-submit').catch(() => {});
   await h.sleep(1000);
   await goToSymbol('timers');
-  expect((await code()).trim() === 'fbNoTime(PT := T#1S, IN := cmd_bStart);', `its call given PT := T#1S (${JSON.stringify((await code()).trim())})`);
+  expect(ptProposed === 'T#1S' && ptRefused === true && (await code()).trim() === 'fbNoTime(PT := T#500MS, IN := cmd_bStart);', `its call given the PT typed (${JSON.stringify((await code()).trim())})`);
   await p.evaluate(() => document.getElementById('dock-tab-problems')?.click());
   await h.sleep(700);
   expect(/Add description/.test(await clickFix('S_RUN has no line in getStateDescription()')), 'S_RUN without description: Add description');
-  await p.waitForSelector('#text-prompt-submit', { timeout: 3000 }).catch(() => {});
+  // (its text editable: Run proposed from the name; typed with a quote, written as ST wants it)
+  await p.waitForSelector('#text-prompt-input', { timeout: 3000 }).catch(() => {});
+  const descProposed = await p.$eval('#text-prompt-input', (e) => e.value).catch(() => null);
+  await p.evaluate(() => { const i = document.getElementById('text-prompt-input'); i.select(); });
+  await p.keyboard.type("Running (it's on)");
   await p.click('#text-prompt-submit').catch(() => {});
   await h.sleep(1000);
   await goToSymbol('getstatedescription');
-  expect(/\tE_S\.S_IDLE: getStateDescription := 'Idle';\n\tE_S\.S_RUN: getStateDescription := 'Run';\nEND_CASE/.test(await code()), `a line for S_RUN, like the others (${JSON.stringify((await code()).split('\n').slice(1, 3).join(' | '))})`);
+  expect(descProposed === 'Run' && /\tE_S\.S_IDLE: getStateDescription := 'Idle';\n\tE_S\.S_RUN: getStateDescription := 'Running \(it\$'s on\)';\nEND_CASE/.test(await code()), `a line for S_RUN with the text typed (${JSON.stringify((await code()).split('\n').slice(1, 3).join(' | '))})`);
 
   // 9. Shift+F6: rename in place (the field at the name, its uses highlighted while it is open)
   await goToSymbol('timers');
@@ -230,7 +241,7 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   await h.sleep(1000);
   const renamed = await code();
   const marksAfter = await p.evaluate((id) => [...(document.getElementById(id)?.parentElement?.querySelectorAll('mark') ?? [])].length, ID);
-  expect(renamed.trim() === 'fbDelay(PT := T#1S, IN := cmd_bStart);' && marksAfter === 0, `renamed in place: ${JSON.stringify(renamed.trim())}, the highlights gone (${marksAfter})`);
+  expect(renamed.trim() === 'fbDelay(PT := T#500MS, IN := cmd_bStart);' && marksAfter === 0, `renamed in place: ${JSON.stringify(renamed.trim())}, the highlights gone (${marksAfter})`);
 
   // 10. Build (XAE edition): XAE's own build of its solution, its Error List here (a click opens it), no write
   await p.click('#header-save-btn').catch(() => {});
@@ -245,7 +256,7 @@ const DUT = `<?xml version="1.0" encoding="utf-8"?>\n<TcPlcObject Version="1.1.0
   expect(xb.asked && /1 error, 1 warning/.test(xb.status) && xb.errs.length === 1 && /SM_X\.timers\(\) line 1/.test(xb.errs[0]) && !xb.write, `Build in XAE: "${xb.status}" ${xb.errs.join(' | ')} (no write: ${!xb.write})`);
   await p.click('#plc-build-errors .plc-build-item').catch(() => {});
   await h.sleep(900);
-  const onTimers = await p.evaluate(() => /fbDelay\(PT := T#1S/.test(document.getElementById('method-implementation-editor')?.value ?? ''));
+  const onTimers = await p.evaluate(() => /fbDelay\(PT := T#500MS/.test(document.getElementById('method-implementation-editor')?.value ?? ''));
   expect(onTimers, 'its error opened: the Method Editor on timers()');
 
   // 11. The word at the caret: its uses marked (machineState, each of its uses in doState()); a keyword: none

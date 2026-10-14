@@ -7022,19 +7022,22 @@ export const App: React.FC = () => {
         const i = fix.line - 1;
         const rx = new RegExp(`(\\b${fix.name}\\s*\\()(\\s*\\))?`, 'i');
         if (!rx.test(lines[i] ?? '')) return showCopyToast(`${fix.name}'s call was not found where it was: check the Problems again`, 'error');
-        const changed = (lines[i] ?? '').replace(rx, (_all, open: string, empty?: string) => (empty ? `${open}PT := T#1S)` : `${open}PT := T#1S, `));
+        const withPt = (pt: string) => (lines[i] ?? '').replace(rx, (_all, open: string, empty?: string) => (empty ? `${open}PT := ${pt})` : `${open}PT := ${pt}, `));
         setPromptRequest({
           title: `Give ${fix.name} its time?`,
-          label: `In ${fix.method}(), line ${fix.line}: PT := T#1S (change it to the time it should run):`,
-          details: [changed.trim()],
-          confirmOnly: true,
+          label: `In ${fix.method}(), line ${fix.line}: ${fix.name}'s PT, the time it should run (a TIME literal such as T#1S or T#500MS, or a variable):`,
+          details: [withPt('T#1S').trim()],
+          initial: 'T#1S',
+          monospace: true,
+          validate: (v) => (/^(L?TIME|L?T)#[\d_.]+(D|H|M|S|MS|US|NS)([\d_.]+(D|H|M|S|MS|US|NS))*$/i.test(v.trim()) || /^[A-Za-z_][\w.]*$/.test(v.trim()) ? null : 'A TIME literal (T#1S, T#500MS, T#1M30S) or a variable'),
           submitLabel: 'Add PT',
-          onSubmit: () => {
+          onSubmit: (v) => {
+            const pt = v.trim();
             const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
-            lines[i] = changed;
+            lines[i] = withPt(pt);
             const res = handleSaveMethodCode(fix.method, lines.join(eol));
             if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
-            showCopyToast(`${fix.name} is given PT := T#1S in ${fix.method}()`, 'success');
+            showCopyToast(`${fix.name} is given PT := ${pt} in ${fix.method}()`, 'success');
             setCodeJump({ method: fix.method, line: fix.line, nonce: Date.now() });
           },
         });
@@ -7052,23 +7055,25 @@ export const App: React.FC = () => {
         let prefix = names.length > 1 ? names.reduce((p, n) => { let k = 0; while (k < p.length && p[k] === n[k]) k++; return p.slice(0, k); }) : '';
         prefix = prefix.slice(0, prefix.lastIndexOf('_') + 1);
         const text = fix.name.slice(prefix.length).split('_').filter(Boolean).map((w) => w[0] + w.slice(1).toLowerCase()).join(' ') || fix.name;
-        const added = `${indent}${qualifier}${fix.name}: getStateDescription := '${text}';`;
+        // (the text typed: a STRING literal, its quotes and dollars escaped as ST wants: $' and $$)
+        const lineFor = (t: string) => `${indent}${qualifier}${fix.name}: getStateDescription := '${t.split('$').join('$$').split("'").join("$'")}';`;
         // Before the CASE's ELSE, else its END_CASE
         let at = lines.findIndex((l) => /^\s*ELSE\b/i.test(l));
         if (at < 0) at = lines.findIndex((l) => /^\s*END_CASE\b/i.test(l));
         if (at < 0) return showCopyToast('getStateDescription() has no CASE to add it to', 'error');
         setPromptRequest({
           title: `Describe ${fix.name}?`,
-          label: 'In getStateDescription() (change the text as you like):',
-          details: [added.trim()],
-          confirmOnly: true,
+          label: `Its description, added to getStateDescription() (${qualifier}${fix.name}: getStateDescription := '…';):`,
+          initial: text,
+          validate: (v) => (!v.trim() ? 'Some text' : /[\r\n]/.test(v) ? 'One line' : v.trim().length > 250 ? 'At most 250 characters' : null),
           submitLabel: 'Add description',
-          onSubmit: () => {
+          onSubmit: (v) => {
+            const t = v.trim();
             const eol = m.code.includes('\r\n') ? '\r\n' : '\n';
-            lines.splice(at, 0, added);
+            lines.splice(at, 0, lineFor(t));
             const res = handleSaveMethodCode('getStateDescription', lines.join(eol));
             if (!res?.success) return showCopyToast(res?.error || 'Could not change the method', 'error');
-            showCopyToast(`${fix.name}: described as '${text}'`, 'success');
+            showCopyToast(`${fix.name}: described as '${t}'`, 'success');
           },
         });
         return;
