@@ -109,6 +109,18 @@
         "icon": "$(sparkle)"
       },
       {
+        "command": "kvalMachineScope.ioDisable",
+        "title": "Disable",
+        "category": "TwinCAT",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "kvalMachineScope.ioEnable",
+        "title": "Enable",
+        "category": "TwinCAT",
+        "icon": "$(pass)"
+      },
+      {
         "command": "kvalMachineScope.openStructuredText",
         "title": "Open as Structured Text",
         "category": "TwinCAT",
@@ -691,6 +703,14 @@
       ],
       "commandPalette": [
         {
+          "command": "kvalMachineScope.ioDisable",
+          "when": "false"
+        },
+        {
+          "command": "kvalMachineScope.ioEnable",
+          "when": "false"
+        },
+        {
           "command": "kvalMachineScope.plcActions",
           "when": "kvalMachineScope.twincatProject"
         },
@@ -813,6 +833,26 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "kvalMachineScope.ioDisable",
+          "when": "view == kvalMachineScope.solution && viewItem == ioEnabled",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.ioEnable",
+          "when": "view == kvalMachineScope.solution && viewItem == ioDisabled",
+          "group": "inline@1"
+        },
+        {
+          "command": "kvalMachineScope.ioDisable",
+          "when": "view == kvalMachineScope.solution && viewItem == ioEnabled",
+          "group": "io@1"
+        },
+        {
+          "command": "kvalMachineScope.ioEnable",
+          "when": "view == kvalMachineScope.solution && viewItem == ioDisabled",
+          "group": "io@1"
+        },
         {
           "command": "kvalMachineScope.addPou",
           "when": "view == kvalMachineScope.solution && viewItem == plcFolder",

@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildFromProject, remoteManagerBuilds, xaeAvailable, rmCrashesFor } = require('../shared/tcBuild.cjs');
 const { readPlcTree, plcProjectsUnder, readTasks, readLibraries } = require('./plcTree.cjs');
+const { readIoTree, setDisabled } = require('./ioTree.cjs');
 const { installedLibraries, setLibraryVersion, removeLibrary, addLibrary, editPlcproj, compareVersions } = require('./libraryEdit.cjs');
 const { projectOf, projectTarget, findPlcproj } = require('./twincatProject.cjs');
 const { systemClient, localTwinCatNetId } = require('../shared/liveSession.cjs');
@@ -616,6 +617,8 @@ function register(context, { activeFile, sectionUriOf }) {
             // (an unreadable .tsproj)
           }
           const tasksNode = tasks.length ? [{ tasksNode: true, tasks, root: project.root }] : [];
+          // (the I/O: its devices and their boxes, as XAE's I/O > Devices)
+          const ioNode = project.tsproj ? [{ ioNode: true, tsproj: project.tsproj }] : [];
           return [...tasksNode, ...plcProjectsUnder(project.root).map((plcproj) => {
             try {
               const t = readPlcTree(plcproj);
@@ -624,8 +627,19 @@ function register(context, { activeFile, sectionUriOf }) {
             } catch {
               return { label: path.basename(plcproj), plc: true, children: [] };
             }
-          })];
+          }), ...ioNode];
         }
+        if (el.ioNode) {
+          let devices = [];
+          try {
+            devices = readIoTree(el.tsproj);
+          } catch {
+            // (an unreadable .tsproj: none)
+          }
+          return [{ devicesNode: true, devices, tsproj: el.tsproj }];
+        }
+        if (el.devicesNode) return el.devices.map((d) => ({ io: d, tsproj: el.tsproj }));
+        if (el.io) return el.io.children.map((c) => ({ io: c, tsproj: el.tsproj }));
         if (el.tasksNode) return el.tasks.map((t) => ({ task: t, root: el.root }));
         if (el.task) {
           // (the programs it calls: each opens as Structured Text)
@@ -656,6 +670,24 @@ function register(context, { activeFile, sectionUriOf }) {
           it.iconPath = new vscode.ThemeIcon('project');
           it.description = 'PLC project';
           it.contextValue = 'plcFolder';
+          return it;
+        }
+        if (el.ioNode) return Object.assign(new vscode.TreeItem('I/O', vscode.TreeItemCollapsibleState.Expanded), { iconPath: new vscode.ThemeIcon('circuit-board'), id: `io|${el.tsproj}` });
+        if (el.devicesNode) return Object.assign(new vscode.TreeItem('Devices', el.devices.length ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None), { iconPath: new vscode.ThemeIcon('server-environment'), description: `${el.devices.length}`, id: `io-devices|${el.tsproj}` });
+        if (el.io) {
+          const n = el.io;
+          const off = n.disabled || n.parentDisabled;
+          const it = new vscode.TreeItem(n.name, n.children.length ? (n.kind === 'device' ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed) : vscode.TreeItemCollapsibleState.None);
+          it.id = `io|${n.file}|${n.kind}|${n.id}`;
+          it.iconPath = new vscode.ThemeIcon(n.missing ? 'warning' : n.kind === 'device' ? 'server' : 'chip', off ? new vscode.ThemeColor('disabledForeground') : n.missing ? new vscode.ThemeColor('problemsWarningIcon.foreground') : undefined);
+          it.description = n.missing ? 'its file is missing' : n.disabled ? 'disabled' : n.parentDisabled ? `disabled with ${n.parentDisabled}` : undefined;
+          it.tooltip = new vscode.MarkdownString([
+            `**${n.name}** (${n.kind === 'device' ? 'I/O device' : 'box'}, Id ${n.id})`,
+            n.disabled ? 'Disabled (XAE: Disable; its children with it)' : n.parentDisabled ? `Disabled with ${n.parentDisabled}: enable that one` : 'Enabled',
+            `In ${path.relative(path.dirname(el.tsproj), n.file) || path.basename(n.file)}`,
+            n.ownFile && n.kind === 'box' ? 'Kept in a file of its own: its terminals are not read here' : null,
+          ].filter(Boolean).join('  \n'));
+          it.contextValue = n.missing || (n.ownFile && n.kind === 'box') ? 'ioUnknown' : n.disabled ? 'ioDisabled' : n.parentDisabled ? 'ioParentDisabled' : 'ioEnabled';
           return it;
         }
         if (el.tasksNode) {
@@ -750,6 +782,40 @@ function register(context, { activeFile, sectionUriOf }) {
     };
   })();
   context.subscriptions.push(vscode.commands.registerCommand('kvalMachineScope.refreshSolution', () => solution.reload()));
+  // I/O devices and boxes disabled / enabled (XAE's Disable: Disabled="true" on the device's or box's element, in the
+  // .tsproj or the device's own .xti), asked first; the PLC uses it once the configuration is activated
+  const toggleIo = async (el, disabled) => {
+    const n = el?.io;
+    if (!n || n.missing) return false;
+    const what = `${n.kind === 'device' ? 'the I/O device' : 'the box'} ${n.name}`;
+    const below = n.children.length ? ` and the ${n.children.length} box${n.children.length === 1 ? '' : 'es'} under it` : '';
+    const ok = await vscode.window.showWarningMessage(
+      `${disabled ? 'Disable' : 'Enable'} ${what}?`,
+      { modal: true, detail: `${disabled ? `It${below} will not be used: the PLC runs without them (their inputs not read, their outputs not written) once the configuration is activated.` : `It${below} will be used again once the configuration is activated.`} Written to ${path.basename(n.file)} (Disabled="true", as TwinCAT XAE's ${disabled ? 'Disable' : 'Enable'} does). If the project is open in TwinCAT XAE, it asks to reload the file.` },
+      disabled ? 'Disable' : 'Enable'
+    );
+    if (!ok) return false;
+    const r = setDisabled(n.file, n.kind, n.id, disabled);
+    if (!r.ok) {
+      vscode.window.showErrorMessage(r.error);
+      return false;
+    }
+    solution.reload();
+    vscode.window.showInformationMessage(`${n.name} ${disabled ? 'disabled' : 'enabled'} in ${path.basename(n.file)}. Activate the configuration (TwinCAT XAE) for the PLC to use it.`);
+    return true;
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand('kvalMachineScope.ioDisable', (el) => toggleIo(el, true)),
+    vscode.commands.registerCommand('kvalMachineScope.ioEnable', (el) => toggleIo(el, false))
+  );
+  // (the I/O's files changed (XAE saved them, a git pull): the tree read again)
+  const ioWatcher = vscode.workspace.createFileSystemWatcher('**/{*.tsproj,_Config/IO/*.xti}');
+  let ioTimer = null;
+  const ioChanged = () => {
+    clearTimeout(ioTimer);
+    ioTimer = setTimeout(() => solution.reload(), 500);
+  };
+  context.subscriptions.push(ioWatcher, ioWatcher.onDidChange(ioChanged), ioWatcher.onDidCreate(ioChanged), ioWatcher.onDidDelete(ioChanged));
 
   // ---- The Online Change view: what an online change would change (as XAE's Online Change details), by kind, each a
   // click from its code; the warnings first

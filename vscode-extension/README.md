@@ -180,6 +180,13 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   the programs it calls (its `.TcTTO`; a click opens one). Logged in, its online values beside it, read from the PLC's
   `TwinCAT_SystemInfoVarList._TaskInfo`: the last cycle's execution time and the longest since logged in, and a warning
   when it overran its cycle; **Show Trend** (its button) watches its execution time (in 100 ns) and opens the trend.
+- **I/O** (the Solution view, as XAE's I/O > Devices): each I/O device (the `.tsproj`'s `<Io>`; one in a file of its own
+  read from `_Config\IO\<device>.xti`) and its boxes nested as on the bus (couplers, terminals, drives). A disabled
+  one is greyed, **disabled**; its children **disabled with** it. **Disable** / **Enable** (a device's or box's
+  right-click menu, or its button), asked first, write what TwinCAT XAE's Disable writes: `Disabled="true"` on that
+  device's or box's element, in its file, nothing else changed (the Automation Interface's `ITcSmTreeItem.Disabled`,
+  `SMDS_DISABLED`). The PLC uses it once the configuration is activated (TwinCAT XAE: Activate Configuration); an XAE
+  with the project open asks to reload the file. The view follows the files: changed in XAE or by git, it is read again.
 - **Start / Stop:** the PLC application, over ADS, while logged in. Asked first (they run or stop the machine's
   program); `kvalMachineScope.twincat.confirmStartStop` switches that off.
 - Needs TwinCAT XAE on this computer for Build and Login (its Automation Interface); Start, Stop and the PLC's state need
