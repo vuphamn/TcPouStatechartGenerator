@@ -1,15 +1,17 @@
-// AI assistants (Claude Code, and any that reads the folder) told what is selected in MachineScope's statechart: the
-// canvas is a webview they cannot see. A folder set up for it (Kval MachineScope: Set up Claude Code for this folder)
+// AI assistants (Claude Code, GitHub Copilot, and any that reads the folder) told what is selected in MachineScope's
+// statechart: the canvas is a webview they cannot see. A folder set up for it (Kval MachineScope: Set up AI assistants
+// for this folder)
 // has .machinescope/ (its own .gitignore: git ignores it all), where the selected state is written as Markdown
 // (selection.md: its code, transitions, description, documentation, problems, live state) each time it changes, and a
-// section in CLAUDE.md (between markers, replaced on a new set-up) that says where to read it and how to document a
-// state. A folder without .machinescope/ gets nothing written.
+// section (between markers, replaced on a new set-up) that says where to read it and how to document a state, in the
+// files the assistants read by themselves: CLAUDE.md (Claude Code) and .github/copilot-instructions.md (GitHub Copilot,
+// in VS Code and Visual Studio). A folder without .machinescope/ gets nothing written.
 const fs = require('fs');
 const path = require('path');
 
 const DIR = '.machinescope';
 const SELECTION = 'selection.md';
-const START = '<!-- kval-machinescope:start (written by Kval MachineScope: Set up Claude Code for this folder; it replaces this section) -->';
+const START = '<!-- kval-machinescope:start (written by Kval MachineScope: Set up AI assistants for this folder; it replaces this section) -->';
 const END = '<!-- kval-machinescope:end -->';
 
 const NOTHING_YET = '# MachineScope selection\n\nNo state selected yet: select one in a Kval MachineScope statechart (VS Code).\n';
@@ -63,17 +65,29 @@ function upsertSection(existing) {
   return `${text.replace(/\s*$/, '')}\n\n${section}`;
 }
 
-/** A folder set up: .machinescope/ (git-ignored by its own .gitignore, a first selection.md) and CLAUDE.md's section */
+/** The section put into a file (created if missing, its folder too) → 'created' | 'updated' | 'kept' */
+function upsertFile(file) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  const after = upsertSection(before);
+  if (after !== before) fs.writeFileSync(file, after);
+  return before === null ? 'created' : after !== before ? 'updated' : 'kept';
+}
+
+/** The files the assistants read by themselves: Claude Code's, GitHub Copilot's (VS Code and Visual Studio) */
+const INSTRUCTION_FILES = ['CLAUDE.md', path.join('.github', 'copilot-instructions.md')];
+
+/**
+ * A folder set up: .machinescope/ (git-ignored by its own .gitignore, a first selection.md) and the section in CLAUDE.md
+ * and .github/copilot-instructions.md → { dir, claude, copilot, created, updated, files: [{ file, result }] }
+ */
 function setupFolder(root) {
   const dir = path.join(root, DIR);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.gitignore'), '# Kval MachineScope: the statechart selection for AI assistants (not committed)\n*\n');
   if (!fs.existsSync(path.join(dir, SELECTION))) fs.writeFileSync(path.join(dir, SELECTION), NOTHING_YET);
-  const claude = path.join(root, 'CLAUDE.md');
-  const before = fs.existsSync(claude) ? fs.readFileSync(claude, 'utf8') : null;
-  const after = upsertSection(before);
-  if (after !== before) fs.writeFileSync(claude, after);
-  return { dir, claude, created: before === null, updated: before !== null && after !== before };
+  const files = INSTRUCTION_FILES.map((f) => ({ file: path.join(root, f), result: upsertFile(path.join(root, f)) }));
+  return { dir, claude: files[0].file, copilot: files[1].file, created: files[0].result === 'created', updated: files[0].result === 'updated', files };
 }
 
 /** Set up for it: the folder has .machinescope/ */
@@ -94,4 +108,4 @@ function writeSelection(root, pouPath, markdown) {
   }
 }
 
-module.exports = { claudeSection, upsertSection, setupFolder, isSetUp, writeSelection, DIR, SELECTION, START, END };
+module.exports = { claudeSection, upsertSection, setupFolder, isSetUp, writeSelection, INSTRUCTION_FILES, DIR, SELECTION, START, END };

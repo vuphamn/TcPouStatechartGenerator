@@ -257,16 +257,17 @@ function activate(context) {
   // Start, Stop, Logout, the target and the Remote Manager build
   tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
   // AI assistants: a workspace folder set up for them (.machinescope/selection.md: the statechart's selected state; a
-  // section in CLAUDE.md saying where to read it and how to document a state), asked first
+  // section in CLAUDE.md and .github/copilot-instructions.md saying where to read it and how to document a state), asked
+  // first
   context.subscriptions.push(
     vscode.commands.registerCommand('kvalMachineScope.setupAssistant', async () => {
       const folders = vscode.workspace.workspaceFolders ?? [];
       if (!folders.length) return void vscode.window.showWarningMessage('Open the PLC project\'s folder first (File > Open Folder).');
-      const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'The folder Claude Code works in' });
+      const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'The folder the AI assistants work in' });
       if (!folder) return;
       const ok = await vscode.window.showInformationMessage(
-        `Set up ${folder.name} for Claude Code?`,
-        { modal: true, detail: 'Creates .machinescope/ in it (git ignores it: its own .gitignore), where the state selected in a MachineScope statechart is written each time it changes (its code, transitions, description, documentation, problems), and adds a Kval MachineScope section to CLAUDE.md (created if missing) saying where to read it and how to document a state. Ask Claude Code about "the selected state" then.' },
+        `Set up ${folder.name} for AI assistants (Claude Code, GitHub Copilot)?`,
+        { modal: true, detail: 'Creates .machinescope/ in it (git ignores it: its own .gitignore), where the state or states selected in a MachineScope statechart are written each time the selection changes (code, transitions, description, documentation, problems), and adds a Kval MachineScope section saying where to read it and how to document a state to CLAUDE.md (Claude Code) and .github/copilot-instructions.md (GitHub Copilot), each created if missing. Ask about "the selected state" then.' },
         'Set up'
       );
       if (ok !== 'Set up') return;
@@ -274,8 +275,9 @@ function activate(context) {
         const r = require('./assistantSetup.cjs').setupFolder(folder.uri.fsPath);
         // (the open statecharts: their selection written at once)
         for (const set of charts.values()) for (const p of set) p({ type: 'assistantContextRequest' });
-        const pick = await vscode.window.showInformationMessage(`${folder.name} is set up: select a state in a statechart, then ask Claude Code about "the selected state". CLAUDE.md ${r.created ? 'created' : r.updated ? 'updated' : 'already had the section'}.`, 'Open CLAUDE.md');
-        if (pick) await vscode.window.showTextDocument(vscode.Uri.file(r.claude));
+        const said = r.files.map((f) => `${path.basename(path.dirname(f.file)) === '.github' ? '.github/copilot-instructions.md' : path.basename(f.file)} ${f.result === 'kept' ? 'already had it' : f.result}`).join(', ');
+        const pick = await vscode.window.showInformationMessage(`${folder.name} is set up (${said}): select a state in a statechart, then ask Claude Code or Copilot about "the selected state".`, 'Open CLAUDE.md', 'Open copilot-instructions.md');
+        if (pick) await vscode.window.showTextDocument(vscode.Uri.file(pick === 'Open CLAUDE.md' ? r.claude : r.copilot));
       } catch (err) {
         vscode.window.showErrorMessage(`Not set up: ${err.message}`);
       }

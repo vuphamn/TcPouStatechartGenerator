@@ -14,7 +14,7 @@ namespace KvalMachineScope.Xae
     {
         public const string DirName = ".machinescope";
         public const string SelectionName = "selection.md";
-        public const string Start = @"<!-- kval-machinescope:start (written by Kval MachineScope: Set up Claude Code for this folder; it replaces this section) -->";
+        public const string Start = @"<!-- kval-machinescope:start (written by Kval MachineScope: Set up AI assistants for this folder; it replaces this section) -->";
         public const string End = @"<!-- kval-machinescope:end -->";
         private const string NothingYet = "# MachineScope selection\n\nNo state selected yet: select one in a Kval MachineScope statechart (VS Code).\n";
 
@@ -68,12 +68,31 @@ Its ""Updated"" time says how recent it is; when it names no state, ask which on
         public sealed class SetupResult
         {
             public string Dir { get; set; }
+            /// <summary>CLAUDE.md (Claude Code)</summary>
             public string Claude { get; set; }
+            /// <summary>.github\copilot-instructions.md (GitHub Copilot, in Visual Studio and VS Code)</summary>
+            public string Copilot { get; set; }
             public bool Created { get; set; }
             public bool Updated { get; set; }
+            /// <summary>Each file's result: created, updated or kept</summary>
+            public string ClaudeResult { get; set; }
+            public string CopilotResult { get; set; }
         }
 
-        /// <summary>A folder set up: .machinescope\ (git-ignored by its own .gitignore, a first selection.md) and CLAUDE.md's section</summary>
+        /// <summary>The section put into a file (created if missing, its folder too): created, updated or kept</summary>
+        private static string UpsertFile(string file)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            var before = File.Exists(file) ? File.ReadAllText(file) : null;
+            var after = UpsertSection(before);
+            if (after != before) File.WriteAllText(file, after, new System.Text.UTF8Encoding(false));
+            return before == null ? "created" : after != before ? "updated" : "kept";
+        }
+
+        /// <summary>
+        /// A folder set up: .machinescope\ (git-ignored by its own .gitignore, a first selection.md) and the section in the
+        /// files the assistants read by themselves: CLAUDE.md (Claude Code) and .github\copilot-instructions.md (Copilot)
+        /// </summary>
         public static SetupResult SetupFolder(string root)
         {
             var dir = Path.Combine(root, DirName);
@@ -82,10 +101,10 @@ Its ""Updated"" time says how recent it is; when it names no state, ask which on
             var selection = Path.Combine(dir, SelectionName);
             if (!File.Exists(selection)) File.WriteAllText(selection, NothingYet.Replace("(VS Code)", "(TwinCAT XAE, Visual Studio)"));
             var claude = Path.Combine(root, "CLAUDE.md");
-            var before = File.Exists(claude) ? File.ReadAllText(claude) : null;
-            var after = UpsertSection(before);
-            if (after != before) File.WriteAllText(claude, after, new System.Text.UTF8Encoding(false));
-            return new SetupResult { Dir = dir, Claude = claude, Created = before == null, Updated = before != null && after != before };
+            var copilot = Path.Combine(root, ".github", "copilot-instructions.md");
+            var c1 = UpsertFile(claude);
+            var c2 = UpsertFile(copilot);
+            return new SetupResult { Dir = dir, Claude = claude, Copilot = copilot, Created = c1 == "created", Updated = c1 == "updated", ClaudeResult = c1, CopilotResult = c2 };
         }
 
         /// <summary>Set up for it: the folder has .machinescope\</summary>

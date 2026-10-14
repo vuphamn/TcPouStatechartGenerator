@@ -3523,15 +3523,15 @@ export const App: React.FC = () => {
   const handleSetupAssistant = () => {
     if (isVsCodeHost()) return postToHost({ type: 'assistantSetup' });
     setPromptRequest({
-      title: 'Set up Claude Code for this folder?',
-      label: "The solution's folder (else the PLC project's) gets .machinescope\\ (git ignores it: its own .gitignore), where the state selected in a MachineScope window is written each time it changes (its code, transitions, description, documentation, problems), and a Kval MachineScope section in CLAUDE.md (created if missing) saying where to read it and how to document a state. Run Claude Code in a terminal at that folder, then ask about \"the selected state\".",
+      title: 'Set up AI assistants for this folder?',
+      label: "The solution's folder (else the PLC project's) gets .machinescope\\ (git ignores it: its own .gitignore), where the state selected in a MachineScope window is written each time it changes (its code, transitions, description, documentation, problems), and a Kval MachineScope section saying where to read it and how to document a state in CLAUDE.md (Claude Code) and .github\\copilot-instructions.md (GitHub Copilot in Visual Studio), each created if missing. Then ask Claude Code (a terminal at that folder) or Copilot Chat about \"the selected state\".",
       confirmOnly: true,
       submitLabel: 'Set up',
       onSubmit: () =>
         void setupAssistantFolder().then((r) => {
           if (!r.ok) return showCopyToast(`Not set up: ${r.error}`, 'error', 8000);
           setAssistantNonce((n) => n + 1);
-          showCopyToast(`${r.root} is set up for Claude Code: CLAUDE.md ${r.created ? 'created' : r.updated ? 'updated' : 'already had the section'}; select a state, then ask about "the selected state"`, 'success', 10000);
+          showCopyToast(`${r.root} is set up for AI assistants (CLAUDE.md, .github\\copilot-instructions.md): select a state, then ask Claude Code or Copilot about "the selected state"`, 'success', 10000);
         }),
     });
   };
@@ -6832,7 +6832,7 @@ export const App: React.FC = () => {
     cmds.push({ id: 'view:engine', group: 'View', label: `Layout engine: ${layoutEngine === 'elk' ? 'Dagre' : 'ELK'}`, run: () => setLayoutEngine(layoutEngine === 'elk' ? 'dagre' : 'elk') });
     cmds.push({ id: 'app:save', group: 'File', label: 'Save to project', hint: 'Ctrl+S', run: () => handleSaveToProjectRef.current() });
     // (AI assistants: the folder they work in told the selected state; VS Code: its command, XAE: asked here)
-    if (isXaeHost() && !isCodeMode()) cmds.push({ id: 'app:setup-assistant', group: 'Global', label: 'Set up Claude Code for this folder…', hint: 'the selected state, for AI assistants', run: () => handleSetupAssistantRef.current() });
+    if (isXaeHost() && !isCodeMode()) cmds.push({ id: 'app:setup-assistant', group: 'Global', label: 'Set up AI assistants for this folder (Claude Code, Copilot)…', hint: 'the selected state(s), for AI assistants', run: () => handleSetupAssistantRef.current() });
     cmds.push({ id: 'app:undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => stepHistory(true) });
     cmds.push({ id: 'app:tidy-edges', group: 'Canvas', label: 'Tidy up edges', hint: 'the states stay: the edges drawn again from them', run: () => { const n = mermaidViewerRef.current?.tidyEdges() ?? 0; showCopyToast(n ? `Edges tidied up: ${n} drawn again from their states` : 'Edges tidied up (none had a route of its own)', 'success'); } });
     cmds.push({ id: 'app:diff-all', group: 'Edit', label: 'All changes (Diff)', hint: "every editor's edits and the files' since saved", run: () => showDiff({ source: 'all' }) });

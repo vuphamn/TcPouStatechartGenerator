@@ -54,6 +54,8 @@ try {
   const r = setupFolder(root);
   const claude = fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
   expect(r.updated && !r.created && claude.startsWith('# EFX\n\nOur own notes.\n\n<!-- kval-machinescope:start') && claude.includes(END) && claude.includes('.machinescope/selection.md') && claude.includes('"notes": { "nodes": { "<STATE>": "<markdown>" } }') && claude.includes("write a quote as `$'`"), 'CLAUDE.md: the section added after its own text');
+  const copilot = fs.readFileSync(path.join(root, '.github', 'copilot-instructions.md'), 'utf8');
+  expect(r.copilot === path.join(root, '.github', 'copilot-instructions.md') && r.files[1].result === 'created' && copilot.startsWith('<!-- kval-machinescope:start') && copilot.includes('.machinescope/selection.md') && copilot.includes('"The selected states" means all of them'), "GitHub Copilot's .github/copilot-instructions.md: the same section");
   expect(fs.readFileSync(path.join(root, '.machinescope', '.gitignore'), 'utf8').includes('\n*\n') && /No state selected yet/.test(fs.readFileSync(path.join(root, '.machinescope', 'selection.md'), 'utf8')), '.machinescope/: git-ignored, a first selection');
   // (set up again: the section replaced, not added twice; the rest kept)
   fs.writeFileSync(path.join(root, 'CLAUDE.md'), claude.replace('## TwinCAT project and Kval MachineScope', '## old heading') + '\n## After\n');

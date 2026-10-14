@@ -27,10 +27,16 @@ namespace KvalMachineScope.Xae.Tests
                 StringAssert.Contains(claude, ".machinescope/selection.md");
                 StringAssert.Contains(claude, "write a quote as `$'`");
                 StringAssert.Contains(File.ReadAllText(Path.Combine(root, ".machinescope", ".gitignore")), "\n*\n");
+                // (GitHub Copilot's: .github\copilot-instructions.md, created with the same section)
+                Assert.AreEqual("created", r.CopilotResult);
+                Assert.AreEqual(Path.Combine(root, ".github", "copilot-instructions.md"), r.Copilot);
+                StringAssert.StartsWith(File.ReadAllText(r.Copilot), AssistantContext.Start);
+                StringAssert.Contains(File.ReadAllText(r.Copilot), ".machinescope/selection.md");
                 // (set up again: replaced, not added twice)
                 AssistantContext.SetupFolder(root);
                 var again = File.ReadAllText(r.Claude);
                 Assert.AreEqual(2, again.Split(new[] { AssistantContext.End }, System.StringSplitOptions.None).Length);
+                Assert.AreEqual(2, File.ReadAllText(r.Copilot).Split(new[] { AssistantContext.End }, System.StringSplitOptions.None).Length);
                 StringAssert.Contains(again, "Our notes.");
                 Assert.IsTrue(AssistantContext.WriteSelection(root, pou, "file `%POU_PATH%`"));
                 Assert.AreEqual("file `EFX/POUs/EFX.TcPOU`", File.ReadAllText(Path.Combine(root, ".machinescope", "selection.md")));

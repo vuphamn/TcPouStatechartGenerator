@@ -1470,7 +1470,7 @@ namespace KvalMachineScope.Xae
             {
                 var res = AssistantContext.SetupFolder(root);
                 Log.Write("assistants: set up " + root);
-                Post(new { type = "assistantSetupResult", requestId, ok = true, root, claude = res.Claude, created = res.Created, updated = res.Updated });
+                Post(new { type = "assistantSetupResult", requestId, ok = true, root, claude = res.Claude, copilot = res.Copilot, created = res.Created, updated = res.Updated, claudeResult = res.ClaudeResult, copilotResult = res.CopilotResult });
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {

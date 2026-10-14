@@ -202,18 +202,19 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   (the committed TwinCAT version, from git), and a rename that reaches other POUs read and write the PLC project's
   files, as in XAE.
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
-- **Claude Code (and other AI assistants) see the selected state:** the canvas is a webview they cannot read, so
-  **Kval MachineScope: Set up Claude Code for this folder** (the Command Palette) prepares the opened folder: it
-  creates `.machinescope/` (git ignores it: its own `.gitignore`), where the state selected in a statechart is written
-  as `selection.md` each time it changes (its POU and file, its `CASE` branch with its lines, its transitions out in
-  their order and in, its description, its MachineScope documentation, its problems, the PLC's state when live), and
-  adds a Kval MachineScope section to `CLAUDE.md` (created if missing; replaced, not added twice, when set up again):
-  how TwinCAT's files and the state machines are read, to read that file for "the selected state", and where a
-  state's documentation goes (its `getStateDescription()` line, its Markdown in `<POU>.machinescope.json`, a comment
-  in its branch). Ask "explain the selected state" or "document the selected state". States selected together
-  (Ctrl+Click, Shift+drag) are all in it, a section each: "write documentation for the selected states" does each one.
-  A folder not set up gets nothing written; deleting `.machinescope/` stops it. MachineScope's command palette
-  (Ctrl+Shift+P in a statechart) has **Set up Claude Code for this folder…** too.
+- **AI assistants (Claude Code, GitHub Copilot) see the selected state:** the canvas is a webview they cannot read,
+  so **Kval MachineScope: Set up AI assistants for this folder** (the Command Palette; also in MachineScope's own,
+  Ctrl+Shift+P in a statechart) prepares the opened folder: it creates `.machinescope/` (git ignores it: its own
+  `.gitignore`), where the state selected in a statechart, or the states selected together (Ctrl+Click, Shift+drag: a
+  section each), is written as `selection.md` each time the selection changes (the POU and file, each state's `CASE`
+  branch with its lines, its transitions out in their order and in, its description, its MachineScope documentation,
+  its problems, the PLC's state when live), and adds a Kval MachineScope section to `CLAUDE.md` (Claude Code) and
+  `.github/copilot-instructions.md` (Copilot Chat), each created if missing (replaced, not added twice): how TwinCAT's
+  files and the state machines are read, to read that file for "the selected state(s)", and where a state's
+  documentation goes (its `getStateDescription()` line, its Markdown in `<POU>.machinescope.json`, a comment in its
+  branch). Ask "explain the selected state" or "write documentation for the selected states". **Copilot Chat:** Agent
+  mode reads the file itself; in Ask mode attach it, `#file:.machinescope/selection.md explain the selected state`
+  (or Add Context… → Files). A folder not set up gets nothing written; deleting `.machinescope/` stops it.
 - **Theme:** one for every MachineScope tab, kept for the next time. A theme chosen in a statechart's **Appearance** also applies to its
   code tabs (Kval MachineScope Code: the Method, POU and Enum editors) and its other statecharts at once. Tabs opened
   later start with it too. A `.TcDUT`'s, a `.TcGVL`'s editor is VS Code's own and takes VS Code's color theme, so
