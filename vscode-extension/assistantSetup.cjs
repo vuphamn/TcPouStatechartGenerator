@@ -31,11 +31,12 @@ function claudeSection() {
 - A state is its CASE branch; a transition is \`<state variable> := <Enum>.<STATE>;\` in it, its condition the
   \`IF\` / \`ELSIF\` around it (the first true one wins: their order is their priority).
 
-### "The selected state", "the canvas", "this state"
-Read \`.machinescope/selection.md\` first: the state selected in the MachineScope statechart (VS Code), rewritten each
-time the selection changes: its POU and file, its CASE branch (method and lines), its transitions out (in order) and in,
-its description, its documentation, its problems and, when live, the PLC's state. Its "Updated" time says how recent it
-is; when it names no state, ask which one.
+### "The selected state(s)", "the canvas", "this state"
+Read \`.machinescope/selection.md\` first: the state selected in the MachineScope statechart, or the states selected
+together (Ctrl+Click, Shift+drag: "Selected states (n)", a section each), rewritten each time the selection changes:
+the POU and file; per state its CASE branch (method and lines), its transitions out (in order) and in, its description,
+its documentation, its problems; when live, the PLC's state. "The selected states" means all of them: do each one.
+Its "Updated" time says how recent it is; when it names no state, ask which one.
 
 ### Documenting a state (when asked)
 - **Its description** (one line, shown under the state): a line in the CASE of the POU's \`getStateDescription()\`,

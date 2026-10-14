@@ -230,7 +230,7 @@ import { shiftReportHtml, shiftReportName, shiftWindow, stateTimesIn, type Shift
 import { ReferencedMachine, declaredMachineMembers, referencedMachines } from './utils/referencedMachines.ts';
 import { getStateCodeFromPou, getMethodCodeFromPou, getAllMethodsFromPou, getPropertyAccessorsFromPou, getActionsFromPou } from './utils/pouStateEditor.ts';
 import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
-import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, canKeepReports, saveReportFile, listReportFiles, readReportFile, type Commissioning, type StateSequence } from './utils/projectFiles.ts';
+import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, setupAssistantFolder, canKeepReports, saveReportFile, listReportFiles, readReportFile, type Commissioning, type StateSequence } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
 import { assistantContextMarkdown } from './utils/assistantContext.ts';
@@ -3519,38 +3519,62 @@ export const App: React.FC = () => {
     }
     return out;
   }, [pouContent, identifiedStatesResult, lintFindings]);
+  // The folder AI assistants work in set up for them (VS Code: the extension's command, which asks; XAE: asked here)
+  const handleSetupAssistant = () => {
+    if (isVsCodeHost()) return postToHost({ type: 'assistantSetup' });
+    setPromptRequest({
+      title: 'Set up Claude Code for this folder?',
+      label: "The solution's folder (else the PLC project's) gets .machinescope\\ (git ignores it: its own .gitignore), where the state selected in a MachineScope window is written each time it changes (its code, transitions, description, documentation, problems), and a Kval MachineScope section in CLAUDE.md (created if missing) saying where to read it and how to document a state. Run Claude Code in a terminal at that folder, then ask about \"the selected state\".",
+      confirmOnly: true,
+      submitLabel: 'Set up',
+      onSubmit: () =>
+        void setupAssistantFolder().then((r) => {
+          if (!r.ok) return showCopyToast(`Not set up: ${r.error}`, 'error', 8000);
+          setAssistantNonce((n) => n + 1);
+          showCopyToast(`${r.root} is set up for Claude Code: CLAUDE.md ${r.created ? 'created' : r.updated ? 'updated' : 'already had the section'}; select a state, then ask about "the selected state"`, 'success', 10000);
+        }),
+    });
+  };
+  const handleSetupAssistantRef = useRef(handleSetupAssistant);
+  handleSetupAssistantRef.current = handleSetupAssistant;
   // The selected state for AI assistants (VS Code: the extension writes it to .machinescope/selection.md in a folder set
   // up for it, Claude Code reads it): sent a moment after the selection or what it shows changes; again when asked
   const [assistantNonce, setAssistantNonce] = useState(0);
-  const assistantStateId = lastSelectedState?.id ?? null;
+  // (the states selected together (Ctrl+Click, Shift+drag), else the one selected last)
+  const assistantStateIds = (multiSelected.length > 1 ? multiSelected : lastSelectedState?.id ? [lastSelectedState.id] : []).filter((s) => s && s !== '[*]');
+  const assistantKey = assistantStateIds.join('|');
   useEffect(() => {
-    if (!isVsCodeHost() || isCodeMode() || !pouContent) return;
+    if (!isXaeHost() || isCodeMode() || !pouContent) return;
     const t = window.setTimeout(() => {
-      const id = assistantStateId;
-      const st = id ? identifiedStatesResult.states.find((s) => s.id === id) ?? { id } : null;
       const method = stateMethodName(pouContent);
       const m = getMethodCodeFromPou(pouContent, method);
       const raw = m.methodFound ? m.code.split(/\r?\n/) : [];
-      const range = id && raw.length ? caseBranchRange(blankComments(m.code).split(/\r?\n/), id) : null;
+      const blanked = raw.length ? blankComments(m.code).split(/\r?\n/) : [];
+      const selected = assistantStateIds.map((id) => {
+        const range = blanked.length ? caseBranchRange(blanked, id) : null;
+        return {
+          state: identifiedStatesResult.states.find((s) => s.id === id) ?? { id },
+          branch: range ? { line: range.start + 1, code: raw.slice(range.start, range.end).map((l) => l.replace(/\s+$/, '')) } : null,
+          outgoing: availableEdges.filter((e) => e.from === id && e.to).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)).map((e) => ({ to: e.to, condition: e.condition || e.label, priority: e.priority })),
+          incoming: availableEdges.filter((e) => e.to === id && e.from && e.from !== '[*]').map((e) => ({ from: e.from, condition: e.condition || e.label })),
+          documentation: diagramNotes.nodes[id] || '',
+          problems: stateProblems[id]?.messages || [],
+        };
+      });
       const markdown = assistantContextMarkdown({
         pou: pouTypeName ?? pouFileName.replace(/\.TcPOU$/i, ''),
         layoutFile: layoutFileNameOf(pouFileName),
         method,
         stateVar: identifiedStatesResult.stateVarName || 'machineState',
         enumType: stateEnumTypeOf(pouContent) || dutContent.match(/<DUT\b[^>]*\bName="([^"]+)"/)?.[1] || '',
-        state: st,
-        branch: range ? { line: range.start + 1, code: raw.slice(range.start, range.end).map((l) => l.replace(/\s+$/, '')) } : null,
-        outgoing: id ? availableEdges.filter((e) => e.from === id && e.to).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)).map((e) => ({ to: e.to, condition: e.condition || e.label, priority: e.priority })) : [],
-        incoming: id ? availableEdges.filter((e) => e.to === id && e.from && e.from !== '[*]').map((e) => ({ from: e.from, condition: e.condition || e.label })) : [],
-        documentation: (id && diagramNotes.nodes[id]) || '',
-        problems: (id && stateProblems[id]?.messages) || [],
+        selected,
         live: liveStatus.state === 'connected' ? { connected: true, state: liveSession.current?.state ?? null, sinceMs: exprStateRef.current?.sinceMs != null ? Date.now() - exprStateRef.current.sinceMs : null, plc: liveStatus.target } : null,
       });
-      postToHost({ type: 'assistantContext', markdown, state: id ?? '' });
+      postToHost({ type: 'assistantContext', markdown, state: assistantKey });
     }, 500);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assistantStateId, pouContent, availableEdges, diagramNotes, stateProblems, identifiedStatesResult, liveSession.current?.state, liveStatus.state, assistantNonce]);
+  }, [assistantKey, pouContent, availableEdges, diagramNotes, stateProblems, identifiedStatesResult, liveSession.current?.state, liveStatus.state, assistantNonce]);
   const lintFindingsRef = useRef<LintFinding[]>([]);
   lintFindingsRef.current = lintFindings;
   const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;
@@ -6807,6 +6831,8 @@ export const App: React.FC = () => {
     toggle('priorities', 'transition priorities', showTransitionPriorities, setShowTransitionPriorities);
     cmds.push({ id: 'view:engine', group: 'View', label: `Layout engine: ${layoutEngine === 'elk' ? 'Dagre' : 'ELK'}`, run: () => setLayoutEngine(layoutEngine === 'elk' ? 'dagre' : 'elk') });
     cmds.push({ id: 'app:save', group: 'File', label: 'Save to project', hint: 'Ctrl+S', run: () => handleSaveToProjectRef.current() });
+    // (AI assistants: the folder they work in told the selected state; VS Code: its command, XAE: asked here)
+    if (isXaeHost() && !isCodeMode()) cmds.push({ id: 'app:setup-assistant', group: 'Global', label: 'Set up Claude Code for this folder…', hint: 'the selected state, for AI assistants', run: () => handleSetupAssistantRef.current() });
     cmds.push({ id: 'app:undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => stepHistory(true) });
     cmds.push({ id: 'app:tidy-edges', group: 'Canvas', label: 'Tidy up edges', hint: 'the states stay: the edges drawn again from them', run: () => { const n = mermaidViewerRef.current?.tidyEdges() ?? 0; showCopyToast(n ? `Edges tidied up: ${n} drawn again from their states` : 'Edges tidied up (none had a route of its own)', 'success'); } });
     cmds.push({ id: 'app:diff-all', group: 'Edit', label: 'All changes (Diff)', hint: "every editor's edits and the files' since saved", run: () => showDiff({ source: 'all' }) });

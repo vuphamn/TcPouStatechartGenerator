@@ -113,6 +113,7 @@ function activate(context) {
       },
       // (the selected state for AI assistants: written to .machinescope/selection.md when the POU's workspace folder is
       // set up for it (Kval MachineScope: Set up Claude Code for this folder), else nothing)
+      setupAssistant: () => vscode.commands.executeCommand('kvalMachineScope.setupAssistant'),
       assistantContext: (file, markdown) => {
         const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
         if (folder) require('./assistantSetup.cjs').writeSelection(folder.uri.fsPath, file, markdown);

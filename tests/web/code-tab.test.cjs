@@ -172,6 +172,16 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
       if (at) await c.mouse.click(at.x, at.y);
       const ctx = await h.until(() => contexts.slice().reverse().find((x) => x.markdown.includes(`**Selected state:** \`${stateId}\``)) ?? null, 6000);
       expect(!!stateId && !!ctx && ctx.file === pouPath && ctx.markdown.includes('file `%POU_PATH%`') && /## Its code: the CASE branch in \w+\(\), from line \d+/.test(ctx.markdown) && ctx.markdown.includes('```st') && /## Transitions out/.test(ctx.markdown), `the selected state (${stateId}) told for AI assistants: ${ctx ? ctx.markdown.split('\n').slice(4, 7).join(' | ').slice(0, 200) : 'nothing'}`);
+      // (Ctrl+Click a second state: both told, a section each)
+      const second = await c.evaluate((s) => [...document.querySelectorAll('#mermaid-canvas-area g.node[data-state-id]')].map((g) => g.getAttribute('data-state-id')).find((x) => x !== s && x !== '[*]') ?? null, stateId);
+      const at2 = await c.evaluate((s) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, second);
+      if (at2) {
+        await c.keyboard.down('Control');
+        await c.mouse.click(at2.x, at2.y);
+        await c.keyboard.up('Control');
+      }
+      const both = await h.until(() => contexts.slice().reverse().find((x) => /\*\*Selected states \(2, selected together\):\*\*/.test(x.markdown)) ?? null, 6000);
+      expect(!!second && !!both && both.markdown.includes(`\n## ${stateId}\n`) && both.markdown.includes(`\n## ${second}\n`), `Ctrl+Click: the states selected together told (${stateId}, ${second})`);
       // (asked again, a folder just set up: sent again)
       const n = contexts.length;
       await c.evaluate(() => window.postMessage({ type: 'assistantContextRequest' }, '*'));

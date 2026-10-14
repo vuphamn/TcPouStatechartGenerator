@@ -53,6 +53,7 @@ const S = (n) => `TABLEMANAGER_${n}`;
       await toApp({ type: 'reportFileSaveResult', requestId: m.requestId, ok: true, path: `C:\\proj\\MachineScope.reports\\${m.name}` });
     } else if (m.type === 'reportFiles') await toApp({ type: 'reportFilesResult', requestId: m.requestId, files: [...reports].map(([name, r]) => ({ name, size: r.content.length, mtime: r.mtime })).sort((a, b) => b.mtime - a.mtime) });
     else if (m.type === 'reportFileRead') await toApp({ type: 'reportFileReadResult', requestId: m.requestId, ok: reports.has(m.name), content: reports.get(m.name)?.content, error: reports.has(m.name) ? null : 'No such report' });
+    else if (m.type === 'assistantSetup') await toApp({ type: 'assistantSetupResult', requestId: m.requestId, ok: true, root: 'C:\\proj', claude: 'C:\\proj\\CLAUDE.md', created: true, updated: false });
     else if (m.type === 'saveDocument') {
       saved.push(m);
       await toApp({ type: 'saveDocumentResult', path: `C:\\docs\\${m.name}` });
@@ -176,6 +177,40 @@ const S = (n) => `TABLEMANAGER_${n}`;
   await p.click('#text-prompt-submit').catch(() => {});
   const page = await h.until(() => saved.find((m) => m.name === 'SM_TableManager_test_reports_compared.html') ?? null, 4000);
   expect(!!history && /Conditions seen both ways: 0 \/ \d+ \(0%\) → 1 \/ \d+/.test(compared ?? '') && /Compared: [1-9]\d* better/.test(compared ?? '') && !!page && /Test reports compared/.test(page.content), `two compared: ${(compared ?? '').slice(0, 120)}`);
+
+  // 6. AI assistants (XAE): the selected state told to the host (it writes .machinescope\selection.md where set up);
+  // the palette's Set up Claude Code for this folder…: asked here, then the host does it; the selection sent again
+  await p.keyboard.press('Escape').catch(() => {});
+  await p.evaluate(() => document.getElementById('dock-tab-diagram')?.click());
+  await h.sleep(600);
+  const node = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, S('CLAMPED'));
+  if (node) await p.mouse.click(node.x, node.y);
+  const contexts = () => sent.filter((m) => m.type === 'assistantContext');
+  const ctx = await h.until(() => contexts().reverse().find((m) => m.markdown.includes(`**Selected state:** \`${S('CLAMPED')}\``)) ?? null, 6000);
+  expect(!!ctx && ctx.state === S('CLAMPED') && ctx.markdown.includes('```st') && ctx.markdown.includes('E_TableManager_States.TABLEMANAGER_CLAMPED'), `the selected state told to XAE: ${ctx ? ctx.markdown.split('\n').slice(4, 6).join(' | ').slice(0, 160) : 'nothing'}`);
+  // (Ctrl+Click a second state: both told, a section each)
+  const node2 = await p.evaluate((id) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${id}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, S('CLAMPPING'));
+  if (node2) {
+    await p.keyboard.down('Control');
+    await p.mouse.click(node2.x, node2.y);
+    await p.keyboard.up('Control');
+  }
+  const both = await h.until(() => contexts().reverse().find((m) => /\*\*Selected states \(2, selected together\):\*\*/.test(m.markdown)) ?? null, 6000);
+  expect(!!both && both.markdown.includes(`\n## ${S('CLAMPED')}\n`) && both.markdown.includes(`\n## ${S('CLAMPPING')}\n`) && both.markdown.split('### Its code').length === 3 && both.state === `${S('CLAMPED')}|${S('CLAMPPING')}`, `Ctrl+Click: the states selected together told to XAE (${both ? both.state : 'nothing'})`);
+  await p.mouse.click(5, 300).catch(() => {});
+  const before = contexts().length;
+  await p.keyboard.down('Control'); await p.keyboard.down('Shift'); await p.keyboard.press('KeyP'); await p.keyboard.up('Shift'); await p.keyboard.up('Control');
+  await p.waitForSelector('#command-palette', { timeout: 3000 }).catch(() => {});
+  await p.keyboard.type('Claude Code', { delay: 10 });
+  await h.sleep(200);
+  const item = await p.$eval('#command-palette .command-palette-item', (e) => e.textContent.trim()).catch(() => '');
+  await p.keyboard.press('Enter');
+  const asked = await h.until(() => prompt().then((t) => (t && /Set up Claude Code for this folder\?/.test(t) ? t : null)), 3000);
+  expect(!sent.some((m) => m.type === 'assistantSetup'), 'nothing set up before the answer');
+  await p.click('#text-prompt-submit').catch(() => {});
+  const setUp = await h.until(() => sent.find((m) => m.type === 'assistantSetup') ?? null, 3000);
+  const again = await h.until(() => (contexts().length > before ? true : null), 4000);
+  expect(/Set up Claude Code for this folder/.test(item) && !!asked && /\.machinescope\\/.test(asked) && !!setUp && !!again, `the palette's command: asked, set up, the selection sent again (${item})`);
 
   expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
   await browser.close();

@@ -123,6 +123,8 @@ function createHost({ pouPath, post, ui }) {
     appearanceChanged: ({ theme }) => ui.appearance?.changed(theme, post),
     // (the selected state for AI assistants: .machinescope/selection.md in a folder set up for it)
     assistantContext: ({ markdown }) => ui.assistantContext?.(pou, markdown),
+    // (the folder set up for them: the extension's command, which asks)
+    assistantSetup: () => ui.setupAssistant?.(),
     save: ({ files = [] }) => {
       const known = files.filter((f) => lastSeen.has(f.path));
       // (all checked before any is written: changed on disk since it was loaded, unless kept anyway)

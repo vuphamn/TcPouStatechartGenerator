@@ -447,6 +447,12 @@ export async function readReportFile(pouPath: string, name: string): Promise<{ o
   return 'ok' in r || 'content' in r ? { ok: !!(r as { ok?: boolean }).ok, content: (r as { content?: string }).content, error: r.error ?? null } : { ok: false, error: r.error };
 }
 
+/** XAE: the folder AI assistants work in (the solution's, else the PLC project's) set up for them: .machinescope\ and CLAUDE.md */
+export async function setupAssistantFolder(): Promise<{ ok: boolean; root?: string; claude?: string; created?: boolean; updated?: boolean; error?: string }> {
+  const r = await hostAsk<{ ok: boolean; root?: string; claude?: string; created?: boolean; updated?: boolean; error?: string }>({ type: 'assistantSetup' }, 'assistantSetupResult', 20000);
+  return r ?? { ok: false, error: 'No answer from the extension' };
+}
+
 /** The TcUnit tests can be run from here (TwinCAT XAE: its project open there) */
 export const canRunPlcTests = () => isXaeHost() && !isVsCodeHost();
 

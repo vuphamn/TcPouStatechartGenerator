@@ -410,6 +410,10 @@ namespace KvalMachineScope.Xae
                     case "eventsSave":
                         HandleEventsSave(msg);
                         break;
+                    case "assistantContext":
+                    case "assistantSetup":
+                        HandleAssistant(msg, type == "assistantSetup");
+                        break;
                     case "reportFileSave":
                     case "reportFiles":
                     case "reportFileRead":
@@ -1434,6 +1438,43 @@ namespace KvalMachineScope.Xae
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 Post(new { type = "eventsSaveResult", requestId, ok = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// AI assistants (AssistantContext): the folder they work in (the solution's, else the PLC project's) set up for
+        /// them (asked in the app first), or the selected state written there (only when it is set up)
+        /// </summary>
+        private void HandleAssistant(Dictionary<string, object> msg, bool setup)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            var requestId = msg.TryGetValue("requestId", out var r) && r is int ri ? ri : 0;
+            string root = null;
+            try
+            {
+                if (Package.GetGlobalService(typeof(EnvDTE.DTE)) is EnvDTE.DTE dte && !string.IsNullOrEmpty(dte.Solution?.FullName)) root = Path.GetDirectoryName(dte.Solution.FullName);
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException || ex is InvalidOperationException) { root = null; }
+            if (root == null && _pouPath != null)
+            {
+                var plcproj = LiveTargets.PlcProjectFile(_pouPath);
+                if (plcproj != null) root = Path.GetDirectoryName(plcproj);
+            }
+            if (!setup)
+            {
+                if (root != null) AssistantContext.WriteSelection(root, _pouPath, msg.TryGetValue("markdown", out var md) ? md as string : null);
+                return;
+            }
+            if (root == null) { Post(new { type = "assistantSetupResult", requestId, ok = false, error = "No solution or PLC project is open" }); return; }
+            try
+            {
+                var res = AssistantContext.SetupFolder(root);
+                Log.Write("assistants: set up " + root);
+                Post(new { type = "assistantSetupResult", requestId, ok = true, root, claude = res.Claude, created = res.Created, updated = res.Updated });
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                Post(new { type = "assistantSetupResult", requestId, ok = false, error = ex.Message });
             }
         }
 
