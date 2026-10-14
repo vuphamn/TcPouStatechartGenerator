@@ -136,6 +136,8 @@ export type HostMessage =
   | { type: 'bookmarks'; pou?: string; bookmarks: unknown }
   /** VS Code: the theme chosen in another panel of the app (or before this one opened) */
   | { type: 'appearance'; theme: string }
+  /** VS Code: send the selection for AI assistants again (a folder was just set up for it) */
+  | { type: 'assistantContextRequest' }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
@@ -221,6 +223,8 @@ export type AppMessage =
   | { type: 'bookmarksChanged'; bookmarks: unknown }
   /** VS Code: the theme chosen here, for the app's other panels (its code tabs, the other statecharts) */
   | { type: 'appearanceChanged'; theme: string }
+  /** VS Code: the selected state as Markdown, for AI assistants (.machinescope/selection.md in a folder set up for it) */
+  | { type: 'assistantContext'; markdown: string; state: string }
   /** A watched variable's value written to the PLC (its watch id; answered with liveWriteResult) */
   | { type: 'liveWrite'; requestId: number; id: string; value: boolean | number | string }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */

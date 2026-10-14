@@ -202,6 +202,16 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   (the committed TwinCAT version, from git), and a rename that reaches other POUs read and write the PLC project's
   files, as in XAE.
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
+- **Claude Code (and other AI assistants) see the selected state:** the canvas is a webview they cannot read, so
+  **Kval MachineScope: Set up Claude Code for this folder** (the Command Palette) prepares the opened folder: it
+  creates `.machinescope/` (git ignores it: its own `.gitignore`), where the state selected in a statechart is written
+  as `selection.md` each time it changes (its POU and file, its `CASE` branch with its lines, its transitions out in
+  their order and in, its description, its MachineScope documentation, its problems, the PLC's state when live), and
+  adds a Kval MachineScope section to `CLAUDE.md` (created if missing; replaced, not added twice, when set up again):
+  how TwinCAT's files and the state machines are read, to read that file for "the selected state", and where a
+  state's documentation goes (its `getStateDescription()` line, its Markdown in `<POU>.machinescope.json`, a comment
+  in its branch). Ask "explain the selected state" or "document the selected state". A folder not set up gets nothing
+  written; deleting `.machinescope/` stops it.
 - **Theme:** one for every MachineScope tab, kept for the next time. A theme chosen in a statechart's **Appearance** also applies to its
   code tabs (Kval MachineScope Code: the Method, POU and Enum editors) and its other statecharts at once. Tabs opened
   later start with it too. A `.TcDUT`'s, a `.TcGVL`'s editor is VS Code's own and takes VS Code's color theme, so

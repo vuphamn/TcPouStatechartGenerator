@@ -150,7 +150,9 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     // A statechart panel: the theme chosen there told to the extension (for its other panels)
     {
       const c = await browser.newPage();
-      const chartHost = createHost({ pouPath, post: (m) => c.evaluate((m) => window.postMessage(m, '*'), m).catch(() => {}), ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, appearance: { get: () => appearance, changed: (theme) => { appearance = { theme }; themesTold.push(theme); } } } });
+      // (the selected state for AI assistants: what the extension would write to .machinescope/selection.md)
+      const contexts = [];
+      const chartHost = createHost({ pouPath, post: (m) => c.evaluate((m) => window.postMessage(m, '*'), m).catch(() => {}), ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, appearance: { get: () => appearance, changed: (theme) => { appearance = { theme }; themesTold.push(theme); } }, assistantContext: (file, markdown) => contexts.push({ file, markdown }) } });
       await c.exposeFunction('__toHost', (m) => chartHost.handle(m));
       await c.evaluateOnNewDocument(() => {
         window.acquireVsCodeApi = () => ({ postMessage: (m) => window.__toHost(m), getState: () => null, setState: () => {} });
@@ -163,6 +165,17 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
       await c.select('#mermaid-theme-select', 'jetbrains-light').catch(() => {});
       const toldTheme = await h.until(() => (themesTold.includes('jetbrains-light') ? true : null), 4000);
       expect(!!opened && !!toldTheme && appearance.theme === 'jetbrains-light' && themesTold.length === 1, `a statechart panel: opened with the kept theme (${opened}); one chosen there told (${themesTold.join(', ')})`);
+      // The selected state for AI assistants: a state selected → its context told to the extension (its code, transitions)
+      await c.keyboard.press('Escape').catch(() => {});
+      const stateId = await c.evaluate(() => document.querySelector('#mermaid-canvas-area g.node[data-state-id]')?.getAttribute('data-state-id') ?? null);
+      const at = await c.evaluate((s) => { const r = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, stateId);
+      if (at) await c.mouse.click(at.x, at.y);
+      const ctx = await h.until(() => contexts.slice().reverse().find((x) => x.markdown.includes(`**Selected state:** \`${stateId}\``)) ?? null, 6000);
+      expect(!!stateId && !!ctx && ctx.file === pouPath && ctx.markdown.includes('file `%POU_PATH%`') && /## Its code: the CASE branch in \w+\(\), from line \d+/.test(ctx.markdown) && ctx.markdown.includes('```st') && /## Transitions out/.test(ctx.markdown), `the selected state (${stateId}) told for AI assistants: ${ctx ? ctx.markdown.split('\n').slice(4, 7).join(' | ').slice(0, 200) : 'nothing'}`);
+      // (asked again, a folder just set up: sent again)
+      const n = contexts.length;
+      await c.evaluate(() => window.postMessage({ type: 'assistantContextRequest' }, '*'));
+      expect(!!(await h.until(() => (contexts.length > n ? true : null), 3000)), 'asked again: sent again');
       await c.close().catch(() => {});
     }
     await browser.close().catch(() => {});

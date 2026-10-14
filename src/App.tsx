@@ -233,6 +233,7 @@ import { buildProjectDocumentation } from './utils/projectDocumentation.ts';
 import { addPlcFiles, canAddPlcFiles, canKeepEvents, canRunPlcTests, fetchCommissioning, fetchProjectStore, fetchWatchLists, loadProjectFiles, postWebhook, runPlcTests, saveCommissioning, saveDocument, saveEventsFile, saveProjectStore, saveWatchList, canKeepReports, saveReportFile, listReportFiles, readReportFile, type Commissioning, type StateSequence } from './utils/projectFiles.ts';
 import { parseLiveValue, writeLiveVar } from './utils/liveWrite.ts';
 import { codeBoot, isCodeMode } from './utils/codeMode.ts';
+import { assistantContextMarkdown } from './utils/assistantContext.ts';
 import { declarationLineCount, implementationLineCount, stateAtLine } from './utils/stateMachineLint.ts';
 import { findPaths, untakenPaths } from './utils/statePaths.ts';
 import { TextPromptDialog, TextPromptRequest } from './components/TextPromptDialog.tsx';
@@ -2285,6 +2286,8 @@ export const App: React.FC = () => {
         h.showMember(m);
       } else if (m.type === 'showWhatsNew') {
         h.openWhatsNew();
+      } else if (m.type === 'assistantContextRequest') {
+        setAssistantNonce((n) => n + 1);
       } else if (m.type === 'appearance') {
         if (isKnownTheme(m.theme) && m.theme !== sharedThemeRef.current) {
           sharedThemeRef.current = m.theme;
@@ -3516,6 +3519,38 @@ export const App: React.FC = () => {
     }
     return out;
   }, [pouContent, identifiedStatesResult, lintFindings]);
+  // The selected state for AI assistants (VS Code: the extension writes it to .machinescope/selection.md in a folder set
+  // up for it, Claude Code reads it): sent a moment after the selection or what it shows changes; again when asked
+  const [assistantNonce, setAssistantNonce] = useState(0);
+  const assistantStateId = lastSelectedState?.id ?? null;
+  useEffect(() => {
+    if (!isVsCodeHost() || isCodeMode() || !pouContent) return;
+    const t = window.setTimeout(() => {
+      const id = assistantStateId;
+      const st = id ? identifiedStatesResult.states.find((s) => s.id === id) ?? { id } : null;
+      const method = stateMethodName(pouContent);
+      const m = getMethodCodeFromPou(pouContent, method);
+      const raw = m.methodFound ? m.code.split(/\r?\n/) : [];
+      const range = id && raw.length ? caseBranchRange(blankComments(m.code).split(/\r?\n/), id) : null;
+      const markdown = assistantContextMarkdown({
+        pou: pouTypeName ?? pouFileName.replace(/\.TcPOU$/i, ''),
+        layoutFile: layoutFileNameOf(pouFileName),
+        method,
+        stateVar: identifiedStatesResult.stateVarName || 'machineState',
+        enumType: stateEnumTypeOf(pouContent) || dutContent.match(/<DUT\b[^>]*\bName="([^"]+)"/)?.[1] || '',
+        state: st,
+        branch: range ? { line: range.start + 1, code: raw.slice(range.start, range.end).map((l) => l.replace(/\s+$/, '')) } : null,
+        outgoing: id ? availableEdges.filter((e) => e.from === id && e.to).sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0)).map((e) => ({ to: e.to, condition: e.condition || e.label, priority: e.priority })) : [],
+        incoming: id ? availableEdges.filter((e) => e.to === id && e.from && e.from !== '[*]').map((e) => ({ from: e.from, condition: e.condition || e.label })) : [],
+        documentation: (id && diagramNotes.nodes[id]) || '',
+        problems: (id && stateProblems[id]?.messages) || [],
+        live: liveStatus.state === 'connected' ? { connected: true, state: liveSession.current?.state ?? null, sinceMs: exprStateRef.current?.sinceMs != null ? Date.now() - exprStateRef.current.sinceMs : null, plc: liveStatus.target } : null,
+      });
+      postToHost({ type: 'assistantContext', markdown, state: id ?? '' });
+    }, 500);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assistantStateId, pouContent, availableEdges, diagramNotes, stateProblems, identifiedStatesResult, liveSession.current?.state, liveStatus.state, assistantNonce]);
   const lintFindingsRef = useRef<LintFinding[]>([]);
   lintFindingsRef.current = lintFindings;
   const lintIgnoreStorageKey = `kss.lint.ignored.${pouFileName || 'POU'}`;

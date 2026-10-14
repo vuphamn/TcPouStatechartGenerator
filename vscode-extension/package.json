@@ -103,6 +103,12 @@
         "icon": "$(type-hierarchy)"
       },
       {
+        "command": "kvalMachineScope.setupAssistant",
+        "title": "Set up Claude Code for this folder (the statechart's selected state)",
+        "category": "Kval MachineScope",
+        "icon": "$(sparkle)"
+      },
+      {
         "command": "kvalMachineScope.openStructuredText",
         "title": "Open as Structured Text",
         "category": "TwinCAT",

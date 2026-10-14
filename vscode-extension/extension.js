@@ -111,6 +111,12 @@ function activate(context) {
           void require('./colorThemeSync.cjs').syncColorTheme(vscode, theme).catch(() => {});
         },
       },
+      // (the selected state for AI assistants: written to .machinescope/selection.md when the POU's workspace folder is
+      // set up for it (Kval MachineScope: Set up Claude Code for this folder), else nothing)
+      assistantContext: (file, markdown) => {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+        if (folder) require('./assistantSetup.cjs').writeSelection(folder.uri.fsPath, file, markdown);
+      },
       // (bookmarks: this POU's from the extension's store; the app's changes kept there, the other panels told)
       bookmarks: {
         get: (file) => bookmarks?.get(file) ?? { states: [], lines: [] },
@@ -249,6 +255,31 @@ function activate(context) {
   // TwinCAT files as Structured Text (declaration above, implementation below), and XAE's toolbar: Build, Login,
   // Start, Stop, Logout, the target and the Remote Manager build
   tc = twincat.register(context, { activeFile: st.activeFile, sectionUriOf: st.sectionUriOf });
+  // AI assistants: a workspace folder set up for them (.machinescope/selection.md: the statechart's selected state; a
+  // section in CLAUDE.md saying where to read it and how to document a state), asked first
+  context.subscriptions.push(
+    vscode.commands.registerCommand('kvalMachineScope.setupAssistant', async () => {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (!folders.length) return void vscode.window.showWarningMessage('Open the PLC project\'s folder first (File > Open Folder).');
+      const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'The folder Claude Code works in' });
+      if (!folder) return;
+      const ok = await vscode.window.showInformationMessage(
+        `Set up ${folder.name} for Claude Code?`,
+        { modal: true, detail: 'Creates .machinescope/ in it (git ignores it: its own .gitignore), where the state selected in a MachineScope statechart is written each time it changes (its code, transitions, description, documentation, problems), and adds a Kval MachineScope section to CLAUDE.md (created if missing) saying where to read it and how to document a state. Ask Claude Code about "the selected state" then.' },
+        'Set up'
+      );
+      if (ok !== 'Set up') return;
+      try {
+        const r = require('./assistantSetup.cjs').setupFolder(folder.uri.fsPath);
+        // (the open statecharts: their selection written at once)
+        for (const set of charts.values()) for (const p of set) p({ type: 'assistantContextRequest' });
+        const pick = await vscode.window.showInformationMessage(`${folder.name} is set up: select a state in a statechart, then ask Claude Code about "the selected state". CLAUDE.md ${r.created ? 'created' : r.updated ? 'updated' : 'already had the section'}.`, 'Open CLAUDE.md');
+        if (pick) await vscode.window.showTextDocument(vscode.Uri.file(r.claude));
+      } catch (err) {
+        vscode.window.showErrorMessage(`Not set up: ${err.message}`);
+      }
+    })
+  );
   // What's New: once after an update, the features since (a first install: nothing); the command any time
   require('./whatsNew.cjs').registerWhatsNew(context, vscode);
   // Bookmarks (TwinCAT's, MachineScope's): kept here, the POU's app panels told and telling
