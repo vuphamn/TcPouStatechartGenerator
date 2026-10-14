@@ -202,6 +202,9 @@ For the project of the active TwinCAT file (the `.tsproj` above it, the PLC proj
   (the committed TwinCAT version, from git), and a rename that reaches other POUs read and write the PLC project's
   files, as in XAE.
 - **Layout:** kept in `<POU>.machinescope.json` beside the POU, as in the desktop app and XAE.
+- **Theme:** one for every MachineScope tab. A theme chosen in a statechart's **Appearance** also applies to its
+  code tabs (Kval MachineScope Code: the Method, POU and Enum editors) and its other statecharts at once. Tabs opened
+  later start with it too.
 - **Live view** of the statechart (the desktop app's live session): its target is the one picked in VS Code's status
   bar, unless given in the Live tab; Browse lists this computer's routes and the TwinCAT devices answering on the
   network. **Build…** is the TwinCAT view's build.

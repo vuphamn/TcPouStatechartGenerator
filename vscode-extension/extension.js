@@ -99,6 +99,16 @@ function activate(context) {
       open(file) {
         void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
       },
+      // (the theme: one for every panel of the app (statecharts, code tabs); chosen in one, the others told; kept for
+      // the panels opened later)
+      appearance: {
+        get: () => context.globalState.get('kss.appearance', null),
+        changed: (theme, from) => {
+          if (typeof theme !== 'string' || !/^[\w-]{1,40}$/.test(theme)) return;
+          void context.globalState.update('kss.appearance', { theme });
+          for (const set of charts.values()) for (const p of set) if (p !== from) p({ type: 'appearance', theme });
+        },
+      },
       // (bookmarks: this POU's from the extension's store; the app's changes kept there, the other panels told)
       bookmarks: {
         get: (file) => bookmarks?.get(file) ?? { states: [], lines: [] },

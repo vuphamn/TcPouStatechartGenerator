@@ -115,8 +115,12 @@ function createHost({ pouPath, post, ui }) {
       load(pou);
       // (the POU's bookmarks, kept by the extension: shared with its editors and its other panels)
       if (ui.bookmarks) post({ type: 'bookmarks', pou: path.basename(pou), bookmarks: ui.bookmarks.get(pou) });
+      // (the theme chosen in any of the app's panels: this one too)
+      const a = ui.appearance?.get();
+      if (a?.theme) post({ type: 'appearance', theme: a.theme });
     },
     bookmarksChanged: ({ bookmarks }) => ui.bookmarks?.changed(pou, bookmarks),
+    appearanceChanged: ({ theme }) => ui.appearance?.changed(theme, post),
     save: ({ files = [] }) => {
       const known = files.filter((f) => lastSeen.has(f.path));
       // (all checked before any is written: changed on disk since it was loaded, unless kept anyway)

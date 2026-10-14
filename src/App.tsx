@@ -520,6 +520,14 @@ export const App: React.FC = () => {
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
   const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
+  // (VS Code: one theme for every panel of the app: each has its own storage, so the extension keeps it and tells the
+  // others when it is chosen in one (the code tabs, the other statecharts); one opened later gets it too)
+  const sharedThemeRef = useRef<string>(initialPreset.mermaidTheme);
+  useEffect(() => {
+    if (!isVsCodeHost() || sharedThemeRef.current === mermaidTheme) return;
+    sharedThemeRef.current = mermaidTheme;
+    postToHost({ type: 'appearanceChanged', theme: mermaidTheme });
+  }, [mermaidTheme]);
   // The header's Theme & Preset panel
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceAt, setAppearanceAt] = useState<{ top: number; right: number } | null>(null);
@@ -2249,6 +2257,12 @@ export const App: React.FC = () => {
         h.showMember(m);
       } else if (m.type === 'showWhatsNew') {
         h.openWhatsNew();
+      } else if (m.type === 'appearance') {
+        const known = ['dark', 'neutral', 'forest', 'base', 'default', ...IDE_THEMES.map((t) => t.id)];
+        if (known.includes(m.theme) && m.theme !== sharedThemeRef.current) {
+          sharedThemeRef.current = m.theme;
+          setMermaidTheme(m.theme as MermaidTheme);
+        }
       } else if (m.type === 'bookmarks') {
         // (the host keeps them: its copy taken, and this window's changes told to it from now on)
         h.applyBookmarks(m.bookmarks, m.pou);

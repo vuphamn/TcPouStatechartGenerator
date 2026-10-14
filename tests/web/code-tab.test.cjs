@@ -1,7 +1,8 @@
 // The VS Code extension's code tab (kvalMachineScope.code): the app in its code mode (window.__KSS_BOOT.code, set by
 // the page the extension makes): no header, the Method Editor alone with its declaration, implementation and splitter,
 // on the member asked (Execute); showMember switches it (MoveAndAdvance; '' the POU Editor); Save to POU writes the file
-// through the host (no header's Save there)
+// through the host (no header's Save there); the theme: the one chosen in the app's other panels (kept by the extension)
+// taken when the tab opens and when changed there; one chosen in a statechart panel told to the extension
 // (runner-timeout: 240)
 const h = require('../lib/harness.cjs');
 const fs = require('fs');
@@ -28,6 +29,9 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
 
 (async () => {
   const nonce = crypto.randomBytes(12).toString('base64');
+  // (the theme chosen in another panel before: a light one; the ones told to the extension)
+  let appearance = { theme: 'vscode-light' };
+  const themesTold = [];
   let origin = '';
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.png': 'image/png' };
   const server = http.createServer((req, res) => {
@@ -35,6 +39,11 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     if (u === '/webview.html') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end(webviewHtml(fs.readFileSync(path.join(dist, 'index.html'), 'utf8'), { base: `${origin}/app/`, cspSource: origin, nonce, boot: { code: { member: 'Execute' } } }));
+    }
+    // (a statechart panel: no boot)
+    if (u === '/chart.html') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(webviewHtml(fs.readFileSync(path.join(dist, 'index.html'), 'utf8'), { base: `${origin}/app/`, cspSource: origin, nonce }));
     }
     const f = path.join(dist, u.replace(/^\/app\//, ''));
     if (!u.startsWith('/app/') || !f.startsWith(dist) || !fs.existsSync(f)) {
@@ -60,7 +69,7 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     const host = createHost({
       pouPath,
       post,
-      ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, bookmarks: { get: () => stored, changed: (file, b) => { stored = b; told.push(b); } } },
+      ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, bookmarks: { get: () => stored, changed: (file, b) => { stored = b; told.push(b); } }, appearance: { get: () => appearance, changed: (theme) => { appearance = { theme }; themesTold.push(theme); } } },
     });
     await p.exposeFunction('__toHost', (m) => {
       sent.push(m);
@@ -85,6 +94,12 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     expect(!shown.header && !shown.canvas && shown.decl && shown.splitter && shown.method === 'Execute()', `the code tab: the Method Editor alone on Execute() (${JSON.stringify(shown)})`);
 
     await p.screenshot({ path: path.join(h.OUT, 'code-tab.png') }).catch(() => {});
+    // The theme: the extension's (chosen in another panel) when it opened; changed there: followed
+    const theme = () => p.evaluate(() => ({ ide: document.documentElement.getAttribute('data-ide-theme'), app: document.documentElement.getAttribute('data-app-theme'), bg: getComputedStyle(document.documentElement).getPropertyValue('--color-slate-950').trim() }));
+    const t1 = await h.until(() => theme().then((t) => (t.ide === 'vscode-light' ? t : null)), 5000);
+    await post({ type: 'appearance', theme: 'vscode-dark' });
+    const t2 = await h.until(() => theme().then((t) => (t.ide === 'vscode-dark' ? t : null)), 5000);
+    expect(!!t1 && t1.app === 'default' && !!t2 && !t2.app && t1.bg !== t2.bg && themesTold.length === 0, `the theme from the other panels: light when opened (${t1?.bg}), dark when changed there (${t2?.bg}); nothing told back`);
     // Bookmarks from the host: Execute's CASE line marked; one set here told to the host
     const caseLine = (await p.$eval('#method-implementation-editor', (e) => e.value)).split('\n').findIndex((l) => /CASE State OF/.test(l)) + 1;
     const marked = await p.$$eval('#method-bottom-panel [data-bookmark-line]', (r) => r.map((x) => Number(x.getAttribute('data-bookmark-line'))));
@@ -132,6 +147,24 @@ fs.writeFileSync(path.join(work, 'POUs', 'E_ScanState.TcDUT'), '﻿' + dut);
     expect(changed && sent.some((m) => m.type === 'save') && /_Count := _Count \+ 2;/.test(disk) && disk.startsWith('﻿'), 'Save to POU: the .TcPOU written (its BOM kept)');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 3).join(' | ')}`);
   } finally {
+    // A statechart panel: the theme chosen there told to the extension (for its other panels)
+    {
+      const c = await browser.newPage();
+      const chartHost = createHost({ pouPath, post: (m) => c.evaluate((m) => window.postMessage(m, '*'), m).catch(() => {}), ui: { version: 'test', pick: async () => null, reveal: () => {}, open: () => {}, appearance: { get: () => appearance, changed: (theme) => { appearance = { theme }; themesTold.push(theme); } } } });
+      await c.exposeFunction('__toHost', (m) => chartHost.handle(m));
+      await c.evaluateOnNewDocument(() => {
+        window.acquireVsCodeApi = () => ({ postMessage: (m) => window.__toHost(m), getState: () => null, setState: () => {} });
+      });
+      await c.goto(`${origin}/chart.html`, { waitUntil: 'load' });
+      await c.waitForSelector('#mermaid-canvas-area g.node', { timeout: 60000 }).catch(() => {});
+      const opened = await h.until(() => c.evaluate(() => document.documentElement.getAttribute('data-ide-theme')).then((x) => (x === 'vscode-light' ? x : null)), 5000);
+      await c.click('#header-appearance-btn').catch(() => {});
+      await c.waitForSelector('#mermaid-theme-select', { timeout: 5000 }).catch(() => {});
+      await c.select('#mermaid-theme-select', 'jetbrains-light').catch(() => {});
+      const toldTheme = await h.until(() => (themesTold.includes('jetbrains-light') ? true : null), 4000);
+      expect(!!opened && !!toldTheme && appearance.theme === 'jetbrains-light' && themesTold.length === 1, `a statechart panel: opened with the kept theme (${opened}); one chosen there told (${themesTold.join(', ')})`);
+      await c.close().catch(() => {});
+    }
     await browser.close().catch(() => {});
     server.close();
   }

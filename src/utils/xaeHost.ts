@@ -134,6 +134,8 @@ export type HostMessage =
   | { type: 'showMember'; member: string; line?: number; part?: 'declaration' }
   /** The POU's bookmarks, as the host keeps them (VS Code: shared with its editors and the POU's other panels) */
   | { type: 'bookmarks'; pou?: string; bookmarks: unknown }
+  /** VS Code: the theme chosen in another panel of the app (or before this one opened) */
+  | { type: 'appearance'; theme: string }
   /** Symbol browser: a symbol and its members (one level), or why not */
   | ({ type: 'liveBrowseResult' } & LiveBrowseResult)
   /** Save All from another MachineScope tab of this XAE (relayed by the extension), and the answers to ours */
@@ -217,6 +219,8 @@ export type AppMessage =
   | { type: 'liveWatch'; vars: LiveWatchVar[] }
   /** The POU's bookmarks changed here (the host keeps them) */
   | { type: 'bookmarksChanged'; bookmarks: unknown }
+  /** VS Code: the theme chosen here, for the app's other panels (its code tabs, the other statecharts) */
+  | { type: 'appearanceChanged'; theme: string }
   /** A watched variable's value written to the PLC (its watch id; answered with liveWriteResult) */
   | { type: 'liveWrite'; requestId: number; id: string; value: boolean | number | string }
   /** The committed (git HEAD) version of a loaded file (answered with gitShowResult) */
