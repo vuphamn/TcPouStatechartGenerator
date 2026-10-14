@@ -146,6 +146,9 @@ import { allBoxes, boxStates, stateEvents, type EcatStatesResult, type IoEvent, 
 import type { BoxSince, CrcBase, DeviceInfo, DeviceInfoRequest } from './components/IoBoxProperties.tsx';
 import { canPickIoFolder, readIoFolderInBrowser } from './utils/ioFolder.ts';
 import { IDE_THEMES, ideThemeOf, ideThemesCss } from './utils/ideThemes.ts';
+// (the theme kept in this browser, shared by the app's windows on it)
+const APP_THEME_KEY = 'kss.appTheme';
+const isKnownTheme = (t: string) => ['dark', 'neutral', 'forest', 'base', 'default'].includes(t) || IDE_THEMES.some((x) => x.id === t);
 
 /** A short two-tone beep (an I/O alert) */
 function ioBeep() {
@@ -519,15 +522,40 @@ export const App: React.FC = () => {
   const [collapsedComposites, setCollapsedComposites] = useState<string[]>([]);
   const [layoutEngine, setLayoutEngine] = useState<LayoutEngine>(initialPreset.layoutEngine);
   const [flowchartCurve, setFlowchartCurve] = useState<FlowchartCurve>(initialPreset.flowchartCurve);
-  const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(initialPreset.mermaidTheme);
+  // The theme: kept in this browser (kss.appTheme: the last one chosen, else the preset's), one for every window of the
+  // app on it: XAE's MachineScope windows (one WebView2 profile), the desktop app's windows, a browser's tabs: chosen in
+  // one, the others follow (the storage event)
+  const [mermaidTheme, setMermaidTheme] = useState<MermaidTheme>(() => {
+    try {
+      const kept = localStorage.getItem(APP_THEME_KEY);
+      return kept && isKnownTheme(kept) ? (kept as MermaidTheme) : initialPreset.mermaidTheme;
+    } catch {
+      return initialPreset.mermaidTheme;
+    }
+  });
   // (VS Code: one theme for every panel of the app: each has its own storage, so the extension keeps it and tells the
   // others when it is chosen in one (the code tabs, the other statecharts); one opened later gets it too)
-  const sharedThemeRef = useRef<string>(initialPreset.mermaidTheme);
+  const sharedThemeRef = useRef<string>(mermaidTheme);
   useEffect(() => {
+    try {
+      if (localStorage.getItem(APP_THEME_KEY) !== mermaidTheme) localStorage.setItem(APP_THEME_KEY, mermaidTheme);
+    } catch {
+      // (this window only)
+    }
     if (!isVsCodeHost() || sharedThemeRef.current === mermaidTheme) return;
     sharedThemeRef.current = mermaidTheme;
     postToHost({ type: 'appearanceChanged', theme: mermaidTheme });
   }, [mermaidTheme]);
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== APP_THEME_KEY || !e.newValue || !isKnownTheme(e.newValue)) return;
+      // (chosen in another window: not told to the VS Code extension again)
+      sharedThemeRef.current = e.newValue;
+      setMermaidTheme(e.newValue as MermaidTheme);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
   // The header's Theme & Preset panel
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [appearanceAt, setAppearanceAt] = useState<{ top: number; right: number } | null>(null);
@@ -2258,8 +2286,7 @@ export const App: React.FC = () => {
       } else if (m.type === 'showWhatsNew') {
         h.openWhatsNew();
       } else if (m.type === 'appearance') {
-        const known = ['dark', 'neutral', 'forest', 'base', 'default', ...IDE_THEMES.map((t) => t.id)];
-        if (known.includes(m.theme) && m.theme !== sharedThemeRef.current) {
+        if (isKnownTheme(m.theme) && m.theme !== sharedThemeRef.current) {
           sharedThemeRef.current = m.theme;
           setMermaidTheme(m.theme as MermaidTheme);
         }
