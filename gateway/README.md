@@ -56,6 +56,7 @@ Requires Node.js 20 or later on the gateway machine.
    - `port`: the PLC runtime's ADS port (851 for the first PLC).
    - `allowedOrigins`: only needed when the web app is served from somewhere else, e.g. `["https://machinescope.example.com"]`.
 4. **Add an ADS route on each PLC** to the gateway: AMS NetId = `localNetId`, address = the gateway's IP. Use the PLC's TwinCAT router (*Router > Edit Routes*) or an XAE connected to the PLC.
+   **A PLC on the gateway's own computer** (TwinCAT installed there: the gateway on an IPC beside its PLC) needs no route: its address `127.0.0.1` (or the computer's own IP), its AMS NetId TwinCAT's own (*TwinCAT > Router > AMS NetId*, e.g. `10.88.88.201.1.1`). The gateway reaches it through the local TwinCAT router, as the desktop app does. `init` then gives the gateway's own `localNetId` the IP + `.1.2`, not TwinCAT's `.1.1`.
 5. **Create access tokens** on the setup page, or from the command line. Each token is shown once; give it to its user:
    ```powershell
    node gateway.cjs add-token alice

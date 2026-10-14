@@ -24,7 +24,7 @@ const { ProjectMirror } = require(`${sharedDir}/projectMirror.cjs`);
 const { readTrialLicense, licenseState } = require(`${sharedDir}/tcLicense.cjs`);
 const { checkConnection } = require(`${sharedDir}/tcCheck.cjs`);
 const { plcAppInfo, startPlc } = require(`${sharedDir}/tcAppInfo.cjs`);
-const { instancesAt, startAt } = require(`${sharedDir}/liveSession.cjs`);
+const { instancesAt, startAt, localTwinCatNetId, defaultLocalNetId } = require(`${sharedDir}/liveSession.cjs`);
 const { describePlc } = require(`${sharedDir}/tcPlcState.cjs`);
 const { VarWatcher, parseWatchRequest } = require(`${sharedDir}/liveVars.cjs`);
 const discovery = require(`${sharedDir}/tcDiscovery.cjs`);
@@ -77,7 +77,8 @@ async function init() {
     port: 8443,
     tls: { cert: 'cert.pem', key: 'key.pem' },
     appDir: 'public',
-    localNetId: `${ip}.1.1`,
+    // (TwinCAT on this computer has its IP + .1.1 already: the gateway's own is .1.2 then)
+    localNetId: defaultLocalNetId(ip),
     allowedOrigins: [],
     maxViewers: 50,
     maxWatchedVariables: 100,
@@ -102,7 +103,8 @@ async function init() {
   console.log(' 1. The PLCs: start the gateway and open https://localhost:8443/admin on this computer (it searches the');
   console.log('    network for them), or edit config.json (id, name, netId, ip, port). Replace cert.pem / key.pem with a certificate');
   console.log('    from your CA if you have one (browsers warn about a self-signed one).');
-  console.log(` 2. On each PLC, add an ADS route to this computer: AMS NetId ${config.localNetId}, address ${ip}.`);
+  console.log(` 2. On each PLC, add an ADS route to this computer: AMS NetId ${config.localNetId}, address ${ip}. A PLC on this computer`);
+  console.log('    (TwinCAT here) needs none: its address 127.0.0.1, its AMS NetId TwinCAT\'s own.');
   console.log(' 3. node gateway.cjs add-token <name>   (one token per person or team)');
   console.log(' 4. node gateway.cjs start');
 }
@@ -124,6 +126,28 @@ function removeToken(name) {
   saveConfig(config);
   console.log(before === config.tokens.length ? `No token named "${name}".` : `Removed "${name}" (running gateways pick this up within 10 s).`);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// A PLC on the gateway's own computer (TwinCAT there: the PLC's NetId is its own, or its address is 127.0.0.1, localhost
+// or one of this computer's): reached through the local TwinCAT router, as the desktop app does. A connection with the
+// gateway's own NetId to this computer's router is refused (no route to itself), so the gateway could not reach a PLC
+// running beside it. A forwarded or simulated ADS port (not 48898) is used as given.
+const ownAddresses = () => new Set(Object.values(os.networkInterfaces()).flat().filter(Boolean).map((a) => a.address));
+function isLocalPlc(plc, { twinCatNetId = localTwinCatNetId(), addresses = ownAddresses() } = {}) {
+  const [host, tcp] = String(plc.ip || String(plc.netId).split('.').slice(0, 4).join('.')).split(':');
+  if ((Number(tcp) || 48898) !== 48898) return false;
+  if (/^(127\.\d+\.\d+\.\d+|localhost)$/i.test(host)) return true;
+  if (!twinCatNetId) return false;
+  return plc.netId === twinCatNetId || addresses.has(host);
+}
+/** ads-client's options to reach a PLC's port: through the local router (a PLC here), else straight with the gateway's NetId */
+function adsTarget(plc, adsPort, localNetId, localAdsPort) {
+  if (isLocalPlc(plc)) return { targetAmsNetId: plc.netId, targetAdsPort: adsPort, routerAddress: '127.0.0.1', routerTcpPort: 48898 };
+  const [host, tcp] = String(plc.ip || String(plc.netId).split('.').slice(0, 4).join('.')).split(':');
+  return { targetAmsNetId: plc.netId, targetAdsPort: adsPort, routerAddress: host, routerTcpPort: Number(tcp) || 48898, localAmsNetId: localNetId, localAdsPort };
+}
+/** The shared helpers' connection to a PLC: a PLC here through the local router (no NetId of the gateway's own) */
+const sharedConnection = (plc, localNetId, extra = {}) => (isLocalPlc(plc) ? { netId: plc.netId, ip: '127.0.0.1', port: Number(plc.port) || 851 } : { netId: plc.netId, ip: plc.ip || undefined, port: Number(plc.port) || 851, localNetId, ...extra });
 
 // ---------------------------------------------------------------------------------------------------------------
 // ADS: one connection per PLC, one notification per variable, fanned out to the viewers
@@ -148,14 +172,9 @@ class PlcConnection {
   async connect() {
     if (this.client) return this.client;
     if (this.connecting) return this.connecting;
-    const [host, tcp] = (this.plc.ip || this.plc.netId.split('.').slice(0, 4).join('.')).split(':');
+    const [host] = (this.plc.ip || this.plc.netId.split('.').slice(0, 4).join('.')).split(':');
     const client = new Client({
-      targetAmsNetId: this.plc.netId,
-      targetAdsPort: this.plc.port || 851,
-      routerAddress: host,
-      routerTcpPort: Number(tcp) || 48898,
-      localAmsNetId: this.localNetId,
-      localAdsPort: 32905,
+      ...adsTarget(this.plc, this.plc.port || 851, this.localNetId, 32905),
       rawClient: true,
       autoReconnect: false,
       timeoutDelay: 3000,
@@ -403,14 +422,11 @@ function start() {
       const h = host.split('.').map(Number);
       return h.length === 4 && a.every((x, i) => (x & m[i]) === (h[i] & m[i]));
     });
-    const route = `Does the PLC have an ADS route to the gateway: AMS NetId ${localNetId}, address ${net?.address ?? 'this computer\'s IP address'}?`;
+    const route = isLocalPlc(plc) ? 'It is on this computer: is TwinCAT running here (the TwinCAT router), and is that its AMS NetId?' : `Does the PLC have an ADS route to the gateway: AMS NetId ${localNetId}, address ${net?.address ?? 'this computer\'s IP address'}?`;
     let client = [...connections.values()].find((c) => c.client && c.plc.netId === plc.netId)?.client;
     let own = null;
     if (!client) {
-      own = new Client({
-        targetAmsNetId: plc.netId, targetAdsPort: 10000, routerAddress: host, routerTcpPort: Number(tcp) || 48898,
-        localAmsNetId: localNetId, localAdsPort: 32906, rawClient: true, autoReconnect: false, timeoutDelay: 2000, hideConsoleWarnings: true,
-      });
+      own = new Client({ ...adsTarget(plc, 10000, localNetId, 32906), rawClient: true, autoReconnect: false, timeoutDelay: 2000, hideConsoleWarnings: true });
       try {
         await own.connect();
       } catch (err) {
@@ -501,7 +517,7 @@ function start() {
     },
     testPlc,
     // (the Live tab's Check, from the gateway: its NetId, its network)
-    checkPlc: (plc) => checkConnection({ netId: plc.netId, ip: plc.ip, adsPort: plc.port || 851, localNetId: plc.localNetId || config.localNetId || '', discoveryPort: Number(process.env.KSS_DISCOVERY_PORT) || 48899 }),
+    checkPlc: (plc) => checkConnection({ netId: plc.netId, ip: isLocalPlc(plc) ? '127.0.0.1' : plc.ip, adsPort: plc.port || 851, localNetId: isLocalPlc(plc) ? '' : plc.localNetId || config.localNetId || '', discoveryPort: Number(process.env.KSS_DISCOVERY_PORT) || 48899 }),
     discover: discovery.discover,
     localNetworks: discovery.localNetworks,
     sha256,
@@ -663,7 +679,7 @@ function start() {
       // Before going live on one of its PLCs (over connections of their own, closed after): a POU type's instances
       // there, the one to follow chosen first; the PLCs' states (the Live tab, while not live); one started, stopped,
       // restarted or set to Run mode (a write: allowWrite, writeUsers, as Start PLC)
-      const ownConnection = (plc) => ({ netId: plc.netId, ip: plc.ip || undefined, port: Number(plc.port) || 851, localNetId: plc.localNetId || config.localNetId, localAdsPort: 32909 });
+      const ownConnection = (plc) => sharedConnection(plc, plc.localNetId || config.localNetId, { localAdsPort: 32909 });
       if (m.type === 'liveInstances') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (config.allowBrowse === false) return send({ type: 'liveInstancesResult', requestId, error: 'Browsing the PLCs is turned off on this gateway' });
@@ -675,7 +691,7 @@ function start() {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const list = (Array.isArray(m.plcs) ? m.plcs : []).slice(0, 32).map((id) => plcs.get(String(id))).filter(Boolean);
         const timeout = () => new Promise((r) => setTimeout(() => r({ error: 'no answer in time' }), 4000));
-        const states = await Promise.all(list.map((p) => Promise.race([describePlc({ netId: p.netId, ip: p.ip || '' }, { plcPort: Number(p.port) || 851, localNetId: p.localNetId || config.localNetId, localAdsPort: 32909 }), timeout()])));
+        const states = await Promise.all(list.map((p) => Promise.race([isLocalPlc(p) ? describePlc({ netId: p.netId, ip: '127.0.0.1' }, { plcPort: Number(p.port) || 851 }) : describePlc({ netId: p.netId, ip: p.ip || '' }, { plcPort: Number(p.port) || 851, localNetId: p.localNetId || config.localNetId, localAdsPort: 32909 }), timeout()])));
         return send({ type: 'plcStatesResult', requestId, devices: list.map((p, i) => ({ id: p.id, name: p.name, netId: p.netId, state: states[i] })) });
       }
       if (m.type === 'plcStartAt') {
@@ -1001,11 +1017,7 @@ function start() {
           // their own to its system service, then closed; its PLC need not run)
           const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
           if (!plc) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
-          const [host, tcp] = (plc.ip || plc.netId.split('.').slice(0, 4).join('.')).split(':');
-          const own = new Client({
-            targetAmsNetId: plc.netId, targetAdsPort: 10000, routerAddress: host, routerTcpPort: Number(tcp) || 48898,
-            localAmsNetId: plc.localNetId || config.localNetId, localAdsPort: 32907, rawClient: true, autoReconnect: false, timeoutDelay: 5000, hideConsoleWarnings: true,
-          });
+          const own = new Client({ ...adsTarget(plc, 10000, plc.localNetId || config.localNetId, 32907), rawClient: true, autoReconnect: false, timeoutDelay: 5000, hideConsoleWarnings: true });
           try {
             await own.connect();
             const key = typeof m.plcProject === 'string' ? m.plcProject.slice(0, 100) : '';
