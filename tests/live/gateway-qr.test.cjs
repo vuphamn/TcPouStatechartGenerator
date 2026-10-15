@@ -77,10 +77,13 @@ const BOX = 'Device 1 (EtherCAT)^Term 1 (EK1100)^Term 2 (EL1008)';
       await phone.keyboard.press('Enter');
     }
     const view = await h.until(() => phone.evaluate(() => ({ state: document.querySelector('#focus-state')?.textContent, todo: document.querySelector('#focus-todo')?.textContent ?? '' })).then((x) => (x.state === 'DOOR_DASHER_ERROR' && x.todo ? x : null)), 20000);
-    await phone.click('#focus-call');
+    // (clicked in the page: the view renders again every second, a node found may be gone)
+    await phone.evaluate(() => { window.__fv = document.querySelector('#focus-view'); window.__mark = 1; window.__seen = []; new MutationObserver(() => { const v = !!document.querySelector('#focus-view'); if (window.__seen.at(-1)?.v !== v) window.__seen.push({ v, t: Date.now(), body: document.body.innerText.slice(0, 160) }); }).observe(document.body, { childList: true, subtree: true }); });
+    await phone.evaluate(() => document.querySelector('#focus-call')?.click());
     await phone.waitForSelector('.focus-reason', { timeout: 5000 });
-    await phone.click('.focus-reason');
+    await phone.evaluate(() => document.querySelector('.focus-reason')?.click());
     const said = await h.until(() => phone.evaluate(() => document.body.innerText.match(/Maintenance called: \w+/)?.[0] ?? null), 5000);
+    if (!said) console.log(`   the view: ${(await phone.evaluate(() => document.querySelector('#focus-view')?.innerText ?? '(none)')).slice(0, 600)}; the same node: ${await phone.evaluate(() => window.__fv === document.querySelector('#focus-view'))}, the same page: ${await phone.evaluate(() => window.__mark === 1)}; seen: ${JSON.stringify(await phone.evaluate(() => window.__seen))}`);
     await phone.click('#focus-back');
     const back = await phone.$('#focus-view');
     expect(!!view && /door sensor S12/.test(view.todo) && !!said && !back, `a machine's label: ${view?.state}, "${view?.todo.slice(0, 40)}…", ${said}, back to the board ${!back}`);

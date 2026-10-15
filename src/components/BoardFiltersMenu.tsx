@@ -61,6 +61,8 @@ export const BoardFiltersMenu: React.FC<{
   linkOf: (f: BoardSavedFilter) => string;
 }> = ({ filters, active, canEdit, narrow, selectedCount, shownPlcs, onApply, onSave, onDelete, linkOf }) => {
   const [open, setOpen] = useState(false);
+  // (the menu opens toward the room there is: right of a button near the left edge, else left of it)
+  const [toRight, setToRight] = useState(false);
   const [form, setForm] = useState<FilterDraft | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState('');
@@ -99,7 +101,10 @@ export const BoardFiltersMenu: React.FC<{
         <button
           id="board-filters-btn"
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={(e) => {
+            setToRight(e.currentTarget.getBoundingClientRect().left < 26 * 16);
+            setOpen((v) => !v);
+          }}
           className={`flex items-center gap-1 px-2 py-1 rounded-l border text-sm ${active ? 'border-sky-600 bg-sky-900/50 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'} ${active ? '' : 'rounded-r'}`}
           title="Saved filters: views of this board for operators, engineering, maintenance, managers"
           aria-expanded={open}
@@ -115,7 +120,7 @@ export const BoardFiltersMenu: React.FC<{
         )}
       </span>
       {open && (
-        <div id="board-filters-menu" className={`absolute z-30 mt-1 ${narrow ? 'left-0 w-[19rem]' : 'right-0 w-[26rem]'} max-h-[70vh] overflow-y-auto rounded border border-slate-700 bg-slate-900 shadow-xl text-sm`}>
+        <div id="board-filters-menu" className={`absolute z-30 mt-1 ${narrow ? 'left-0 w-[19rem]' : toRight ? 'left-0 w-[26rem]' : 'right-0 w-[26rem]'} max-h-[70vh] overflow-y-auto rounded border border-slate-700 bg-slate-900 shadow-xl text-sm`}>
           {!filters.length && <div className="px-3 py-3 text-slate-400">No saved filters yet.{canEdit ? ' Set the board up (filter, tree or flat, machines chosen), then save it here for the people it is for.' : ''}</div>}
           {AUDIENCES.map((a) => {
             const list = filters.filter((f) => f.audience === a.id);

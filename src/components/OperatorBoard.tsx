@@ -351,9 +351,12 @@ export const OperatorBoard: React.FC = () => {
     if (origin) void fetchGatewaySso(origin).then(setSso);
   }, [origin]);
 
+  // (signed in with the company account or not: what the connection depends on, not the whole answer: its coming
+  // later than the page must not connect again, losing what the page holds)
+  const ssoSignedIn = !!sso?.user;
   const connect = useCallback(() => {
     if (!origin) return;
-    const useSso = !viewOnly && !!sso?.user;
+    const useSso = !viewOnly && ssoSignedIn;
     const useToken = viewToken || token;
     if (!useSso && !useToken) {
       setStatus({ state: 'idle', message: '' });
@@ -425,7 +428,7 @@ export const OperatorBoard: React.FC = () => {
         // A wall screen: keep trying while the gateway or the network is away
         if (!/not accepted|denied|Sign in/i.test(err.message)) window.setTimeout(() => connectRef.current(), 10000);
       });
-  }, [origin, sso, token, viewToken]);
+  }, [origin, ssoSignedIn, token, viewToken]);
   const connectRef = useRef(connect);
   connectRef.current = connect;
   useEffect(() => {

@@ -167,7 +167,15 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
     await p.click(`.board-row[data-path="${R}.smTable1"]`);
     await p.click(`.board-row[data-path="${R}.smTable2"]`);
     await p.click('#board-filters-btn');
-    await p.click('#board-filter-save-new');
+    await p.click('#board-filter-save-new').catch(async (e) => {
+      await p.screenshot({ path: h.out('board3-filters.png') });
+      console.log(`the menu: ${await p.$eval('#board-filters-menu', (m) => m.textContent).catch(() => '(not open)')}`);
+      throw e;
+    });
+    if (!(await p.$('#board-filter-name'))) {
+      await p.screenshot({ path: h.out('board3-filters.png') });
+      console.log(`the menu after Save: ${await p.$eval('#board-filters-menu', (m) => m.textContent).catch(() => '(not open)')}`);
+    }
     await p.type('#board-filter-name', 'Tables (operators)');
     await p.select('#board-filter-audience', 'operators');
     await p.click('#board-filter-save');
