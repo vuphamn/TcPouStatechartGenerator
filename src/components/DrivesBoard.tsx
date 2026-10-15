@@ -129,7 +129,11 @@ export const DrivesBoard: React.FC<{
   plcIds: string[];
   onlyPlcs: string[];
   narrow: boolean;
-}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, narrow }) => {
+  /** A drive to open (a QR label scanned) */
+  focusPath?: { plc: string; path: string } | null;
+  /** QR labels of the drives shown */
+  onQr?: (items: { plc: string; plcName: string; path: string; label: string; detail: string }[]) => void;
+}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, narrow, focusPath, onQr }) => {
   const [plcs, setPlcs] = useState<DrivePlc[]>([]);
   const [params, setParams] = useState<Record<string, { name: string; params: ParamInfo[] }>>({});
   const [error, setError] = useState('');
@@ -150,6 +154,14 @@ export const DrivesBoard: React.FC<{
   };
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [open, setOpen] = useState<{ plc: string; path: string } | null>(null);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (!focusPath || focused) return;
+    if (plcs.some((p) => p.id === focusPath.plc && p.drives.some((d) => d.path === focusPath.path))) {
+      setOpen(focusPath);
+      setFocused(true);
+    }
+  }, [focusPath, focused, plcs]);
   useEffect(
     () =>
       subscribe((m) => {
@@ -209,6 +221,11 @@ export const DrivesBoard: React.FC<{
         <button id="drives-problems" type="button" aria-pressed={problemsOnly} onClick={() => setProblemsOnly((v) => !v)} className={`px-2 py-1 rounded border text-sm ${problemsOnly ? 'border-amber-500 bg-amber-500/20 text-amber-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title="Only the drives to look at (alarm, warning, watch, not answering)">
           Problems only
         </button>
+        {onQr && (
+          <button id="drives-qr" type="button" onClick={() => onQr(view.flatMap((p) => p.drives.map((d) => ({ plc: p.id, plcName: p.name, path: d.path, label: d.name, detail: `${d.vendor} ${d.firmware}` }))))} className="px-2 py-1 rounded border border-slate-700 text-sm text-slate-300 hover:bg-slate-800" title="QR labels of the drives shown: scanned, one opens its health on a phone">
+            QR labels…
+          </button>
+        )}
         <span id="drives-counts" className="flex items-center gap-2 text-sm text-slate-400">
           {all.length} drives
           {(['alarm', 'warn', 'watch'] as const).map((l) =>

@@ -72,7 +72,11 @@ export const IoBoard: React.FC<{
   narrow: boolean;
   /** The charted signals kept with each PLC's fault records (absent: not this user's) */
   onFaultSignals?: (byPlc: Record<string, string[]>) => Promise<string | null>;
-}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, signals, onSignals, recordings, onRecord, canEdit, narrow, onFaultSignals }) => {
+  /** A box to show (a QR label scanned): found, filtered to, its properties opened */
+  focusPath?: { plc: string; path: string } | null;
+  /** QR labels of the boxes shown */
+  onQr?: (items: { plc: string; plcName: string; path: string; label: string; detail: string }[]) => void;
+}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, signals, onSignals, recordings, onRecord, canEdit, narrow, onFaultSignals, focusPath, onQr }) => {
   const [trees, setTrees] = useState<Record<string, IoTree>>({});
   const [states, setStates] = useState<IoPlcState[]>([]);
   const [error, setError] = useState('');
@@ -110,6 +114,16 @@ export const IoBoard: React.FC<{
     }
     return null;
   }, [propsAt, trees]);
+  const [focusDone, setFocusDone] = useState(false);
+  useEffect(() => {
+    if (!focusPath || focusDone) return;
+    const tree = trees[focusPath.plc];
+    const box = tree?.devices.flatMap((d) => allBoxes(d.boxes)).find((b) => b.path === focusPath.path);
+    if (!box) return;
+    setFilterState(box.name);
+    setPropsAt(focusPath);
+    setFocusDone(true);
+  }, [focusPath, focusDone, trees]);
   const fetchInfo = useMemo(
     () => (req: DeviceInfoRequest) => (conn ? conn.request<DeviceInfo>({ type: 'deviceInfo', productCode: req.productCode, revision: req.revision, deviceType: req.type, product: req.product }, 'deviceInfoResult', 20000) : Promise.reject(new Error('Not connected'))),
     [conn]
@@ -270,6 +284,24 @@ export const IoBoard: React.FC<{
           </button>
         )}
         {faultSaid && <span id="io-board-fault-said" className="text-xs text-slate-400">{faultSaid}</span>}
+        {onQr && (
+          <button
+            id="io-board-qr"
+            type="button"
+            onClick={() =>
+              onQr(
+                states
+                  .filter((s) => !onlyPlcs.length || onlyPlcs.includes(s.id))
+                  .flatMap((s) => (trees[s.id]?.devices ?? []).flatMap((d) => allBoxes(d.boxes).filter((b) => !b.disabled && words.every((w) => boxText(b).includes(w))).map((b) => ({ plc: s.id, plcName: s.name, path: b.path, label: b.name, detail: `${vendorOf(b)} ${b.info?.type ?? b.product}`.trim() }))))
+                  .slice(0, 300)
+              )
+            }
+            className="ml-auto px-2 py-1 rounded border border-slate-700 text-sm text-slate-300 hover:bg-slate-800"
+            title="QR labels of the boxes the filter shows: scanned, one opens its properties on a phone"
+          >
+            QR labels…
+          </button>
+        )}
       </div>
       <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2 space-y-3' : 'p-4 space-y-5'}`}>
         {error && <div className="px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{error}</div>}

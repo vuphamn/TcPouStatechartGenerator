@@ -10,6 +10,8 @@ import { RiskBoard } from './RiskBoard.tsx';
 import { OeeBoard } from './OeeBoard.tsx';
 import { AndonBoard } from './AndonBoard.tsx';
 import { WorkBoard, type WorkDraft } from './WorkBoard.tsx';
+import { QrSheet, type QrItem } from './QrSheet.tsx';
+import { FocusView } from './FocusView.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -169,7 +171,20 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
+  const [focus, setFocus] = useState<{ kind: 'm' | 'd' | 'b'; plc: string; path: string } | null>(() => {
+    const f = /^([mdb]):([^|]+)\|(.+)$/.exec(params.get('focus') ?? '');
+    return f ? { kind: f[1] as 'm' | 'd' | 'b', plc: f[2], path: f[3] } : null;
+  });
+  const closeFocus = () => {
+    setFocus(null);
+    const u = new URL(window.location.href);
+    u.searchParams.delete('focus');
+    window.history.replaceState(null, '', u.toString());
+  };
+  const [qrItems, setQrItems] = useState<QrItem[] | null>(null);
   const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work'>(() => {
+    const f = /^([db]):/.exec(params.get('focus') ?? '');
+    if (f) return f[1] === 'd' ? 'drives' : 'io';
     const p = params.get('page') || store.get('kss.board.page');
     return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' ? p : 'machines';
   });
@@ -1082,7 +1097,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'drives' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <DrivesBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} narrow={narrow} />
+              <DrivesBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} narrow={narrow} focusPath={focus?.kind === 'd' ? focus : null} onQr={viewOnly ? undefined : (items) => setQrItems(items.map((x) => ({ ...x, kind: 'd' })))} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'io' && (
@@ -1099,6 +1114,8 @@ export const OperatorBoard: React.FC = () => {
                 onRecord={(groups) => setRuleDialog({ kind: 'recording', groups })}
                 canEdit={canEdit}
                 narrow={narrow}
+                focusPath={focus?.kind === 'b' ? focus : null}
+                onQr={viewOnly ? undefined : (items) => setQrItems(items.map((x) => ({ ...x, kind: 'b' })))}
                 onFaultSignals={
                   may('faults')
                     ? async (byPlc) => {
@@ -1137,6 +1154,9 @@ export const OperatorBoard: React.FC = () => {
                 </button>
                 <button id="board-sel-playback" type="button" disabled={!selected.size} onClick={() => void startPlayback(PLAYBACK_WINDOWS[0].ms)} className="flex items-center gap-1 px-2.5 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-40" title="Play back the last hour (the Play back… menu: longer)">
                   <History className="w-4 h-4" /> Play back
+                </button>
+                <button id="board-sel-qr" type="button" disabled={!selected.size} onClick={() => setQrItems([...selected].map((k) => { const [plc, p] = k.split('|'); const t = tiles.find((x) => x.id === plc); return { kind: 'm' as const, plc, plcName: t?.name ?? plc, path: p, label: short(p, root), detail: t?.machines.find((x) => x.path === p)?.type ?? '' }; }))} className="px-2.5 py-1 rounded border border-slate-600 hover:bg-slate-800 disabled:opacity-40" title="QR labels of the chosen machines: scanned, one opens the machine on a phone">
+                  QR labels…
                 </button>
                 <button type="button" onClick={() => { setSelecting(false); setSelected(new Set()); }} className="px-2 py-1 rounded border border-slate-600 hover:bg-slate-800">
                   Done
@@ -1376,6 +1396,30 @@ export const OperatorBoard: React.FC = () => {
           </div>
         </div>
       )}
+      {focus?.kind === 'm' && status.state === 'connected' && (() => {
+        const t = tiles.find((x) => x.id === focus.plc);
+        const m = t?.machines.find((x) => x.path.toLowerCase() === focus.path.toLowerCase()) ?? null;
+        return (
+          <FocusView
+            conn={conn.current}
+            connected={status.state === 'connected'}
+            subscribe={subscribeIo}
+            plc={{ id: focus.plc, name: t?.name ?? plcName(focus.plc) }}
+            machine={m}
+            path={focus.path}
+            root={root}
+            alerts={alerts.filter((a) => a.plc === focus.plc && a.machine.toLowerCase() === focus.path.toLowerCase())}
+            faults={faultList.filter((f) => f.plc === focus.plc && f.machine.toLowerCase() === focus.path.toLowerCase())}
+            canCall={may('call')}
+            canWork={may('workorder')}
+            diagramUrl={t && m && !viewOnly ? watchUrl(t, m) : null}
+            onWork={(d) => { closeFocus(); toWork(d); }}
+            onFault={setFaultOpen}
+            onClose={closeFocus}
+          />
+        );
+      })()}
+      {qrItems && <QrSheet items={qrItems} onClose={() => setQrItems(null)} />}
       {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} />}
       {ruleDialog && (
         <BoardRuleDialog
