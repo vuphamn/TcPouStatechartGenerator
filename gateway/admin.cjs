@@ -57,7 +57,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -195,6 +195,18 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     'POST service/switch': async () => service.switchToTask(),
     // The PLCs' projects kept here (projectSync.cjs): their state; one checked now
     'GET projects': async () => (projects ? projects.list() : { enabled: false, plcs: [] }),
+    // Roles: who has which, the default, groups, start pages, notifications (roles.cjs); null: roles off
+    'GET roles': async () => ({ roles: getConfig().roles ?? null, labels: roles?.labels ?? {}, filters: roles?.filters() ?? [], users: (getConfig().tokens ?? []).map((t) => ({ name: t.name, view: !!t.view })) }),
+    'POST roles': async (body) => {
+      const checked = body.roles == null ? null : roles.check(body.roles, (roles?.filters() ?? []).map((f) => f.id));
+      update((c) => {
+        if (checked) c.roles = checked;
+        else delete c.roles;
+      });
+      log(`admin: roles ${checked ? `saved (${Object.keys(checked.users).length} user(s), ${Object.keys(checked.groups).length} group(s), default ${checked.default || 'none'}, ${checked.notify.length} notification(s))` : 'off'}`);
+      audit?.add('setup page', 'roles', { on: !!checked });
+      return { roles: checked };
+    },
     // (the load panel: this computer, the gateway, each PLC's notifications and tasks, the drives read)
     'GET load': async () => (load ? load() : { plcs: [] }),
     'POST projects/check': async (body) => {
@@ -377,6 +389,14 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div class="msg" id="admin-alerts-msg"></div>
 </section>
 
+<section>
+  <h2>Roles</h2>
+  <p class="hint flush">Who may do what. An <b>operator</b> acknowledges alerts, writes notes, calls maintenance and gives downtime reasons. A <b>technician</b> also sets maintenance windows, handles work orders and fault records. A <b>supervisor</b> also assigns work, adds alarms and recordings and saves the board's filters, and sees the reports. An <b>engineer</b> also builds and writes to the PLCs (with allowWrite and writeUsers). A <b>manager</b> sees the boards and the reports. Without roles, everyone signed in may do everything. Each role can start on a saved filter of the board, and be told of alerts on its own channel, naming who is on call.</p>
+  <label class="row"><input type="checkbox" id="admin-roles-on"> Use roles</label>
+  <div id="admin-roles"></div>
+  <div class="row mt"><span class="grow"></span><button class="primary" id="admin-roles-save">Save roles</button></div>
+  <div class="msg" id="admin-roles-msg"></div>
+</section>
 <section>
   <h2>Operator boards</h2>
   <p class="hint flush">Saved boards: open one at /?board=&lt;id&gt; (for a screen by the line). Without PLCs ticked, a board shows all of them.</p>
@@ -823,34 +843,6 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
           say('admin-projects-msg', p.name + ': ' + (projState[r.state] || r.state) + (r.message ? ' (' + r.message + ')' : ''), r.state !== 'error' && r.state !== 'no-sources');
         } catch (err) { say('admin-projects-msg', err.message, false); }
         loadProjects().catch(() => {});
-
-  // ---- Load (this computer, the gateway, each PLC) ----
-  const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');
-  const loadLoad = async () => {
-    const a = await call('load');
-    if (!a.machine) return;
-    $('admin-load-sub').textContent = a.host + ' (' + a.cores + ' cores): all programs ' + a.machine.cpuPct + ' % CPU, ' + a.machine.freeMemMB + ' of ' + a.machine.totalMemMB + ' MB memory free. The gateway: ' + a.gateway.cpuPct + ' % of one core, ' + a.gateway.rssMB + ' MB, answering within ' + a.gateway.loopP99Ms + ' ms (99 %).';
-    const box = $('admin-load');
-    box.replaceChildren();
-    const rows = el('tbody', {});
-    for (const p of a.plcs) {
-      const d = (a.drives || []).find((x) => x.plc === p.id);
-      const tasks = (p.tasks || []).map((t) => {
-        const pct = t.cycleUs && t.execUs != null ? Math.round((t.execUs / t.cycleUs) * 100) : null;
-        return t.name.split('_').pop() + ': ' + timeOf(t.execUs) + ' of ' + timeOf(t.cycleUs) + (pct != null ? ' (' + pct + ' %)' : '') + ', longest ' + timeOf(t.maxExecUs) + ', ' + t.overruns + ' overrun' + (t.overruns === 1 ? '' : 's') + (t.overrunsLastHour ? ' (' + t.overrunsLastHour + ' in the last hour)' : '') + (t.rtViolations ? ', ' + t.rtViolations + ' real-time violations' : '');
-      });
-      rows.append(el('tr', { 'data-load-plc': p.id, class: (p.tasks || []).some((t) => t.overrunsLastHour) ? 'warn' : '' },
-        el('td', {}, p.name),
-        el('td', {}, p.connected ? 'connected' + (p.plcState ? ', PLC ' + p.plcState : '') : 'not connected'),
-        el('td', { class: 'admin-load-shared' }, p.shared ? p.shared.notifications + ' (' + p.shared.uses + ' uses, every ' + p.shared.cycleMs + ' ms on change; ' + p.shared.samplesPerSec + ' changes/s)' : ''),
-        el('td', {}, p.live.notifications ? String(p.live.notifications) : ''),
-        el('td', {}, d ? d.drives + ' every ' + Math.round(d.everyMs / 1000) + ' s' : ''),
-        el('td', { class: 'admin-load-tasks' }, tasks.join(' · '))));
-    }
-    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Drives read'), el('th', {}, 'Its tasks'))), rows)));
-  };
-  loadLoad().catch(() => {});
-  window.setInterval(() => { if (!document.hidden) loadLoad().catch(() => {}); }, 3000);
       } } }, 'Check now');
       rows.append(el('tr', { 'data-project-plc': p.id },
         el('td', {}, p.name),
@@ -863,6 +855,75 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'State'), el('th', {}, 'Checked'), el('th', {}, 'Its version, downloaded'), el('th', {}, ''), el('th', {}, ''))), rows)));
   };
   loadProjects().catch(() => {});
+
+  // ---- Roles ----
+  let rolesData = null;
+  const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'recovered', 'escalated'];
+  const roleSelect = (value, onChange, none) => {
+    const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
+    s.value = value || '';
+    return s;
+  };
+  const renderRoles = () => {
+    const box = $('admin-roles');
+    box.replaceChildren();
+    const r = rolesData.roles;
+    $('admin-roles-on').checked = !!r;
+    if (!r) return box.append(el('p', { class: 'hint' }, 'Off: everyone signed in may do everything; a view-only token is a display.'));
+    box.append(el('div', { class: 'row' }, 'Everyone else signed in: ', roleSelect(r.default, (v) => { r.default = v; }, '(nothing: only those named below)')));
+    // Users: the tokens' names, and the company sign-ins added
+    const names = [...new Set([...rolesData.users.filter((u) => !u.view).map((u) => u.name.toLowerCase()), ...Object.keys(r.users)])];
+    const users = el('tbody', {});
+    for (const n of names) users.append(el('tr', { 'data-role-user': n }, el('td', {}, n), el('td', {}, roleSelect(r.users[n], (v) => { if (v) r.users[n] = v; else delete r.users[n]; }))));
+    const newUser = el('input', { placeholder: 'a company sign-in (ann@acme.com)', class: 'admin-role-new-user' });
+    box.append(el('h3', {}, 'People'), el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'User (a token\\'s name, a company sign-in)'), el('th', {}, 'Role'))), users)),
+      el('div', { class: 'row' }, newUser, el('button', { on: { click: () => { const v = newUser.value.trim().toLowerCase(); if (v) { r.users[v] = r.users[v] || 'operator'; renderRoles(); } } } }, 'Add')));
+    // Groups (a company sign-in's groups or app roles)
+    const groups = el('tbody', {});
+    for (const g of Object.keys(r.groups)) groups.append(el('tr', {}, el('td', {}, g), el('td', {}, roleSelect(r.groups[g], (v) => { if (v) r.groups[g] = v; else delete r.groups[g]; }, '(remove)'))));
+    const newGroup = el('input', { placeholder: 'a group or app role of the company sign-in' });
+    box.append(el('h3', {}, 'Groups'), el('div', { class: 'scroll' }, el('table', {}, groups)), el('div', { class: 'row' }, newGroup, el('button', { on: { click: () => { const v = newGroup.value.trim(); if (v) { r.groups[v] = 'operator'; renderRoles(); } } } }, 'Add')));
+    // Start pages
+    const starts = el('tbody', {});
+    for (const role of ROLE_IDS) {
+      const s = el('select', { 'data-start-role': role, on: { change: (e) => { if (e.target.value) r.startPages[role] = e.target.value; else delete r.startPages[role]; } } }, el('option', { value: '' }, '(the whole board)'), ...rolesData.filters.map((f) => el('option', { value: f.id }, f.name + ' (' + f.audience + ')')));
+      s.value = r.startPages[role] || '';
+      starts.append(el('tr', {}, el('td', {}, rolesData.labels[role]), el('td', {}, s)));
+    }
+    box.append(el('h3', {}, 'Start pages (a saved filter of the board, as each role first sees it)'), el('div', { class: 'scroll' }, el('table', {}, starts)));
+    // Notifications
+    box.append(el('h3', {}, 'Told of alerts'));
+    r.notify.forEach((n, i) => {
+      const events = el('span', {}, ...EVENT_IDS.map((ev) => el('label', { class: 'inline' }, el('input', { type: 'checkbox', checked: n.events.includes(ev), on: { change: (e) => { n.events = e.target.checked ? [...n.events, ev] : n.events.filter((x) => x !== ev); } } }), ' ' + ev + ' ')));
+      const onCall = el('textarea', { rows: 3, placeholder: 'Who is on call, one a line: Bob; Mon-Fri; 06:00-14:00', value: n.onCall.map((o) => o.name + '; ' + (o.days || 'every day') + '; ' + o.from + '-' + o.to).join('\\n'), on: { input: (e) => {
+        n.onCall = e.target.value.split('\\n').map((l) => l.split(';').map((x) => x.trim())).filter((p) => p[0]).map((p) => { const [from, to] = (p[2] || '00:00-24:00').split('-').map((x) => x.trim()); return { name: p[0], days: p[1] === 'every day' ? '' : (p[1] || ''), from: from || '00:00', to: to || '24:00' }; });
+      } } });
+      box.append(el('div', { class: 'card admin-role-notify' },
+        el('div', { class: 'row' }, roleSelect(n.role, (v) => { n.role = v; }, '(choose)'), el('input', { class: 'mono grow', placeholder: 'https://… (Teams, Slack or JSON webhook)', value: n.webhook, on: { input: (e) => { n.webhook = e.target.value.trim(); } } }),
+          (() => { const f = el('select', { on: { change: (e) => { n.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); f.value = n.format || 'teams'; return f; })(),
+          el('button', { on: { click: () => { r.notify.splice(i, 1); renderRoles(); } } }, 'Remove')),
+        el('div', { class: 'row' }, 'Of: ', events), onCall));
+    });
+    box.append(el('button', { on: { click: () => { r.notify.push({ role: 'technician', webhook: '', format: 'teams', events: ['error', 'stuck', 'plcStopped', 'drive', 'call'], onCall: [] }); renderRoles(); } } }, 'Add a channel'));
+  };
+  const loadRoles = async () => {
+    rolesData = await call('roles');
+    renderRoles();
+  };
+  $('admin-roles-on').addEventListener('change', (e) => {
+    rolesData.roles = e.target.checked ? (rolesData.roles || { users: {}, groups: {}, default: 'operator', startPages: {}, notify: [] }) : null;
+    renderRoles();
+  });
+  $('admin-roles-save').addEventListener('click', async () => {
+    try {
+      const r = await call('roles', { roles: rolesData.roles });
+      rolesData.roles = r.roles;
+      renderRoles();
+      say('admin-roles-msg', r.roles ? 'Saved: every board and web app page gets its role when it signs in again' : 'Roles are off', true);
+    } catch (err) { say('admin-roles-msg', err.message, false); }
+  });
+  loadRoles().catch(() => {});
 
   // ---- Load (this computer, the gateway, each PLC) ----
   const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');

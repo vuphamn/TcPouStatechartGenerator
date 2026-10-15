@@ -227,6 +227,10 @@ export const OperatorBoard: React.FC = () => {
     store.set('kss.board.signals', JSON.stringify(keys));
   };
   const [ruleDialog, setRuleDialog] = useState<{ kind: 'alarm' | 'recording'; groups: RuleGroup[] } | null>(null);
+  // The user's role on the gateway (roles.cjs): what it may do; roles off: everything
+  const [perm, setPerm] = useState<{ role: string | null; label: string | null; can: string[]; on: boolean }>({ role: null, label: null, can: [], on: false });
+  const may = (cap: string) => !viewOnly && (!perm.on || perm.can.includes(cap));
+  const [startFilter, setStartFilter] = useState<string | null>(null);
   // (the I/O page's messages, handed to it)
   const ioListeners = useRef(new Set<(m: { type: string }) => void>());
   const subscribeIo = useCallback((fn: (m: never) => void) => {
@@ -316,9 +320,10 @@ export const OperatorBoard: React.FC = () => {
         return;
       }
       if (msg.type === 'boardFilters') {
-        const x = m as unknown as { filters?: BoardSavedFilter[]; canEdit?: boolean };
+        const x = m as unknown as { filters?: BoardSavedFilter[]; canEdit?: boolean; startFilter?: string | null };
         setSavedFilters(x.filters ?? []);
         setCanEdit(!!x.canEdit);
+        setStartFilter(x.startFilter ?? null);
         return;
       }
       if (msg.type === 'boardRules') {
@@ -348,7 +353,10 @@ export const OperatorBoard: React.FC = () => {
     conn.current = c;
     setStatus({ state: 'connecting', message: 'Connecting to the gateway...' });
     c.connect(origin, useToken, useSso)
-      .then(({ user }) => {
+      .then((w) => {
+        const { user } = w;
+        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean };
+        setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn });
         setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
@@ -492,6 +500,11 @@ export const OperatorBoard: React.FC = () => {
   };
   // (the address's or the last one: applied once the gateway lists them; gone: forgotten)
   const appliedRef = useRef('');
+  useEffect(() => {
+    if (!startFilter || activeFilterId || params.get('saved') || params.has('filter') || params.get('page') || store.get(savedKey) !== null) return;
+    setActiveFilterId(startFilter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startFilter]);
   useEffect(() => {
     if (!activeFilterId || appliedRef.current === activeFilterId || !savedFilters.length) return;
     appliedRef.current = activeFilterId;
@@ -884,12 +897,17 @@ export const OperatorBoard: React.FC = () => {
             {(kioskIdx % kioskList.length) + 1} / {kioskList.length}
           </span>
         )}
+        {perm.on && perm.label && !viewOnly && (
+          <span id="board-role" className="px-2 py-0.5 rounded-full border border-sky-800 text-xs text-sky-200" title={`Your role on this gateway: ${perm.label}`}>
+            {perm.label}
+          </span>
+        )}
         {viewOnly && (
           <span id="board-view-only" className="px-2 py-0.5 rounded-full border border-slate-600 text-xs text-slate-400" title="A display: this board only, nothing can be done from it (a view-only token)">
             view only
           </span>
         )}
-        {status.state === 'connected' && !viewOnly && (
+        {status.state === 'connected' && may('reports') && (
           <select
             id="board-report"
             value=""
@@ -987,10 +1005,10 @@ export const OperatorBoard: React.FC = () => {
                 </button>
               )}
               <span className="ml-auto flex flex-wrap items-center gap-2">
-                <button id="board-sel-record" type="button" disabled={!selected.size} onClick={() => setRuleDialog({ kind: 'recording', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-rose-800 hover:bg-rose-700 text-white disabled:opacity-40">
+                <button id="board-sel-record" type="button" disabled={!selected.size || !may('boardEdit')} title={may('boardEdit') ? undefined : 'Your role may not add recordings'} onClick={() => setRuleDialog({ kind: 'recording', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-rose-800 hover:bg-rose-700 text-white disabled:opacity-40">
                   <CircleDot className="w-4 h-4" /> Record…
                 </button>
-                <button id="board-sel-alarm" type="button" disabled={!selected.size} onClick={() => setRuleDialog({ kind: 'alarm', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white disabled:opacity-40">
+                <button id="board-sel-alarm" type="button" disabled={!selected.size || !may('boardEdit')} title={may('boardEdit') ? undefined : 'Your role may not add alarms'} onClick={() => setRuleDialog({ kind: 'alarm', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white disabled:opacity-40">
                   <BellRing className="w-4 h-4" /> Alarm…
                 </button>
                 <button id="board-sel-playback" type="button" disabled={!selected.size} onClick={() => void startPlayback(PLAYBACK_WINDOWS[0].ms)} className="flex items-center gap-1 px-2.5 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-40" title="Play back the last hour (the Play back… menu: longer)">
@@ -1027,13 +1045,13 @@ export const OperatorBoard: React.FC = () => {
                     <span className="board-maintenance ml-auto flex items-center gap-2 px-3 py-0.5 rounded-full bg-violet-800 text-violet-100 text-sm">
                       <Wrench className="w-4 h-4" /> Maintenance until {new Date(p.maintenance.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ({p.maintenance.by}
                       {p.maintenance.note ? `: ${p.maintenance.note}` : ''}), alerts muted
-                      {!viewOnly && (
+                      {may('maintenance') && (
                         <button className="board-maintenance-end ml-1 px-2 rounded bg-violet-600 hover:bg-violet-500" onClick={() => void setMaintenance(p.id, 0, '')}>
                           End
                         </button>
                       )}
                     </span>
-                  ) : viewOnly ? null : (
+                  ) : !may('maintenance') ? null : (
                     <button className="board-maintenance-btn ml-auto flex items-center gap-1 px-2 py-0.5 rounded border border-slate-700 text-sm text-slate-300 hover:bg-slate-800" onClick={() => setMaintFor(maintFor === p.id ? null : p.id)} title="Mute this PLC's alerts during planned work">
                       <Wrench className="w-4 h-4" /> Maintenance...
                     </button>
@@ -1045,7 +1063,7 @@ export const OperatorBoard: React.FC = () => {
                       <span key={w.id} className="board-planned-item flex items-center gap-2 px-2.5 py-0.5 rounded-full border border-violet-700 text-violet-200">
                         🗓️ Planned {new Date(w.from).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} to {new Date(w.until).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} ({w.by}
                         {w.note ? `: ${w.note}` : ''})
-                        {!viewOnly && (
+                        {may('maintenance') && (
                           <button className="board-planned-remove px-1.5 rounded hover:bg-violet-800" onClick={() => void setMaintenance(p.id, 0, '', undefined, w.id)} title="Remove this planned window">
                             ×
                           </button>
@@ -1160,7 +1178,7 @@ export const OperatorBoard: React.FC = () => {
                             <button className="board-ack-send px-2 rounded bg-sky-700 hover:bg-sky-600">OK</button>
                           </form>
                         ) : (
-                          !viewOnly && (
+                          may('ack') && (
                             <button className="board-ack-btn mt-2 px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => setNoteFor(a.id)}>
                               Acknowledge
                             </button>

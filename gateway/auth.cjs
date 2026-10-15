@@ -100,7 +100,9 @@ function createAuth({ getConfig, log, secure }) {
       || domains.some((d) => user.endsWith(`@${d}`))
       || (Array.isArray(c.groups) && c.groups.some((g) => groups.includes(String(g))))
       || (Array.isArray(c.roles) && c.roles.some((g) => groups.includes(String(g))));
-    return { user, name, allowed };
+    // (its groups and app roles: the gateway's roles by group, roles.cjs)
+    const groupList = [...(Array.isArray(c.groups) ? c.groups : []), ...(Array.isArray(c.roles) ? c.roles : [])].map(String).slice(0, 200);
+    return { user, name, allowed, groups: groupList };
   }
 
   const redirectUri = (o, req) => o.redirectUri || `${secure ? 'https' : 'http'}://${req.headers.host}/auth/callback`;
@@ -188,7 +190,7 @@ function createAuth({ getConfig, log, secure }) {
         }
         const id = b64url(crypto.randomBytes(32));
         const hours = Number(o.sessionHours) > 0 ? Number(o.sessionHours) : 12;
-        sessions.set(id, { user: who.user, name: who.name, expires: Date.now() + hours * 3600000 });
+        sessions.set(id, { user: who.user, name: who.name, groups: who.groups ?? [], expires: Date.now() + hours * 3600000 });
         log(`auth: ${who.user} signed in (${o.name || 'OpenID Connect'})`);
         res.writeHead(302, { Location: p.returnTo, 'Set-Cookie': cookie(id, Math.round(hours * 3600)), 'Cache-Control': 'no-store' });
         res.end();
@@ -227,6 +229,7 @@ function createAuth({ getConfig, log, secure }) {
     handle,
     /** The signed-in user of a request (the live WebSocket), or null */
     userOf: (req) => sessionOf(req)?.user ?? null,
+    groupsOf: (req) => sessionOf(req)?.groups ?? [],
     tokensAllowed: () => oidc()?.tokens !== false,
   };
 }

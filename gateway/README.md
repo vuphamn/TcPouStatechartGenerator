@@ -241,6 +241,22 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
 
 **The log:** the gateway writes it to its console and to `gateway.log` beside `config.json` (at 5 MB it moves to `gateway.log.1`): run by the task it has no console, read the file then. A PLC that does not answer is retried every 30 s: the same error is logged once, then every 10 minutes with how many tries, and its connection when it comes back.
 
+**Roles** (the setup page's **Roles**, `config.json` `"roles"`): who may do what on the gateway. Without roles, everyone signed in may do everything (`writeUsers` and `boardEditors` still apply), and a view-only token is a display.
+
+| Role | May |
+|---|---|
+| Operator | acknowledge alerts, write notes, call maintenance, give downtime reasons |
+| Service / maintenance technician | as an operator, and set maintenance windows, handle work orders and fault records |
+| Maintenance supervisor | as a technician, and assign work, add alarms and recordings, save the board's filters, the reports |
+| Engineer | as a supervisor, and build and write to the PLCs (with `allowWrite`, `writeUsers`) |
+| Production / office manager | see the boards, write notes, the reports |
+
+- **Who has which:** by user (a token's name, a company sign-in), by a company sign-in's group or app role, else the default role (none: nothing beyond looking).
+- **What the gateway does with it:** it refuses the rest, with the reason, and writes the refusal in its audit log. The board and the web app hide what a role may not do, and the board shows the role in its header.
+- **Start page:** each role can start on a saved filter of the board (an operator on its line's machines, a technician on the Drives page …). The address (`&saved=`) or the viewer's own choice comes first.
+- **Told of alerts:** each role can have channels (Teams, Slack or JSON webhooks) for the alerts it wants (error, stuck, PLC stopped, drive, getting slower, call, recovered, escalated). An on-call schedule (`Bob; Mon-Fri; 06:00-14:00`, overnight too: `22:00-06:00`) names who is on call in each message.
+- Example: `"roles": { "users": { "ann": "operator", "bob@acme.com": "technician" }, "groups": { "Maintenance": "technician" }, "default": "operator", "startPages": { "operator": "<saved filter id>" }, "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive", "call"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }] }`.
+
 **Load** (the setup page): what the gateway costs this computer and each PLC, measured every few seconds.
 - **This computer:** its CPU for all programs (the PLC's Windows side, KvalCAM, browsers …) and its free memory.
 - **The gateway:** its own CPU, memory and answer delay.

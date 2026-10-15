@@ -11,7 +11,7 @@ const { AlertMonitor, postWebhook, parseQuietHours, isQuiet } = require('./alert
 const MAX_HISTORY = 1000;
 const IDLE_MS = 60000;
 
-function createAlertLog({ file, log, rules }) {
+function createAlertLog({ file, log, rules, onNew }) {
   let events = [];
   try {
     events = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -55,6 +55,8 @@ function createAlertLog({ file, log, rules }) {
       if (events.length > MAX_HISTORY) events = events.slice(-MAX_HISTORY);
       save();
       publish(e);
+      // (the roles told of it: roles.cjs notify)
+      onNew?.(e);
       return e;
     },
     /** The latest alerts, newest first */
@@ -90,6 +92,7 @@ function createAlertLog({ file, log, rules }) {
         e.escalatedAt = new Date(now).toISOString();
         save();
         publish(e);
+        onNew?.(e);
         const url = rule.escalateWebhook || rule.webhook;
         const text = `⏰ Not acknowledged for ${rule.escalateAfterMin} min: ${e.text}`;
         log(`alerts: escalated ${e.event} ${e.machine} (not acknowledged for ${rule.escalateAfterMin} min)`);

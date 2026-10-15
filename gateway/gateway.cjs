@@ -37,6 +37,7 @@ const { createIoBoards } = require('./ioBoard.cjs');
 const { SharedVars } = require('./sharedVars.cjs');
 const { createLoad } = require('./load.cjs');
 const { createDrives } = require('./drives.cjs');
+const { createRoles, checkRoles, LABELS: ROLE_LABELS } = require('./roles.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
@@ -430,6 +431,7 @@ function start() {
     config.boardEditors = next.boardEditors;
     config.drives = next.drives;
     drives?.apply();
+    config.roles = next.roles;
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -516,7 +518,9 @@ function start() {
   // The alert history (listed and acknowledged in the web app) and the operator boards' monitors
   const plcOf = (id) => plcs.get(id);
   const rulesNow = () => config.alerts ?? [];
-  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow });
+  // Roles (roles.cjs): who may do what, their start pages, who is told of what
+  const roles = createRoles({ getConfig: () => config, postWebhook, log });
+  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow, onNew: (e) => roles.notify(e) });
   // Maintenance (set on the board: a PLC's alerts muted until a time)
   // Audit log: who did what (audit-YYYY-MM.jsonl next to config.json)
   const audit = createAudit({ dir: baseDir, log });
@@ -623,6 +627,7 @@ function start() {
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     projects: projectSync,
     load: () => ({ ...load.snapshot(), drives: drives.stats() }),
+    roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
@@ -665,6 +670,7 @@ function start() {
   wss.on('connection', (ws, req) => {
     const ip = req.socket.remoteAddress;
     const ssoUser = auth.userOf(req);
+    const ssoGroups = auth.groupsOf?.(req) ?? [];
     // Operator board and alert history of this connection
     let boardStop = null;
     let alertsOff = null;
@@ -704,10 +710,17 @@ function start() {
       },
     };
     const helloTimer = setTimeout(() => !user && ws.close(4401, 'no hello'), 10000);
-    // (what this gateway offers its pages, by its settings)
+    // (what this user may do: roles.cjs; its groups: a company sign-in's)
+    const groups = () => (user && user === ssoUser ? ssoGroups : []);
+    const may = (cap) => roles.can(user, groups(), viewOnly).includes(cap);
+    const roleInfo = () => {
+      const role = viewOnly ? null : roles.roleOf(user, groups());
+      return { role, roleLabel: role ? ROLE_LABELS[role] : null, can: roles.can(user, groups(), viewOnly), rolesOn: roles.enabled() };
+    };
+    // (what this gateway offers its pages, by its settings and the user's role)
     const features = () => {
       const browse = config.allowBrowse !== false;
-      return ['appInfo', ...(browse ? ['deviceInfo', 'instancesOffline', 'plcStatesRefresh'] : []), ...(browse && config.allowSources !== false ? ['sourcesOffline'] : []), ...(config.allowBuild === true ? ['projectBuild'] : []), ...(config.allowWrite === true ? ['plcStart', 'plcStartAt', 'plcStopAt', 'plcHistory'] : [])];
+      return ['appInfo', ...(browse ? ['deviceInfo', 'instancesOffline', 'plcStatesRefresh'] : []), ...(browse && config.allowSources !== false ? ['sourcesOffline'] : []), ...(config.allowBuild === true && may('engineering') ? ['projectBuild'] : []), ...(config.allowWrite === true && may('plcWrite') ? ['plcStart', 'plcStartAt', 'plcStopAt', 'plcHistory'] : [])];
     };
 
     const stopSession = async () => {
@@ -743,7 +756,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features() });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features(), ...roleInfo() });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -770,7 +783,7 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}${viewOnly ? ' (view only)' : ''}`);
         audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}) });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}), ...roleInfo() });
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)
@@ -779,6 +792,21 @@ function start() {
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
         return send({ type: `${String(m.type).replace(/[^\w]/g, '').slice(0, 40)}Result`, requestId, ok: false, error: message });
+      }
+
+      // Roles: an action this user's role may not do, refused (answered as its handler would)
+      {
+        const NEEDS = { alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        let need = NEEDS[m.type];
+        if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
+        if (need && roles.enabled() && !viewOnly && !may(need)) {
+          const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+          const role = roles.roleOf(user, groups());
+          const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
+          audit.add(user, 'refused', { action: m.type, role });
+          const reply = { alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
+        }
       }
 
       // Before going live on one of its PLCs (over connections of their own, closed after): a POU type's instances
@@ -849,8 +877,8 @@ function start() {
       // alarms (sent again when they change)
       if (m.type === 'boardList') {
         send({ type: 'boardList', boards: config.boards ?? [] });
-        const sendFilters = () => send({ type: 'boardFilters', filters: boardFilters.list(), canEdit: canEditBoard(user, viewOnly) });
-        const sendRules = () => send({ type: 'boardRules', ...boardRules(), canEdit: canEditBoard(user, viewOnly) });
+        const sendFilters = () => send({ type: 'boardFilters', filters: boardFilters.list(), canEdit: canEditBoard(user, viewOnly) && may('boardEdit'), startFilter: roles.startPage(viewOnly ? null : roles.roleOf(user, groups())) });
+        const sendRules = () => send({ type: 'boardRules', ...boardRules(), canEdit: canEditBoard(user, viewOnly) && may('boardEdit') });
         sendFilters();
         sendRules();
         filtersOff ??= boardFilters.subscribe(sendFilters);
