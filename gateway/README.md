@@ -157,6 +157,7 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
 - **Signing in:** the board asks for a token (kept in that browser, for a wall screen), or offers **Sign in** when company sign-in is set up. After a lost connection it connects again by itself.
 - **A display:** `/?board&view=<token>` with a view-only token (the setup page): no sign-in, **view only** in the header, no Acknowledge, Maintenance or Report, and the tiles do not open diagrams.
 - **Notes:** under each PLC's name, the notes written live on it in the last 24 h (the web app's Live tab, **+ Note**), newest first, with who wrote them: "jam cleared here — ann".
+- **Filter** (the header; `/` goes there, Esc clears it): the machines whose path, state, type or PLC name has every word typed (`lockhead axis`), counted as *n of N machines*; a PLC with none is hidden. **Problems only**: the machines in error or stuck. Kept per board in that browser; `&filter=smLockManager` and `&problems=1` in the address set them for a wall screen.
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
 - **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles, and its planned windows are listed.
 - **The header** also counts the **escalated** alerts, and has **Report...** (see [Shift reports](#shift-reports)).

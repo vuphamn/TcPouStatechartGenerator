@@ -139,6 +139,34 @@ function client() {
       expect(posts.some((x) => x.event === 'acknowledged' && /aDoors\[2\].* · checking/.test(x.text)), 'and posted to the webhook');
     }
     await p.screenshot({ path: h.out('operator-board.png') });
+    // The filter: every word typed in the machine's path, state, type or PLC; problems only; "/" goes there, Esc clears
+    const paths = () => p.$$eval('.board-tile', (t) => t.map((x) => x.getAttribute('data-path').split('.').pop()));
+    await p.mouse.click(5, 400);
+    await p.keyboard.press('/');
+    const focused = await p.evaluate(() => document.activeElement?.id);
+    await p.keyboard.type('adoors[2]');
+    await h.sleep(300);
+    const one = await paths();
+    const countOne = await p.$eval('#board-machine-count', (e) => e.textContent);
+    await p.click('#board-filter-clear');
+    await p.type('#board-filter', 'DOOR_DASHER_ERROR');
+    await h.sleep(300);
+    const byState = await paths();
+    await p.click('#board-filter-clear');
+    await p.click('#board-problems-only');
+    await h.sleep(300);
+    const problems = await p.$$eval('.board-tile', (t) => t.map((x) => x.getAttribute('data-kind')));
+    await p.click('#board-problems-only');
+    await p.type('#board-filter', 'nothing like this');
+    await h.sleep(300);
+    const none = await p.$eval('#board-filter-none', (e) => e.textContent).catch(() => '');
+    await p.focus('#board-filter');
+    await p.keyboard.press('Escape');
+    await h.sleep(300);
+    const all = await paths();
+    expect(focused === 'board-filter' && JSON.stringify(one) === '["aDoors[2]"]' && countOne === '1 of 5 machines', `the filter ("/" there; "adoors[2]"): ${one.join(', ')} (${countOne})`);
+    expect(JSON.stringify(byState) === '["aDoors[2]"]' && problems.length >= 1 && problems.every((k) => k === 'error' || k === 'stuck') && /No machine matches/.test(none) && all.length === 5, `by state: ${byState.join(', ')}; problems only: ${problems.join(', ')}; none: said; Esc: all ${all.length} back`);
+    expect((await p.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('kss.board.filter|')))), 'the filter kept for this viewer');
     expect(await p.evaluate(() => localStorage.getItem('kss.gateway.token')) === TOKEN, 'the token is kept for the wall screen');
     expect(errors.length === 0, `no page errors ${errors.slice(0, 2).join(' | ')}`);
     await browser.close();

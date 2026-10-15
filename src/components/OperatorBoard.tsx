@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BellOff, Check, LayoutGrid, Maximize2, Radio, Timer, Volume2, VolumeX, Wrench } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, Check, LayoutGrid, Maximize2, Radio, Search, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
 import { useMediaQuery } from '../hooks/useMediaQuery.ts';
 import { GatewayConnection, detectGatewayOrigin, fetchGatewaySso, type GatewaySso } from '../utils/liveGateway.ts';
@@ -293,6 +293,46 @@ export const OperatorBoard: React.FC = () => {
     [plcs, typeLimits, viewerDefault, stuckDefault, now, offset]
   );
   const counts = tiles.flatMap((p) => p.machines).reduce((c, m) => ({ all: c.all + 1, error: c.error + (m.error ? 1 : 0), stuck: c.stuck + (m.stuck ? 1 : 0) }), { all: 0, error: 0, stuck: 0 });
+  // The filter: the machines whose path, state, type or PLC has every word typed (lockhead axis); problems only: the
+  // ones in error or stuck. From the address (&filter=, &problems=1: a wall screen's own), else this viewer's last
+  const filterKey = `kss.board.filter|${boardId || params.get('plcs') || 'all'}`;
+  const [filter, setFilterState] = useState(() => {
+    if (params.has('filter')) return params.get('filter') ?? '';
+    try {
+      return localStorage.getItem(filterKey) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const setFilter = (v: string) => {
+    setFilterState(v);
+    try {
+      localStorage.setItem(filterKey, v);
+    } catch {
+      // (this viewer only, this time)
+    }
+  };
+  const [problemsOnly, setProblemsOnly] = useState(() => params.get('problems') === '1');
+  const filterRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    // ("/" goes to the filter, as in many tools)
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.key !== '/' || e.ctrlKey || e.altKey || e.metaKey || (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      filterRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
+  const filtering = words.length > 0 || problemsOnly;
+  const shown = filtering
+    ? tiles
+        .map((p) => ({ ...p, machines: p.machines.filter((m) => (!problemsOnly || m.error || m.stuck) && words.every((w) => `${p.name} ${m.path} ${m.state ?? ''} ${m.type}`.toLowerCase().includes(w))) }))
+        .filter((p) => p.machines.length)
+    : tiles;
+  const shownCount = shown.reduce((n, p) => n + p.machines.length, 0);
   const open = alerts.filter((a) => a.event !== 'recovered' && !a.ack && !a.resolvedAt);
   const openMachines = new Set(open.map((a) => a.machine.toLowerCase()));
   const flashOn = (path: string) => openMachines.has(path.toLowerCase()) && (flashing[path.toLowerCase()] ?? 0) > now;
@@ -320,7 +360,7 @@ export const OperatorBoard: React.FC = () => {
         <Radio className={`${narrow ? 'w-5 h-5' : 'w-6 h-6'} text-sky-400`} />
         <h1 id="board-title" className={`${narrow ? 'text-lg' : 'text-2xl'} font-semibold tracking-wide`}>{title}</h1>
         <span id="board-counts" className={`flex items-center gap-3 ${narrow ? 'text-sm' : 'text-lg'}`}>
-          <span className="text-slate-400">{counts.all} machines</span>
+          <span id="board-machine-count" className="text-slate-400">{filtering ? `${shownCount} of ${counts.all} machines` : `${counts.all} machines`}</span>
           {counts.error > 0 && (
             <span className="flex items-center gap-1 px-2.5 rounded-full bg-rose-700 text-white">
               <AlertTriangle className="w-4 h-4" /> {counts.error} in error
@@ -336,6 +376,41 @@ export const OperatorBoard: React.FC = () => {
               <Timer className="w-4 h-4" /> {counts.stuck} stuck
             </span>
           )}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="relative flex items-center">
+            <Search className="absolute left-2 w-4 h-4 text-slate-500 pointer-events-none" />
+            <input
+              id="board-filter"
+              ref={filterRef}
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setFilter('');
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Filter machines… ( / )"
+              title="The machines whose path, state, type or PLC has every word typed, e.g. lockhead axis. Esc clears it"
+              className={`${narrow ? 'w-40' : 'w-72'} pl-7 pr-7 py-1 rounded bg-slate-950 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-600 select-text`}
+            />
+            {filter && (
+              <button id="board-filter-clear" type="button" onClick={() => setFilter('')} className="absolute right-1.5 p-0.5 rounded text-slate-400 hover:text-white" title="Clear the filter">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </span>
+          <button
+            id="board-problems-only"
+            type="button"
+            onClick={() => setProblemsOnly((v) => !v)}
+            className={`px-2 py-1 rounded border text-sm ${problemsOnly ? 'border-amber-500 bg-amber-500/20 text-amber-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+            title="Only the machines in error or stuck"
+            aria-pressed={problemsOnly}
+          >
+            Problems only
+          </button>
         </span>
         {!narrow && (
           <span className="ml-auto text-sm text-slate-400" id="board-status" title={status.message}>
@@ -461,7 +536,15 @@ export const OperatorBoard: React.FC = () => {
           {(!narrow || phoneView === 'machines') && (
           <main className={`flex-1 min-w-0 overflow-y-auto ${narrow ? 'p-2 space-y-3' : 'p-4 space-y-5'}`}>
             {status.state === 'error' && <div className="px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{status.message}</div>}
-            {tiles.map((p) => (
+            {filtering && !shown.length && (
+              <div id="board-filter-none" className="px-4 py-6 text-slate-400">
+                No machine matches {words.length ? <b className="text-slate-200">{filter}</b> : null}{problemsOnly ? ' among the ones in error or stuck' : ''}.{' '}
+                <button type="button" className="underline hover:text-white" onClick={() => { setFilter(''); setProblemsOnly(false); }}>
+                  Show all
+                </button>
+              </div>
+            )}
+            {shown.map((p) => (
               <section key={p.id} className="board-plc" data-plc={p.id} data-plc-state={p.plcState ?? ''}>
                 <h2 className="flex items-center gap-3 mb-2">
                   <span className="text-xl font-semibold">{p.name}</span>
