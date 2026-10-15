@@ -28,6 +28,11 @@ for (const dir of ['gateway', 'shared']) {
 const missing = [...needed].filter(([p]) => !deps.includes(p));
 expect(needed.has('ads-client') && needed.has('ws'), `the code's packages found: ${[...needed.keys()].join(', ')}`);
 expect(!missing.length, missing.length ? `missing from gateway/package.json: ${missing.map(([p, f]) => `${p} (${[...new Set(f)].slice(0, 3).join(', ')})`).join('; ')}` : 'gateway/package.json names them all');
+// (its package-lock.json in step: CI's "npm ci --prefix gateway" refuses one that lacks a dependency; on 2026-10-14
+// every job failed so: npm install --package-lock-only in gateway/ brings it in step)
+const lock = JSON.parse(fs.readFileSync(path.join(repo, 'gateway', 'package-lock.json'), 'utf8'));
+const unlocked = deps.filter((d) => !lock.packages?.[`node_modules/${d}`] || !lock.packages?.['']?.dependencies?.[d]);
+expect(!unlocked.length, unlocked.length ? `gateway/package-lock.json lacks: ${unlocked.join(', ')} (npm install --package-lock-only in gateway/)` : 'gateway/package-lock.json has them all');
 
 console.log(`${fails} failures`);
 process.exit(fails ? 1 : 0);

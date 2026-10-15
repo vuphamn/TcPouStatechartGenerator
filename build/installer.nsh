@@ -438,11 +438,11 @@
       File /r "${KSS_EXTRAS}\gateway\*.*"
       CreateShortCut "$SMPROGRAMS\Kval MachineScope Gateway.lnk" "$kssGatewayDir"
       WriteRegStr SHCTX "${KSS_REG}" "GatewayDir" "$kssGatewayDir"
-      nsExec::ExecToStack 'cmd.exe /c node --version'
-      Pop $0
-      Pop $1
-      ${If} $0 != 0
-        MessageBox MB_OK|MB_ICONINFORMATION "The gateway is in $kssGatewayDir.$\n$\nIt runs on Node.js 20 or later, which was not found: install it from nodejs.org, then follow README.md in that folder." /SD IDOK
+      ; (Node.js comes with it: node\node.exe, run by gateway.cmd. A new gateway: its config.json and certificate made for
+      ; this computer's name; an existing one's kept as they are)
+      ${IfNot} ${FileExists} "$kssGatewayDir\config.json"
+        nsExec::ExecToLog 'cmd.exe /d /c ""$kssGatewayDir\gateway.cmd" init"'
+        Pop $0
       ${EndIf}
     ${EndIf}
 
@@ -503,7 +503,9 @@
       RMDir /r "$1\public"
       RMDir /r "$1\shared"
       RMDir /r "$1\node_modules"
-      Delete "$1\gateway.cjs"
+      RMDir /r "$1\node"
+      Delete "$1\*.cjs"
+      Delete "$1\gateway.cmd"
       Delete "$1\package.json"
       Delete "$1\package-lock.json"
       Delete "$1\README.md"

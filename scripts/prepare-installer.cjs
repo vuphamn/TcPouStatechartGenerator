@@ -3,7 +3,8 @@
 //   KvalMachineScope.Xae.Vs2017.vsix                                     the same for TwinCAT 4024's TcXaeShell (VS 2017 shell)
 //   kval-machinescope-vscode.vsix, vscode-extension.ps1                    the VS Code extension (Open in Kval MachineScope)
 //   link/Kval MachineScope Link.exe                                        the web edition's local helper
-//   gateway/                                                             the gateway, with its runtime dependencies
+//   gateway/                                                             the gateway, with its runtime dependencies and
+//                                                                        Node.js (node/node.exe: scripts/fetch-node.cjs)
 // Run after "npm run build" (npm run build:exe does both). The VSIX is built with xae-extension/build.ps1 when missing.
 const fs = require('fs');
 const path = require('path');
@@ -75,7 +76,7 @@ run(process.execPath, [path.join(root, 'scripts', 'build-link.cjs')]);
 fs.mkdirSync(path.join(out, 'link'), { recursive: true });
 fs.copyFileSync(path.join(root, 'release', 'link', 'Kval MachineScope Link.exe'), path.join(out, 'link', 'Kval MachineScope Link.exe'));
 
-// 3. The gateway with its dependencies (the gateway machine then needs only Node.js)
+// 3. The gateway with its dependencies and Node.js (node\node.exe, run by gateway.cmd): the gateway machine needs nothing
 run(process.execPath, [path.join(root, 'scripts', 'build-gateway.cjs')]);
 const gateway = path.join(out, 'gateway');
 const ownFiles = new Set(['config.json', 'cert.pem', 'key.pem', 'node_modules']);
@@ -83,6 +84,7 @@ fs.cpSync(path.join(root, 'release', 'gateway'), gateway, { recursive: true, fil
 const npmArgs = ['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'];
 if (process.platform === 'win32') run('cmd.exe', ['/d', '/c', 'npm', ...npmArgs], { cwd: gateway });
 else run('npm', npmArgs, { cwd: gateway });
+run(process.execPath, [path.join(root, 'scripts', 'fetch-node.cjs'), path.join(gateway, 'node')]);
 
 const size = (dir) => fs.readdirSync(dir, { withFileTypes: true }).reduce((n, e) => n + (e.isDirectory() ? size(path.join(dir, e.name)) : fs.statSync(path.join(dir, e.name)).size), 0);
 console.log(`Installer components staged in ${out} (${Math.round(size(out) / 1048576)} MB)`);

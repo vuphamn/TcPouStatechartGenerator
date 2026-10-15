@@ -22,14 +22,16 @@ For a single person on a computer that can reach the PLC, the local helper [Kval
 
 Requires Node.js 20 or later on the gateway machine.
 
-1. **Build and copy:** on a development machine, run `npm run build:gateway`, which assembles `release/gateway`. Copy that folder to the gateway machine.
+**Installed by the Kval MachineScope setup** (its *gateway* option), everything comes with it: Node.js (`node\node.exe`), the packages (`node_modules`), and a first `config.json` and certificate made for the computer's name (an update keeps yours). Skip steps 1 and 2: open a console in its folder (`C:\ProgramData\KvalMachineScope\Gateway` for all users, `%LOCALAPPDATA%\KvalMachineScope\Gateway` for one; the Start menu's **Kval MachineScope Gateway** opens it) and use `gateway.cmd` where this page says `node gateway.cjs`: `gateway.cmd start`, `gateway.cmd add-token alice`, `gateway.cmd init --host <name>` (after deleting `config.json`, for another host name). **Run at startup** then runs that Node.js too.
+
+1. **Build and copy:** on a development machine, run `npm run build:gateway`, which assembles `release/gateway` with its packages (`node_modules`). Copy that folder to the gateway machine.
 2. **Install and initialize** on the gateway machine:
    ```powershell
    cd gateway
    npm install --omit=dev
    node gateway.cjs init --host machinescope-gw.example.local
    ```
-   (PowerShell says *running scripts is disabled on this system*: run `npm.cmd install --omit=dev` instead; it changes no security setting.) Installed by the Kval MachineScope setup, the gateway is in `C:ProgramDataKvalMachineScopeGateway` (for all users) or `%LOCALAPPDATA%KvalMachineScopeGateway` (for one user); the Start menu's **Kval MachineScope Gateway** opens it.
+   (PowerShell says *running scripts is disabled on this system*: run `npm.cmd install --omit=dev` instead; it changes no security setting.) Installed by the Kval MachineScope setup, skip `npm install`: its packages came with it.
    `init` creates `config.json` and a self-signed certificate for that host name. For browsers to trust the gateway, replace `cert.pem` / `key.pem` with a certificate from your company CA. Alternatively, set `tls.pfx` and `tls.passphrase`.
 3. **Set up the PLCs:** start the gateway (step 6) and open its **setup page** on the gateway machine, `https://localhost:8443/admin` (see [Setup page](#setup-page)): search the network for the PLCs, tick them, test them, save. Or edit `config.json` by hand:
    ```json
