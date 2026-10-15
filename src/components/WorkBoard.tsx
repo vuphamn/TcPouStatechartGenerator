@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Package, Plus, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Package, Plus, Repeat, X } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { WorkParts, type SpareMove, type SparePart } from './WorkParts.tsx';
+import { WorkPm, type PmPlan } from './WorkPm.tsx';
 
 export interface WorkOrder {
   id: string;
@@ -79,8 +80,11 @@ export const WorkBoard: React.FC<{
   narrow: boolean;
   /** A fault record opened (a work order made of one) */
   onFault?: (id: string) => void;
-}> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow, onFault }) => {
-  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability' | 'parts'>('orders');
+  /** The PLCs (a preventive maintenance plan's) */
+  plcs?: { id: string; name: string }[];
+}> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow, onFault, plcs = [] }) => {
+  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability' | 'parts' | 'pm'>('orders');
+  const [pmPlans, setPmPlans] = useState<PmPlan[]>([]);
   const [spares, setSpares] = useState<{ parts: SparePart[]; moves: SpareMove[] }>({ parts: [], moves: [] });
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [people, setPeople] = useState<string[]>([]);
@@ -91,6 +95,10 @@ export const WorkBoard: React.FC<{
   useEffect(
     () =>
       subscribe((m) => {
+        if (m.type === 'pmPlans') {
+          setPmPlans((m as unknown as { plans?: PmPlan[] }).plans ?? []);
+          return;
+        }
         if (m.type === 'spares') {
           const x = m as unknown as { parts?: SparePart[]; moves?: SpareMove[] };
           setSpares({ parts: x.parts ?? [], moves: x.moves ?? [] });
@@ -106,6 +114,7 @@ export const WorkBoard: React.FC<{
     if (!connected || !conn) return;
     conn.send({ type: 'workWatch' });
     conn.send({ type: 'sparesWatch' });
+    conn.send({ type: 'pmWatch' });
     return () => {
       conn.send({ type: 'workStop' });
     };
@@ -151,6 +160,7 @@ export const WorkBoard: React.FC<{
               ['orders', 'Work orders', ClipboardList],
               ['calendar', 'Calendar', CalendarDays],
               ['reliability', 'Reliability', HeartPulse],
+              ['pm', `Preventive${pmPlans.some((p) => p.due.state === 'due') ? ` (${pmPlans.filter((p) => p.due.state === 'due').length} due)` : ''}`, Repeat],
               ['parts', `Parts${spares.parts.some((p) => p.low) ? ` (${spares.parts.filter((p) => p.low).length} low)` : ''}`, Package],
             ] as const
           ).map(([id, label, Icon]) => (
@@ -198,6 +208,7 @@ export const WorkBoard: React.FC<{
         )}
         {tab === 'calendar' && <WorkCalendar conn={conn} connected={connected} orders={orders} onOpen={setOpenId} />}
         {tab === 'reliability' && <WorkReliability conn={conn} connected={connected} root={root} />}
+        {tab === 'pm' && <WorkPm conn={conn} plans={pmPlans} plcs={plcs} orderNumber={(oid) => orders.find((o) => o.id === oid)?.number ?? null} canWork={canWork} canEdit={canAssign} onOpenOrder={(oid) => { setShow('all'); setTab('orders'); setOpenId(oid); }} />}
         {tab === 'parts' && <WorkParts conn={conn} parts={spares.parts} moves={spares.moves} canWork={canWork} canEdit={canAssign} />}
       </div>
       {form && (

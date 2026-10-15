@@ -51,6 +51,7 @@ const { createRecovery } = require('./recovery.cjs');
 const { createEventLog } = require('./eventlog.cjs');
 const { createSpares } = require('./spares.cjs');
 const { createPush } = require('./push.cjs');
+const { createPm } = require('./pm.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -694,6 +695,15 @@ function start() {
   };
   // Guided recovery (recovery.cjs): the steps to bring a stopped machine back, their checks read from the PLC
   const recovery = createRecovery({ baseDir, log, audit, readVars: readVarsOnce });
+  // Preventive maintenance (pm.cjs): plans by days or operating hours (a drive's own, a PLC counter's), their work
+  // orders made by themselves when due
+  const pm = createPm({
+    baseDir, getPlc: (id) => plcs.get(id), workOrders, readVars: readVarsOnce, log, audit,
+    hoursOfDrive: (plcId, x) => {
+      const d = drives.view([plcId])[0]?.drives.find((v) => v.path === x || v.name.toLowerCase() === String(x).toLowerCase());
+      return typeof d?.latest?.opHours?.v === 'number' ? d.latest.opHours.v : null;
+    },
+  });
   // TwinCAT logged events (eventlog.cjs): imported on the setup page, shown with the fault records
   const eventLog = createEventLog({ baseDir, log, audit });
   // Spare parts (spares.cjs): the stock kept for the machines; a work order done takes the parts it used
@@ -850,6 +860,7 @@ function start() {
     let handoverOff = null;
     let recoveryOff = null;
     let sparesOff = null;
+    let pmOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -965,7 +976,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -973,7 +984,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1337,6 +1348,34 @@ function start() {
           return send({ type: 'pushResult', requestId, ok: false, error: err.message });
         }
       }
+      // Preventive maintenance: the plans (again when one or a work order changes); written, removed; a work order now
+      if (m.type === 'pmWatch') {
+        const sendPm = () => send({ type: 'pmPlans', plans: pm.list() });
+        sendPm();
+        if (!pmOff) {
+          const a = pm.subscribe(sendPm);
+          const b = workOrders.subscribe(sendPm);
+          pmOff = () => {
+            a();
+            b();
+          };
+        }
+        return;
+      }
+      if (m.type === 'pmSave' || m.type === 'pmDelete' || m.type === 'pmNow') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'pmResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          if (m.type === 'pmSave') return send({ type: 'pmResult', requestId, ok: true, plan: await pm.save(m.plan ?? {}, user) });
+          if (m.type === 'pmDelete') {
+            pm.remove(String(m.id ?? ''), user);
+            return send({ type: 'pmResult', requestId, ok: true });
+          }
+          return send({ type: 'pmResult', requestId, ok: true, order: pm.now(String(m.id ?? ''), user) });
+        } catch (err) {
+          return send({ type: 'pmResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'sparesWatch') {
         const sendSpares = () => send({ type: 'spares', ...spares.view() });
         sendSpares();
@@ -1382,6 +1421,8 @@ function start() {
                 if (used.length) ch.parts = [String(ch.parts ?? '').trim(), used.map(({ p, qty }) => `${qty} × ${p.number} ${p.name}`).join('; ')].filter(Boolean).join('; ');
                 const done = workOrders.update(id, ch, user, roles.enabled() ? may('assign') : true);
                 spares.take(used, user, done.number);
+                // (a preventive maintenance's work order done: its plan done)
+                if (done.source?.kind === 'pm' && done.status === 'done') pm.done(done.source.id);
                 return done;
               })();
           return send({ type: 'workResult', requestId, ok: true, order: o });
@@ -1859,6 +1900,7 @@ function start() {
       handoverOff?.();
       recoveryOff?.();
       sparesOff?.();
+      pmOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

@@ -417,7 +417,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares' || msg.type === 'pmPlans') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -1188,7 +1188,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'work' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} onFault={(fid) => setFaultOpen(fid)} />
+              <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} onFault={(fid) => setFaultOpen(fid)} plcs={plcs.map((p) => ({ id: p.id, name: p.name }))} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'andon' && (
