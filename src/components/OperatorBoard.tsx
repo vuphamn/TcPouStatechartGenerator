@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
 import { BoardPlayback } from './BoardPlayback.tsx';
 import { IoBoard } from './IoBoard.tsx';
 import { DrivesBoard } from './DrivesBoard.tsx';
+import { RiskBoard } from './RiskBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -165,11 +166,11 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives'>(() => {
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk'>(() => {
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives') => {
+  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -320,7 +321,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -790,6 +791,9 @@ export const OperatorBoard: React.FC = () => {
           <button id="board-page-drives" type="button" onClick={() => setPage('drives')} className={`flex items-center gap-1 px-2 py-1 ${page === 'drives' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'drives'} title="The drives' health: read from each drive, judged against its limits, its own past and its siblings">
             <Gauge className="w-4 h-4" /> Drives
           </button>
+          <button id="board-page-risk" type="button" onClick={() => setPage('risk')} className={`flex items-center gap-1 px-2 py-1 ${page === 'risk' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'risk'} title="What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box">
+            <ShieldAlert className="w-4 h-4" /> Risk
+          </button>
         </span>
         <span className={`flex items-center gap-2 ${page !== 'machines' ? 'hidden' : ''}`}>
           <span className="relative flex items-center">
@@ -990,6 +994,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'risk' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'drives' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <DrivesBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} narrow={narrow} />

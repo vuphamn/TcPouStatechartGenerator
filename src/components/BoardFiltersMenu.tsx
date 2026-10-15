@@ -16,7 +16,7 @@ export interface BoardSavedFilter {
   /** "<plc>|<path>": the I/O signals charted */
   signals: string[];
   alerts: boolean;
-  page: 'machines' | 'io' | 'drives';
+  page: 'machines' | 'io' | 'drives' | 'risk';
   by?: string;
   at?: string;
   changedBy?: string;
@@ -138,7 +138,7 @@ export const BoardFiltersMenu: React.FC<{
                         <span className="truncate font-medium">{f.name}</span>
                       </div>
                       <div className="text-xs text-slate-400 truncate">
-                        {[f.layout === 'tree' ? 'tree' : 'flat', f.page === 'io' ? 'I/O page' : f.page === 'drives' ? 'Drives page' : '', f.problemsOnly ? 'problems only' : '', f.text ? `"${f.text}"` : '', f.machines.length ? `${f.machines.length} machines` : '', f.signals.length ? `${f.signals.length} signals` : '', f.plcs.length ? `${f.plcs.length} PLC${f.plcs.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}
+                        {[f.layout === 'tree' ? 'tree' : 'flat', f.page === 'io' ? 'I/O page' : f.page === 'drives' ? 'Drives page' : f.page === 'risk' ? 'Risk page' : '', f.problemsOnly ? 'problems only' : '', f.text ? `"${f.text}"` : '', f.machines.length ? `${f.machines.length} machines` : '', f.signals.length ? `${f.signals.length} signals` : '', f.plcs.length ? `${f.plcs.length} PLC${f.plcs.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}
                         {f.note ? ` — ${f.note}` : ''}
                       </div>
                     </button>

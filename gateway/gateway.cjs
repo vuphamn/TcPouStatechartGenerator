@@ -39,6 +39,8 @@ const { createLoad } = require('./load.cjs');
 const { createDrives } = require('./drives.cjs');
 const { createRoles, checkRoles, LABELS: ROLE_LABELS } = require('./roles.cjs');
 const { createFaults } = require('./faults.cjs');
+const { createFleet } = require('./fleet.cjs');
+const { risks: risksOf, inventory: inventoryOf } = require('./risk.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
@@ -435,6 +437,8 @@ function start() {
     config.roles = next.roles;
     config.faults = next.faults;
     faults?.apply();
+    config.fleet = next.fleet;
+    fleet?.apply();
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -456,6 +460,7 @@ function start() {
   let recorders = null;
   let drives = null;
   let faults = null;
+  let fleet = null;
   setInterval(() => {
     if (mtime() === configMtime) return;
     try {
@@ -598,6 +603,14 @@ function start() {
   // The fault recorder (faults.cjs): each PLC's last minute kept, a fault's minute before and after saved
   faults = createFaults({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, log, retryMs: config.alertRetryMs ?? 30000 });
   faults.start();
+  // The fleet (fleet.cjs): every I/O box, its state over the days; the risk list (risk.cjs) from it, the drives, the alerts
+  fleet = createFleet({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log });
+  fleet.start();
+  const fleetState = (ids) => {
+    const f = fleet.view().filter((p) => !ids?.length || ids.includes(p.id));
+    const d = drives.view(ids);
+    return { type: 'fleetState', at: Date.now(), risks: risksOf({ drives: d, daily: drives.daily(), fleet: f, alerts: alertLog.list(1000).filter((a) => !ids?.length || ids.includes(a.plc)), limits: config.fleet?.limits ?? {} }), inventory: inventoryOf(f), plcs: f.map((p) => ({ id: p.id, name: p.name, state: p.state, message: p.message })) };
+  };
   const load = createLoad({ connections: () => [...connections.entries()], plcOf, plcList: () => [...plcs.values()], ads, log });
   // (From PLC: the copy kept here when it is in step with the PLC, else null: read from the PLC; logged once a minute)
   let keptSaid = 0;
@@ -689,6 +702,7 @@ function start() {
     // (its board's Drives page; the faults kept, told as they come)
     let drivesOff = null;
     let faultsOff = null;
+    let fleetTimer = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -795,7 +809,7 @@ function start() {
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)
-      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'fleetWatch', 'fleetStop', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
@@ -990,6 +1004,18 @@ function start() {
         log(`faults: ${user} keeps ${m.signals.length} signal(s) with ${m.plc}'s faults`);
         audit.add(user, 'fault.signals', { plc: m.plc, signals: m.signals });
         return send({ type: 'faultSignalsResult', requestId, ok: true });
+      }
+      // The Risk page: the risk list and the inventory of these PLCs (all when none), every 30 s
+      if (m.type === 'fleetWatch') {
+        clearInterval(fleetTimer);
+        const ids = Array.isArray(m.plcs) ? m.plcs.filter((id) => plcs.has(id)) : [];
+        send(fleetState(ids));
+        fleetTimer = setInterval(() => send(fleetState(ids)), 30000);
+        return;
+      }
+      if (m.type === 'fleetStop') {
+        clearInterval(fleetTimer);
+        return;
       }
       if (m.type === 'drivesStop') {
         drivesOff?.();
@@ -1439,6 +1465,7 @@ function start() {
       ioWatch?.stop();
       drivesOff?.();
       faultsOff?.();
+      clearInterval(fleetTimer);
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -1469,6 +1496,7 @@ function start() {
     drives.stop();
     load.stop();
     faults.stop();
+    fleet.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();

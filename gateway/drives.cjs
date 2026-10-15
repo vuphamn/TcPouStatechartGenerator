@@ -383,6 +383,12 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       if (s.webhook) void postWebhook?.(s.webhook, s.format, e, log);
     }
 
+    /** Each drive's daily heatsink medians while running (the risk list's trends), today's last */
+    daily() {
+      const days = Object.keys(this.summary.days).sort().slice(-21);
+      return Object.fromEntries(this.drives.map((d) => [d.path, [...days.map((day) => ({ day, heatsink: this.summary.days[day]?.[d.path]?.heatsink?.median ?? null })), ...(d.todayStats?.heatsink ? [{ day: new Date().toISOString().slice(0, 10), heatsink: d.todayStats.heatsink.median }] : [])].filter((x, i, all) => all.findIndex((y) => y.day === x.day) === i)]));
+    }
+
     /** As the board shows it */
     view() {
       return {
@@ -476,6 +482,8 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     },
     /** The board's view of these PLCs (all when none) */
     view: (ids) => [...monitors.values()].filter((m) => !ids?.length || ids.includes(m.plc.id)).map((m) => m.view()),
+    /** Each PLC's drives' daily heatsink medians (the risk list) */
+    daily: () => Object.fromEntries([...monitors.entries()].map(([id, m]) => [id, m.daily()])),
     /** The drives' parameters, by profile, for the board's labels */
     params: () => Object.fromEntries(settings().profiles.map((p) => [p.id, { name: p.name, params: p.params.map(({ key, label, unit, verified, format, counter, slow, trend }) => ({ key, label, unit, verified, format, counter, slow, trend })) }])),
     history(plcId, drivePath, keys, from, to) {
