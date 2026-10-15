@@ -119,4 +119,42 @@ function stateNamesFromSources(files, types, stateVar = 'machineState') {
   return out;
 }
 
-module.exports = { stateNamesFromSources, stateEnumOf, enumValues, indexSources, integerLiteral };
+/**
+ * An enum's members' descriptions: the comment on a member's line (// text, (* text *)), else the comment lines just
+ * above it: { NAME: text } (the andon's "what to do": TABLE_ERROR := 9, // Check the clamp sensor, then Reset)
+ */
+function enumDocs(dutXml) {
+  const decl = cdata(dutXml, 'Declaration') || dutXml;
+  const out = {};
+  let above = [];
+  for (const raw of decl.split(/\r?\n/)) {
+    const line = raw.trim();
+    const only = /^(?:\/\/\s?(.*)|\(\*\s*(.*?)\s*\*\))$/.exec(line);
+    if (only) {
+      const t = (only[1] ?? only[2] ?? '').trim();
+      if (t) above.push(t);
+      continue;
+    }
+    const m = /^([A-Za-z_]\w*)\s*(?::=\s*[^,;)\s]+)?\s*[,)]?\s*(?:\/\/\s?(.*)|\(\*\s*(.*?)\s*\*\))?\s*$/.exec(line);
+    if (m && !/^(TYPE|END_TYPE|STRUCT|END_STRUCT)$/i.test(m[1])) {
+      const t = (m[2] ?? m[3] ?? '').trim() || above.join(' ');
+      if (t) out[m[1]] = t;
+    }
+    above = [];
+  }
+  return out;
+}
+
+/** Each type's states' descriptions from the sources: Map(type lower case → { stateName: text }) */
+function stateDocsFromSources(files, types, stateVar = 'machineState') {
+  const index = indexSources(files);
+  const out = new Map();
+  for (const t of new Set(types.map((x) => String(x).split('.').pop()).filter(Boolean))) {
+    const e = stateEnumOf(index, t, stateVar);
+    const docs = e ? enumDocs(index.duts.get(e.toLowerCase()) ?? '') : {};
+    if (Object.keys(docs).length) out.set(t.toLowerCase(), docs);
+  }
+  return out;
+}
+
+module.exports = { stateNamesFromSources, stateDocsFromSources, enumDocs, stateEnumOf, enumValues, indexSources, integerLiteral };

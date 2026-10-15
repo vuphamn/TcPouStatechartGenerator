@@ -617,6 +617,23 @@ function start() {
   };
   const oee = createOee({ baseDir, getConfig: () => config, recorders, rules: rulesNow, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), log, audit, postWebhook });
   const downtimeListeners = new Set();
+  // The andon's "what to do": each state's description in the PLC's sources (the copy kept here when in step), read
+  // once every 10 minutes per PLC; config.andon.steps over them
+  const andonSources = new Map();
+  const sourceFilesOf = (plc) => {
+    const hit = andonSources.get(plc.id);
+    if (hit && Date.now() - hit.at < 10 * 60000) return hit.p;
+    const p = (async () => {
+      const conn = connectionFor(plc);
+      await conn.connect();
+      const r = (await projectSync.storedSources(plc, conn.client, '').catch(() => null)) ?? (await readPlcSources(conn.client, Number(plc.port) || 851));
+      return r.files ?? [];
+    })();
+    andonSources.set(plc.id, { at: Date.now(), p });
+    p.catch(() => andonSources.delete(plc.id));
+    return p;
+  };
+  const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
   const oeeConfig = () => {
     const s = oee.settings();
     return { type: 'oeeConfig', reasons: s.reasons, reasonAfterMin: s.reasonAfterMin, given: oee.recent().map((e) => `${e.plc}|${e.machine.toLowerCase()}|${e.from}`) };
@@ -834,7 +851,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -842,7 +859,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1059,6 +1076,34 @@ function start() {
         } catch (err) {
           return send({ type: 'downtimeReasonResult', requestId, ok: false, error: err.message });
         }
+      }
+      // The andon: the states' descriptions and steps, the reasons to call for; a call for maintenance (an alert)
+      if (m.type === 'andonInfo') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+        const steps = config.andon?.steps && typeof config.andon.steps === 'object' ? config.andon.steps : {};
+        const reasons = Array.isArray(config.andon?.callReasons) && config.andon.callReasons.length ? config.andon.callReasons.map(String) : CALL_REASONS;
+        if (!plc) return send({ type: 'andonInfoResult', requestId, docs: {}, steps, reasons });
+        const types = Array.isArray(m.types) ? m.types.filter((t) => typeof t === 'string').slice(0, 200) : [];
+        try {
+          const files = await sourceFilesOf(plc);
+          const { stateDocsFromSources } = require(`${sharedDir}/enumFromSources.cjs`);
+          return send({ type: 'andonInfoResult', requestId, docs: Object.fromEntries(stateDocsFromSources(files, types)), steps, reasons });
+        } catch (err) {
+          return send({ type: 'andonInfoResult', requestId, docs: {}, steps, reasons, error: ads.adsErrorText(err) });
+        }
+      }
+      if (m.type === 'callMaintenance') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
+        const machine = typeof m.machine === 'string' && ads.isSymbolPath(m.machine) ? m.machine : null;
+        const reason = String(m.reason ?? '').trim().slice(0, 60);
+        if (!plc || !reason) return send({ type: 'callMaintenanceResult', requestId, ok: false, error: 'A PLC of the gateway and a reason' });
+        const note = String(m.note ?? '').trim().slice(0, 200);
+        const e = alertLog.add({ event: 'call', rule: 'Call maintenance', ruleId: 'call', plc: plc.id, plcName: plc.name, machine: machine ?? '(the line)', state: reason, by: user, note, text: `${plc.name}: 📣 ${user} calls maintenance${machine ? ` for ${machine}` : ''}: ${reason}${note ? ` · ${note}` : ''}`, at: new Date().toISOString() });
+        audit.add(user, 'call', { plc: plc.id, machine, reason, note });
+        log(`call: ${user} calls maintenance on ${plc.id}${machine ? ` (${machine})` : ''}: ${reason}`);
+        return send({ type: 'callMaintenanceResult', requestId, ok: true, id: e.id });
       }
       if (m.type === 'fleetStop') {
         clearInterval(fleetTimer);

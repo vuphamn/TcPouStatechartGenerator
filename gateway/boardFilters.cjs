@@ -32,7 +32,7 @@ function checkFilter(f, plcIds) {
     machines: list(f?.machines, 500, keyed),
     signals: list(f?.signals, 50, keyed),
     alerts: f?.alerts === false ? false : true,
-    page: ['io', 'drives', 'risk', 'oee'].includes(f?.page) ? f.page : 'machines',
+    page: ['io', 'drives', 'risk', 'oee', 'andon'].includes(f?.page) ? f.page : 'machines',
   };
 }
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -8,6 +8,7 @@ import { IoBoard } from './IoBoard.tsx';
 import { DrivesBoard } from './DrivesBoard.tsx';
 import { RiskBoard } from './RiskBoard.tsx';
 import { OeeBoard } from './OeeBoard.tsx';
+import { AndonBoard } from './AndonBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -73,7 +74,7 @@ interface BoardPlc {
 
 export interface AlertEvent {
   id: string;
-  event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped' | 'drive';
+  event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped' | 'drive' | 'call';
   /** Muted when it happened (maintenance, quiet hours): kept to be seen, never open */
   muted?: string;
   plc: string;
@@ -167,11 +168,11 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee'>(() => {
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon'>(() => {
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee') => {
+  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -824,6 +825,9 @@ export const OperatorBoard: React.FC = () => {
         </span>
         {/* (the page: the machines or the I/O) */}
         <span id="board-pages" className="flex items-center rounded border border-slate-700 overflow-hidden text-sm">
+          <button id="board-page-andon" type="button" onClick={() => setPage('andon')} className={`flex items-center gap-1 px-2 py-1 ${page === 'andon' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'andon'} title="Andon: big and plain, for the line: what stopped, what to do, Call maintenance">
+            <Megaphone className="w-4 h-4" /> Andon
+          </button>
           <button id="board-page-machines" type="button" onClick={() => setPage('machines')} className={`flex items-center gap-1 px-2 py-1 ${page === 'machines' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'machines'} title="The state machines">
             <LayoutGrid className="w-4 h-4" /> Machines
           </button>
@@ -1041,6 +1045,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'andon' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <AndonBoard conn={conn.current} connected={status.state === 'connected'} plcs={shown} root={root} calls={alerts.filter((a) => a.event === 'call')} canCall={may('call')} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'oee' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <OeeBoard conn={conn.current} connected={status.state === 'connected'} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} root={root} narrow={narrow} />
