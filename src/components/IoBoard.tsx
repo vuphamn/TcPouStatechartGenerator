@@ -70,7 +70,9 @@ export const IoBoard: React.FC<{
   onRecord: (groups: RuleGroup[]) => void;
   canEdit: boolean;
   narrow: boolean;
-}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, signals, onSignals, recordings, onRecord, canEdit, narrow }) => {
+  /** The charted signals kept with each PLC's fault records (absent: not this user's) */
+  onFaultSignals?: (byPlc: Record<string, string[]>) => Promise<string | null>;
+}> = ({ conn, connected, subscribe, plcIds, onlyPlcs, signals, onSignals, recordings, onRecord, canEdit, narrow, onFaultSignals }) => {
   const [trees, setTrees] = useState<Record<string, IoTree>>({});
   const [states, setStates] = useState<IoPlcState[]>([]);
   const [error, setError] = useState('');
@@ -94,6 +96,7 @@ export const IoBoard: React.FC<{
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [picked, setPicked] = useState<Record<string, string>>({}); // device -> box path (network view)
   const [history, setHistory] = useState<{ from: number; to: number; loading?: string } | null>(null);
+  const [faultSaid, setFaultSaid] = useState('');
   // A box's properties (the I/O tab's panel); its details from the gateway (TwinCAT's device descriptions there, its
   // Devices folder's pictures)
   const [propsAt, setPropsAt] = useState<{ plc: string; path: string } | null>(null);
@@ -255,6 +258,18 @@ export const IoBoard: React.FC<{
           <input type="checkbox" checked={linkedOnly} onChange={(e) => setLinkedOnly(e.target.checked)} /> Linked only
         </label>
         <span className="text-xs text-slate-500">{signals.length ? `${signals.length} signal${signals.length === 1 ? '' : 's'} charted` : 'Tick a linked channel to chart it'}</span>
+        {onFaultSignals && signals.length > 0 && (
+          <button
+            id="io-board-fault-signals"
+            type="button"
+            onClick={() => void onFaultSignals(byPlc).then((err) => setFaultSaid(err ?? 'Kept with the fault records from now on'))}
+            className="px-2 py-1 rounded border border-rose-800 text-sm text-rose-200 hover:bg-rose-950"
+            title="Keep these signals with each fault record of their PLC (the minute before and after a fault)"
+          >
+            Keep with fault records
+          </button>
+        )}
+        {faultSaid && <span id="io-board-fault-said" className="text-xs text-slate-400">{faultSaid}</span>}
       </div>
       <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2 space-y-3' : 'p-4 space-y-5'}`}>
         {error && <div className="px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{error}</div>}

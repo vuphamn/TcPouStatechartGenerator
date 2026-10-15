@@ -38,6 +38,7 @@ const { SharedVars } = require('./sharedVars.cjs');
 const { createLoad } = require('./load.cjs');
 const { createDrives } = require('./drives.cjs');
 const { createRoles, checkRoles, LABELS: ROLE_LABELS } = require('./roles.cjs');
+const { createFaults } = require('./faults.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
@@ -432,6 +433,8 @@ function start() {
     config.drives = next.drives;
     drives?.apply();
     config.roles = next.roles;
+    config.faults = next.faults;
+    faults?.apply();
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -452,6 +455,7 @@ function start() {
   let alerts = null;
   let recorders = null;
   let drives = null;
+  let faults = null;
   setInterval(() => {
     if (mtime() === configMtime) return;
     try {
@@ -591,6 +595,9 @@ function start() {
   // The drives' health (drives.cjs): each PLC's drives read by the gateway itself; the load panel's numbers (load.cjs)
   drives = createDrives({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log, onEvent: (e) => alertLog.add(e), postWebhook });
   drives.start();
+  // The fault recorder (faults.cjs): each PLC's last minute kept, a fault's minute before and after saved
+  faults = createFaults({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, log, retryMs: config.alertRetryMs ?? 30000 });
+  faults.start();
   const load = createLoad({ connections: () => [...connections.entries()], plcOf, plcList: () => [...plcs.values()], ads, log });
   // (From PLC: the copy kept here when it is in step with the PLC, else null: read from the PLC; logged once a minute)
   let keptSaid = 0;
@@ -679,8 +686,9 @@ function start() {
     let rulesOff = null;
     let ioWatch = null;
     const ioViewer = {};
-    // (its board's Drives page)
+    // (its board's Drives page; the faults kept, told as they come)
     let drivesOff = null;
+    let faultsOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -881,6 +889,7 @@ function start() {
         const sendRules = () => send({ type: 'boardRules', ...boardRules(), canEdit: canEditBoard(user, viewOnly) && may('boardEdit') });
         sendFilters();
         sendRules();
+        faultsOff ??= faults.subscribe((fault, kind) => send({ type: 'faultEvent', fault: { ...fault, file: undefined }, kind }));
         filtersOff ??= boardFilters.subscribe(sendFilters);
         if (!rulesOff) {
           boardRuleListeners.add(sendRules);
@@ -959,6 +968,28 @@ function start() {
         drivesOff = drives.subscribe((plcId) => (!ids.length || ids.includes(plcId)) && sendDrives());
         log(`drives: ${user} watches the drives of ${ids.join(', ') || 'every PLC'}`);
         return;
+      }
+      // The fault records: their list (a PLC's, a machine's, since), one in full; the signals kept with a PLC's faults
+      if (m.type === 'faultsList') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        return send({ type: 'faultsListResult', requestId, faults: faults.list({ plc: typeof m.plc === 'string' ? m.plc : undefined, machine: typeof m.machine === 'string' ? m.machine : undefined, since: Number(m.since) || undefined, limit: Math.min(500, Number(m.limit) || 200) }), signals: Object.fromEntries([...plcs.keys()].map((id) => [id, faults.signalsOf(id)])) });
+      }
+      if (m.type === 'faultGet') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const fault = typeof m.id === 'string' ? faults.get(m.id) : null;
+        if (fault) audit.add(user, 'fault.view', { id: fault.id, plc: fault.plc, machine: fault.machine });
+        return send({ type: 'faultGetResult', requestId, ...(fault ? { fault } : { error: 'No such fault record (kept for config.faults.keepDays days)' }) });
+      }
+      if (m.type === 'faultSignalsSet') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (roles.enabled() ? !may('faults') : viewOnly) return send({ type: 'faultSignalsResult', requestId, ok: false, error: `${user} may not change what the fault records keep` });
+        if (!plcs.has(m.plc) || !Array.isArray(m.signals) || m.signals.length > 20 || m.signals.some((p) => typeof p !== 'string' || !ads.isSymbolPath(p))) return send({ type: 'faultSignalsResult', requestId, ok: false, error: 'A PLC of the gateway and at most 20 symbol paths' });
+        updateConfig((c) => {
+          c.faults = { ...(c.faults ?? {}), signals: { ...(c.faults?.signals ?? {}), [m.plc]: [...new Set(m.signals)] } };
+        });
+        log(`faults: ${user} keeps ${m.signals.length} signal(s) with ${m.plc}'s faults`);
+        audit.add(user, 'fault.signals', { plc: m.plc, signals: m.signals });
+        return send({ type: 'faultSignalsResult', requestId, ok: true });
       }
       if (m.type === 'drivesStop') {
         drivesOff?.();
@@ -1407,6 +1438,7 @@ function start() {
       rulesOff?.();
       ioWatch?.stop();
       drivesOff?.();
+      faultsOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -1436,6 +1468,7 @@ function start() {
     ioBoards.stop();
     drives.stop();
     load.stop();
+    faults.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();

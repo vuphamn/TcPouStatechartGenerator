@@ -28,7 +28,11 @@ export const BoardPlayback: React.FC<{
   onSpeed: (x: number) => void;
   onClose: () => void;
   narrow: boolean;
-}> = ({ machines, from, to, t, playing, speed, loading, isError, labelOf, onSeek, onPlay, onSpeed, onClose, narrow }) => {
+  /** Moments marked on every lane (a fault) */
+  marks?: { t: number; label: string }[];
+  title?: string;
+  closeLabel?: string;
+}> = ({ machines, from, to, t, playing, speed, loading, isError, labelOf, onSeek, onPlay, onSpeed, onClose, narrow, marks = [], title, closeLabel }) => {
   const lanes = useRef<HTMLDivElement | null>(null);
   const changes = useMemo(() => changeTimes(machines, from, to), [machines, from, to]);
   const span = Math.max(1, to - from);
@@ -48,7 +52,7 @@ export const BoardPlayback: React.FC<{
     <section id="board-playback" className="border-t-2 border-violet-700 bg-slate-900/95 px-3 py-2 text-sm">
       <div className="flex flex-wrap items-center gap-2 mb-2">
         <History className="w-4 h-4 text-violet-300" />
-        <span className="font-semibold text-violet-200">Playback</span>
+        <span className="font-semibold text-violet-200">{title ?? 'Playback'}</span>
         <span id="board-playback-time" className="font-mono text-lg text-white">{clock(t, days)}</span>
         <span className="text-slate-400 text-xs">
           {clock(from, true)} – {clock(to, true)}
@@ -71,7 +75,7 @@ export const BoardPlayback: React.FC<{
             ))}
           </select>
           <button id="board-playback-close" type="button" onClick={onClose} className="flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800" title="Back to the live board">
-            <X className="w-4 h-4" /> Live
+            <X className="w-4 h-4" /> {closeLabel ?? 'Live'}
           </button>
         </span>
       </div>
@@ -97,6 +101,9 @@ export const BoardPlayback: React.FC<{
                     />
                   ))
                 )}
+                {marks.map((mk, i) => (
+                  <span key={i} className="board-playback-mark absolute top-0 bottom-0 w-0.5 bg-rose-500" style={{ left: `${((mk.t - from) / span) * 100}%` }} title={mk.label} />
+                ))}
                 <span className="absolute top-0 bottom-0 w-0.5 bg-white pointer-events-none" style={{ left: `${pct}%` }} />
               </div>
             </div>

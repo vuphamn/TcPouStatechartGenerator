@@ -6,6 +6,7 @@ import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type 
 import { BoardPlayback } from './BoardPlayback.tsx';
 import { IoBoard } from './IoBoard.tsx';
 import { DrivesBoard } from './DrivesBoard.tsx';
+import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
@@ -231,6 +232,10 @@ export const OperatorBoard: React.FC = () => {
   const [perm, setPerm] = useState<{ role: string | null; label: string | null; can: string[]; on: boolean }>({ role: null, label: null, can: [], on: false });
   const may = (cap: string) => !viewOnly && (!perm.on || perm.can.includes(cap));
   const [startFilter, setStartFilter] = useState<string | null>(null);
+  // The fault records (gateway/faults.cjs): the list beside the alerts, the one opened
+  const [faultList, setFaultList] = useState<FaultSummary[]>([]);
+  const [faultOpen, setFaultOpen] = useState<string | null>(null);
+  const [aside, setAside] = useState<'alerts' | 'faults'>('alerts');
   // (the I/O page's messages, handed to it)
   const ioListeners = useRef(new Set<(m: { type: string }) => void>());
   const subscribeIo = useCallback((fn: (m: never) => void) => {
@@ -326,6 +331,11 @@ export const OperatorBoard: React.FC = () => {
         setStartFilter(x.startFilter ?? null);
         return;
       }
+      if (msg.type === 'faultEvent') {
+        const f = (m as unknown as { fault: FaultSummary }).fault;
+        setFaultList((list) => [f, ...list.filter((x) => x.id !== f.id)].sort((a, b) => b.at - a.at).slice(0, 300));
+        return;
+      }
       if (msg.type === 'boardRules') {
         const x = m as unknown as BoardRules & { canEdit?: boolean };
         setRules({ alarms: x.alarms ?? [], recordings: x.recordings ?? [] });
@@ -360,6 +370,7 @@ export const OperatorBoard: React.FC = () => {
         setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
+        if (!viewOnly) void c.request<{ faults?: FaultSummary[] }>({ type: 'faultsList' }, 'faultsListResult').then((r) => setFaultList(r.faults ?? [])).catch(() => undefined);
       })
       .catch((err: Error) => {
         setStatus({ state: 'error', message: err.message });
@@ -986,7 +997,30 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'io' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <IoBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} signals={signals} onSignals={setSignals} recordings={rules.recordings} onRecord={(groups) => setRuleDialog({ kind: 'recording', groups })} canEdit={canEdit} narrow={narrow} />
+              <IoBoard
+                conn={conn.current}
+                connected={status.state === 'connected'}
+                subscribe={subscribeIo}
+                plcIds={wanted}
+                onlyPlcs={activeFilter?.plcs ?? []}
+                signals={signals}
+                onSignals={setSignals}
+                recordings={rules.recordings}
+                onRecord={(groups) => setRuleDialog({ kind: 'recording', groups })}
+                canEdit={canEdit}
+                narrow={narrow}
+                onFaultSignals={
+                  may('faults')
+                    ? async (byPlc) => {
+                        for (const [plc, list] of Object.entries(byPlc)) {
+                          const r = await conn.current?.request<{ ok: boolean; error?: string }>({ type: 'faultSignalsSet', plc, signals: list }, 'faultSignalsResult').catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+                          if (!r?.ok) return r?.error ?? 'Not kept';
+                        }
+                        return null;
+                      }
+                    : undefined
+                }
+              />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'machines' && (
@@ -1141,10 +1175,35 @@ export const OperatorBoard: React.FC = () => {
           {(narrow ? phoneView === 'alerts' : showAlerts) && (
             <aside id="board-alerts" className={`${narrow ? 'flex-1 min-w-0' : 'w-[26rem] shrink-0 border-l border-slate-800'} bg-slate-900/70 flex flex-col`}>
               <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
-                <Bell className="w-4 h-4 text-sky-400" />
-                <span className="font-semibold">Alerts</span>
-                <span className="text-sm text-slate-400">{open.length} open</span>
+                <button id="board-aside-alerts" type="button" onClick={() => setAside('alerts')} className={`flex items-center gap-1.5 ${aside === 'alerts' ? 'text-white' : 'text-slate-500 hover:text-slate-200'}`}>
+                  <Bell className="w-4 h-4 text-sky-400" />
+                  <span className="font-semibold">Alerts</span>
+                  <span className="text-sm text-slate-400">{open.length} open</span>
+                </button>
+                {!viewOnly && (
+                  <button id="board-aside-faults" type="button" onClick={() => setAside('faults')} className={`ml-auto flex items-center gap-1 ${aside === 'faults' ? 'text-white' : 'text-slate-500 hover:text-slate-200'}`} title="Fault records: the minute before and after each fault, kept by the gateway">
+                    <AlertTriangle className="w-4 h-4 text-rose-400" /> Faults <span className="text-xs text-slate-400">{faultList.length}</span>
+                  </button>
+                )}
               </div>
+              {aside === 'faults' && !viewOnly ? (
+                <div id="board-faults" className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                  {!faultList.length && <div className="p-3 text-slate-500 text-sm">No fault records yet. The gateway keeps the minute before and after each time a machine goes into an error state.</div>}
+                  {faultList.map((f) => (
+                    <button key={f.id} type="button" onClick={() => setFaultOpen(f.id)} className="board-fault w-full text-left rounded border border-rose-900 bg-rose-950/40 hover:bg-rose-950/70 px-3 py-2 text-sm" data-fault={f.id}>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-slate-400">{new Date(f.at).toLocaleString()}</span>
+                        <span className="ml-auto text-xs text-slate-400">{f.plcName}</span>
+                      </div>
+                      <div className="truncate">
+                        {short(f.machine, root)}: <b className="text-rose-300">{f.state}</b>
+                      </div>
+                      <div className="text-xs text-slate-500">{f.machines} machines{f.signals ? `, ${f.signals} signals` : ''}{f.complete ? '' : ' · still keeping the minute after'}</div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+              <>
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {alerts.length === 0 && <div className="p-3 text-slate-500 text-sm">No alerts. The gateway's alert rules (its setup page) decide what is reported.</div>}
                 {alerts.slice(0, 200).map((a) => {
@@ -1184,15 +1243,27 @@ export const OperatorBoard: React.FC = () => {
                             </button>
                           )
                         ))}
+                      {(() => {
+                        // (its fault record: the same machine, within seconds)
+                        const f = !viewOnly ? faultList.find((x) => x.plc === a.plc && x.machine.toLowerCase() === a.machine.toLowerCase() && Math.abs(x.at - Date.parse(a.at)) < 15000) : null;
+                        return f ? (
+                          <button className="board-alert-fault mt-2 ml-2 px-2 py-0.5 rounded border border-rose-800 text-rose-200 hover:bg-rose-950" onClick={() => setFaultOpen(f.id)} title="The minute before and after it, kept by the gateway">
+                            Fault record
+                          </button>
+                        ) : null;
+                      })()}
                     </div>
                   );
                 })}
               </div>
+              </>
+              )}
             </aside>
           )}
         </div>
         </div>
       )}
+      {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} />}
       {ruleDialog && (
         <BoardRuleDialog
           kind={ruleDialog.kind}
