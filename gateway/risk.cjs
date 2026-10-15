@@ -52,7 +52,7 @@ function risks({ drives = [], daily = {}, fleet = [], alerts = [], now = Date.no
       if (b.disabled) continue;
       const where = `${p.name} · ${b.device}`;
       const base = { kind: 'box', plc: p.id, plcName: p.name, name: b.name, path: b.path, where, eta: null };
-      if (b.now && !b.now.ok) out.push({ ...base, id: `box-now:${p.id}:${b.path}`, level: 'alarm', reason: `Not in OP now (${b.now.name})` });
+      if (b.now && !b.now.ok && !b.now.absent) out.push({ ...base, id: `box-now:${p.id}:${b.path}`, level: 'alarm', reason: `Not in OP now (${b.now.name})` });
       if (b.week?.daysOut >= L.daysOutWarn) out.push({ ...base, id: `box-out:${p.id}:${b.path}`, level: 'warn', reason: `Out of OP on ${b.week.daysOut} of the last 7 days: its supply, its cable, its connectors` });
       if (b.week?.crc >= L.crcWarn) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'warn', reason: `${b.week.crc} CRC errors in 7 days: its cable or connectors` });
       else if (b.week?.crc >= L.crcWatch) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'watch', reason: `${b.week.crc} CRC errors in 7 days` });

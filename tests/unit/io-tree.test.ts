@@ -212,6 +212,18 @@ expect(op.name === 'OP' && op.ok && bad.name === 'SAFEOP' && !bad.ok && bad.flag
   const inline = parseIoTree({ 'Line.tsproj': TSPROJ });
   expect(inline.devices.map((d: { name: string }) => d.name).join() === 'Inline (EtherCAT)' && inline.devices[0].boxes[0].product === 'EK1100', `the .tsproj's own I/O: ${JSON.stringify(inline.devices.map((d: { name: string }) => d.name))}`);
 
+  // Hot Connect groups: their heads (an IdentificationValue), the boxes after them in the line and theirs
+  const hcXti = `<?xml version="1.0"?><TcSmItem><Device><Name>HC (EtherCAT)</Name>
+    <Box Id="1"><Name>Main (EK1100)</Name><EtherCAT Type="EK1100"/><Box Id="2"><Name>In (EL1008)</Name><EtherCAT Type="EL1008"/></Box></Box>
+    <Box Id="3"><Name>(HC:8-SHOOTER.v1) 8-Shooter (EP1111-0000)</Name><EtherCAT Type="EP1111" IdentificationAdo="308" IdentificationValue="30"/></Box>
+    <Box Id="4"><Name>I-S.0 to I-S.7 (EP1098-0001)</Name><EtherCAT Type="EP1098"/><Box Id="5"><Name>Q-H (EX260-SEC3)</Name><EtherCAT Type="EX260"/></Box></Box>
+    <Box Id="6"><Name>(HC:HOPPER.v1) Hopper (EP1111-0000)</Name><EtherCAT Type="EP1111" IdentificationValue="40"/><Box Id="7"><Name>Q-M (EX260-SEC1)</Name><EtherCAT Type="EX260"/></Box></Box>
+  </Device></TcSmItem>`;
+  const hc = parseIoTree({ 'HC.xti': hcXti }).devices[0].boxes;
+  const hcOf = (b: { hotConnect?: { group: string; head: boolean } }) => (b.hotConnect ? `${b.hotConnect.group}${b.hotConnect.head ? '*' : ''}` : '-');
+  const hcAll = [hc[0], hc[0].boxes[0], hc[1], hc[2], hc[2].boxes[0], hc[3], hc[3].boxes[0]].map(hcOf).join(' ');
+  expect(hcAll === '- - 8-SHOOTER.v1* 8-SHOOTER.v1 8-SHOOTER.v1 HOPPER.v1* HOPPER.v1', `Hot Connect groups (* their heads): ${hcAll}`);
+
   // The PLC's I/O and the project's compared: a box added, one missing, another revision, cabled elsewhere
   const mk = (boxes: object[]) => ({ devices: [{ name: 'D', netId: null, boxes }], links: [] });
   const bx = (id: number, name: string, extra: object = {}) => ({ name, product: '', path: `D^${name}`, id, boxes: [], pdos: [], info: { type: name.split(' ')[0], productCode: '#x1', revision: '#x10' }, portA: { master: true, port: 0 }, ...extra });

@@ -36,6 +36,8 @@ export interface IoBox {
   /** What the project says of its device (its ESI type and name, vendor, product code, revision) */
   info?: { type?: string; desc?: string; vendorId?: number; productCode?: string; revision?: string; supplier?: string };
   disabled?: boolean;
+  /** A box of a Hot Connect group (optional equipment): its group, whether it is the group's head */
+  hotConnect?: { group: string; head: boolean; key: string };
   boxes: IoBox[];
   pdos: IoPdo[];
 }

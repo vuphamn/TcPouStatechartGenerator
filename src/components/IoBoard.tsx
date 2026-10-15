@@ -45,8 +45,13 @@ export const vendorOf = (b: IoBox) => b.info?.supplier || (b.info?.vendorId === 
 const boxText = (b: IoBox) => `${b.name} ${b.product} ${b.info?.type ?? ''} ${b.info?.desc ?? ''} ${vendorOf(b)}`.toLowerCase();
 const entryText = (e: { name: string; link?: string; type: string }, pdo: string) => `${pdo} ${e.name} ${e.link ?? ''} ${e.type}`.toLowerCase();
 
-/** A box's health for the colours: OP and OK, not OK, or not known (no master state, a disabled box) */
-const kindOf = (st: SlaveState | undefined, b: IoBox) => (b.disabled ? 'off' : !st ? 'unknown' : st.ok ? 'ok' : 'bad');
+/**
+ * A box's health for the colours: OP and OK, not OK, or not known (no master state, a disabled box); absent: a box of
+ * a Hot Connect group not attached (its head not there: optional equipment, not a fault)
+ */
+const kindOf = (st: SlaveState | undefined, b: IoBox, absent?: Set<string>) => (b.disabled ? 'off' : b.hotConnect && absent?.has(b.hotConnect.key) ? 'absent' : !st ? 'unknown' : st.ok ? 'ok' : 'bad');
+/** The Hot Connect groups not attached: their heads not OK */
+const absentGroups = (boxes: IoBox[], st: Map<string, SlaveState>) => new Set(boxes.filter((b) => b.hotConnect?.head && kindOf(st.get(b.path), b) === 'bad').map((b) => b.hotConnect!.key));
 
 /**
  * The operator board's I/O page: each PLC's I/O devices (EtherCAT masters …) with their boxes as cabled (couplers,
@@ -311,8 +316,9 @@ export const IoBoard: React.FC<{
           const devices = (tree?.devices ?? []).filter((d) => d.boxes.length);
           const st = tree ? boxStates(devices, p.ecat, () => undefined) : new Map<string, SlaveState>();
           const boxes = devices.flatMap((d) => allBoxes(d.boxes));
-          const bad = boxes.filter((b) => kindOf(st.get(b.path), b) === 'bad').length;
-          const ok = boxes.filter((b) => kindOf(st.get(b.path), b) === 'ok').length;
+          const absent = absentGroups(boxes, st);
+          const bad = boxes.filter((b) => kindOf(st.get(b.path), b, absent) === 'bad').length;
+          const ok = boxes.filter((b) => kindOf(st.get(b.path), b, absent) === 'ok').length;
           return (
             <section key={p.id} className="io-board-plc" data-plc={p.id}>
               <h2 className="flex flex-wrap items-center gap-3 mb-2">
@@ -324,6 +330,11 @@ export const IoBoard: React.FC<{
                     {bad > 0 && (
                       <>
                         , <span className="io-board-bad px-2 rounded-full bg-rose-700 text-white">{bad} not OK</span>
+                      </>
+                    )}
+                    {absent.size > 0 && (
+                      <>
+                        , <span className="io-board-hc px-2 rounded-full bg-slate-700 text-slate-200" title={`Optional equipment, its Hot Connect group's head not on the bus: ${[...absent].map((k) => k.split('^').pop()).join(', ')}`}>{absent.size} Hot Connect group{absent.size === 1 ? '' : 's'} not attached</span>
                       </>
                     )}
                   </span>
@@ -449,11 +460,12 @@ const DeviceView: React.FC<{
   // What the filter keeps: a box matching it (all of its channels), or the channels matching it (with their box);
   // problems only: the boxes not OK; their parents shown too
   const filtering = words.length > 0 || problemsOnly;
+  const absent = useMemo(() => absentGroups(allBoxes(device.boxes), states), [device, states]);
   const keep = useMemo(() => {
     const boxes = new Map<string, 'all' | Set<string>>();
     const visit = (b: IoBox, parents: IoBox[]) => {
       const st = states.get(b.path);
-      const problem = !problemsOnly || kindOf(st, b) === 'bad';
+      const problem = !problemsOnly || kindOf(st, b, absent) === 'bad';
       const t = boxText(b) + ' ' + (st ? stateText(st).toLowerCase() : '');
       let hit: 'all' | Set<string> | null = null;
       if (problem && words.every((w) => t.includes(w))) hit = 'all';
@@ -470,14 +482,14 @@ const DeviceView: React.FC<{
     };
     if (filtering) for (const b of device.boxes) visit(b, []);
     return boxes;
-  }, [device, states, words.join(' '), problemsOnly, filtering]);
+  }, [device, states, words.join(' '), problemsOnly, filtering, absent]);
   const matches = filtering ? [...keep.entries()].filter(([, k]) => k === 'all' || k.size).length : 0;
   if (filtering && !keep.size) return null;
 
   const boxRow = (b: IoBox, depth: number): React.ReactNode => {
     if (filtering && !keep.has(b.path)) return null;
     const st = states.get(b.path);
-    const kind = kindOf(st, b);
+    const kind = kindOf(st, b, absent);
     const k = keep.get(b.path);
     const boxOpen = filtering ? !!k && (k === 'all' ? open.has(`${dKey}|${b.path}`) : k.size > 0 || open.has(`${dKey}|${b.path}`)) : open.has(`${dKey}|${b.path}`);
     const channels = b.pdos.flatMap((pdo) => pdo.entries.map((e) => ({ e, pdo }))).filter(({ e }) => (!linkedOnly || e.link) && (!(k instanceof Set) || k.has(e.path)));
@@ -489,9 +501,10 @@ const DeviceView: React.FC<{
             {boxOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </button>
           <span className={`io-board-state shrink-0 px-1.5 rounded text-xs font-semibold ${kind === 'ok' ? 'bg-emerald-900 text-emerald-200' : kind === 'bad' ? 'bg-rose-700 text-white' : kind === 'off' ? 'bg-slate-800 text-slate-500' : 'bg-slate-800 text-slate-400'}`} title={st ? stateText(st) : b.disabled ? 'Disabled in the project' : 'State not known'}>
-            {b.disabled ? 'off' : st ? st.name : '?'}
+            {b.disabled ? 'off' : kind === 'absent' ? '—' : st ? st.name : '?'}
           </span>
-          <span className="truncate text-slate-100">{b.name}</span>
+          <span className={`truncate ${kind === 'absent' ? 'text-slate-500' : 'text-slate-100'}`}>{b.name}</span>
+          {b.hotConnect?.head && <span className={`io-board-hc-tag shrink-0 px-1.5 rounded text-[11px] ${kind === 'absent' ? 'bg-slate-800 text-slate-400' : 'border border-slate-700 text-slate-300'}`} title="A Hot Connect group: optional equipment, attached or not">{kind === 'absent' ? `Hot Connect ${b.hotConnect.group}: not attached` : `Hot Connect ${b.hotConnect.group}`}</span>}
           {vendor && vendor !== 'Beckhoff' && <span className="io-board-vendor shrink-0 px-1.5 rounded border border-slate-700 text-[11px] text-slate-300" title={`${b.info?.type ?? ''} ${b.info?.desc ?? ''}`.trim()}>{vendor}</span>}
           {kind === 'bad' && st && <span className="truncate text-xs text-rose-300">{stateText(st)}</span>}
           <button type="button" className={`io-board-props-btn shrink-0 p-0.5 rounded ${propsPath === b.path ? 'text-sky-300' : 'text-slate-500 hover:text-white'}`} onClick={() => onProps(b.path)} title="Its properties: pictures (front, back), the maker's page, the manual, its channels">

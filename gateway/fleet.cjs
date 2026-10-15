@@ -111,7 +111,7 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
           for (const d of tree.devices ?? []) {
             const walk = (list) => {
               for (const b of list) {
-                boxes.push({ path: b.path, name: b.name, product: b.product, device: d.name, netId: d.netId, slave: b.slave ?? null, address: b.address ?? null, vendorId: b.info?.vendorId ?? null, vendor: b.info?.supplier || (b.info?.vendorId === 2 ? 'Beckhoff' : b.info?.vendorId != null ? `vendor #x${b.info.vendorId.toString(16)}` : ''), type: b.info?.type ?? b.product ?? '', productCode: b.info?.productCode ?? '', revision: b.info?.revision ?? '', disabled: !!(b.disabled || d.disabled) });
+                boxes.push({ path: b.path, name: b.name, product: b.product, device: d.name, netId: d.netId, slave: b.slave ?? null, address: b.address ?? null, hotConnect: b.hotConnect ?? null, vendorId: b.info?.vendorId ?? null, vendor: b.info?.supplier || (b.info?.vendorId === 2 ? 'Beckhoff' : b.info?.vendorId != null ? `vendor #x${b.info.vendorId.toString(16)}` : ''), type: b.info?.type ?? b.product ?? '', productCode: b.info?.productCode ?? '', revision: b.info?.revision ?? '', disabled: !!(b.disabled || d.disabled) });
                 walk(b.boxes);
               }
             };
@@ -130,16 +130,21 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
           if (!m?.slaves) continue;
           const mine = this.boxes.filter((b) => b.device === d.name && !b.disabled);
           const byAddress = new Map(m.slaves.filter((s) => s.address !== undefined).map((s) => [s.address, s]));
-          for (const b of mine) {
+          const read = mine.map((b) => {
             const s = (b.address != null && byAddress.get(b.address)) || (b.slave != null ? m.slaves[b.slave] : null);
+            return { b, s, ok: !!s && s.ok !== false && (s.name ?? describeState?.(s.state)?.name ?? 'OP') === 'OP' };
+          });
+          // (a Hot Connect group not attached, its head not OP: optional equipment, its boxes not out of OP)
+          const absent = new Set(read.filter((x) => x.b.hotConnect?.head && !x.ok).map((x) => x.b.hotConnect.key));
+          for (const { b, s, ok } of read) {
+            const off = !!b.hotConnect && absent.has(b.hotConnect.key);
             const st = (today[b.path] ??= { seen: 0, notOp: 0, crc: 0 });
             st.seen++;
-            const ok = !!s && s.ok !== false && (s.name ?? describeState?.(s.state)?.name ?? 'OP') === 'OP';
-            if (!ok) st.notOp++;
+            if (!ok && !off) st.notOp++;
             const before = this.now.get(b.path);
             const crcSum = Array.isArray(s?.crc) ? s.crc.reduce((a, x) => a + x, 0) : null;
             if (crcSum !== null && before?.crc != null && crcSum > before.crc) st.crc += crcSum - before.crc;
-            this.now.set(b.path, { ok, name: s?.name ?? (s ? 'OP' : 'missing'), crc: crcSum });
+            this.now.set(b.path, { ok, name: s?.name ?? (s ? 'OP' : 'missing'), crc: crcSum, ...(off ? { absent: b.hotConnect.group } : {}) });
           }
         }
         const days = Object.keys(this.summary.days).sort();

@@ -6,7 +6,8 @@
 // - the setup page's Check a drive: the boxes of other makers, the spindle's profile read raw, one object, one absent;
 // - an alert rule, a recording and a board on the same machines: one ADS notification each, not three;
 // - the setup page's Load: the shared notifications, the PLC's task with its overrun counted;
-// - the board's Drives page (filter, problems only, a drive's history) and the I/O page's box properties.
+// - the board's Drives page (filter, problems only, a drive's history) and the I/O page's box properties;
+// - a Hot Connect group not attached (optional equipment, in INIT, not present): not counted as not OK.
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -64,22 +65,25 @@ const apiPost = (p, body) =>
   const files = Object.fromEntries(unzip(Buffer.from(c.bootFiles['CurrentConfig.tszip'], 'base64'), () => true).map((f) => [f.path, f.data.toString('utf8')]));
   const io = '_Config/IO/Device 1 (EtherCAT).xti';
   const i550 = (id, name) => `<Box Id="${id}" BoxType="9099"><Name>${name} (Inverter i550 Cabinet)</Name><EtherCAT VendorId="#x0000003b" ProductCode="#x69055000" RevisionNo="#x00050002" Type="i550 Inverter FW V05.02.xx" Desc="Inverter i550 Cabinet" PortABoxInfo="#x01000003"><SuName>Lenze</SuName></EtherCAT></Box>`;
-  files[io] = files[io].replace('</Box></Device>', `</Box>${i550(4, 'Drive A')}${i550(5, 'Drive B')}${i550(6, 'Drive C')}<Box Id="7" BoxType="9099"><Name>HSD ES951 Spindle (ES95x)</Name><EtherCAT VendorId="#x00000129" ProductCode="#x0000004b" Type="ES95x" PortABoxInfo="#x01000006"></EtherCAT></Box><Box Id="8" BoxType="9099"><Name>Q-A (EX260-SEC1)</Name><EtherCAT VendorId="#x00000114" Type="EX260-SEC1 EtherCAT SI Unit (32DO_PNP) Rev1.2" PortABoxInfo="#x01000007"></EtherCAT></Box></Device>`);
+  files[io] = files[io].replace('</Box></Device>', `</Box>${i550(4, 'Drive A')}${i550(5, 'Drive B')}${i550(6, 'Drive C')}<Box Id="7" BoxType="9099"><Name>HSD ES951 Spindle (ES95x)</Name><EtherCAT VendorId="#x00000129" ProductCode="#x0000004b" Type="ES95x" PortABoxInfo="#x01000006"></EtherCAT></Box><Box Id="8" BoxType="9099"><Name>Q-A (EX260-SEC1)</Name><EtherCAT VendorId="#x00000114" Type="EX260-SEC1 EtherCAT SI Unit (32DO_PNP) Rev1.2" PortABoxInfo="#x01000007"></EtherCAT></Box><Box Id="9" BoxType="9099"><Name>(HC:SHOOTER.v1) Shooter (EP1111-0000)</Name><EtherCAT VendorId="#x00000002" Type="EP1111-0000" IdentificationAdo="308" IdentificationValue="30" PortABoxInfo="#x01000008"></EtherCAT></Box><Box Id="10" BoxType="9099"><Name>I-S.0 to I-S.7 (EP1098-0001)</Name><EtherCAT VendorId="#x00000002" Type="EP1098-0001" PortABoxInfo="#x01000009"></EtherCAT></Box></Device>`);
   c.bootFiles['CurrentConfig.tszip'] = writeZip(files).toString('base64');
-  c.ecat = [{ netId: MASTER, slaves: Array.from({ length: 8 }, () => [8, 0]), addresses: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008] }];
+  c.ecat = [{ netId: MASTER, slaves: [...Array.from({ length: 8 }, () => [8, 0]), [1, 1], [1, 1]], addresses: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010] }];
   const u16 = (value) => ({ size: 2, value });
   const s16 = (value) => ({ size: 2, value, signed: true });
   const u32 = (value) => ({ size: 4, value });
+  const id = (vendor, product) => ({ '1018:1': u32(vendor), '1018:2': u32(product) });
   const lenze = (heatsink, error) => ({
+    ...id(0x3b, 0x69055000),
     '2ddd:0': s16(500), '2d88:0': u16(52), '6078:0': s16(400), '6077:0': s16(300), '2d87:0': u16(560), '2d89:0': u16(400),
     '2d84:1': s16(heatsink), '2d84:2': s16(800), '2d4f:0': u16(30), '2d40:4': u16(40), '603f:0': u16(error),
     '2d81:1': u32(1234 * 3600), '2d81:2': u32(2000 * 3600), '2d81:4': u32(77), '2d81:6': u16(0), '2d81:7': u16(0),
   });
   c.coe = {
     [`${MASTER}|1004`]: lenze(420, 0),
-    [`${MASTER}|1005`]: lenze(560, 0),
+    [`${MASTER}|1005`]: id(0x114, 0x1234),
+    [`${MASTER}|1008`]: lenze(560, 0),
     [`${MASTER}|1006`]: lenze(430, 0x2250),
-    [`${MASTER}|1007`]: { '6ff0:1': { size: 1, value: 5 }, '6ff1:1': u16(1200), '6ff1:2': u16(12000), '6010:1': u16(0x10), '6010:2': u16(35), '6010:3': u16(0) },
+    [`${MASTER}|1007`]: { ...id(0x129, 0x4b), '6ff0:1': { size: 1, value: 5 }, '6ff1:1': u16(1200), '6ff1:2': u16(12000), '6010:1': u16(0x10), '6010:2': u16(35), '6010:3': u16(0) },
   };
   fs.writeFileSync(cfg, JSON.stringify(c));
   const plcLog = h.out('fake-ams2-drives-run.txt');
@@ -127,6 +131,7 @@ const apiPost = (p, body) =>
   const ds = state?.plcs?.[0]?.drives ?? [];
   const by = (n) => ds.find((d) => d.name === n);
   expect(ds.length === 4 && !ds.some((d) => /EX260/.test(d.box)), `the drives found: ${ds.map((d) => `${d.name} (${d.profile}, ${d.address})`).join(', ')}`);
+  expect(by('Drive B')?.address === 1008 && /found at 1008, not 1005/.test(by('Drive B')?.identity ?? '') && by('Drive A')?.identity === 'checked' && by('Drive A')?.address === 1004, `identity: Drive A ${by('Drive A')?.identity} at ${by('Drive A')?.address}; Drive B ${by('Drive B')?.identity}`);
   expect(by('Drive A')?.health?.level === 'ok' && Math.abs((by('Drive A')?.latest.heatsink?.v ?? 0) - 42) < 0.01 && Math.abs((by('Drive A')?.latest.current?.v ?? 0) - 5.2) < 0.01 && by('Drive A')?.latest.opHours?.v === 1234, `Drive A healthy: ${by('Drive A')?.latest.heatsink?.v} °C, ${by('Drive A')?.latest.current?.v} A, ${by('Drive A')?.latest.opHours?.v} h`);
   const bTexts = (by('Drive B')?.health?.findings ?? []).map((f) => f.text).join(' | ');
   expect(/14 °C warmer than its last 5 days/.test(bTexts) && /hotter than its 2 siblings/.test(bTexts), `Drive B: ${bTexts}`);
@@ -159,7 +164,7 @@ const apiPost = (p, body) =>
   expect(listed?.boxes?.length >= 5 && sp?.profile?.id === 'hsd-es951' && sp.address === 1007 && listed.boxes.some((b) => /EX260/.test(b.name) && !b.profile), `Check a drive: ${listed?.boxes?.map((b) => `${b.name} (${b.profile?.id ?? 'none'}, ${b.address})`).join(', ') ?? listed?.error}`);
   const prof = await apiPost('drivecheck', { plc: 'line', path: sp?.path });
   const speed = prof?.reads?.find((x) => x.key === 'speed');
-  expect(prof?.reads?.length === 6 && speed?.hex === 'e0 2e' && speed.as?.u16 === 12000 && speed.value === 12000 && speed.verified === false && prof.reads.find((x) => x.key === 'p75')?.as?.u8 === 5, `its profile read: ${prof?.reads?.map((x) => `${x.label} ${x.hex}`).join(', ') ?? prof?.error}`);
+  expect(prof?.reads?.length === 8 && prof.reads[1].as?.u32 === 0x4b && speed?.hex === 'e0 2e' && speed.as?.u16 === 12000 && speed.value === 12000 && speed.verified === false && prof.reads.find((x) => x.key === 'p75')?.as?.u8 === 5, `its profile read: ${prof?.reads?.map((x) => `${x.label} ${x.hex}`).join(', ') ?? prof?.error}`);
   const one = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '0x6010', sub: '2', size: 2 });
   const none = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '2d84', sub: 1, size: 2 });
   expect(one?.reads?.[0]?.as?.u16 === 35 && /\S/.test(none?.reads?.[0]?.error ?? ''), `one object: 0x6010:2 = ${one?.reads?.[0]?.as?.u16}; one it has not: ${none?.reads?.[0]?.error}`);
@@ -210,6 +215,9 @@ const apiPost = (p, body) =>
     // The I/O page: a box's properties (as on the I/O tab)
     await p.click('#board-page-io');
     await p.waitForSelector('.io-board-props-btn', { timeout: 15000 });
+    // (the Hot Connect group not attached: not counted as not OK)
+    const hc = await h.until(() => p.evaluate(() => ({ chip: document.querySelector('.io-board-hc')?.textContent, bad: document.querySelector('.io-board-bad')?.textContent ?? null, kinds: [...document.querySelectorAll('.io-board-box[data-kind="absent"]')].length, tag: document.querySelector('.io-board-hc-tag')?.textContent })).then((x) => (x.chip ? x : null)), 15000);
+    expect(/1 Hot Connect group not attached/.test(hc?.chip ?? '') && hc.bad === null && hc.kinds === 2 && /SHOOTER\.v1: not attached/.test(hc.tag ?? ''), `a Hot Connect group not attached: ${JSON.stringify(hc)}`);
     await p.click('.io-board-box[data-box$="Drive A (Inverter i550 Cabinet)"] .io-board-props-btn');
     const props = await h.until(() => p.$eval('#io-board-props', (e) => e.textContent).catch(() => null), 8000);
     expect(/Drive A/.test(props ?? '') && /i550/.test(props ?? ''), `the I/O page's box properties: ${(props ?? '').slice(0, 120)}`);

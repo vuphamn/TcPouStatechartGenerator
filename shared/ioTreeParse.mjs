@@ -35,8 +35,28 @@ export function portAOf(info) {
  * links: [{ path, variable, type, dir }] (path: "device^box^…^pdo^entry", as TwinCAT names it; variable: the PLC's
  * symbol, e.g. MAIN.fb.bIn). A box's id: its Box Id; slave: its place among the master's slaves (the boxes in the order
  * the project lists them, the disabled ones left out); address: its EtherCAT address as TwinCAT gives it by default
- * (1000 + its Id); info: what the project says of the device (its ESI type and name, vendor, product code, revision)
+ * (1000 + its Id); info: what the project says of the device (its ESI type and name, vendor, product code, revision);
+ * hotConnect: { group, head, key (its head's path) } for a box of a Hot Connect group (optional equipment, attached or not): its head the box
+ * the master identifies it by (its IdentificationValue; named "(HC:<group>) …" by habit), the boxes after it in the
+ * same line, and theirs, its members
  */
+function markHotConnect(b, group, key) {
+  b.hotConnect = { group, head: false, key };
+  for (const c of b.boxes) markHotConnect(c, group, key);
+}
+function groupHotConnect(list) {
+  let group = null;
+  let key = null;
+  for (const b of list) {
+    if (b.hotConnect?.head) {
+      group = b.hotConnect.group;
+      key = b.hotConnect.key;
+      for (const c of b.boxes) markHotConnect(c, group, key);
+    } else if (group) markHotConnect(b, group, key);
+    else groupHotConnect(b.boxes);
+  }
+}
+
 export function parseIoTreeWith(files, parseXml) {
   const devices = [];
   const links = [];
@@ -44,7 +64,7 @@ export function parseIoTreeWith(files, parseXml) {
     if (!/\.(xti|tsproj)$/i.test(p)) continue;
     let doc;
     try {
-      doc = parseXml(String(text).replace(/^﻿/, ''));
+      doc = parseXml(String(text).replace(/^\uFEFF/, ''));
     } catch {
       continue;
     }
@@ -77,6 +97,7 @@ export function parseIoTreeWith(files, parseXml) {
         const id = Number(el.getAttribute('Id'));
         const hasId = Number.isFinite(id) && !!el.getAttribute('Id');
         const portA = portAOf(ec?.getAttribute('PortABoxInfo'));
+        const hcHead = !!ec?.getAttribute('IdentificationValue');
         const info = ec
           ? Object.fromEntries(
               Object.entries({
@@ -98,11 +119,14 @@ export function parseIoTreeWith(files, parseXml) {
           ...(portA ? { portA } : {}),
           ...(info && Object.keys(info).length ? { info } : {}),
           ...(disabled ? { disabled: true } : {}),
+          ...(hcHead ? { hotConnect: { group: /^\(HC:([^)]+)\)/.exec(bname)?.[1]?.trim() || bname, head: true, key: path } } : {}),
           boxes: kids(el, 'Box').map((b) => boxOf(b, path)),
           pdos,
         };
       };
-      devices.push({ name, netId: dev.getAttribute('AmsNetId') || null, ...(dev.getAttribute('Disabled') === 'true' ? { disabled: true } : {}), boxes: kids(dev, 'Box').map((b) => boxOf(b, name)) });
+      const top = kids(dev, 'Box').map((b) => boxOf(b, name));
+      groupHotConnect(top);
+      devices.push({ name, netId: dev.getAttribute('AmsNetId') || null, ...(dev.getAttribute('Disabled') === 'true' ? { disabled: true } : {}), boxes: top });
     }
     // The PLC's links: its variables to the boxes' entries
     // (InputDst / OutputSrc: VarA the variable itself; the project's own mappings, no name: VarA "<task> Inputs^MAIN.x"

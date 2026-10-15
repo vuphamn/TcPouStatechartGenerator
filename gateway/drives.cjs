@@ -173,16 +173,76 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
             if (profile) {
               const known = slaves?.some((s) => s.address === b.address);
               const address = known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address;
-              found.push({ path: b.path, name: b.name.replace(/\s*\([^()]*\)\s*$/, '') || b.name, box: b.name, device: d.name, netId: d.netId, address, profile, product: b.info?.desc ?? '', firmware: b.info?.type ?? '', vendor: b.info?.supplier || (b.info?.vendorId !== undefined ? `vendor #x${b.info.vendorId.toString(16)}` : '') });
+              found.push({ path: b.path, name: b.name.replace(/\s*\([^()]*\)\s*$/, '') || b.name, box: b.name, device: d.name, netId: d.netId, address, profile, notFound: null, identity: null, vendorId: b.info?.vendorId ?? null, productCode: /^#x[0-9a-f]+$/i.test(b.info?.productCode ?? '') ? parseInt(b.info.productCode.slice(2), 16) : null, product: b.info?.desc ?? '', firmware: b.info?.type ?? '', vendor: b.info?.supplier || (b.info?.vendorId !== undefined ? `vendor #x${b.info.vendorId.toString(16)}` : '') });
             }
             walk(b.boxes);
           }
         };
         walk(d.boxes);
+        await this.verifyAddresses(client, found.filter((f) => f.netId === d.netId), slaves);
       }
       const old = new Map(this.drives.map((x) => [x.path, x]));
       this.drives = found.map((f) => ({ ...(old.get(f.path) ?? { latest: {}, slowAt: 0, failing: 0, stored: {}, today: [], spark: {}, health: null, sent: {} }), ...f }));
       if (found.length !== old.size) log(`drives: ${this.plc.id}: ${found.length} drive(s) in its I/O (${[...new Set(found.map((x) => x.profile.name))].join(', ') || 'none a profile knows'})`);
+    }
+
+    /**
+     * Each drive at its address, by its identity (CoE 0x1018: vendor, product code): the address the project gives
+     * it may be another slave's. One not there (another's identity, or no slave at it): looked for among the master's
+     * slaves, in their order (each one taken once). Its identity not readable anywhere: kept where it was.
+     */
+    async verifyAddresses(client, list, slaves) {
+      const ids = new Map();
+      const identity = async (netId, address) => {
+        if (ids.has(address)) return ids.get(address);
+        let r;
+        try {
+          const v = await client.readRaw(COE_SDO, (0x1018 << 16) | 1, 4, { amsNetId: netId, adsPort: address });
+          const p = await client.readRaw(COE_SDO, (0x1018 << 16) | 2, 4, { amsNetId: netId, adsPort: address });
+          r = { vendorId: v.readUInt32LE(0), productCode: p.readUInt32LE(0) };
+        } catch (err) {
+          r = { error: ads.adsErrorText(err) };
+        }
+        ids.set(address, r);
+        return r;
+      };
+      const matches = (id, f) => !id.error && id.vendorId === f.vendorId && (f.productCode === null || id.productCode === f.productCode);
+      const claimed = new Set();
+      const lost = [];
+      for (const f of list) {
+        if (f.vendorId === null) {
+          f.identity = 'unknown';
+          continue;
+        }
+        const id = await identity(f.netId, f.address);
+        if (matches(id, f)) {
+          f.identity = 'checked';
+          claimed.add(f.address);
+        } else lost.push({ f, id });
+      }
+      let anyIdentity = [...ids.values()].some((x) => !x.error);
+      for (const { f, id } of lost) {
+        let at = null;
+        for (const s of slaves ?? []) {
+          if (typeof s.address !== 'number' || claimed.has(s.address)) continue;
+          const other = await identity(f.netId, s.address);
+          if (!other.error) anyIdentity = true;
+          if (matches(other, f)) {
+            at = s.address;
+            break;
+          }
+        }
+        if (at !== null) {
+          log(`drives: ${this.plc.id}: ${f.name}: at EtherCAT address ${at}, not ${f.address} (${id.error ? id.error : `there: vendor #x${id.vendorId.toString(16)}, product #x${id.productCode.toString(16)}`})`);
+          f.identity = `found at ${at}, not ${f.address}`;
+          f.address = at;
+          claimed.add(at);
+        } else if (anyIdentity) {
+          // (others answer theirs, this one's nowhere: not on the bus)
+          f.identity = 'not found';
+          f.notFound = id.error ? `not on the EtherCAT bus? Its identity at none of the master's slaves (${id.error} at ${f.address})` : `not on the EtherCAT bus? Its identity at none of the master's slaves (another device at ${f.address})`;
+        } else f.identity = 'unverified';
+      }
     }
 
     /** Today's samples back from its file (the gateway restarted) */
@@ -238,6 +298,13 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         for (const d of this.drives) {
           // (a drive not answering: tried every 5 minutes only)
           if (d.failing >= 3 && now - (d.lastTry ?? 0) < 5 * 60000) continue;
+          // (not on the bus: not read until its I/O is read again)
+          if (d.notFound) {
+            d.latest = { error: { v: null, t: now, error: d.notFound } };
+            d.failing = 3;
+            d.lastTry = now;
+            continue;
+          }
           d.lastTry = now;
           const slow = now - d.slowAt >= s.slowMs;
           let ok = 0;
@@ -256,7 +323,9 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           const values = {};
           for (const [k, x] of Object.entries(d.latest)) if (typeof x.v === 'number') values[k] = x.v;
           if (!ok) continue;
-          d.today.push({ t: now, values });
+          // (no mains: its 0 °C, 0 A not its day's values)
+          const noMains = typeof values.dcBus === 'number' && values.dcBus < (s.limits?.noMainsV ?? 50);
+          if (!noMains) d.today.push({ t: now, values });
           if (d.today.length > 6000) d.today.splice(0, d.today.length - 6000);
           // (kept when it changed, else every 10 minutes)
           for (const [k, v] of Object.entries(values)) {
@@ -266,7 +335,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
               d.stored[k] = { v, t: now };
             }
           }
-          for (const k of SPARK_KEYS) {
+          for (const k of noMains ? [] : SPARK_KEYS) {
             if (typeof values[k] !== 'number') continue;
             const b = Math.floor(now / SPARK_BUCKET_MS) * SPARK_BUCKET_MS;
             const list = (d.spark[k] ??= []);
@@ -371,7 +440,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         }
         if (bad(before) && !bad(d.health) && d.health.level !== 'unknown') {
           d.sent = {};
-          this.say(d, 'recovered', `✅ ${d.name}: healthy again`, d.health.level, s);
+          this.say(d, 'recovered', d.health.level === 'off' ? `⏻ ${d.name}: no mains now (its DC bus off): not judged until it is powered` : `✅ ${d.name}: healthy again`, d.health.level, s);
         }
       }
     }
@@ -399,6 +468,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           health: d.health, today: d.todayStats ?? null,
           spark: Object.fromEntries(Object.entries(d.spark).map(([k, list]) => [k, list.map((b) => ({ t: b.t, v: Math.round((b.sum / b.n) * 10) / 10 }))])),
           notAnswering: d.failing >= 3,
+          identity: d.identity ?? null,
         })),
       };
     }
@@ -521,7 +591,8 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
             const profile = b.disabled ? null : profileFor(b, profiles);
             if (!b.disabled && (profile || (b.info?.vendorId !== undefined && b.info.vendorId !== 2))) {
               const known = slaves?.some((s) => s.address === b.address);
-              boxes.push({ path: b.path, name: b.name, device: d.name, netId: d.netId, address: known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address, vendorId: b.info?.vendorId ?? null, type: b.info?.type ?? '', profile });
+              const followed = monitors.get(plcId)?.drives.find((x) => x.path === b.path && x.identity && x.identity !== 'not found');
+              boxes.push({ path: b.path, name: b.name, device: d.name, netId: d.netId, address: followed?.address ?? (known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address), vendorId: b.info?.vendorId ?? null, productCode: b.info?.productCode ?? '', type: b.info?.type ?? '', profile });
             }
             walk(b.boxes);
           }
@@ -542,7 +613,12 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         wanted = [{ key: 'asked', label: 'As asked', index: i, sub: s, size: n, signed: false, scale: 1, unit: '', asked: true }];
       } else {
         if (!b.profile) throw new Error(`${b.name}: no profile knows it: read one object of it`);
-        wanted = b.profile.params;
+        // (its identity first: the vendor and product code its project expects, to see it is the right device)
+        wanted = [
+          { key: 'vendorId', label: `Identity: vendor (expected #x${(b.vendorId ?? 0).toString(16)})`, index: 0x1018, sub: 1, size: 4, signed: false, scale: 1, unit: '', format: 'hex' },
+          { key: 'productCode', label: `Identity: product code (expected ${b.productCode || '?'})`, index: 0x1018, sub: 2, size: 4, signed: false, scale: 1, unit: '', format: 'hex' },
+          ...b.profile.params,
+        ];
       }
       const reads = [];
       for (const p of wanted) {

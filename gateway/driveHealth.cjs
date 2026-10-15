@@ -18,7 +18,9 @@ const DEFAULTS = {
   peerHotter: { watch: 6, warn: 10 }, // °C above its siblings' median
   dcBusApart: 10, // % from its siblings' median
   baselineDays: 3, // at least, for a baseline
+  noMainsV: 50, // V: a DC bus below it: no mains (its 24 V only): not judged
 };
+const hex4 = (x) => x.toString(16).toUpperCase().padStart(4, '0');
 
 const median = (xs) => {
   if (!xs.length) return null;
@@ -77,6 +79,17 @@ function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers =
     const err = Object.values(latest).find((x) => x?.error)?.error;
     return { level: 'unknown', score: null, findings: err ? [{ level: 'unknown', key: null, text: `Not read: ${err}` }] : [], baseline: {} };
   }
+  // No mains (a DC bus near 0 V: the drive on its 24 V only): not judged; an error of the voltages inside the drive
+  // (0x32xx, as without mains) not a fault, any other one still is
+  const dc = v('dcBus');
+  if (dc !== null && dc < L.noMainsV) {
+    const err = v('error');
+    const supply = !!err && err >= 0x3200 && err <= 0x32ff;
+    const f = [];
+    if (err && !supply) f.push({ level: 'alarm', key: 'error', text: `In fault: error 0x${hex4(err)}` });
+    f.push({ level: 'off', key: 'dcBus', text: `No mains: DC bus ${fmt(dc, 0)} V${supply ? ` (error 0x${hex4(err)}: a voltage inside the drive, as without mains)` : ''}; not judged until it is powered` });
+    return { level: f[0].level, score: null, findings: f, baseline: {} };
+  }
   // In fault
   const error = v('error');
   if (error) add('alarm', 'error', `In fault: error 0x${error.toString(16).toUpperCase().padStart(4, '0')}`);
@@ -125,6 +138,14 @@ function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers =
     const now = v(p.key);
     const before = counters7d[p.key];
     if (now !== null && typeof before === 'number' && now > before) add('alarm', p.key, `${now - before} new ${now - before === 1 ? p.label.toLowerCase().replace(/s$/, '') : p.label.toLowerCase()} in 7 days`);
+  }
+  // (most of its values not answering: not healthy for what little answers)
+  const main = profile.params.filter((p) => !p.slow);
+  const answered = main.filter((p) => typeof latest[p.key]?.v === 'number').length;
+  const failed = main.filter((p) => latest[p.key]?.error).length;
+  if (main.length >= 3 && failed > answered) {
+    const err = main.map((p) => latest[p.key]?.error).find(Boolean);
+    add('watch', null, `Only ${answered} of its ${main.length} values answer${err ? ` (${err})` : ''}: its address or its profile? (the setup page: Check a drive)`);
   }
   const level = findings.reduce((w, f) => (LEVELS.indexOf(f.level) > LEVELS.indexOf(w) ? f.level : w), 'ok');
   const score = Math.max(0, 100 - findings.reduce((s, f) => s + (PENALTY[f.level] ?? 0), 0));

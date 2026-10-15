@@ -15,10 +15,12 @@ export interface DriveView {
   product: string;
   firmware: string;
   latest: Record<string, { v: number | null; error?: string }>;
-  health: { level: 'ok' | 'watch' | 'warn' | 'alarm' | 'unknown'; score: number | null; findings: { level: string; key: string | null; text: string }[]; baseline: Record<string, number> } | null;
+  health: { level: 'ok' | 'watch' | 'warn' | 'alarm' | 'unknown' | 'off'; score: number | null; findings: { level: string; key: string | null; text: string }[]; baseline: Record<string, number> } | null;
   today: Record<string, { median: number; p90?: number; max?: number; n: number }> | null;
   spark: Record<string, { t: number; v: number }[]>;
   notAnswering: boolean;
+  /** Its identity at its address: checked, found at another address, not found, unverified */
+  identity?: string | null;
 }
 interface DrivePlc {
   id: string;
@@ -46,8 +48,9 @@ const LEVEL = {
   watch: { text: 'Watch', cls: 'bg-sky-700 text-white', border: 'border-sky-600' },
   ok: { text: 'Healthy', cls: 'bg-emerald-800 text-emerald-100', border: 'border-emerald-900' },
   unknown: { text: 'Not read', cls: 'bg-slate-700 text-slate-200', border: 'border-slate-700' },
+  off: { text: 'No mains', cls: 'bg-slate-600 text-slate-100', border: 'border-slate-600' },
 } as const;
-const RANK = { alarm: 0, warn: 1, watch: 2, unknown: 3, ok: 4 } as const;
+const RANK = { alarm: 0, warn: 1, watch: 2, unknown: 3, off: 4, ok: 5 } as const;
 const RANGES = [
   { label: '24 h', ms: 24 * 3600_000 },
   { label: '7 days', ms: 7 * 86400_000 },
@@ -228,7 +231,7 @@ export const DrivesBoard: React.FC<{
         )}
         <span id="drives-counts" className="flex items-center gap-2 text-sm text-slate-400">
           {all.length} drives
-          {(['alarm', 'warn', 'watch'] as const).map((l) =>
+          {(['alarm', 'warn', 'watch', 'off'] as const).map((l) =>
             count(l) ? (
               <span key={l} className={`px-2 rounded-full ${LEVEL[l].cls}`}>
                 {count(l)} {LEVEL[l].text.toLowerCase()}
@@ -266,6 +269,7 @@ export const DrivesBoard: React.FC<{
                     </div>
                     <div className="text-[11px] text-slate-500 truncate">
                       {d.vendor} {d.firmware} · {d.device.replace(/\s*\(EtherCAT\)$/, '')} {d.address}
+                      {d.identity && /^found/.test(d.identity) && <span className="drive-moved text-sky-300" title="Its identity (CoE 0x1018: vendor, product code) answered at this address, not at the one its project gives"> ({d.identity})</span>}
                     </div>
                     <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-1 text-xs">
                       <span title={pinfo(d, 'heatsink')?.label} className={typeof hs === 'number' && hs >= limit - 5 ? 'text-amber-300' : ''}>

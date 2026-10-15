@@ -49,6 +49,11 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   expect(fault.level === 'alarm' && /In fault: error 0x2250/.test(texts) && /near its warning threshold/.test(texts) && /i²t 96 %: about to trip/.test(texts) && /1 new short circuit in 7 days/.test(texts) && fault.score === 0, `in fault: ${texts}`);
   const more = evaluate({ latest: latest({ heatsink: 42 }), today: day(42, 6.5), past, peers: [], profile: lenze });
   expect(more.findings.some((f: { level: string; text: string }) => f.level === 'warn' && /30 % more current at the same speed/.test(f.text)), `more current at the same speed: ${more.findings.map((f: { text: string }) => f.text).join(' | ')}`);
+  // (no mains: not judged; its DC-bus error not a fault, another one is; most values not answering: not healthy)
+  const noMains = evaluate({ latest: latest({ heatsink: 0, dcBus: 0, current: 0, error: 0x3222 }), today: {}, past, peers: [], profile: lenze });
+  const noMainsFault = evaluate({ latest: latest({ heatsink: 0, dcBus: 2, error: 0x2250 }), today: {}, past, peers: [], profile: lenze });
+  const partly = evaluate({ latest: { ...latest({ error: 0, opHours: 10 }), heatsink: { v: null, error: 'Invalid index offset' }, current: { v: null, error: 'Invalid index offset' }, dcBus: { v: null, error: 'Invalid index offset' } }, today: {}, past: {}, peers: [], profile: lenze });
+  expect(noMains.level === 'off' && /No mains: DC bus 0 V \(error 0x3222/.test(noMains.findings[0]?.text) && noMains.findings.length === 1 && noMainsFault.level === 'alarm' && /0x2250/.test(noMainsFault.findings[0].text) && partly.level === 'watch' && /Only 1 of its 10 values answer/.test(partly.findings[0]?.text), `no mains: ${noMains.level} "${noMains.findings[0]?.text}"; with another fault: ${noMainsFault.level}; most not answering: ${partly.level} "${partly.findings[0]?.text}"`);
   const unread = evaluate({ latest: { heatsink: { v: null, error: 'timeout' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(unread.level === 'unknown' && /Not read: timeout/.test(unread.findings[0]?.text ?? ''), 'nothing read: unknown, with why');
 
