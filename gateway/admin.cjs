@@ -44,6 +44,77 @@ function checkPlcs(list) {
   });
 }
 
+/** The Monitoring section's settings, checked (throws with a message): each kept as config.json has it, merged */
+function checkMonitoring(body, plcIds, current) {
+  const num = (x, min, max, def) => {
+    if (x === '' || x == null) return def;
+    const n = Number(x);
+    if (!Number.isFinite(n) || n < min || n > max) throw new Error(`${x}: a number from ${min} to ${max}`);
+    return n;
+  };
+  const plcList = (x) => {
+    const l = (Array.isArray(x) ? x : []).filter((p) => plcIds.includes(p));
+    return l.length && l.length < plcIds.length ? l : undefined;
+  };
+  const url = (x, what) => {
+    const s = String(x ?? '').trim();
+    if (s && !/^https?:[/][/][^ ]+$/i.test(s)) throw new Error(`${what}: an http(s) address`);
+    return s || undefined;
+  };
+  const fmt = (x) => (['teams', 'slack', 'json'].includes(x) ? x : 'teams');
+  const text = (x, n) => String(x ?? '').trim().slice(0, n);
+  const lines = (x, n, len) => (Array.isArray(x) ? x : String(x ?? '').split(String.fromCharCode(10))).map((s) => text(s, len)).filter(Boolean).slice(0, n);
+  // (a symbol path: names joined by dots, each maybe with its array index: MAIN.aDoors[2].bClosed)
+  const sym = (x) => !!String(x ?? '') && String(x).split('.').every((part) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(part.split('[')[0]));
+  const b = body ?? {};
+  const d = b.drives ?? {};
+  const drives = { ...(current.drives ?? {}), enabled: d.enabled !== false, everySeconds: num(d.everySeconds, 5, 3600, 30), slowEveryMinutes: num(d.slowEveryMinutes, 1, 1440, 10), keepDays: num(d.keepDays, 2, 3650, 90), plcs: plcList(d.plcs), webhook: url(d.webhook, 'The drives\' webhook'), format: fmt(d.format) };
+  const L = d.limits ?? {};
+  drives.limits = {
+    heatsinkRise: { watch: num(L.heatsinkRise?.watch, 1, 50, 5), warn: num(L.heatsinkRise?.warn, 1, 50, 8) },
+    currentRise: { watch: num(L.currentRise?.watch, 1, 200, 10), warn: num(L.currentRise?.warn, 1, 200, 20) },
+    utilisation: { warn: num(L.utilisation?.warn, 10, 100, 80), alarm: num(L.utilisation?.alarm, 10, 100, 95) },
+    peerHotter: { watch: num(L.peerHotter?.watch, 1, 50, 6), warn: num(L.peerHotter?.warn, 1, 50, 10) },
+  };
+  const f = b.faults ?? {};
+  const signals = {};
+  for (const [plc, list] of Object.entries(f.signals ?? {})) {
+    if (!plcIds.includes(plc)) continue;
+    const l = lines(list, 20, 200);
+    if (l.some((p) => !sym(p))) throw new Error(`The fault records' signals of ${plc}: symbol paths such as MAIN.fbDoor.bClosed`);
+    if (l.length) signals[plc] = l;
+  }
+  if (f.root && !sym(f.root)) throw new Error('The fault recorder\'s root: a symbol path such as MAIN.mainStateMachine');
+  const faults = { ...(current.faults ?? {}), enabled: f.enabled !== false, preSeconds: num(f.preSeconds, 5, 600, 60), postSeconds: num(f.postSeconds, 5, 600, 60), keepDays: num(f.keepDays, 1, 3650, 30), root: text(f.root, 200) || undefined, plcs: plcList(f.plcs), signals };
+  const fl = b.fleet ?? {};
+  const fleet = { ...(current.fleet ?? {}), enabled: fl.enabled !== false, everySeconds: num(fl.everySeconds, 10, 3600, 60), plcs: plcList(fl.plcs), limits: { crcWatch: num(fl.limits?.crcWatch, 1, 1e6, 5), crcWarn: num(fl.limits?.crcWarn, 1, 1e6, 50), etaDays: num(fl.limits?.etaDays, 1, 3650, 90), etaWarnDays: num(fl.limits?.etaWarnDays, 1, 3650, 14), faultsWatch: num(fl.limits?.faultsWatch, 1, 1e4, 5), faultsWarn: num(fl.limits?.faultsWarn, 1, 1e4, 10) } };
+  const ps = b.projectSync ?? {};
+  const projectSync = { ...(current.projectSync ?? {}), enabled: ps.enabled !== false, everyMinutes: num(ps.everyMinutes, 1, 1440, 10), keep: num(ps.keep, 1, 200, 20), plcs: plcList(ps.plcs) };
+  const o = b.oee ?? {};
+  const machines = (Array.isArray(o.machines) ? o.machines : []).filter((m) => m && (m.machine || m.type)).map((m, i) => {
+    if (!plcIds.includes(m.plc)) throw new Error(`OEE machine ${i + 1}: one of the gateway's PLCs`);
+    if (m.machine && !sym(m.machine)) throw new Error(`OEE machine ${i + 1}: its machine is a symbol path`);
+    if (!text(m.cycleState, 80)) throw new Error(`OEE machine ${i + 1}: its cycle state (the state each cycle goes into)`);
+    for (const k of ['goodVar', 'badVar']) if (m[k] && !sym(m[k])) throw new Error(`OEE machine ${i + 1}: ${k} is a symbol path`);
+    return { plc: m.plc, ...(m.machine ? { machine: text(m.machine, 200) } : { type: text(m.type, 80) }), cycleState: text(m.cycleState, 80), idealCycleSec: num(m.idealCycleSec, 0.1, 86400, 60), ...(m.goodVar ? { goodVar: text(m.goodVar, 200) } : {}), ...(m.badVar ? { badVar: text(m.badVar, 200) } : {}) };
+  });
+  const w = o.weekly ?? {};
+  const weekly = url(w.webhook, 'The weekly summary\'s webhook') ? { day: text(w.day, 3) || 'Mon', at: /^[0-2][0-9]:[0-5][0-9]$/.test(w.at) ? w.at : '07:00', webhook: url(w.webhook, ''), format: fmt(w.format), link: url(w.link, 'Its link') } : undefined;
+  const oee = { ...(current.oee ?? {}), reasons: lines(o.reasons, 40, 60), reasonAfterMin: num(o.reasonAfterMin, 0, 240, 2), machines, weekly };
+  if (!oee.reasons.length) delete oee.reasons;
+  const a = b.andon ?? {};
+  const steps = {};
+  for (const l of lines(a.steps, 500, 400)) {
+    const i = l.indexOf('=');
+    if (i > 0) steps[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+  }
+  const andon = { ...(current.andon ?? {}), steps, callReasons: lines(a.callReasons, 20, 60) };
+  if (!andon.callReasons.length) delete andon.callReasons;
+  const workorders = { ...(current.workorders ?? {}), fromCalls: b.workorders?.fromCalls !== false };
+  const clean = (x) => JSON.parse(JSON.stringify(x));
+  return { drives: clean(drives), faults: clean(faults), fleet: clean(fleet), projectSync: clean(projectSync), oee: clean(oee), andon: clean(andon), workorders: clean(workorders) };
+}
+
 /** A saved operator board, checked */
 function checkBoard(b, i, plcIds) {
   const where = `Board ${i + 1}`;
@@ -206,6 +277,19 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       log(`admin: roles ${checked ? `saved (${Object.keys(checked.users).length} user(s), ${Object.keys(checked.groups).length} group(s), default ${checked.default || 'none'}, ${checked.notify.length} notification(s))` : 'off'}`);
       audit?.add('setup page', 'roles', { on: !!checked });
       return { roles: checked };
+    },
+    // Monitoring: which monitors on which PLCs, and their settings (one Save)
+    'GET monitoring': async () => {
+      const c = getConfig();
+      return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
+    },
+    'POST monitoring': async (body) => {
+      const c = getConfig();
+      const checked = checkMonitoring(body, (c.plcs ?? []).map((p) => p.id), c);
+      update((x) => Object.assign(x, checked));
+      log('admin: monitoring saved (drives, fault records, fleet, projects, OEE, andon, work orders)');
+      audit?.add('setup page', 'monitoring', { drives: checked.drives.enabled, faults: checked.faults.enabled, fleet: checked.fleet.enabled, projects: checked.projectSync.enabled });
+      return { ok: true };
     },
     // (the load panel: this computer, the gateway, each PLC's notifications and tasks, the drives read)
     'GET load': async () => (load ? load() : { plcs: [] }),
@@ -411,6 +495,13 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-recordings"></div>
   <div class="row mt"><button id="admin-recording-add">Add a recording</button><span class="grow"></span><button class="primary" id="admin-recordings-save">Save recordings</button></div>
   <div class="msg" id="admin-recordings-msg"></div>
+</section>
+<section>
+  <h2>Monitoring</h2>
+  <p class="hint flush">What the gateway follows on each PLC by itself, and how. Drives: each drive's own values (heatsink, current, DC bus …), judged against its limits, its past and its siblings. Fault records: the minute before and after each fault. I/O fleet: the EtherCAT boxes' states (the Risk page, the inventory). Project copies: the PLC's project kept here. Each costs a little of the PLC's and the network's time: the Load section below shows it.</p>
+  <div id="admin-monitoring"></div>
+  <div class="row mt"><span class="grow"></span><button class="primary" id="admin-monitoring-save">Save monitoring</button></div>
+  <div class="msg" id="admin-monitoring-msg"></div>
 </section>
 <section>
   <h2>Load</h2>
@@ -925,6 +1016,96 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   });
   loadRoles().catch(() => {});
 
+  // ---- Monitoring ----
+  const NL = String.fromCharCode(10);
+  let mon = null;
+  const numIn = (obj, key, attrs) => el('input', Object.assign({ type: 'number', value: obj[key] == null ? '' : String(obj[key]), 'data-key': key, class: 'num', on: { input: (e) => { obj[key] = e.target.value === '' ? '' : Number(e.target.value); } } }, attrs || {}));
+  const txtIn = (obj, key, attrs) => el('input', Object.assign({ type: 'text', value: obj[key] == null ? '' : String(obj[key]), 'data-key': key, on: { input: (e) => { obj[key] = e.target.value; } } }, attrs || {}));
+  const chk = (obj, key, label, dflt) => el('label', { class: 'inline' }, el('input', { type: 'checkbox', 'data-key': key, checked: obj[key] == null ? dflt !== false : !!obj[key], on: { change: (e) => { obj[key] = e.target.checked; } } }), ' ' + label);
+  const area = (value, onInput, attrs) => el('textarea', Object.assign({ rows: 4, value, on: { input: (e) => onInput(e.target.value) } }, attrs || {}));
+  const renderMonitoring = () => {
+    const box = $('admin-monitoring');
+    box.replaceChildren();
+    const m = mon;
+    // Which monitors on which PLC
+    const KINDS = [['drives', 'Drives'], ['faults', 'Fault records'], ['fleet', 'I/O fleet'], ['projectSync', 'Project copy']];
+    const on = (kind, id) => m[kind].enabled !== false && (!Array.isArray(m[kind].plcs) || !m[kind].plcs.length || m[kind].plcs.includes(id));
+    const setOn = (kind, id, v) => {
+      const all = m.plcs.map((p) => p.id);
+      let list = Array.isArray(m[kind].plcs) && m[kind].plcs.length ? m[kind].plcs.slice() : all.slice();
+      if (m[kind].enabled === false) { list = []; m[kind].enabled = true; }
+      list = v ? [...new Set([...list, id])] : list.filter((x) => x !== id);
+      if (!list.length) { m[kind].enabled = false; m[kind].plcs = []; } else m[kind].plcs = list.length === all.length ? [] : list;
+    };
+    const rows = el('tbody', {});
+    for (const p of m.plcs) rows.append(el('tr', { 'data-monitor-plc': p.id }, el('td', {}, p.name), ...KINDS.map(([k]) => el('td', {}, el('input', { type: 'checkbox', 'data-monitor': k, checked: on(k, p.id), on: { change: (e) => setOn(k, p.id, e.target.checked) } })))));
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), ...KINDS.map(([, l]) => el('th', {}, l)))), rows)));
+    // Drives
+    const d = m.drives;
+    d.limits = d.limits || {};
+    for (const k of ['heatsinkRise', 'currentRise', 'utilisation', 'peerHotter']) d.limits[k] = d.limits[k] || {};
+    box.append(el('h3', {}, 'Drives'),
+      el('div', { class: 'row' }, 'Read every ', numIn(d, 'everySeconds', { min: 5, placeholder: '30' }), ' s; hours and counters every ', numIn(d, 'slowEveryMinutes', { min: 1, placeholder: '10' }), ' min; kept ', numIn(d, 'keepDays', { min: 2, placeholder: '90' }), ' days'),
+      el('div', { class: 'row' }, 'Warmer than its past: watch ', numIn(d.limits.heatsinkRise, 'watch', { placeholder: '5' }), ' °C, warning ', numIn(d.limits.heatsinkRise, 'warn', { placeholder: '8' }), ' °C; more current at the same speed: watch ', numIn(d.limits.currentRise, 'watch', { placeholder: '10' }), ' %, warning ', numIn(d.limits.currentRise, 'warn', { placeholder: '20' }), ' %'),
+      el('div', { class: 'row' }, 'i²t / ixt: warning ', numIn(d.limits.utilisation, 'warn', { placeholder: '80' }), ' %, alarm ', numIn(d.limits.utilisation, 'alarm', { placeholder: '95' }), ' %; hotter than its siblings: watch ', numIn(d.limits.peerHotter, 'watch', { placeholder: '6' }), ' °C, warning ', numIn(d.limits.peerHotter, 'warn', { placeholder: '10' }), ' °C'),
+      el('div', { class: 'row' }, 'Its alerts also to ', txtIn(d, 'webhook', { class: 'mono grow', placeholder: 'https://… (empty: the boards only)' }), (() => { const s = el('select', { on: { change: (e) => { d.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); s.value = d.format || 'teams'; return s; })()));
+    // Fault records
+    const f = m.faults;
+    f.signals = f.signals || {};
+    box.append(el('h3', {}, 'Fault records'),
+      el('div', { class: 'row' }, 'Keep ', numIn(f, 'preSeconds', { min: 5, placeholder: '60' }), ' s before and ', numIn(f, 'postSeconds', { min: 5, placeholder: '60' }), ' s after each fault, ', numIn(f, 'keepDays', { min: 1, placeholder: '30' }), ' days; the machines under ', txtIn(f, 'root', { class: 'mono', placeholder: 'the root of the alert rule, else MAIN.mainStateMachine' })),
+      ...m.plcs.map((p) => el('div', { class: 'row' }, el('span', { class: 'label' }, p.name + ': its signals kept with its faults'), area((f.signals[p.id] || []).join(NL), (v) => { f.signals[p.id] = v.split(NL).map((x) => x.trim()).filter(Boolean); }, { class: 'mono grow', rows: 2, placeholder: 'MAIN.fbDoor.bClosed (one a line)', 'data-fault-signals': p.id }))));
+    // I/O fleet and the Risk page
+    const fl = m.fleet;
+    fl.limits = fl.limits || {};
+    box.append(el('h3', {}, 'I/O fleet and the Risk page'),
+      el('div', { class: 'row' }, 'The EtherCAT states every ', numIn(fl, 'everySeconds', { min: 10, placeholder: '60' }), ' s; CRC errors in 7 days: watch ', numIn(fl.limits, 'crcWatch', { placeholder: '5' }), ', warning ', numIn(fl.limits, 'crcWarn', { placeholder: '50' }), '; a heatsink trend within ', numIn(fl.limits, 'etaDays', { placeholder: '90' }), ' days (a warning within ', numIn(fl.limits, 'etaWarnDays', { placeholder: '14' }), '); a machine faulting more: ', numIn(fl.limits, 'faultsWatch', { placeholder: '5' }), ' a week'));
+    // Project copies
+    const ps = m.projectSync;
+    box.append(el('h3', {}, 'Project copies'), el('div', { class: 'row' }, 'Checked every ', numIn(ps, 'everyMinutes', { min: 1, placeholder: '10' }), ' min; ', numIn(ps, 'keep', { min: 1, placeholder: '20' }), ' older versions kept'));
+    // OEE
+    const o = m.oee;
+    o.machines = o.machines || [];
+    o.weekly = o.weekly || {};
+    const mt = el('tbody', {});
+    o.machines.forEach((x, i) => mt.append(el('tr', { 'data-oee-machine': String(i) },
+      el('td', {}, (() => { const s = el('select', { on: { change: (e) => { x.plc = e.target.value; } } }, ...m.plcs.map((p) => el('option', { value: p.id }, p.name))); s.value = x.plc || (m.plcs[0] || {}).id || ''; x.plc = s.value; return s; })()),
+      el('td', {}, txtIn(x, 'machine', { class: 'mono', placeholder: 'MAIN.mainStateMachine.smTable1' })),
+      el('td', {}, txtIn(x, 'type', { class: 'mono', placeholder: 'or its type: SM_TableManager' })),
+      el('td', {}, txtIn(x, 'cycleState', { class: 'mono', placeholder: 'TABLEMANAGER_DONE' })),
+      el('td', {}, numIn(x, 'idealCycleSec', { min: 0.1, step: 'any', placeholder: '42' })),
+      el('td', {}, txtIn(x, 'goodVar', { class: 'mono', placeholder: 'good parts (counter)' })),
+      el('td', {}, txtIn(x, 'badVar', { class: 'mono', placeholder: 'bad parts (counter)' })),
+      el('td', {}, el('button', { on: { click: () => { o.machines.splice(i, 1); renderMonitoring(); } } }, 'Remove')))));
+    box.append(el('h3', {}, 'OEE'),
+      el('div', { class: 'row' }, 'Ask Why? after a stop of ', numIn(o, 'reasonAfterMin', { min: 0, placeholder: '2' }), ' min'),
+      el('div', { class: 'row' }, el('span', { class: 'label' }, 'The reasons offered (one a line)'), area((o.reasons && o.reasons.length ? o.reasons : mon.defaults.reasons).join(NL), (v) => { o.reasons = v.split(NL); }, { class: 'grow', id: 'admin-oee-reasons' })),
+      el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Machine'), el('th', {}, 'or its type'), el('th', {}, 'Cycle state'), el('th', {}, 'Ideal cycle (s)'), el('th', {}, 'Good count'), el('th', {}, 'Bad count'), el('th', {}, ''))), mt)),
+      el('button', { id: 'admin-oee-add', on: { click: () => { o.machines.push({ plc: (m.plcs[0] || {}).id, cycleState: '', idealCycleSec: '' }); renderMonitoring(); } } }, 'Add the cycle of a machine'),
+      el('div', { class: 'row' }, 'Weekly summary on ', txtIn(o.weekly, 'day', { placeholder: 'Mon', size: 4 }), ' at ', txtIn(o.weekly, 'at', { placeholder: '07:00', size: 5 }), ' to ', txtIn(o.weekly, 'webhook', { class: 'mono grow', placeholder: 'https://… (empty: none)' }), ' its link ', txtIn(o.weekly, 'link', { class: 'mono', placeholder: 'https://gateway:8443/?board&page=oee&window=week' })));
+    // Andon and work orders
+    const a = m.andon;
+    box.append(el('h3', {}, 'Andon and calls'),
+      el('div', { class: 'row' }, el('span', { class: 'label' }, 'What to do, by state (STATE = text, one a line; Type.STATE for one type)'), area(Object.entries(a.steps || {}).map(([k, v]) => k + ' = ' + v).join(NL), (v) => { a.steps = v.split(NL); }, { class: 'mono grow', rows: 4, id: 'admin-andon-steps', placeholder: 'DOOR_DASHER_ERROR = Check the door sensor S12, then press Reset' })),
+      el('div', { class: 'row' }, el('span', { class: 'label' }, 'Reasons to call maintenance (one a line)'), area((a.callReasons && a.callReasons.length ? a.callReasons : mon.defaults.callReasons).join(NL), (v) => { a.callReasons = v.split(NL); }, { class: 'grow', rows: 3 })),
+      el('div', { class: 'row' }, chk(m.workorders, 'fromCalls', 'A call for maintenance makes a work order by itself', true)));
+  };
+  const loadMonitoring = async () => {
+    mon = await call('monitoring');
+    renderMonitoring();
+  };
+  $('admin-monitoring-save').addEventListener('click', async () => {
+    try {
+      const body = JSON.parse(JSON.stringify(mon));
+      // (the steps: STATE = text lines)
+      if (Array.isArray(body.andon.steps)) body.andon.steps = body.andon.steps.join(NL);
+      await call('monitoring', body);
+      say('admin-monitoring-msg', 'Saved: the monitors take it at once', true);
+      await loadMonitoring();
+    } catch (err) { say('admin-monitoring-msg', err.message, false); }
+  });
+  loadMonitoring().catch(() => {});
+
   // ---- Load (this computer, the gateway, each PLC) ----
   const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');
   const loadLoad = async () => {
@@ -945,10 +1126,10 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         el('td', {}, p.connected ? 'connected' + (p.plcState ? ', PLC ' + p.plcState : '') : 'not connected'),
         el('td', { class: 'admin-load-shared' }, p.shared ? p.shared.notifications + ' (' + p.shared.uses + ' uses, every ' + p.shared.cycleMs + ' ms on change; ' + p.shared.samplesPerSec + ' changes/s)' : ''),
         el('td', {}, p.live.notifications ? String(p.live.notifications) : ''),
-        el('td', {}, d ? d.drives + ' every ' + Math.round(d.everyMs / 1000) + ' s' : ''),
+        el('td', { class: 'admin-load-monitors' }, [d ? d.drives + ' drives every ' + Math.round(d.everyMs / 1000) + ' s' : '', (a.faults || []).includes(p.id) ? 'fault records' : '', (a.fleet || []).find((x) => x.plc === p.id) ? 'I/O fleet every ' + Math.round((a.fleet || []).find((x) => x.plc === p.id).everyMs / 1000) + ' s' : '', (a.projects || []).includes(p.id) ? 'project copy' : ''].filter(Boolean).join(', ')),
         el('td', { class: 'admin-load-tasks' }, tasks.join(' · '))));
     }
-    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Drives read'), el('th', {}, 'Its tasks'))), rows)));
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Monitors'), el('th', {}, 'Its tasks'))), rows)));
   };
   loadLoad().catch(() => {});
   window.setInterval(() => { if (!document.hidden) loadLoad().catch(() => {}); }, 3000);

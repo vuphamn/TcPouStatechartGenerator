@@ -19,7 +19,7 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
   const { readMasters, describeState } = require(`${sharedDir}/tcEcat.cjs`);
   const settings = () => {
     const c = getConfig().fleet ?? {};
-    return { enabled: c.enabled !== false && getConfig().allowBrowse !== false, everyMs: Math.max(10, Math.min(3600, Number(c.everySeconds) || 60)) * 1000 };
+    return { enabled: c.enabled !== false && getConfig().allowBrowse !== false, everyMs: Math.max(10, Math.min(3600, Number(c.everySeconds) || 60)) * 1000, plcs: Array.isArray(c.plcs) && c.plcs.length ? c.plcs : null };
   };
   const dirOf = (id) => path.join(baseDir, 'fleet', String(id).replace(/[^\w.-]/g, '_'));
   const monitors = new Map();
@@ -167,7 +167,7 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
 
   const apply = () => {
     const s = settings();
-    const wanted = new Set(s.enabled ? plcList().map((p) => p.id) : []);
+    const wanted = new Set(s.enabled ? plcList().filter((p) => !s.plcs || s.plcs.includes(p.id)).map((p) => p.id) : []);
     for (const [id, m] of monitors) {
       if (wanted.has(id) && JSON.stringify(m.plc) === JSON.stringify(plcList().find((p) => p.id === id))) continue;
       m.stop();
@@ -188,6 +188,8 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
       monitors.clear();
     },
     view: () => [...monitors.values()].map((m) => m.view()),
+    /** The PLCs followed, how often (the Load panel) */
+    stats: () => [...monitors.values()].map((m) => ({ plc: m.plc.id, boxes: m.boxes.length, everyMs: settings().everyMs })),
     /** A round now on each PLC (the tests, the setup page) */
     roundNow: async () => {
       for (const m of monitors.values()) await m.round();

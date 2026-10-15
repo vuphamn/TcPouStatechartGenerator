@@ -279,6 +279,18 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
 
 **The log:** the gateway writes it to its console and to `gateway.log` beside `config.json` (at 5 MB it moves to `gateway.log.1`): run by the task it has no console, read the file then. A PLC that does not answer is retried every 30 s: the same error is logged once, then every 10 minutes with how many tries, and its connection when it comes back.
 
+**Monitoring** (the setup page): what the gateway follows on each PLC by itself, without editing `config.json`.
+- **Per PLC:** a row with **Drives**, **Fault records**, **I/O fleet** and **Project copy** to tick on or off.
+- **Each monitor's settings:**
+  - the drives': how often, how long they are kept, their limits for a warning or an alarm, a webhook;
+  - the fault records': the seconds before and after, the days kept, the root, the signals kept with each PLC's faults;
+  - the fleet's: how often, its CRC and trend limits for the Risk page;
+  - the project copies': how often, how many versions.
+- **The OEE settings:** the reasons offered and when **Why?** is asked; each machine's cycle state, ideal cycle time and good and bad counters; the weekly summary.
+- **The andon's:** its steps by state, the reasons to call maintenance; whether a call makes a work order.
+- **Saving:** one **Save monitoring**, checked; taken at once, without a restart.
+- **Load** shows which monitors run on each PLC.
+
 **Roles** (the setup page's **Roles**, `config.json` `"roles"`): who may do what on the gateway. Without roles, everyone signed in may do everything (`writeUsers` and `boardEditors` still apply), and a view-only token is a display.
 
 | Role | May |

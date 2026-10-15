@@ -443,6 +443,11 @@ function start() {
     faults?.apply();
     config.fleet = next.fleet;
     fleet?.apply();
+    // (read where they are used: taken as they are saved, without a restart)
+    config.projectSync = next.projectSync;
+    config.oee = next.oee;
+    config.andon = next.andon;
+    config.workorders = next.workorders;
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -723,7 +728,7 @@ function start() {
     audit,
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     projects: projectSync,
-    load: () => ({ ...load.snapshot(), drives: drives.stats() }),
+    load: () => ({ ...load.snapshot(), drives: drives.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
     roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },

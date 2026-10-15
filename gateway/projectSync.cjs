@@ -23,6 +23,7 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
       everyMinutes: Math.max(1, Math.min(24 * 60, Number(s.everyMinutes) || 10)),
       keep: Math.max(1, Math.min(200, Number(s.keep) || 20)),
       folder: path.resolve(baseDir, String(s.folder || 'PlcProjects')),
+      plcs: Array.isArray(s.plcs) && s.plcs.length ? s.plcs : null,
     };
   };
   const dirOf = (plc) => path.join(settings().folder, String(plc.id).replace(/[^\w.-]/g, '_'));
@@ -231,7 +232,8 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
   /** Every PLC, one after the other */
   async function checkAll(by) {
     if (!settings().enabled) return;
-    for (const plc of plcList()) await check(plc, { by }).catch(() => {});
+    const only = settings().plcs;
+    for (const plc of plcList()) if (!only || only.includes(plc.id)) await check(plc, { by }).catch(() => {});
   }
 
   let timer = null;

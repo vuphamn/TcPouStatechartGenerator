@@ -32,6 +32,7 @@ function createFaults({ baseDir, getConfig, plcList, connectionFor, log, retryMs
       keepDays: Math.max(1, Math.min(3650, Number(c.keepDays) || 30)),
       root: typeof c.root === 'string' && c.root ? c.root : null,
       signals: c.signals && typeof c.signals === 'object' ? c.signals : {},
+      plcs: Array.isArray(c.plcs) && c.plcs.length ? c.plcs : null,
     };
   };
   const dirOf = (plcId) => path.join(baseDir, 'faults', String(plcId).replace(/[^\w.-]/g, '_'));
@@ -203,7 +204,7 @@ function createFaults({ baseDir, getConfig, plcList, connectionFor, log, retryMs
     for (const r of recorders.values()) r.stop();
     recorders.clear();
     if (!s.enabled) return;
-    for (const plc of plcList()) recorders.set(plc.id, new FaultRecorder(plc));
+    for (const plc of plcList()) if (!s.plcs || s.plcs.includes(plc.id)) recorders.set(plc.id, new FaultRecorder(plc));
   };
   const pruneTimer = setInterval(prune, 3600_000);
   pruneTimer.unref();
@@ -242,6 +243,8 @@ function createFaults({ baseDir, getConfig, plcList, connectionFor, log, retryMs
         return null;
       }
     },
+    /** The PLCs whose faults are recorded (the Load panel) */
+    stats: () => [...recorders.keys()],
     /** A PLC's signals kept with its faults (the I/O page's "Add to fault records") */
     signalsOf: (plcId) => (Array.isArray(settings().signals[plcId]) ? settings().signals[plcId] : []),
     subscribe(fn) {
