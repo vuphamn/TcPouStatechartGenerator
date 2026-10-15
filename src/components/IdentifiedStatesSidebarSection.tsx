@@ -414,7 +414,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                         }
                       : undefined
                   }
-                  className={`group relative flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
+                  className={`group relative scroll-mt-3 flex items-center justify-between gap-2 px-2 py-1 rounded-md cursor-pointer border select-none text-[11px] ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                     isJustNavigated
                       ? 'bg-sky-950/80 border-sky-400 ring-2 ring-sky-400/80 text-white'
                       : isSelected
@@ -714,7 +714,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
           <div
             ref={scrollListRef}
             id="identified-states-scrollable-list"
-            className={`flex flex-col gap-1 overflow-y-auto pr-0.5 custom-scrollbar ${fill ? 'flex-1 min-h-0' : 'max-h-[340px]'}`}
+            className={`flex flex-col gap-1 overflow-y-auto pt-2.5 pb-1 pl-1 pr-1.5 custom-scrollbar ${fill ? 'flex-1 min-h-0' : 'max-h-[340px]'}`}
           >
             {states.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-6 px-3 text-center border border-dashed border-slate-800 rounded-lg bg-slate-950/40 text-slate-400">
@@ -769,7 +769,7 @@ export const IdentifiedStatesSidebarSection: React.FC<IdentifiedStatesSidebarSec
                           }
                         : undefined
                     }
-                    className={`group relative flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
+                    className={`group relative scroll-mt-3 flex items-start justify-between p-2 rounded-lg cursor-pointer transition-all border select-none ${isLive ? 'outline outline-2 outline-emerald-400/90 outline-offset-1 ' : ''}${
                       isJustNavigated
                         ? 'bg-sky-950/80 border-sky-400 shadow-[0_0_18px_rgba(56,189,248,0.35)] ring-2 ring-sky-400/80 text-white'
                         : isSelected

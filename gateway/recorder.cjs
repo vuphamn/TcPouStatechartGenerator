@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { AlertMonitor, postWebhook, DEFAULT_ERROR } = require('./alerts.cjs');
+const { AlertMonitor, postWebhook, machinesOf, DEFAULT_ERROR } = require('./alerts.cjs');
 const { createTrends } = require('./trends.cjs');
 
 const ads = require(fs.existsSync(path.join(__dirname, 'shared', 'tcAds.cjs')) ? './shared/tcAds.cjs' : '../shared/tcAds.cjs');
@@ -46,6 +46,7 @@ function checkRecording(r, i, plcIds) {
   return {
     id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, days, vars, maxMB,
     compress: r?.compress !== false, slowerPct, slowerWebhook, slowerFormat: ['teams', 'slack', 'json'].includes(r?.slowerFormat) ? r.slowerFormat : 'teams',
+    ...machinesOf(r, where),
   };
 }
 
@@ -246,7 +247,7 @@ function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () =
       for (const rule of list) {
         const r = { rule, buffer: [], timer: null, monitor: null, slowerDay: null };
         r.monitor = new AlertMonitor(
-          { id: `rec:${rule.id}`, name: `recording ${rule.id}`, plc: rule.plc, root: rule.root, stateVar: rule.stateVar, stuckAfterMs: null, stateLimits: {}, onError: false, notifyRecovery: false, webhook: null, extraVars: rule.vars ?? [] },
+          { id: `rec:${rule.id}`, name: `recording ${rule.id}`, plc: rule.plc, root: rule.root, stateVar: rule.stateVar, stuckAfterMs: null, stateLimits: {}, onError: false, notifyRecovery: false, webhook: null, extraVars: rule.vars ?? [], ...(Array.isArray(rule.machines) ? { machines: rule.machines } : {}) },
           { connectionFor, plcOf, log, retryMs, onSample: (m, v, t) => r.buffer.push({ t, m: m.path, v }), onVar: (p, v, t) => r.buffer.push({ t, x: p, v }) }
         );
         r.timer = setInterval(() => flush(r), FLUSH_MS);
@@ -273,6 +274,8 @@ function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () =
           keepDays: r.rule.days, days: days(r.rule.id), state: r.monitor.state, message: r.monitor.message, vars: r.rule.vars ?? [],
           bytes: fl.reduce((s, x) => s + x.bytes, 0), maxMB: r.rule.maxMB ?? null, compressedDays: fl.filter((x) => x.gz).length,
           machines: r.monitor.machines.map((m) => ({ path: m.path, type: m.type, stateNames: m.stateNames })),
+          // (its own machines, chosen on the board: null, every machine under its root)
+          only: Array.isArray(r.rule.machines) ? r.rule.machines : null,
         };
       }),
 
@@ -340,6 +343,53 @@ function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () =
         machine: m?.path ?? machine, machineType: m?.type ?? '', stateVar: r.rule.stateVar, plcName: plcOf(r.rule.plc)?.name ?? r.rule.plc, values, truncated,
         vars: vars.map(({ id: vid, t, v }) => ({ id: vid, t, v })), watched,
       };
+    },
+
+    /**
+     * Recorded variables (I/O signals, guard values) between from and to (ms): each one's values, its value when the
+     * window starts first ({ series: { <path>: [{ t, v }] }, truncated })
+     */
+    queryVars(id, paths, from, to) {
+      const r = recorders.get(id);
+      if (!r) return { error: `No recording "${id}"` };
+      flush(r);
+      const want = new Map(paths.map((p) => [String(p).toLowerCase(), String(p)]));
+      const series = Object.fromEntries([...want.values()].map((p) => [p, []]));
+      const before = new Map();
+      let n = 0;
+      let truncated = false;
+      const all = days(id).filter((d) => d <= dayOf(to));
+      // (the window's days, and the day before it for the values at its start)
+      const first = all.findIndex((d) => d >= dayOf(from));
+      for (const d of all.slice(Math.max(0, (first < 0 ? all.length : first) - 1))) {
+        let text = '';
+        try {
+          text = readDay(id, d);
+        } catch {
+          continue;
+        }
+        for (const line of text.split('\n')) {
+          if (!line || !line.includes('"x"')) continue;
+          let o;
+          try {
+            o = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          const p = want.get(String(o.x).toLowerCase());
+          if (!p || o.t > to) continue;
+          if (o.t < from) {
+            const b = before.get(p);
+            if (!b || o.t >= b.t) before.set(p, { t: o.t, v: o.v });
+          } else if (n < MAX_VALUES) {
+            series[p].push({ t: o.t, v: o.v });
+            n++;
+          } else truncated = true;
+        }
+      }
+      for (const [p, b] of before) series[p].unshift({ t: from, v: b.v });
+      for (const p of Object.keys(series)) series[p].sort((a, b) => a.t - b.t);
+      return { series, truncated };
     },
 
     /** One machine's state times per day (the latest `n` days recorded), with its state names */

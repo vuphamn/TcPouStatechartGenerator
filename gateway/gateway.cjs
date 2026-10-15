@@ -32,6 +32,8 @@ const { createAdmin } = require('./admin.cjs');
 const { createAlerts, checkRule, postWebhook } = require('./alerts.cjs');
 const { createAuth } = require('./auth.cjs');
 const { createAlertLog, createBoards, createMaintenance, mutedFor } = require('./board.cjs');
+const { createBoardFilters } = require('./boardFilters.cjs');
+const { createIoBoards } = require('./ioBoard.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
@@ -415,7 +417,22 @@ function start() {
     config.recordings = next.recordings ?? [];
     recorders?.apply(config.recordings);
     config.oidc = next.oidc;
+    config.boardEditors = next.boardEditors;
     configMtime = mtime();
+    // (the boards: which machines are recorded or alarmed now)
+    for (const fn of boardRuleListeners) fn();
+  };
+  const boardRuleListeners = new Set();
+  // config.json read fresh, changed and written whole (a temporary file renamed over it), then applied: the board's
+  // recordings and alarms (the setup page does the same)
+  const updateConfig = (change) => {
+    const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
+    change(onDisk);
+    const tmp = `${configPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(onDisk, null, 2) + '\n');
+    fs.renameSync(tmp, configPath);
+    applyConfig(onDisk);
+    return onDisk;
   };
   // Alerts: the machines of the rules' PLCs followed by the gateway itself (webhooks when stuck / in error)
   let alerts = null;
@@ -507,6 +524,17 @@ function start() {
     return notesCache.by.get(plcId) ?? [];
   };
   const boards = createBoards({ connectionFor, plcOf, rules: rulesNow, log, retryMs: config.alertRetryMs ?? 30000, maintenance, notesOf });
+  // The board's saved filters (board-filters.json) and its I/O page's monitors (ioBoard.cjs)
+  const boardFilters = createBoardFilters({ file: path.join(baseDir, 'board-filters.json'), log, audit });
+  const ioBoards = createIoBoards({ connectionFor, plcOf, log, sharedDir, retryMs: config.alertRetryMs ?? 30000 });
+  // (who may save filters, recordings and alarms from the board: everyone signed in (not a view-only token), or the
+  // users of config.boardEditors)
+  const canEditBoard = (user, viewOnly) => !viewOnly && (!Array.isArray(config.boardEditors) || config.boardEditors.map((u) => String(u).toLowerCase()).includes(String(user ?? '').toLowerCase()));
+  // The recordings and alarms as the board shows them (which machines and signals each one covers)
+  const boardRules = () => ({
+    alarms: (config.alerts ?? []).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled !== false, plc: r.plc, root: r.root, machines: Array.isArray(r.machines) ? r.machines : null, stuckAfterMs: r.stuckAfterMs ?? null, onError: r.onError !== false, webhook: !!r.webhook, fromBoard: r.fromBoard ?? null })),
+    recordings: (config.recordings ?? []).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled !== false, plc: r.plc, root: r.root, machines: Array.isArray(r.machines) ? r.machines : null, vars: r.vars ?? [], days: r.days, fromBoard: r.fromBoard ?? null })),
+  });
   alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id) });
   alerts.apply(config.alerts ?? []);
   // Escalation: open alerts not acknowledged in time, posted again
@@ -621,6 +649,11 @@ function start() {
     // Operator board and alert history of this connection
     let boardStop = null;
     let alertsOff = null;
+    // (its board's saved filters and rules followed; its I/O page)
+    let filtersOff = null;
+    let rulesOff = null;
+    let ioWatch = null;
+    const ioViewer = {};
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -718,8 +751,9 @@ function start() {
         audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
         return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}) });
       }
-      // A display (view-only token): the board, its saved boards and the alerts, nothing else
-      if (viewOnly && !['boardWatch', 'boardList', 'alertsList'].includes(m.type)) {
+      // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
+      // nothing else (the filters and rules: refused by their own handlers, with their answers)
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
@@ -790,8 +824,103 @@ function start() {
         alertsOff ??= alertLog.subscribe((event) => send({ type: 'alertEvent', event }));
         return;
       }
-      // Saved boards (config.json "boards", the setup page edits them)
-      if (m.type === 'boardList') return send({ type: 'boardList', boards: config.boards ?? [] });
+      // Saved boards (config.json "boards", the setup page edits them); then the saved filters and the recordings and
+      // alarms (sent again when they change)
+      if (m.type === 'boardList') {
+        send({ type: 'boardList', boards: config.boards ?? [] });
+        const sendFilters = () => send({ type: 'boardFilters', filters: boardFilters.list(), canEdit: canEditBoard(user, viewOnly) });
+        const sendRules = () => send({ type: 'boardRules', ...boardRules(), canEdit: canEditBoard(user, viewOnly) });
+        sendFilters();
+        sendRules();
+        filtersOff ??= boardFilters.subscribe(sendFilters);
+        if (!rulesOff) {
+          boardRuleListeners.add(sendRules);
+          rulesOff = () => boardRuleListeners.delete(sendRules);
+        }
+        return;
+      }
+      // A saved filter saved (new, or changed: its id) or deleted
+      if (m.type === 'boardFilterSave' || m.type === 'boardFilterDelete') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (!canEditBoard(user, viewOnly)) return send({ type: 'boardFilterResult', requestId, ok: false, error: viewOnly ? 'A display: nothing can be saved from it' : `${user} may not save the board's filters (boardEditors)` });
+        try {
+          if (m.type === 'boardFilterDelete') return send({ type: 'boardFilterResult', requestId, ok: boardFilters.remove(String(m.id ?? ''), user) });
+          return send({ type: 'boardFilterResult', requestId, ok: true, filter: boardFilters.save(m.filter ?? {}, user, [...plcs.keys()]) });
+        } catch (err) {
+          return send({ type: 'boardFilterResult', requestId, ok: false, error: err.message });
+        }
+      }
+      // A recording or an alarm for the machines (or signals) chosen on the board: config.json's recordings / alerts, as
+      // the setup page saves them; changed (its id), or removed (only one made on the board)
+      if (m.type === 'boardRuleSave' || m.type === 'boardRuleDelete') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const kind = m.kind === 'recording' ? 'recording' : 'alarm';
+        const key = kind === 'recording' ? 'recordings' : 'alerts';
+        if (!canEditBoard(user, viewOnly)) return send({ type: 'boardRuleResult', requestId, ok: false, error: viewOnly ? 'A display: nothing can be changed from it' : `${user} may not add recordings or alarms from the board (boardEditors)` });
+        try {
+          if (m.type === 'boardRuleDelete') {
+            const old = (config[key] ?? []).find((r) => r.id === m.id);
+            if (!old) throw new Error('No such one: it may have been removed already');
+            if (!old.fromBoard) throw new Error(`"${old.name}" was made on the setup page: remove it there`);
+            updateConfig((c) => {
+              c[key] = (c[key] ?? []).filter((r) => r.id !== m.id);
+            });
+            log(`board: ${user} removed the ${kind} "${old.name}"`);
+            audit.add(user, `board.${kind}.remove`, { id: old.id, name: old.name, plc: old.plc });
+            return send({ type: 'boardRuleResult', requestId, ok: true });
+          }
+          const r = m.rule && typeof m.rule === 'object' ? m.rule : {};
+          const old = typeof r.id === 'string' ? (config[key] ?? []).find((x) => x.id === r.id) : null;
+          const id = old?.id ?? `board-${String(r.name ?? kind).toLowerCase().replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || kind}-${crypto.randomBytes(2).toString('hex')}`;
+          const pick = (o, names) => Object.fromEntries(names.filter((n) => o[n] !== undefined).map((n) => [n, o[n]]));
+          const fields = kind === 'recording' ? ['name', 'plc', 'root', 'stateVar', 'machines', 'vars', 'days', 'enabled'] : ['name', 'plc', 'root', 'stateVar', 'machines', 'stuckAfterMs', 'onError', 'notifyRecovery', 'onPlcStop', 'webhook', 'format', 'enabled'];
+          const raw = { ...(old ?? { onPlcStop: false }), ...pick(r, fields), id, fromBoard: old?.fromBoard ?? { by: user, at: new Date().toISOString() } };
+          const list = config[key] ?? [];
+          const index = old ? list.indexOf(old) : list.length;
+          const checked = kind === 'recording' ? checkRecording(raw, index, [...plcs.keys()]) : checkRule(raw, index, [...plcs.keys()]);
+          updateConfig((c) => {
+            const all = c[key] ?? [];
+            const at = all.findIndex((x) => x.id === id);
+            c[key] = at >= 0 ? all.map((x, i) => (i === at ? checked : x)) : [...all, checked];
+          });
+          const what = kind === 'recording' ? `${(checked.machines ?? []).length} machine(s), ${checked.vars.length} signal(s)` : `${(checked.machines ?? []).length} machine(s)`;
+          log(`board: ${user} ${old ? 'changed' : 'added'} the ${kind} "${checked.name}" on ${checked.plc} (${what})`);
+          audit.add(user, `board.${kind}.${old ? 'change' : 'add'}`, { id, name: checked.name, plc: checked.plc, machines: checked.machines ?? null, vars: checked.vars });
+          return send({ type: 'boardRuleResult', requestId, ok: true, id });
+        } catch (err) {
+          return send({ type: 'boardRuleResult', requestId, ok: false, error: err.message });
+        }
+      }
+      // The I/O page: these PLCs' I/O devices and box states (read-only); its signals, live
+      if (m.type === 'ioBoardWatch') {
+        ioWatch?.stop();
+        ioWatch = null;
+        if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'ioBoardState', plcs: [], error: 'Reading the PLCs\' I/O is turned off on this gateway' });
+        const ids = Array.isArray(m.plcs) && m.plcs.length ? m.plcs.filter((id) => plcs.has(id)).slice(0, 20) : [...plcs.keys()].slice(0, 20);
+        ioWatch = ioBoards.watch(ids, ioViewer, send);
+        log(`io board: ${user} watches ${ids.join(', ') || '(no PLCs)'}`);
+        return;
+      }
+      if (m.type === 'ioBoardStop') {
+        ioWatch?.stop();
+        ioWatch = null;
+        return;
+      }
+      if (m.type === 'ioSignals') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (!ioWatch) return send({ type: 'ioSignalsResult', requestId, error: 'The I/O page is not open' });
+        return send({ type: 'ioSignalsResult', requestId, ...(await ioWatch.signals(String(m.plc ?? ''), Array.isArray(m.signals) ? m.signals : [])) });
+      }
+      // Recorded signals over a time window (the I/O page's trends, going back)
+      if (m.type === 'recordingVars') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const from = Number(m.from);
+        const to = Number(m.to);
+        const vars = Array.isArray(m.vars) ? m.vars.filter((v) => typeof v === 'string' && ads.isSymbolPath(v)).slice(0, 20) : [];
+        if (typeof m.id !== 'string' || !vars.length || !(from < to) || to - from > 31 * 86400000) return send({ type: 'recordingVarsResult', requestId, error: 'A recording, its signals and a time window of at most 31 days' });
+        audit.add(user, 'replay', { recording: m.id, vars, from: new Date(from).toISOString(), to: new Date(to).toISOString() });
+        return send({ type: 'recordingVarsResult', requestId, ...recorders.queryVars(m.id, vars, from, to) });
+      }
       // Maintenance: a PLC's alerts muted for some minutes (0: ends it, or with id removes a planned window); from: planned
       if (m.type === 'maintenanceSet') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
@@ -1202,6 +1331,9 @@ function start() {
       mirror.dispose();
       boardStop?.();
       alertsOff?.();
+      filtersOff?.();
+      rulesOff?.();
+      ioWatch?.stop();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -1228,6 +1360,7 @@ function start() {
     log('stopping');
     alerts.stop();
     boards.stop();
+    ioBoards.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();

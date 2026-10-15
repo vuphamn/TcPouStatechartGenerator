@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BellOff, Check, LayoutGrid, Maximize2, Radio, Search, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, History, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { BoardTree } from './BoardTree.tsx';
+import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
+import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
+import { BoardPlayback } from './BoardPlayback.tsx';
+import { IoBoard } from './IoBoard.tsx';
+import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
+import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
 import { useMediaQuery } from '../hooks/useMediaQuery.ts';
 import { GatewayConnection, detectGatewayOrigin, fetchGatewaySso, type GatewaySso } from '../utils/liveGateway.ts';
@@ -76,6 +83,34 @@ export interface AlertEvent {
   escalatedAt?: string | null;
 }
 
+/** The gateway's recordings as the playback needs them (recordingsList) */
+interface GwRecording {
+  id: string;
+  plc: string;
+  machines: { path: string; type: string; stateNames?: Record<string, string> }[];
+}
+
+/** An error state, as the gateway's alerts find them by default */
+const ERROR_STATE = /ERROR|FAULT|ALARM|E_?STOP|ABORT/i;
+const PLAYBACK_MAX = 40;
+
+const store = {
+  get: (k: string) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k: string, v: string) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {
+      // (this viewer only, this time)
+    }
+  },
+};
+
 const short = (path: string, root: string) => (path.toLowerCase().startsWith(root.toLowerCase() + '.') ? path.slice(root.length + 1) : path.toLowerCase() === root.toLowerCase() ? '(main)' : path);
 
 export const OperatorBoard: React.FC = () => {
@@ -126,6 +161,79 @@ export const OperatorBoard: React.FC = () => {
   const [note, setNote] = useState('');
   const [now, setNow] = useState(Date.now());
   const conn = useRef<GatewayConnection | null>(null);
+  // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
+  // the machines as a tree (nested as in the program) or flat (tiles)
+  const [page, setPageState] = useState<'machines' | 'io'>(() => (params.get('page') === 'io' || (!params.get('page') && store.get('kss.board.page') === 'io') ? 'io' : 'machines'));
+  const setPage = (p: 'machines' | 'io') => {
+    setPageState(p);
+    store.set('kss.board.page', p);
+  };
+  const [layout, setLayoutState] = useState<'flat' | 'tree'>(() => (params.get('layout') === 'tree' || (!params.get('layout') && store.get('kss.board.layout') === 'tree') ? 'tree' : 'flat'));
+  const setLayout = (l: 'flat' | 'tree') => {
+    setLayoutState(l);
+    store.set('kss.board.layout', l);
+  };
+  const collapsedKey = `kss.board.collapsed|${boardId || 'all'}`;
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(store.get(collapsedKey) ?? '[]') as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const collapse = (keys: string[], closed: boolean) =>
+    setCollapsed((s) => {
+      const n = new Set(s);
+      for (const k of keys) {
+        if (closed) n.add(k);
+        else n.delete(k);
+      }
+      store.set(collapsedKey, JSON.stringify([...n].slice(-2000)));
+      return n;
+    });
+  // The gateway's saved filters and the one applied (the address's &saved= first), its recordings and alarms (which
+  // machines and signals each covers), and whether this user may change them (boardEditors)
+  const [savedFilters, setSavedFilters] = useState<BoardSavedFilter[]>([]);
+  const [canEdit, setCanEdit] = useState(false);
+  const [rules, setRules] = useState<BoardRules>({ alarms: [], recordings: [] });
+  const savedKey = `kss.board.saved|${boardId || 'all'}`;
+  const [activeFilterId, setActiveFilterId] = useState(() => params.get('saved') ?? store.get(savedKey) ?? '');
+  const activeFilter = savedFilters.find((f) => f.id === activeFilterId) ?? null;
+  // Machines chosen (Select): for a recording, an alarm, a playback, a saved filter ("<plc>|<path>")
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelected = (k: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
+  // The I/O page's charted signals ("<plc>|<variable>"), kept in this browser
+  const [signals, setSignalsState] = useState<string[]>(() => {
+    try {
+      const v = JSON.parse(store.get('kss.board.signals') ?? '[]');
+      return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  const setSignals = (keys: string[]) => {
+    setSignalsState(keys);
+    store.set('kss.board.signals', JSON.stringify(keys));
+  };
+  const [ruleDialog, setRuleDialog] = useState<{ kind: 'alarm' | 'recording'; groups: RuleGroup[] } | null>(null);
+  // (the I/O page's messages, handed to it)
+  const ioListeners = useRef(new Set<(m: { type: string }) => void>());
+  const subscribeIo = useCallback((fn: (m: never) => void) => {
+    const f = fn as unknown as (m: { type: string }) => void;
+    ioListeners.current.add(f);
+    return () => {
+      ioListeners.current.delete(f);
+    };
+  }, []);
+  // Playback: the chosen machines' recorded states over a window, the board showing them at the cursor
+  const [playback, setPlayback] = useState<{ from: number; to: number; t: number; playing: boolean; speed: number; machines: PlaybackMachine[]; loading: string } | null>(null);
   // New alerts: a chime (unless off) and the machine's tile flashing until the alert is acknowledged or resolved
   const [sound, setSoundState] = useState(() => {
     if (params.get('sound') === '0') return false;
@@ -199,6 +307,22 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
+      if (msg.type.startsWith('io')) {
+        for (const fn of ioListeners.current) fn(msg);
+        return;
+      }
+      if (msg.type === 'boardFilters') {
+        const x = m as unknown as { filters?: BoardSavedFilter[]; canEdit?: boolean };
+        setSavedFilters(x.filters ?? []);
+        setCanEdit(!!x.canEdit);
+        return;
+      }
+      if (msg.type === 'boardRules') {
+        const x = m as unknown as BoardRules & { canEdit?: boolean };
+        setRules({ alarms: x.alarms ?? [], recordings: x.recordings ?? [] });
+        setCanEdit(!!x.canEdit);
+        return;
+      }
       if (msg.type === 'boardList' && msg.boards) {
         setSaved(msg.boards);
         setBoardsLoaded(true);
@@ -276,21 +400,31 @@ export const OperatorBoard: React.FC = () => {
   const types = useMemo(() => plcs.flatMap((p) => p.machines.map((m) => m.type.split('.').pop() ?? m.type)), [plcs]);
   const typeLimits = useLimitsOfTypes(types);
   const viewerDefault = useDefaultLimit();
+  // (playing back: each machine as recorded at the cursor; one not in the playback: no state shown)
+  const played = useMemo(() => new Map((playback?.machines ?? []).map((pm) => [machineKey(pm.plc, pm.path).toLowerCase(), pm])), [playback?.machines]);
   const tiles = useMemo(
     () =>
       plcs.map((p) => ({
         ...p,
         machines: p.machines
-          .map((m) => {
+          .map((m0) => {
+            let m: BoardMachine & { played?: boolean } = m0;
+            let at = now - offset;
+            if (playback) {
+              at = playback.t;
+              const pm = played.get(machineKey(p.id, m0.path).toLowerCase());
+              const st = pm ? stateAt(pm, playback.t) : null;
+              m = st ? { ...m0, value: st.value, state: st.name, since: st.since, error: ERROR_STATE.test(st.name), atLeast: false, played: true } : { ...m0, value: null, state: null, since: null, error: false, played: false };
+            }
             const type = (m.type.split('.').pop() ?? m.type).toLowerCase();
             const limit = m.limitMs ?? limitFor(typeLimits[type] ?? {}, viewerDefault ?? stuckDefault, m.state);
-            const inState = m.since ? Math.max(0, now - offset - m.since) : 0;
+            const inState = m.since ? Math.max(0, at - m.since) : 0;
             const stuck = !m.error && !!limit && inState > limit;
             return { ...m, limit, inState, stuck, rank: m.error ? 0 : stuck ? 1 : m.state ? 2 : 3 };
           })
           .sort((a, b) => a.rank - b.rank || a.path.localeCompare(b.path)),
       })),
-    [plcs, typeLimits, viewerDefault, stuckDefault, now, offset]
+    [plcs, typeLimits, viewerDefault, stuckDefault, now, offset, playback, played]
   );
   const counts = tiles.flatMap((p) => p.machines).reduce((c, m) => ({ all: c.all + 1, error: c.error + (m.error ? 1 : 0), stuck: c.stuck + (m.stuck ? 1 : 0) }), { all: 0, error: 0, stuck: 0 });
   // The filter: the machines whose path, state, type or PLC has every word typed (lockhead axis); problems only: the
@@ -326,12 +460,173 @@ export const OperatorBoard: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
-  const filtering = words.length > 0 || problemsOnly;
+  // (a saved filter applied: its PLCs and its machines only)
+  const onlyPlcs = activeFilter?.plcs.length ? activeFilter.plcs : null;
+  const onlyMachines = activeFilter?.machines.length ? new Set(activeFilter.machines.map((k) => k.toLowerCase())) : null;
+  const filtering = words.length > 0 || problemsOnly || !!onlyPlcs || !!onlyMachines;
   const shown = filtering
     ? tiles
-        .map((p) => ({ ...p, machines: p.machines.filter((m) => (!problemsOnly || m.error || m.stuck) && words.every((w) => `${p.name} ${m.path} ${m.state ?? ''} ${m.type}`.toLowerCase().includes(w))) }))
-        .filter((p) => p.machines.length)
+        .filter((p) => !onlyPlcs || onlyPlcs.includes(p.id))
+        .map((p) => ({ ...p, machines: p.machines.filter((m) => (!onlyMachines || onlyMachines.has(machineKey(p.id, m.path).toLowerCase())) && (!problemsOnly || m.error || m.stuck) && words.every((w) => `${p.name} ${m.path} ${m.state ?? ''} ${m.type}`.toLowerCase().includes(w))) }))
+        .filter((p) => p.machines.length || (!words.length && !problemsOnly && !onlyMachines))
     : tiles;
+  // Saved filters: one applied (its view: words, problems only, tree or flat, page, alerts, signals; its PLCs and
+  // machines), or none (the whole board)
+  const applyFilter = (f: BoardSavedFilter | null) => {
+    setActiveFilterId(f?.id ?? '');
+    store.set(savedKey, f?.id ?? '');
+    if (!f) {
+      if (activeFilter && filter === activeFilter.text) setFilter('');
+      return;
+    }
+    setFilter(f.text);
+    setProblemsOnly(f.problemsOnly);
+    setLayout(f.layout);
+    setPage(f.page);
+    setShowAlerts(f.alerts);
+    if (f.signals.length) setSignals(f.signals);
+  };
+  // (the address's or the last one: applied once the gateway lists them; gone: forgotten)
+  const appliedRef = useRef('');
+  useEffect(() => {
+    if (!activeFilterId || appliedRef.current === activeFilterId || !savedFilters.length) return;
+    appliedRef.current = activeFilterId;
+    const f = savedFilters.find((x) => x.id === activeFilterId);
+    if (f) applyFilter(f);
+    else setActiveFilterId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFilterId, savedFilters]);
+  const saveFilter = async (d: FilterDraft): Promise<string | null> => {
+    const old = d.id ? savedFilters.find((f) => f.id === d.id) : null;
+    const f = {
+      ...(d.id ? { id: d.id } : {}),
+      name: d.name,
+      audience: d.audience,
+      note: d.note,
+      text: filter,
+      problemsOnly,
+      layout,
+      page,
+      alerts: showAlerts,
+      signals,
+      plcs: d.withPlcs ? shown.map((p) => p.id) : [],
+      machines: d.withMachines ? (selected.size ? [...selected] : old?.machines ?? []) : [],
+    };
+    try {
+      const r = await conn.current?.request<{ ok: boolean; error?: string; filter?: BoardSavedFilter }>({ type: 'boardFilterSave', filter: f }, 'boardFilterResult');
+      if (!r?.ok) return r?.error ?? 'Not saved';
+      if (r.filter) {
+        appliedRef.current = r.filter.id;
+        setActiveFilterId(r.filter.id);
+        store.set(savedKey, r.filter.id);
+      }
+      setSelecting(false);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  };
+  const deleteFilter = async (f: BoardSavedFilter): Promise<string | null> => {
+    try {
+      const r = await conn.current?.request<{ ok: boolean; error?: string }>({ type: 'boardFilterDelete', id: f.id }, 'boardFilterResult');
+      if (!r?.ok) return r?.error ?? 'Not deleted';
+      if (activeFilterId === f.id) applyFilter(null);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  };
+  const filterLink = (f: BoardSavedFilter) => {
+    const u = new URL(window.location.href);
+    u.searchParams.set('saved', f.id);
+    for (const k of ['filter', 'problems', 'layout', 'page']) u.searchParams.delete(k);
+    return u.toString();
+  };
+  // Recordings and alarms: which cover a machine; the chosen machines by PLC; saved, removed
+  const recordedBy = (plc: string, path: string) => rules.recordings.filter((r) => covers(r, plc, path));
+  const alarmedBy = (plc: string, path: string) => rules.alarms.filter((r) => covers(r, plc, path));
+  const plcName = (id: string) => plcs.find((p) => p.id === id)?.name ?? id;
+  const groupsOf = (keys: string[]): RuleGroup[] => {
+    const by = new Map<string, string[]>();
+    for (const k of keys) {
+      const [plc, p] = k.split('|');
+      by.set(plc, [...(by.get(plc) ?? []), p]);
+    }
+    return [...by].map(([plc, machines]) => ({ plc, plcName: plcName(plc), machines, signals: [] }));
+  };
+  const existingFor = (kind: 'alarm' | 'recording', groups: RuleGroup[]): BoardRule[] =>
+    (kind === 'alarm' ? rules.alarms : rules.recordings).filter((r) => groups.some((g) => g.machines.some((p) => covers(r, g.plc, p)) || g.signals.some((s) => r.plc === g.plc && (r.vars ?? []).some((v) => v.toLowerCase() === s.toLowerCase()))));
+  const saveRules = async (kind: 'alarm' | 'recording', drafts: RuleDraft[]): Promise<string | null> => {
+    for (const d of drafts) {
+      try {
+        const r = await conn.current?.request<{ ok: boolean; error?: string }>({ type: 'boardRuleSave', kind, rule: { ...d, root } }, 'boardRuleResult', 20000);
+        if (!r?.ok) return r?.error ?? 'Not saved';
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    }
+    setSelecting(false);
+    setSelected(new Set());
+    return null;
+  };
+  const deleteRule = async (kind: 'alarm' | 'recording', r: BoardRule): Promise<string | null> => {
+    try {
+      const res = await conn.current?.request<{ ok: boolean; error?: string }>({ type: 'boardRuleDelete', kind, id: r.id }, 'boardRuleResult', 20000);
+      return res?.ok ? null : res?.error ?? 'Not removed';
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  };
+  // Playback: the chosen machines (else the ones shown, the first 40) from the gateway's recordings, over a window
+  const startPlayback = async (ms: number) => {
+    const keys = selected.size ? [...selected] : shown.flatMap((p) => p.machines.map((m) => machineKey(p.id, m.path)));
+    const to = Date.now();
+    const from = to - ms;
+    const wanted = keys.slice(0, PLAYBACK_MAX);
+    // (Select ends: what was chosen is played back, the next Select starts afresh)
+    setSelected(new Set());
+    setPlayback({ from, to, t: from, playing: false, speed: 60, machines: [], loading: `Reading ${wanted.length} machine${wanted.length === 1 ? '' : 's'} from the gateway's recordings…${keys.length > PLAYBACK_MAX ? ` (the first ${PLAYBACK_MAX} of ${keys.length})` : ''}` });
+    setSelecting(false);
+    let recs: GwRecording[] = [];
+    try {
+      recs = (await conn.current?.request<{ recordings?: GwRecording[] }>({ type: 'recordingsList' }, 'recordingsList', 20000))?.recordings ?? [];
+    } catch {
+      recs = [];
+    }
+    const out: PlaybackMachine[] = [];
+    for (const k of wanted) {
+      const [plc, path] = k.split('|');
+      const rec = recs.find((r) => r.plc === plc && r.machines.some((m) => m.path.toLowerCase() === path.toLowerCase()));
+      const names = rec?.machines.find((m) => m.path.toLowerCase() === path.toLowerCase())?.stateNames ?? {};
+      if (!rec) {
+        out.push({ plc, path, recording: '', stateNames: {}, values: [], error: 'Not recorded: choose it and Record… first' });
+        continue;
+      }
+      try {
+        const r = await conn.current?.request<{ values?: RecordedValue[]; error?: string }>({ type: 'recordingQuery', id: rec.id, machine: path, from, to }, 'recordingData', 60000);
+        out.push({ plc, path, recording: rec.id, stateNames: names, values: r?.values ?? [], ...(r?.error ? { error: r.error } : !r?.values?.length ? { error: 'Nothing recorded in this window' } : {}) });
+      } catch (e) {
+        out.push({ plc, path, recording: rec.id, stateNames: names, values: [], error: e instanceof Error ? e.message : String(e) });
+      }
+      setPlayback((pb) => (pb ? { ...pb, machines: [...out] } : pb));
+    }
+    setPlayback((pb) => (pb ? { ...pb, machines: out, loading: out.every((x) => x.error) ? 'None of them has recorded states in this window.' : '' } : pb));
+  };
+  useEffect(() => {
+    if (!playback?.playing) return;
+    let last = performance.now();
+    const id = window.setInterval(() => {
+      const n = performance.now();
+      const dt = n - last;
+      last = n;
+      setPlayback((pb) => {
+        if (!pb || !pb.playing) return pb;
+        const t = Math.min(pb.to, pb.t + dt * pb.speed);
+        return { ...pb, t, playing: t < pb.to };
+      });
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [playback?.playing]);
   const shownCount = shown.reduce((n, p) => n + p.machines.length, 0);
   const open = alerts.filter((a) => a.event !== 'recovered' && !a.ack && !a.resolvedAt);
   const openMachines = new Set(open.map((a) => a.machine.toLowerCase()));
@@ -354,6 +649,85 @@ export const OperatorBoard: React.FC = () => {
   };
 
   const needsSignIn = status.state !== 'connected' && !sso?.user && !token && !viewOnly;
+  // A machine as a tile (flat) or a row (tree): coloured by its kind; Select: a click chooses it, else opens its
+  // diagram live; its recordings and alarms as icons; playing back: one not recorded is dimmed
+  type Shown = (typeof tiles)[number];
+  type Tile = Shown['machines'][number];
+  const healthOf = (m: Tile): Health => (m.error ? 'error' : m.stuck ? 'stuck' : m.state ? 'ok' : 'unknown');
+  const colours = (m: Tile) => (m.error ? 'bg-rose-800 border-rose-500' : m.stuck ? 'bg-amber-500 border-amber-300 text-slate-950' : m.state ? 'bg-emerald-950 border-emerald-800' : 'bg-slate-900 border-slate-800 text-slate-400');
+  const linkProps = (p: Shown, m: Tile) => {
+    const k = machineKey(p.id, m.path);
+    if (selecting) return { role: 'checkbox', 'aria-checked': selected.has(k), onClick: (e: React.MouseEvent) => { e.preventDefault(); toggleSelected(k); }, title: `${m.path} (${m.type}): click to choose it` };
+    return { href: viewOnly ? undefined : watchUrl(p, m), target: '_blank', rel: 'noreferrer', title: viewOnly ? `${m.path} (${m.type})` : `${m.path} (${m.type}): open its diagram, live` };
+  };
+  const marks = (p: Shown, m: Tile) => {
+    const rec = recordedBy(p.id, m.path);
+    const al = alarmedBy(p.id, m.path);
+    return (
+      <>
+        {rec.length > 0 && (
+          <span className="board-recorded" title={`Recorded: ${rec.map((r) => r.name).join(', ')}`}>
+            <CircleDot className="w-3.5 h-3.5 text-rose-300" />
+          </span>
+        )}
+        {al.length > 0 && (
+          <span className="board-alarmed" title={`Alarms: ${al.map((r) => r.name).join(', ')}`}>
+            <BellRing className="w-3.5 h-3.5 text-amber-300" />
+          </span>
+        )}
+      </>
+    );
+  };
+  // (a PLC's closed branches: their keys without its id)
+  const collapsedOf = (plc: string) => new Set([...collapsed].filter((k) => k.startsWith(plc + '|')).map((k) => k.slice(plc.length + 1)));
+  const chosenMark = (p: Shown, m: Tile) => (selecting ? selected.has(machineKey(p.id, m.path)) ? <CheckSquare className="w-4 h-4 shrink-0 text-violet-200" /> : <Square className="w-4 h-4 shrink-0 opacity-60" /> : null);
+  const tileOf = (p: Shown, m: Tile) => {
+    const sel = selecting && selected.has(machineKey(p.id, m.path));
+    return (
+      <a
+        key={m.path}
+        {...linkProps(p, m)}
+        className={`board-tile block rounded-lg border-2 ${viewOnly && !selecting ? '' : 'cursor-pointer hover:brightness-125'} ${narrow ? 'px-2.5 py-2' : 'px-4 py-3'} ${flashOn(m.path) ? 'board-tile-flash' : ''} ${colours(m)} ${sel ? 'ring-4 ring-violet-400' : ''} ${playback && m.played === false ? 'opacity-40' : ''}`}
+        data-path={m.path}
+        data-kind={healthOf(m) === 'ok' ? 'ok' : healthOf(m)}
+        data-chosen={sel ? 'true' : undefined}
+      >
+        <div className={`flex items-center gap-1 ${narrow ? 'text-xs' : 'text-sm'} opacity-80`}>
+          {chosenMark(p, m)}
+          <span className="truncate">{short(m.path, root)}</span>
+          <span className="ml-auto flex items-center gap-1 shrink-0">{marks(p, m)}</span>
+        </div>
+        <div className={`board-state ${narrow ? 'text-sm' : 'text-lg'} font-bold leading-tight break-words`}>{m.state ?? (playback ? '—' : '...')}</div>
+        <div className="flex items-center gap-2 text-sm font-mono opacity-90">
+          {m.since ? `${m.atLeast ? '≥ ' : ''}${formatDuration(m.inState)}` : ''}
+          {m.stuck && m.limit ? <span>/ {formatLimit(m.limit)}</span> : null}
+          {m.error ? <AlertTriangle className="w-4 h-4 ml-auto" /> : m.stuck ? <Timer className="w-4 h-4 ml-auto" /> : null}
+        </div>
+      </a>
+    );
+  };
+  const rowOf = (p: Shown, m: Tile, label: string) => {
+    const sel = selecting && selected.has(machineKey(p.id, m.path));
+    return (
+      <a
+        {...linkProps(p, m)}
+        className={`board-row flex items-center gap-2 rounded border px-2 py-1 ${viewOnly && !selecting ? '' : 'cursor-pointer hover:brightness-125'} ${flashOn(m.path) ? 'board-tile-flash' : ''} ${colours(m)} ${sel ? 'ring-2 ring-violet-400' : ''} ${playback && m.played === false ? 'opacity-40' : ''}`}
+        data-path={m.path}
+        data-kind={healthOf(m)}
+        data-chosen={sel ? 'true' : undefined}
+      >
+        {chosenMark(p, m)}
+        <span className={`font-mono ${narrow ? 'text-xs' : 'text-sm'} truncate max-w-[45%]`}>{label}</span>
+        <span className={`board-state font-semibold ${narrow ? 'text-sm' : ''} truncate`}>{m.state ?? (playback ? '—' : '...')}</span>
+        <span className="ml-auto flex items-center gap-2 shrink-0 text-xs font-mono opacity-90">
+          {marks(p, m)}
+          {m.since ? `${m.atLeast ? '≥ ' : ''}${formatDuration(m.inState)}` : ''}
+          {m.stuck && m.limit ? <span>/ {formatLimit(m.limit)}</span> : null}
+          {m.error ? <AlertTriangle className="w-4 h-4" /> : m.stuck ? <Timer className="w-4 h-4" /> : null}
+        </span>
+      </a>
+    );
+  };
   return (
     <div id="operator-board" className="fixed inset-0 flex flex-col bg-slate-950 text-slate-100 select-none">
       <header className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-800 bg-slate-900 ${narrow ? 'px-3 py-2' : 'px-5 py-3'} ${open.length && Object.values(flashing).some((t) => t > now) ? 'board-header-flash' : ''}`}>
@@ -377,7 +751,16 @@ export const OperatorBoard: React.FC = () => {
             </span>
           )}
         </span>
-        <span className="flex items-center gap-2">
+        {/* (the page: the machines or the I/O) */}
+        <span id="board-pages" className="flex items-center rounded border border-slate-700 overflow-hidden text-sm">
+          <button id="board-page-machines" type="button" onClick={() => setPage('machines')} className={`flex items-center gap-1 px-2 py-1 ${page === 'machines' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'machines'} title="The state machines">
+            <LayoutGrid className="w-4 h-4" /> Machines
+          </button>
+          <button id="board-page-io" type="button" onClick={() => setPage('io')} className={`flex items-center gap-1 px-2 py-1 ${page === 'io' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'io'} title="The I/O devices, their states, and signals charted live">
+            <Cpu className="w-4 h-4" /> I/O
+          </button>
+        </span>
+        <span className={`flex items-center gap-2 ${page === 'io' ? 'hidden' : ''}`}>
           <span className="relative flex items-center">
             <Search className="absolute left-2 w-4 h-4 text-slate-500 pointer-events-none" />
             <input
@@ -411,7 +794,45 @@ export const OperatorBoard: React.FC = () => {
           >
             Problems only
           </button>
+          <button id="board-layout" type="button" onClick={() => setLayout(layout === 'tree' ? 'flat' : 'tree')} className={`flex items-center gap-1 px-2 py-1 rounded border text-sm ${layout === 'tree' ? 'border-sky-600 bg-sky-900/40 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title={layout === 'tree' ? 'Tree: nested as in the program (click: flat tiles)' : 'Flat tiles (click: a tree, nested as in the program)'} aria-pressed={layout === 'tree'}>
+            {layout === 'tree' ? <ListTree className="w-4 h-4" /> : <LayoutGrid className="w-4 h-4" />}
+            {layout === 'tree' ? 'Tree' : 'Flat'}
+          </button>
         </span>
+        {status.state === 'connected' && (
+          <BoardFiltersMenu filters={savedFilters} active={activeFilter} canEdit={canEdit} narrow={narrow} selectedCount={selected.size} shownPlcs={shown.length} onApply={applyFilter} onSave={saveFilter} onDelete={deleteFilter} linkOf={filterLink} />
+        )}
+        {status.state === 'connected' && !viewOnly && page === 'machines' && (
+          <>
+            <button
+              id="board-select"
+              type="button"
+              onClick={() => {
+                setSelecting((v) => !v);
+                setSelected(new Set());
+              }}
+              className={`flex items-center gap-1 px-2 py-1 rounded border text-sm ${selecting ? 'border-violet-500 bg-violet-900/50 text-violet-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+              title="Choose machines: record them, alarm on them, play them back, or save them as a filter"
+              aria-pressed={selecting}
+            >
+              <CheckSquare className="w-4 h-4" /> Select
+            </button>
+            <select
+              id="board-playback-start"
+              value=""
+              onChange={(e) => e.target.value && void startPlayback(Number(e.target.value))}
+              className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
+              title="Play back the chosen machines (else the ones shown) from the gateway's recordings"
+            >
+              <option value="">{playback ? 'Play back again…' : 'Play back…'}</option>
+              {PLAYBACK_WINDOWS.map((w) => (
+                <option key={w.ms} value={w.ms}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         {!narrow && (
           <span className="ml-auto text-sm text-slate-400" id="board-status" title={status.message}>
             {status.state === 'connected' ? status.message : status.message || ''}
@@ -533,13 +954,48 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
-          {(!narrow || phoneView === 'machines') && (
+          {(!narrow || phoneView === 'machines') && page === 'io' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <IoBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} signals={signals} onSignals={setSignals} recordings={rules.recordings} onRecord={(groups) => setRuleDialog({ kind: 'recording', groups })} canEdit={canEdit} narrow={narrow} />
+            </div>
+          )}
+          {(!narrow || phoneView === 'machines') && page === 'machines' && (
+          <div className="flex-1 min-w-0 flex flex-col">
+          {selecting && (
+            <div id="board-selection" className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-violet-800 bg-violet-950/60 text-sm">
+              <CheckSquare className="w-4 h-4 text-violet-300" />
+              <span id="board-selected-count" className="font-semibold">{selected.size} chosen</span>
+              <span className="text-violet-200/70">{narrow ? '' : 'click machines to choose them'}</span>
+              <button type="button" className="px-2 py-0.5 rounded border border-violet-700 hover:bg-violet-900" onClick={() => setSelected(new Set(shown.flatMap((p) => p.machines.map((m) => machineKey(p.id, m.path)))))}>
+                All shown
+              </button>
+              {selected.size > 0 && (
+                <button type="button" className="px-2 py-0.5 rounded border border-violet-700 hover:bg-violet-900" onClick={() => setSelected(new Set())}>
+                  None
+                </button>
+              )}
+              <span className="ml-auto flex flex-wrap items-center gap-2">
+                <button id="board-sel-record" type="button" disabled={!selected.size} onClick={() => setRuleDialog({ kind: 'recording', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-rose-800 hover:bg-rose-700 text-white disabled:opacity-40">
+                  <CircleDot className="w-4 h-4" /> Record…
+                </button>
+                <button id="board-sel-alarm" type="button" disabled={!selected.size} onClick={() => setRuleDialog({ kind: 'alarm', groups: groupsOf([...selected]) })} className="flex items-center gap-1 px-2.5 py-1 rounded bg-amber-700 hover:bg-amber-600 text-white disabled:opacity-40">
+                  <BellRing className="w-4 h-4" /> Alarm…
+                </button>
+                <button id="board-sel-playback" type="button" disabled={!selected.size} onClick={() => void startPlayback(PLAYBACK_WINDOWS[0].ms)} className="flex items-center gap-1 px-2.5 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white disabled:opacity-40" title="Play back the last hour (the Play back… menu: longer)">
+                  <History className="w-4 h-4" /> Play back
+                </button>
+                <button type="button" onClick={() => { setSelecting(false); setSelected(new Set()); }} className="px-2 py-1 rounded border border-slate-600 hover:bg-slate-800">
+                  Done
+                </button>
+              </span>
+            </div>
+          )}
           <main className={`flex-1 min-w-0 overflow-y-auto ${narrow ? 'p-2 space-y-3' : 'p-4 space-y-5'}`}>
             {status.state === 'error' && <div className="px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{status.message}</div>}
             {filtering && !shown.length && (
               <div id="board-filter-none" className="px-4 py-6 text-slate-400">
                 No machine matches {words.length ? <b className="text-slate-200">{filter}</b> : null}{problemsOnly ? ' among the ones in error or stuck' : ''}.{' '}
-                <button type="button" className="underline hover:text-white" onClick={() => { setFilter(''); setProblemsOnly(false); }}>
+                <button type="button" className="underline hover:text-white" onClick={() => { setFilter(''); setProblemsOnly(false); applyFilter(null); }}>
                   Show all
                 </button>
               </div>
@@ -621,32 +1077,36 @@ export const OperatorBoard: React.FC = () => {
                     <button className="board-maintenance-start px-3 py-1 rounded bg-violet-700 hover:bg-violet-600">{maintAt ? 'Plan' : 'Start now'}</button>
                   </form>
                 )}
-                <div className={`grid ${narrow ? 'gap-2 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]' : 'gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]'} ${p.maintenance ? 'opacity-60' : ''}`}>
-                  {p.machines.map((m) => (
-                    <a
-                      key={m.path}
-                      href={viewOnly ? undefined : watchUrl(p, m)}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={viewOnly ? `${m.path} (${m.type})` : `${m.path} (${m.type}): open its diagram, live`}
-                      className={`board-tile block rounded-lg border-2 ${viewOnly ? '' : 'cursor-pointer hover:brightness-125'} ${narrow ? 'px-2.5 py-2' : 'px-4 py-3'} ${flashOn(m.path) ? 'board-tile-flash' : ''} ${m.error ? 'bg-rose-800 border-rose-500' : m.stuck ? 'bg-amber-500 border-amber-300 text-slate-950' : m.state ? 'bg-emerald-950 border-emerald-800' : 'bg-slate-900 border-slate-800 text-slate-400'}`}
-                      data-path={m.path}
-                      data-kind={m.error ? 'error' : m.stuck ? 'stuck' : m.state ? 'ok' : 'unknown'}
-                    >
-                      <div className={`${narrow ? 'text-xs' : 'text-sm'} opacity-80 truncate`}>{short(m.path, root)}</div>
-                      <div className={`board-state ${narrow ? 'text-sm' : 'text-lg'} font-bold leading-tight break-words`}>{m.state ?? '...'}</div>
-                      <div className="flex items-center gap-2 text-sm font-mono opacity-90">
-                        {m.since ? `${m.atLeast ? '≥ ' : ''}${formatDuration(m.inState)}` : ''}
-                        {m.stuck && m.limit ? <span>/ {formatLimit(m.limit)}</span> : null}
-                        {m.error ? <AlertTriangle className="w-4 h-4 ml-auto" /> : m.stuck ? <Timer className="w-4 h-4 ml-auto" /> : null}
-                      </div>
-                    </a>
-                  ))}
-                  {!p.machines.length && <div className="text-slate-500">{p.state === 'watching' ? 'No state machines under ' + root : 'Looking for the machines...'}</div>}
-                </div>
+                {layout === 'tree' ? (
+                  <div className={`board-tree-plc ${p.maintenance ? 'opacity-60' : ''}`}>
+                    <BoardTree nodes={machineTree(p.machines, root)} healthOf={healthOf} renderMachine={(m, label) => rowOf(p, m, label)} collapsed={collapsedOf(p.id)} onCollapse={(keys, closed) => collapse(keys.map((k) => `${p.id}|${k}`), closed)} narrow={narrow} />
+                  </div>
+                ) : (
+                  <div className={`grid ${narrow ? 'gap-2 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]' : 'gap-3 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]'} ${p.maintenance ? 'opacity-60' : ''}`}>{p.machines.map((m) => tileOf(p, m))}</div>
+                )}
+                {!p.machines.length && <div className="text-slate-500">{p.state === 'watching' ? 'No state machines under ' + root : 'Looking for the machines...'}</div>}
               </section>
             ))}
           </main>
+          {playback && (
+            <BoardPlayback
+              machines={playback.machines}
+              from={playback.from}
+              to={playback.to}
+              t={playback.t}
+              playing={playback.playing}
+              speed={playback.speed}
+              loading={playback.loading}
+              isError={(n) => ERROR_STATE.test(n)}
+              labelOf={(pm) => `${plcs.length > 1 ? `${plcName(pm.plc)}: ` : ''}${short(pm.path, root)}`}
+              onSeek={(t) => setPlayback((pb) => (pb ? { ...pb, t } : pb))}
+              onPlay={(on) => setPlayback((pb) => (pb ? { ...pb, playing: on, t: on && pb.t >= pb.to ? pb.from : pb.t } : pb))}
+              onSpeed={(x) => setPlayback((pb) => (pb ? { ...pb, speed: x } : pb))}
+              onClose={() => setPlayback(null)}
+              narrow={narrow}
+            />
+          )}
+          </div>
           )}
           {(narrow ? phoneView === 'alerts' : showAlerts) && (
             <aside id="board-alerts" className={`${narrow ? 'flex-1 min-w-0' : 'w-[26rem] shrink-0 border-l border-slate-800'} bg-slate-900/70 flex flex-col`}>
@@ -702,6 +1162,18 @@ export const OperatorBoard: React.FC = () => {
           )}
         </div>
         </div>
+      )}
+      {ruleDialog && (
+        <BoardRuleDialog
+          kind={ruleDialog.kind}
+          groups={ruleDialog.groups}
+          root={root}
+          existing={existingFor(ruleDialog.kind, ruleDialog.groups)}
+          canEdit={canEdit}
+          onSave={(drafts) => saveRules(ruleDialog.kind, drafts)}
+          onDelete={(r) => deleteRule(ruleDialog.kind, r)}
+          onClose={() => setRuleDialog(null)}
+        />
       )}
     </div>
   );

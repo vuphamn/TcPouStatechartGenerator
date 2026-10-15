@@ -114,7 +114,20 @@ function checkRule(r, i, plcIds) {
     id, name: String(r?.name ?? '').trim().slice(0, 80) || id, enabled: r?.enabled !== false, plc: r.plc, root, stateVar, stuckAfterMs, stateLimits, onPlcStop: r?.onPlcStop !== false,
     onError: r?.onError !== false, errorPattern, notifyRecovery: r?.notifyRecovery !== false, webhook, format,
     escalateAfterMin, escalateWebhook, escalateFormat: ['teams', 'slack', 'json'].includes(r?.escalateFormat) ? r.escalateFormat : format, quietHours,
+    ...machinesOf(r, where),
   };
+}
+
+/**
+ * A rule's or a recording's own machines (chosen on the operator board): { machines: [paths] } (an empty list: none,
+ * a recording of signals only), or none (every machine under its root); fromBoard: who made it there, and when (the
+ * board removes only those). Throws with a message for the setup page
+ */
+function machinesOf(r, where) {
+  const origin = r?.fromBoard && typeof r.fromBoard === 'object' ? { fromBoard: { by: String(r.fromBoard.by ?? '').slice(0, 80), at: String(r.fromBoard.at ?? '').slice(0, 40) } } : {};
+  if (r?.machines == null) return origin;
+  if (!Array.isArray(r.machines) || r.machines.length > 500 || r.machines.some((p) => typeof p !== 'string' || !ads.isSymbolPath(p))) throw new Error(`${where}: its machines are symbol paths such as MAIN.mainStateMachine.smTable1 (at most 500)`);
+  return { ...origin, machines: [...new Set(r.machines.map((p) => p.trim()))] };
 }
 
 /** The webhook's body: Teams and Slack incoming webhooks take { text }; json: the event with its fields */
@@ -197,7 +210,9 @@ class AlertMonitor {
       this.conn = conn;
       conn.viewers.add(this.viewer);
       clearTimeout(conn.idleTimer);
-      this.machines = await this.discover(conn.client);
+      // (a rule's own machines, chosen on the board: those of them found under its root; none: signals only)
+      const only = Array.isArray(this.rule.machines) ? new Set(this.rule.machines.map((p) => p.toLowerCase())) : null;
+      this.machines = only && !only.size ? [] : (await this.discover(conn.client)).filter((m) => !only || only.has(m.path.toLowerCase()));
       if (this.stopped) return;
       this.vars = new VarWatcher(conn.client, () => {});
       // (and a recording's extra variables, e.g. guard values: ids "var:<path>")
@@ -463,4 +478,4 @@ function createAlerts(env) {
   };
 }
 
-module.exports = { createAlerts, checkRule, postWebhook, AlertMonitor, parseQuietHours, isQuiet, DEFAULT_ERROR };
+module.exports = { createAlerts, checkRule, machinesOf, postWebhook, AlertMonitor, parseQuietHours, isQuiet, DEFAULT_ERROR };

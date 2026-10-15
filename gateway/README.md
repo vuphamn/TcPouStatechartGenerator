@@ -158,6 +158,29 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
 - **A display:** `/?board&view=<token>` with a view-only token (the setup page): no sign-in, **view only** in the header, no Acknowledge, Maintenance or Report, and the tiles do not open diagrams.
 - **Notes:** under each PLC's name, the notes written live on it in the last 24 h (the web app's Live tab, **+ Note**), newest first, with who wrote them: "jam cleared here — ann".
 - **Filter** (the header; `/` goes there, Esc clears it): the machines whose path, state, type or PLC name has every word typed (`lockhead axis`), counted as *n of N machines*; a PLC with none is hidden. **Problems only**: the machines in error or stuck. Kept per board in that browser; `&filter=smLockManager` and `&problems=1` in the address set them for a wall screen.
+- **Tree or Flat** (the header): **Tree** nests the machines as the program does (`smTable1` under `mainStateMachine`, an array's elements under it, `stations.station1` as one group). A closed branch still shows what is under it: how many machines, and how many are in error or stuck, coloured by the worst. Alt+click opens or closes a branch with everything under it. **Flat** is the tiles. The choice and the closed branches are kept in that browser; `&layout=tree` sets it for a wall screen.
+- **Saved filters** (**Filters** in the header): views of the board kept on the gateway for the people who look at it, grouped as *Operators*, *Engineering*, *Maintenance*, *Office / production managers*, *Other*. One keeps:
+  - the filter's words and **Problems only**;
+  - Tree or Flat, and the page (Machines or I/O);
+  - the alerts panel and the charted I/O signals;
+  - optionally, only the machines chosen (**Select**) and only the PLCs shown.
+
+  Applied, the header shows its name (× shows the whole board again). Each one's link (the copy icon, `&saved=<id>`) opens it on a wall screen, a display's too. They are kept in `board-filters.json` beside `config.json`.
+- **Select** (the header): click machines to choose them (**All shown**, **None**), then:
+  - **Record…**: the gateway records those machines, for some days. A recording made here covers only its own machines (its `machines` in `config.json`).
+  - **Alarm…**: stuck after a time, an error state, the recovery, an optional webhook.
+  - **Play back**.
+
+  Each is a recording or alert rule in `config.json`, marked as made on the board (`fromBoard`: by whom, when), and listed on the setup page too. The dialog lists the ones already covering those machines; the ones made on the board can be removed there. The tiles show a recorded (⏺) and an alarmed (🔔) icon.
+- **Play back…** (the header, or **Play back** in Select): the chosen machines (or the ones shown, the first 40) from the gateway's recordings, over the last hour, 8 hours or 24 hours. A lane per machine shows a bar per stay, coloured by state (error states red). Click or drag to move the cursor. **Play** runs it at 1×, 10×, 60× or 600×, and ⏮ / ⏭ step to the change before or after. Meanwhile the tiles show each machine as it was at the cursor; one not recorded is dimmed. **Live** goes back.
+- **Who may change them:** everyone signed in (not a display) saves filters and adds recordings and alarms from the board. `"boardEditors": ["alice", "bob"]` in `config.json` limits it to those users. Each change is in the log and the audit log.
+- **The I/O page** (**I/O** in the header; `&page=io`): each PLC's I/O devices, as its TwinCAT project in the PLC's boot folder describes them (read again every 10 minutes and after each download).
+  - **States:** each box's state from its EtherCAT master, read every 2 seconds. OP is green; a box not in OP is red, with why (*SAFEOP*, *link lost* …); the PLC's header counts them.
+  - **Other makers:** boxes of any maker the project has (Lenze drives, SMC valve terminals, HSD spindles …) show their maker beside the name.
+  - **Tree or Network:** per device. In the tree, a box opens to its channels: **Linked only** shows the ones linked to a PLC variable, with the variable. The network is the cabling, as on the I/O tab.
+  - **Filter** (every word, Esc clears it): boxes by name, type or maker; channels; PLC variables. A box's parents stay shown. In the network, the matches are listed to pick from. **Problems only**: the boxes not in OP.
+  - **Signals:** tick a linked channel to chart its PLC variable live. A boolean is a band, a number a line with its range, on one time axis over 1, 5 or 15 minutes (the gateway keeps the last 15 minutes, so a chart starts full). Hover shows every value at a time; you can pause, export CSV, and **Record…** them (a recording of signals only). A recorded signal (⏺) goes back 1 h, 8 h or 24 h from its recording. Up to 20 signals per board, 50 per PLC across all boards.
+  - Read-only: nothing is written to the PLC. Off with `allowBrowse: false` or `allowSources: false`.
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
 - **Maintenance:** each PLC has **Maintenance...** (see [Alerts](#alerts)); a PLC in maintenance shows the banner and dimmed tiles, and its planned windows are listed.
 - **The header** also counts the **escalated** alerts, and has **Report...** (see [Shift reports](#shift-reports)).
