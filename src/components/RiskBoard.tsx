@@ -53,7 +53,7 @@ const Spark: React.FC<{ values: number[] }> = ({ values }) => {
  * faulting more than the week before), worst first; and the Inventory: every I/O box by maker, type and firmware
  * (how many, where; a type with several firmware versions marked), CSV.
  */
-export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean }> = ({ conn, connected, subscribe, plcIds, narrow }) => {
+export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean; onWork?: (r: RiskItem) => void }> = ({ conn, connected, subscribe, plcIds, narrow, onWork }) => {
   const [tab, setTab] = useState<'risk' | 'inventory'>('risk');
   const [risks, setRisks] = useState<RiskItem[]>([]);
   const [inv, setInv] = useState<InventoryRow[]>([]);
@@ -160,6 +160,11 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
                   </span>
                   {r.trend && <Spark values={r.trend} />}
                   {r.eta !== null && <span className="risk-eta shrink-0 px-2 rounded-full border border-amber-600 text-xs text-amber-200" title="At this rate">≈ {r.eta} days</span>}
+                  {onWork && (
+                    <button type="button" onClick={() => onWork(r)} className="risk-work shrink-0 px-2 py-0.5 rounded border border-slate-600 text-xs hover:bg-slate-800" title="A work order for it">
+                      Work order
+                    </button>
+                  )}
                 </li>
               );
             })}

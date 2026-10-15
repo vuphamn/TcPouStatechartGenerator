@@ -46,6 +46,7 @@ const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
 const { createReports, checkShifts, shiftWindows } = require('./report.cjs');
 const { createOee } = require('./oee.cjs');
+const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createService } = require('./service.cjs');
 
 const VERSION = '1.0.0';
@@ -634,6 +635,9 @@ function start() {
     return p;
   };
   const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
+  // Work orders (workorders.cjs): kept in workorders.json, told to the roles that want them
+  const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: (e) => roles.notify(e) });
+  const peopleOf = () => [...new Set([...Object.keys(config.roles?.users ?? {}), ...(config.tokens ?? []).filter((t) => !t.view).map((t) => t.name)])].sort();
   const oeeConfig = () => {
     const s = oee.settings();
     return { type: 'oeeConfig', reasons: s.reasons, reasonAfterMin: s.reasonAfterMin, given: oee.recent().map((e) => `${e.plc}|${e.machine.toLowerCase()}|${e.from}`) };
@@ -736,6 +740,7 @@ function start() {
     let faultsOff = null;
     let fleetTimer = null;
     let downtimeOff = null;
+    let workOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -851,7 +856,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { workCreate: 'workorder', workUpdate: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -859,7 +864,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { workCreate: 'workResult', workUpdate: 'workResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1102,8 +1107,47 @@ function start() {
         const note = String(m.note ?? '').trim().slice(0, 200);
         const e = alertLog.add({ event: 'call', rule: 'Call maintenance', ruleId: 'call', plc: plc.id, plcName: plc.name, machine: machine ?? '(the line)', state: reason, by: user, note, text: `${plc.name}: 📣 ${user} calls maintenance${machine ? ` for ${machine}` : ''}: ${reason}${note ? ` · ${note}` : ''}`, at: new Date().toISOString() });
         audit.add(user, 'call', { plc: plc.id, machine, reason, note });
+        // (a work order by itself: config.workorders.fromCalls, on unless false)
+        if (config.workorders?.fromCalls !== false) workOrders.create({ title: `${reason}${machine ? ` at ${machine.split('.').slice(-1)[0]}` : ''}${note ? `: ${note}` : ''}`, plc: plc.id, plcName: plc.name, machine, priority: 'high', source: { kind: 'call', id: e.id, text: e.text } }, user);
         log(`call: ${user} calls maintenance on ${plc.id}${machine ? ` (${machine})` : ''}: ${reason}`);
         return send({ type: 'callMaintenanceResult', requestId, ok: true, id: e.id });
+      }
+      // Work orders: followed (the Work page), created, changed (assigning another: those who assign); each machine's
+      // reliability; the maintenance calendar
+      if (m.type === 'workWatch') {
+        const sendWork = () => send({ type: 'workOrders', orders: workOrders.list(), people: peopleOf() });
+        sendWork();
+        workOff ??= workOrders.subscribe(sendWork);
+        return;
+      }
+      if (m.type === 'workStop') {
+        workOff?.();
+        workOff = null;
+        return;
+      }
+      if (m.type === 'workCreate' || m.type === 'workUpdate') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'workResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          const o = m.type === 'workCreate'
+            ? workOrders.create({ ...(m.order ?? {}), plcName: plcs.get(m.order?.plc)?.name ?? m.order?.plcName ?? null }, user)
+            : workOrders.update(String(m.id ?? ''), m.change ?? {}, user, roles.enabled() ? may('assign') : true);
+          return send({ type: 'workResult', requestId, ok: true, order: o });
+        } catch (err) {
+          return send({ type: 'workResult', requestId, ok: false, error: err.message });
+        }
+      }
+      if (m.type === 'reliability') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const days = [7, 30, 90, 365].includes(Number(m.days)) ? Number(m.days) : 30;
+        return send({ type: 'reliabilityResult', requestId, rows: reliability({ alerts: alertLog.all(), orders: workOrders.list(), from: Date.now() - days * 86400000, to: Date.now() }) });
+      }
+      if (m.type === 'maintenanceCalendar') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const from = Number(m.from);
+        const to = Number(m.to);
+        if (!(from < to) || to - from > 100 * 86400000) return send({ type: 'maintenanceCalendarResult', requestId, windows: [] });
+        return send({ type: 'maintenanceCalendarResult', requestId, windows: maintenance.calendar(from, to) });
       }
       if (m.type === 'fleetStop') {
         clearInterval(fleetTimer);
@@ -1559,6 +1603,7 @@ function start() {
       faultsOff?.();
       clearInterval(fleetTimer);
       downtimeOff?.();
+      workOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

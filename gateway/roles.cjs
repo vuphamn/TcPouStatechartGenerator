@@ -20,7 +20,7 @@ const CAN = {
   manager: ['note', 'reports'],
 };
 const ALL = [...new Set(Object.values(CAN).flat())];
-const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'recovered', 'escalated'];
+const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'recovered', 'escalated'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 /** "Mon-Fri", "Sat,Sun", "Mon" -> day numbers (0 Sunday); empty: every day */

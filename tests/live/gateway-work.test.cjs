@@ -1,0 +1,120 @@
+// Work orders, reliability and the maintenance calendar (gateway/workorders.cjs; simulated PLC symbols-plc.cjs; the
+// web app from dist/): a call for maintenance makes a work order by itself; a technician creates one, takes it, may not
+// assign it to someone else, closes it only with its root cause; a supervisor assigns one; each machine's failures,
+// MTBF and MTTR from the alert history; the calendar's planned window. The board's Work page, its three tabs.
+const h = require('../lib/harness.cjs');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const WebSocket = require(require.resolve('ws', { paths: [h.REPO] }));
+const { R, writeSymbolsPlc } = require('../fakes/symbols-plc.cjs');
+let fails = 0;
+const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
+const PORT = 8501;
+const BASE = `http://localhost:${PORT}`;
+const tok = (n) => `work-${n}-token`;
+const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+const M = `${R}.aDoors[2]`;
+
+(async () => {
+  const cfg = writeSymbolsPlc('fake-ams2-work.json');
+  const plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), '48991', cfg], { stdio: 'ignore' });
+  const dir = h.out('gw-work');
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  // (three failures of aDoors[2] in the last 30 days, each recovered in 10 minutes)
+  const DAY = 86400000;
+  const history = [3, 10, 20].map((d, i) => ({ id: `f${i}`, event: 'error', plc: 'line', plcName: 'Line 9', machine: M, state: 'DOOR_DASHER_ERROR', text: 'x', at: new Date(Date.now() - d * DAY).toISOString(), ack: null, resolvedAt: new Date(Date.now() - d * DAY + 10 * 60000).toISOString() }));
+  fs.writeFileSync(path.join(dir, 'alerts-history.json'), JSON.stringify(history));
+  // (a planned maintenance window in two hours)
+  const from = new Date(Date.now() + 2 * 3600_000);
+  fs.writeFileSync(path.join(dir, 'maintenance.json'), JSON.stringify({ windows: [{ id: 'w1', plc: 'line', from: from.toISOString(), until: new Date(from.getTime() + 3600_000).toISOString(), by: 'sup', note: 'belt', started: false }], history: [] }));
+  const configPath = path.join(dir, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [], alertRetryMs: 2000,
+    plcs: [{ id: 'line', name: 'Line 9', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48991', port: 851 }],
+    tokens: ['tech', 'sup', 'ann'].map((n) => ({ name: n, sha256: sha(tok(n)) })),
+    roles: { users: { tech: 'technician', sup: 'supervisor', ann: 'operator' }, groups: {}, default: '', startPages: {}, notify: [] },
+    drives: { enabled: false }, fleet: { enabled: false }, faults: { enabled: false }, projectSync: { enabled: false },
+  }, null, 2));
+  const logFile = h.out('gw-work-run.txt');
+  const gw = spawn(process.execPath, [path.join(h.REPO, 'gateway', 'gateway.cjs'), 'start', '--config', configPath], { stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')] });
+  await h.waitForText(logFile, /Setup page/);
+
+  const session = async (name) => {
+    const got = [];
+    const ws = new WebSocket(`ws://localhost:${PORT}/live`, { headers: { origin: BASE } });
+    ws.on('message', (d) => got.push(JSON.parse(d.toString())));
+    await new Promise((r) => ws.on('open', r));
+    ws.send(JSON.stringify({ type: 'hello', token: tok(name) }));
+    await h.until(() => got.find((m) => m.type === 'welcome'), 5000);
+    let id = 100;
+    const ask = async (msg, reply) => {
+      const requestId = ++id;
+      ws.send(JSON.stringify({ ...msg, requestId }));
+      return h.until(() => got.find((m) => m.type === reply && m.requestId === requestId), 10000);
+    };
+    return { ws, got, ask };
+  };
+  // 1. A call makes a work order by itself
+  const ann = await session('ann');
+  await ann.ask({ type: 'callMaintenance', plc: 'line', machine: M, reason: 'Electrical', note: 'S12 dark' }, 'callMaintenanceResult');
+  const annCreate = await ann.ask({ type: 'workCreate', order: { title: 'x' } }, 'workResult');
+  ann.ws.send(JSON.stringify({ type: 'workWatch' }));
+  const fromCall = await h.until(() => [...ann.got].reverse().find((m) => m.type === 'workOrders')?.orders?.find((o) => o.source?.kind === 'call'), 5000);
+  expect(fromCall?.priority === 'high' && /Electrical at aDoors\[2\]: S12 dark/.test(fromCall.title) && fromCall.machine === M && annCreate?.ok === false, `a call's work order: #${fromCall?.number} "${fromCall?.title}"; an operator creates none (${annCreate?.error})`);
+  ann.ws.close();
+  // 2. A technician: creates, may not assign another, takes it, closes it only with its root cause
+  const tech = await session('tech');
+  const made = await tech.ask({ type: 'workCreate', order: { title: 'Replace the door sensor S12', plc: 'line', machine: M, priority: 'urgent' } }, 'workResult');
+  const o = made?.order;
+  const assignOther = await tech.ask({ type: 'workUpdate', id: o?.id, change: { assignee: 'sup' } }, 'workResult');
+  const take = await tech.ask({ type: 'workUpdate', id: o?.id, change: { status: 'in progress' } }, 'workResult');
+  const noCause = await tech.ask({ type: 'workUpdate', id: o?.id, change: { status: 'done' } }, 'workResult');
+  const done = await tech.ask({ type: 'workUpdate', id: o?.id, change: { status: 'done', rootCause: 'Sensor cable cut at the hinge', parts: 'S12 sensor, 2 m cable' } }, 'workResult');
+  expect(made?.ok && o.plcName === 'Line 9' && assignOther?.ok === false && /supervisor/.test(assignOther.error) && take?.order?.status === 'in progress' && take.order.assignee === 'tech', `a technician: created #${o?.number}, assigning another refused, taken (${take?.order?.assignee})`);
+  expect(noCause?.ok === false && /root cause/.test(noCause.error) && done?.order?.status === 'done' && done.order.rootCause === 'Sensor cable cut at the hinge' && done.order.log.length >= 3, `done only with its root cause: ${done?.order?.rootCause} (${done?.order?.parts})`);
+  tech.ws.close();
+  // 3. A supervisor assigns; reliability; the calendar
+  const sup = await session('sup');
+  const assigned = await sup.ask({ type: 'workUpdate', id: fromCall?.id, change: { assignee: 'tech' } }, 'workResult');
+  const rel = await sup.ask({ type: 'reliability', days: 30 }, 'reliabilityResult');
+  const row = rel?.rows?.find((r) => r.machine === M);
+  const cal = await sup.ask({ type: 'maintenanceCalendar', from: Date.now() - DAY, to: Date.now() + 2 * DAY }, 'maintenanceCalendarResult');
+  expect(assigned?.order?.status === 'assigned' && assigned.order.assignee === 'tech', `a supervisor assigns: ${assigned?.order?.status} to ${assigned?.order?.assignee}`);
+  expect(row?.failures === 3 && row.orders === 1 && Math.abs(row.mtbfMs - 10 * DAY) < 60000 && row.mttrMs > 0 && row.causes[0]?.cause === 'Sensor cable cut at the hinge', `reliability: ${row?.failures} failures, MTBF ${(row?.mtbfMs / DAY).toFixed(1)} days, MTTR ${Math.round(row?.mttrMs / 60000)} min, cause ${row?.causes?.[0]?.cause}`);
+  expect(cal?.windows?.length === 1 && cal.windows[0].planned && cal.windows[0].plcName === 'Line 9' && cal.windows[0].note === 'belt', `the calendar: ${JSON.stringify(cal?.windows?.[0])}`);
+  sup.ws.close();
+  expect(fs.existsSync(path.join(dir, 'workorders.json')), 'kept in workorders.json');
+
+  const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('work-reliability'));
+  if (!built) console.log('skip the browser part: dist/ is an older build (npm run build)');
+  else {
+    const browser = await h.launchBrowser({ defaultViewport: { width: 1600, height: 950 } });
+    const errors = [];
+    const p = await browser.newPage();
+    p.on('pageerror', (e) => errors.push(e.message));
+    await p.goto(`${BASE}/?board&page=work`, { waitUntil: 'load' });
+    await p.waitForSelector('#board-token', { timeout: 10000 });
+    await p.type('#board-token', tok('sup'));
+    await p.keyboard.press('Enter');
+    await p.select('#work-show', 'all');
+    const orders = await h.until(() => p.$$eval('.work-order', (x) => x.length).then((n) => (n >= 2 ? n : null)), 15000);
+    await p.click('.work-order[data-status="done"]');
+    const detail = await h.until(() => p.$eval('#work-detail', (e) => e.textContent).catch(() => null), 5000);
+    await p.keyboard.press('Escape');
+    await p.click('#work-detail button[title^="Close"]').catch(() => {});
+    await p.click('#work-tab-calendar');
+    const win = await h.until(() => p.$eval('.calendar-window', (e) => e.textContent).catch(() => null), 8000);
+    await p.click('#work-tab-reliability');
+    const rel2 = await h.until(() => p.$eval(`.reliability-row[data-machine="${M}"]`, (e) => e.textContent).catch(() => null), 8000);
+    expect(orders >= 2 && /Sensor cable cut at the hinge/.test(detail ?? '') && /Line 9/.test(win ?? '') && /10\.0 days/.test(rel2 ?? ''), `the Work page: ${orders} orders, the done one's root cause, the calendar's window, reliability "${rel2}"`);
+    expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
+    await browser.close();
+  }
+  gw.kill();
+  plc.kill();
+  console.log(`${fails} failures`);
+  process.exit(fails ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(2); });

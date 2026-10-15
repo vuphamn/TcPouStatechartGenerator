@@ -186,6 +186,8 @@ function createMaintenance({ file, log, rules, plcOf, audit }) {
     },
     /** The PLC's planned windows (not started yet), soonest first */
     planned: (plcId) => state.windows.filter((w) => w.plc === plcId && Date.parse(w.from) > Date.now()).sort((a, b) => a.from.localeCompare(b.from)).map((w) => ({ id: w.id, from: w.from, until: w.until, by: w.by, note: w.note })),
+    /** Every PLC's windows overlapping [from, to]: past, in force, planned (the maintenance calendar) */
+    calendar: (from, to) => [...state.history.map((w) => ({ ...w, planned: false })), ...state.windows.map((w) => ({ ...w, planned: !w.started }))].filter((w) => Date.parse(w.from) < to && Date.parse(w.until) > from).map((w) => ({ plc: w.plc, plcName: name(w.plc), from: w.from, until: w.until, by: w.by, note: w.note, planned: w.planned })),
     /** Past and current windows of a PLC overlapping [from, to] (the availability report) */
     windowsBetween: (plcId, from, to) => [...state.history, ...state.windows.filter((w) => w.started)].filter((w) => w.plc === plcId && Date.parse(w.from) < to && Date.parse(w.until) > from).map((w) => ({ from: Date.parse(w.from), until: Math.min(Date.parse(w.until), Date.now()) })),
     /**

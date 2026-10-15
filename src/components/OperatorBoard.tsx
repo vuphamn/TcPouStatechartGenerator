@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, ClipboardList, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -9,6 +9,7 @@ import { DrivesBoard } from './DrivesBoard.tsx';
 import { RiskBoard } from './RiskBoard.tsx';
 import { OeeBoard } from './OeeBoard.tsx';
 import { AndonBoard } from './AndonBoard.tsx';
+import { WorkBoard, type WorkDraft } from './WorkBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -168,11 +169,11 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon'>(() => {
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work'>(() => {
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon') => {
+  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -243,6 +244,14 @@ export const OperatorBoard: React.FC = () => {
   const [downtime, setDowntime] = useState<{ reasons: string[]; afterMin: number; given: Set<string> }>({ reasons: [], afterMin: 2, given: new Set() });
   const [whyFor, setWhyFor] = useState<{ plc: string; plcName: string; machine: string; state: string; from: number } | null>(null);
   const [whyNote, setWhyNote] = useState('');
+  // A work order to begin (from an alert, a risk), and who signed in (the Work page's "mine")
+  const [workDraft, setWorkDraft] = useState<WorkDraft | null>(null);
+  const [me, setMe] = useState('');
+  const onDraftDone = useCallback(() => setWorkDraft(null), []);
+  const toWork = (d: WorkDraft) => {
+    setWorkDraft(d);
+    setPage('work');
+  };
   // (the I/O page's messages, handed to it)
   const ioListeners = useRef(new Set<(m: { type: string }) => void>());
   const subscribeIo = useCallback((fn: (m: never) => void) => {
@@ -327,7 +336,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -377,6 +386,7 @@ export const OperatorBoard: React.FC = () => {
     c.connect(origin, useToken, useSso)
       .then((w) => {
         const { user } = w;
+        setMe(user);
         const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean };
         setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn });
         setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
@@ -842,6 +852,11 @@ export const OperatorBoard: React.FC = () => {
               <BarChart3 className="w-4 h-4" /> OEE
             </button>
           )}
+          {(may('workorder') || may('reports')) && (
+            <button id="board-page-work" type="button" onClick={() => setPage('work')} className={`flex items-center gap-1 px-2 py-1 ${page === 'work' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'work'} title="Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)">
+              <ClipboardList className="w-4 h-4" /> Work
+            </button>
+          )}
           <button id="board-page-risk" type="button" onClick={() => setPage('risk')} className={`flex items-center gap-1 px-2 py-1 ${page === 'risk' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'risk'} title="What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box">
             <ShieldAlert className="w-4 h-4" /> Risk
           </button>
@@ -1045,6 +1060,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'work' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'andon' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <AndonBoard conn={conn.current} connected={status.state === 'connected'} plcs={shown} root={root} calls={alerts.filter((a) => a.event === 'call')} canCall={may('call')} narrow={narrow} />
@@ -1057,7 +1077,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'risk' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} />
+              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} onWork={may('workorder') ? (r) => toWork({ title: r.reason.split(':')[0].slice(0, 100), plc: r.plc, plcName: r.plcName, machine: r.path, priority: r.level === 'alarm' ? 'urgent' : r.level === 'warn' ? 'high' : 'normal', source: { kind: 'risk', id: r.id, text: `${r.name}: ${r.reason}` } }) : undefined} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'drives' && (
@@ -1313,6 +1333,11 @@ export const OperatorBoard: React.FC = () => {
                             </button>
                           )
                         ))}
+                      {may('workorder') && a.event !== 'recovered' && (
+                        <button className="board-alert-work mt-2 ml-2 px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => toWork({ title: `${a.event === 'call' ? a.state : a.state ? `${a.state} at` : ''} ${short(a.machine, root)}`.trim(), plc: a.plc, plcName: a.plcName, machine: a.machine.startsWith('(') ? null : a.machine, priority: a.event === 'error' || a.event === 'plcStopped' ? 'high' : 'normal', source: { kind: 'alert', id: a.id, text: a.text } })} title="A work order for it">
+                          Work order
+                        </button>
+                      )}
                       {(() => {
                         // (its fault record: the same machine, within seconds)
                         const f = !viewOnly ? faultList.find((x) => x.plc === a.plc && x.machine.toLowerCase() === a.machine.toLowerCase() && Math.abs(x.at - Date.parse(a.at)) < 15000) : null;
