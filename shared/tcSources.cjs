@@ -239,15 +239,24 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
     const code = err?.adsError?.errorCode;
     return { error: code === 0x70c || code === 1804 ? `The PLC keeps no sources of ${name} (download the project with its sources: PLC project > Settings > Source download)` : `Could not read ${name}'s sources: ${err?.adsError?.errorStr ?? err?.message ?? err}`, projects };
   }
-  const unpacked = unzip(zip, (p) => SOURCE_FILE.test(p) || /^[^/]+\.tmc$/i.test(p) || /\.(plcproj|TcTTO)$/i.test(p));
-  const files = unpacked.filter((f) => SOURCE_FILE.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
-  const tmc = unpacked.find((f) => /\.tmc$/i.test(f.path));
+  const { files, projectFiles, libraryTypes, tmc } = sourcesOfArchive(zip);
   // (only the port's own project runs where this connection reads types)
-  const stale = sub.port === adsPort || projects.length === 1 ? await staleCheck(client, tmc ? text(tmc.data) : '', files) : null;
-  const libraryTypes = tmc ? libraryTypesOf(text(tmc.data)) : {};
-  // (its .plcproj and task objects: what an online change would change, shared/onlineChangeCheck.cjs)
-  const projectFiles = unpacked.filter((f) => /\.(plcproj|TcTTO)$/i.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
+  const stale = sub.port === adsPort || projects.length === 1 ? await staleCheck(client, tmc, files) : null;
   return { project: info?.project?.name ?? name, plcProject: name, projects, files, projectFiles, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { activeProjectOf, readBootFile, readPlcSources, projectInfoOf, plcProjectsOf, staleCheck, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };
+/**
+ * A PLC project's archive (<project>.tpzip) unpacked as readPlcSources gives it: its .TcPOU, .TcDUT and .TcGVL files,
+ * its .plcproj and task objects (what an online change would change, shared/onlineChangeCheck.cjs), its library types,
+ * and its .tmc's text (for staleCheck; '' when it has none). The gateway's kept copy is read so too (projectSync.cjs)
+ */
+function sourcesOfArchive(zip) {
+  const unpacked = unzip(zip, (p) => SOURCE_FILE.test(p) || /^[^/]+\.tmc$/i.test(p) || /\.(plcproj|TcTTO)$/i.test(p));
+  const files = unpacked.filter((f) => SOURCE_FILE.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
+  const tmcFile = unpacked.find((f) => /\.tmc$/i.test(f.path));
+  const tmc = tmcFile ? text(tmcFile.data) : '';
+  const projectFiles = unpacked.filter((f) => /\.(plcproj|TcTTO)$/i.test(f.path)).map((f) => ({ path: f.path, content: text(f.data) }));
+  return { files, projectFiles, libraryTypes: tmc ? libraryTypesOf(tmc) : {}, tmc };
+}
+
+module.exports = { activeProjectOf, readBootFile, readPlcSources, sourcesOfArchive, projectInfoOf, plcProjectsOf, staleCheck, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };

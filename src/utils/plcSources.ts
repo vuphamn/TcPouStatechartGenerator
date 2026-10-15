@@ -21,6 +21,9 @@ export interface PlcSources {
   libraryTypes?: Record<string, string>;
   /** The sources are older than the running code (a type of them differs from the PLC's) */
   stale?: string;
+  /** A gateway's copy of the PLC's project, in step with the PLC (its build and online changes the same): not read from
+   * the PLC again (gateway/projectSync.cjs); downloadedAt: when the gateway read it from the PLC */
+  fromGateway?: { downloadedAt: string | null };
   error?: string;
 }
 

@@ -542,6 +542,17 @@ function start() {
     audit,
   });
   projectSync.start();
+  // (From PLC: the copy kept here when it is in step with the PLC, else null: read from the PLC; logged once a minute)
+  let keptSaid = 0;
+  const keptSources = async (plc, client, key) => {
+    if (!plc) return null;
+    const r = await projectSync.storedSources(plc, client, key).catch(() => null);
+    if (r && Date.now() - keptSaid > 60000) {
+      keptSaid = Date.now();
+      log(`projects: ${plc.id}: sources from the copy kept here (in step with the PLC)`);
+    }
+    return r;
+  };
   const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween });
   // Run at startup (Windows): the gateway as a scheduled task
   const service = createService({ configPath, log, audit });
@@ -1053,14 +1064,15 @@ function start() {
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'plcSourcesResult', requestId, error: 'Reading the PLC\'s sources is turned off on this gateway' });
         if (!session?.conn.client) {
           // (not live: one of the gateway's PLCs named, its sources read from its boot folder over a connection of
-          // their own to its system service, then closed; its PLC need not run)
+          // their own (the boot folder's files from its system service, port 10000), then closed; its PLC need not
+          // run. The gateway's copy when that is in step with the PLC: its _AppInfo read, not the archives)
           const plc = typeof m.plc === 'string' ? plcs.get(m.plc) : null;
           if (!plc) return send({ type: 'plcSourcesResult', requestId, error: 'Not connected' });
-          const own = new Client({ ...adsTarget(plc, 10000, plc.localNetId || config.localNetId, 32907), rawClient: true, autoReconnect: false, timeoutDelay: 5000, hideConsoleWarnings: true });
+          const own = new Client({ ...adsTarget(plc, Number(plc.port) || 851, plc.localNetId || config.localNetId, 32907), rawClient: true, autoReconnect: false, timeoutDelay: 5000, hideConsoleWarnings: true });
           try {
             await own.connect();
             const key = typeof m.plcProject === 'string' ? m.plcProject.slice(0, 100) : '';
-            send({ type: 'plcSourcesResult', requestId, ...(await readPlcSources(own, Number(plc.port) || 851, { plcProject: key })) });
+            send({ type: 'plcSourcesResult', requestId, ...((await keptSources(plc, own, key)) ?? (await readPlcSources(own, Number(plc.port) || 851, { plcProject: key }))) });
           } catch (err) {
             send({ type: 'plcSourcesResult', requestId, error: `${plc.name} did not answer (${ads.adsErrorText(err)}). Does the PLC have an ADS route to the gateway (AMS NetId ${plc.localNetId || config.localNetId})?` });
           } finally {
@@ -1073,7 +1085,7 @@ function start() {
           // (per PLC project: plcProject, another one on the same target; read once each)
           const key = typeof m.plcProject === 'string' ? m.plcProject.slice(0, 100) : '';
           conn.sources ??= new Map();
-          if (!conn.sources.has(key)) conn.sources.set(key, readPlcSources(conn.client, Number(conn.plc?.port) || 851, { plcProject: key }));
+          if (!conn.sources.has(key)) conn.sources.set(key, keptSources(conn.plc, conn.client, key).then((kept) => kept ?? readPlcSources(conn.client, Number(conn.plc?.port) || 851, { plcProject: key })));
           const r = await conn.sources.get(key);
           if (r.error) conn.sources.delete(key);
           send({ type: 'plcSourcesResult', requestId, ...r });

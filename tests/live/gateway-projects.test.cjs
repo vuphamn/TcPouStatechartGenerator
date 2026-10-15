@@ -1,9 +1,12 @@
 // The PLCs' projects kept by the gateway (gateway/projectSync.cjs, simulated PLC symbols-plc.cjs with its boot folder's
 // sources): at start its project downloaded (the TwinCAT configuration at the root, the PLC project in its folder);
 // a local edit undone from the PLC's copy (the golden one); checked again: in step, nothing downloaded; another
-// version on the PLC: downloaded, the one before in history; the setup page lists them, Check now
+// version on the PLC: downloaded, the one before in history; From PLC (plcSources, not live) from the copy kept while
+// the PLC's _AppInfo is the same, from the PLC after another build there (and the copy checked then); the setup page
+// lists them, Check now
 const h = require('../lib/harness.cjs');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
+const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -29,6 +32,11 @@ const api = (method, p, body) =>
 
 (async () => {
   const cfg = writeSymbolsPlc('fake-ams2-projects.json', [], { sources: true });
+  // (its _AppInfo steady: the build's time, its online changes not counted up on each read)
+  const steady = JSON.parse(fs.readFileSync(cfg, 'utf8'));
+  steady.countOnRead = [];
+  steady.symbols['TwinCAT_SystemInfoVarList._AppInfo.AppTimestamp'] = { type: 'DT', dataType: 19, size: 4, value: 1700000000 };
+  fs.writeFileSync(cfg, JSON.stringify(steady));
   let plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), PLC_PORT, cfg], { stdio: 'ignore' });
   const dir = h.out('gw-projects');
   fs.rmSync(dir, { recursive: true, force: true });
@@ -39,6 +47,7 @@ const api = (method, p, body) =>
     plcs: [{ id: 'line202', name: 'Line 202', netId: '127.0.0.1.1.1', ip: `127.0.0.1:${PLC_PORT}`, port: 851 }],
     tokens: [],
   }, null, 2));
+  const token = execFileSync(process.execPath, [path.join(h.REPO, 'gateway', 'gateway.cjs'), 'add-token', 'tester', '--config', configPath], { encoding: 'utf8' }).match(/\n\s+(\S+)\s*\n/)[1];
   const logFile = h.out('gw-projects-run.txt');
   const gw = spawn(process.execPath, [path.join(h.REPO, 'gateway', 'gateway.cjs'), 'start', '--config', configPath], { stdio: ['ignore', fs.openSync(logFile, 'w'), fs.openSync(logFile, 'a')], env: { ...process.env, KSS_PROJECT_SYNC_DELAY_MS: '300' } });
   await h.waitForText(logFile, /Setup page/);
@@ -79,7 +88,41 @@ const api = (method, p, body) =>
   const log = fs.readFileSync(logFile, 'utf8');
   expect(/projects: line202: its project downloaded from the PLC/.test(log) && /restored/.test(log) && /a new version downloaded/.test(log), 'said in the log');
 
-  // 5. The setup page: the PLC's row, Check now
+  // 5. From PLC (not live): the copy kept here while the PLC's build is the same; another build there: read from the PLC
+  // (and the copy checked); then from the copy again
+  const ws = new WebSocket(`ws://localhost:${PORT}/live`, { headers: { Origin: BASE } });
+  const got = [];
+  ws.on('message', (d) => got.push(JSON.parse(d.toString())));
+  await new Promise((r) => ws.on('open', r));
+  ws.send(JSON.stringify({ type: 'hello', token }));
+  await h.sleep(400);
+  const sourcesOf = async (requestId) => {
+    ws.send(JSON.stringify({ type: 'plcSources', requestId, plc: 'line202' }));
+    return h.until(() => got.find((m) => m.type === 'plcSourcesResult' && m.requestId === requestId) ?? null, 15000);
+  };
+  const v2pou = (r) => (r?.files ?? []).find((x) => x.path === pou)?.content ?? '';
+  const kept = await sourcesOf(21);
+  expect(!!kept?.fromGateway && /version 2/.test(v2pou(kept)) && kept.plcProject === 'Plant' && kept.projects?.length >= 1 && (kept.projectFiles ?? []).some((x) => /\.plcproj$/.test(x.path)), `From PLC: the copy kept here: ${kept?.error ?? (kept?.fromGateway ? `${kept.files?.length} files, read ${kept.fromGateway.downloadedAt}` : 'read from the PLC')}`);
+  // (another PLC project than the one kept: from the PLC)
+  ws.send(JSON.stringify({ type: 'plcSources', requestId: 22, plc: 'line202', plcProject: 'Other' }));
+  const other = await h.until(() => got.find((m) => m.type === 'plcSourcesResult' && m.requestId === 22) ?? null, 15000);
+  expect(!!other && !other.fromGateway, `another PLC project: not from the copy (${other?.error ?? 'read'})`);
+  steady.symbols['TwinCAT_SystemInfoVarList._AppInfo.AppTimestamp'].value = 1700000500;
+  steady.bootFiles = conf.bootFiles;
+  fs.writeFileSync(cfg, JSON.stringify(steady));
+  plc.kill();
+  await h.sleep(500);
+  plc = spawn(process.execPath, [path.join(h.FAKES, 'fake-ams2.cjs'), PLC_PORT, cfg], { stdio: 'ignore' });
+  await h.sleep(800);
+  const fresh = await sourcesOf(23);
+  expect(!!fresh && !fresh.error && !fresh.fromGateway && /version 2/.test(v2pou(fresh)), `another build on the PLC: read from it: ${fresh?.error ?? (fresh?.fromGateway ? 'from the copy (wrong)' : 'from the PLC')}`);
+  const rechecked = await h.until(() => list().then((p) => (p && !p.checking && p.state === 'in-sync' ? p : null)), 15000);
+  const again2 = await sourcesOf(24);
+  expect(!!rechecked && !!again2?.fromGateway, `the copy checked, then From PLC from it again: ${rechecked?.state}, ${again2?.fromGateway ? 'from the copy' : again2?.error ?? 'from the PLC'}`);
+  expect(/sources from the copy kept here/.test(fs.readFileSync(logFile, 'utf8')), 'said in the log');
+  ws.close();
+
+  // 6. The setup page: the PLC's row, Check now
   if (!fs.existsSync(path.join(h.REPO, 'dist', 'index.html'))) console.log('skipped the browser part: no dist/');
   const browser = await h.launchBrowser({ defaultViewport: { width: 1400, height: 900 } });
   const p = await browser.newPage();

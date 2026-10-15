@@ -8494,6 +8494,7 @@ export const App: React.FC = () => {
           setPlcCodeFiles({ project: sources.project, files: plcProjectFiles(sources.files ?? []) });
           const keptNote = Object.keys(keep).length ? ` Kept your edits of ${Object.values(keep).map((e) => e.path.split('/').pop()).join(', ')} for the build.` : '';
           if (sources.stale) showCopyToast(`${sources.stale}${keptNote}`, 'error', 12000);
+          else if (sources.fromGateway) showCopyToast(`${src.name} from the gateway's copy of the PLC's project (${sources.project ?? 'its project'}), in step with the PLC; Save As keeps it on this computer.${keptNote}`, 'success', 7000);
           else showCopyToast(`${src.name} from the PLC (${sources.project ?? 'its project'}): a copy of the PLC's source; Save As keeps it on this computer.${keptNote}`, 'success', 7000);
         };
         // Not live: its instances on the PLC read first (desktop app, Link), so the one to follow is chosen before

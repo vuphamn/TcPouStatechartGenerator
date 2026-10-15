@@ -162,12 +162,12 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
         const stale = tmc ? await sources.staleCheck(client, tmc.data.toString('utf8'), unpacked.filter((f) => !/\.tmc$/i.test(f.path)).map((f) => ({ path: f.path, content: f.data.toString('utf8') }))).catch(() => null) : null;
         const staleText = typeof stale === 'string' && stale ? stale : null;
         if (prev?.sha256 === hash) {
-          if (intact(plc, prev.manifest)) return result({ state: 'in-sync', fingerprint: fp, stale: staleText, message: staleText ?? 'The same as the PLC' });
+          if (intact(plc, prev.manifest)) return result({ state: 'in-sync', fingerprint: fp, projects, plcProject: sub.name, stale: staleText, message: staleText ?? 'The same as the PLC' });
           // (the golden copy: local edits undone from the archives just read)
           const manifest = unpack(plc, tszip, tpzip, sub.name);
           log(`projects: ${plc.id}: the local copy differed from the PLC's: restored (${Object.keys(manifest).length} files)`);
           audit?.add(by, 'project.restore', { plc: plc.id });
-          return result({ state: 'restored', fingerprint: fp, manifest, stale: staleText, message: staleText ?? 'Local changes undone: the PLC\'s copy restored' });
+          return result({ state: 'restored', fingerprint: fp, manifest, projects, plcProject: sub.name, stale: staleText, message: staleText ?? 'Local changes undone: the PLC\'s copy restored' });
         }
         // (another version: the one before to history/, this one kept and unpacked)
         const dir = dirOf(plc);
@@ -179,7 +179,7 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
         const manifest = unpack(plc, tszip, tpzip, sub.name);
         log(`projects: ${plc.id}: ${prev?.sha256 ? 'a new version' : 'its project'} downloaded from the PLC: ${info?.project?.name ?? sub.name}, ${Object.keys(manifest).length} files${staleText ? ` (${staleText})` : ''}`);
         audit?.add(by, 'project.download', { plc: plc.id, project: info?.project?.name ?? sub.name, files: Object.keys(manifest).length });
-        return result({ state: 'updated', fingerprint: fp, sha256: hash, manifest, downloadedAt: now, project: info?.project?.name ?? sub.name, plcProject: sub.name, files: Object.keys(manifest).length, stale: staleText, message: staleText ?? (prev?.sha256 ? 'A new version from the PLC' : 'Downloaded from the PLC') });
+        return result({ state: 'updated', fingerprint: fp, sha256: hash, manifest, downloadedAt: now, project: info?.project?.name ?? sub.name, plcProject: sub.name, projects, files: Object.keys(manifest).length, stale: staleText, message: staleText ?? (prev?.sha256 ? 'A new version from the PLC' : 'Downloaded from the PLC') });
       } catch (err) {
         return result({ state: 'error', message: err instanceof Error ? err.message : String(err) });
       } finally {
@@ -189,6 +189,43 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
     })();
     running.set(plc.id, job);
     return job;
+  }
+
+  /**
+   * The PLC project's sources from the copy kept here, when it is in step with the PLC: its _AppInfo (build time, online
+   * changes) as when the copy was read, a few bytes read instead of the archives' megabytes. What readPlcSources gives
+   * (shared/tcSources.cjs), with fromGateway. null: no copy kept, another PLC project asked for, the PLC's _AppInfo not
+   * read (not running, an older runtime), or another build there (a check started then): the caller reads the PLC
+   */
+  async function storedSources(plc, client, plcProject = '') {
+    if (!settings().enabled || running.has(plc.id)) return null;
+    const s = readState(plc);
+    // (no-sources keeps the copy before, with the fingerprint of a later build: not in step)
+    if (!s?.sha256 || !s.plcProject || !Array.isArray(s.projects) || !s.fingerprint || s.state === 'no-sources') return null;
+    const wanted = String(plcProject ?? '').trim().toLowerCase();
+    if (wanted && wanted !== String(s.plcProject).toLowerCase()) return null;
+    const fp = await fingerprint(client);
+    if (!fp) return null;
+    if (fp.appTimestamp !== s.fingerprint.appTimestamp || fp.onlineChanges !== s.fingerprint.onlineChanges) {
+      void check(plc, { by: 'gateway' }).catch(() => {});
+      return null;
+    }
+    let tpzip;
+    let tszip = null;
+    try {
+      tpzip = fs.readFileSync(path.join(dirOf(plc), 'project.tpzip'));
+    } catch {
+      return null;
+    }
+    try {
+      tszip = fs.readFileSync(path.join(dirOf(plc), 'system.tszip'));
+    } catch {
+      tszip = null;
+    }
+    // (the archives as they were read from the PLC)
+    if (sha256(Buffer.concat([tszip ?? Buffer.alloc(0), tpzip])) !== s.sha256) return null;
+    const { files, projectFiles, libraryTypes } = sources.sourcesOfArchive(tpzip);
+    return { project: s.project ?? s.plcProject, plcProject: s.plcProject, projects: s.projects, files, projectFiles, libraryTypes, ...(s.stale ? { stale: s.stale } : {}), fromGateway: { downloadedAt: s.downloadedAt ?? null } };
   }
 
   /** Every PLC, one after the other */
@@ -215,6 +252,7 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
       clearInterval(timer);
     },
     check: (plc, by) => check(plc, { force: true, by }),
+    storedSources,
     /** Each PLC's state, as sync.json keeps it (without its manifest) */
     list() {
       const s = settings();
