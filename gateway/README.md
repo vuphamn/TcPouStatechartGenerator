@@ -202,10 +202,11 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
 - **The OEE page** (**OEE** in the header, for those who see the reports; `&page=oee`, `&window=week`), from the gateway's recordings (Select → Record… the machines first). Over today, yesterday, 7 or 30 days, it shows the line's and each machine's figures, by shift (`config.shifts`) or by day side by side, and three Pareto charts of the downtime: by the reasons given, by machine, by state. Each stop is listed with its reason. CSV, and **Print** (or save as PDF).
   - **Availability:** the time running normally, out of the time not in maintenance and with data. An error state, or the part of a stay beyond its limit (the PLC's alert rule's), is down.
   - **Performance** (when a machine's cycle is set): its entries into its cycle state times its ideal cycle time, out of its running time.
-  - **OEE:** their product (quality is not counted).
+  - **Quality** (when a machine's part counters are set): its good parts out of its good and bad parts in the window. Each counter's rises are counted, and a drop is a reset. With one counter only, it is taken out of the cycles counted. The counters (`goodVar`, `badVar`: PLC variables that count up) are recorded with that PLC's recordings by themselves.
+  - **OEE:** their product (what is known of them).
   - **Why?** A machine in an error state, or stuck, longer than `reasonAfterMin` (2 by default) gets **Why?** on its tile. An operator picks a reason (`reasons`, with a note). Kept in `downtime.jsonl`; each stop of the report shows its reason, who gave it, and the note.
   - **Weekly summary:** `weekly` posts the last 7 days (OEE, availability, stops, the top reasons) to a webhook at a day and time.
-  - **Settings:** `"oee": { "reasons": ["Waiting for material", "Jam", "Tool change", …], "reasonAfterMin": 2, "machines": [{ "plc": "line202", "machine": "MAIN.mainStateMachine.smTable1" (or "type": "SM_TableManager"), "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42 }], "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee&window=week" } }`.
+  - **Settings:** `"oee": { "reasons": ["Waiting for material", "Jam", "Tool change", …], "reasonAfterMin": 2, "machines": [{ "plc": "line202", "machine": "MAIN.mainStateMachine.smTable1" (or "type": "SM_TableManager"), "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42, "goodVar": "MAIN.nGoodParts", "badVar": "MAIN.nBadParts" }], "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee&window=week" } }`.
 - **The Risk page** (**Risk** in the header; `&page=risk`), for a maintenance supervisor: across every PLC, what to look at first, worst first.
   - **Drives:** their health findings, and their heatsink's daily medians (while running) rising, carried forward to the warning threshold: "near its warning threshold in about 19 days" (within 90 days; a warning within 14).
   - **I/O boxes:** one out of OP now (alarm); one out of OP on 2 or more of the last 7 days (warning: its supply, cable, connectors); its CRC errors over 7 days (5: watch, 50: warning: its cable or connectors).
@@ -221,7 +222,7 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **Cost:** it uses the shared notifications, so the machines the boards, alarms and recordings follow cost nothing more.
   - **Settings:** `"faults": { "enabled": true, "preSeconds": 60, "postSeconds": 60, "keepDays": 30, "root": "MAIN.mainStateMachine", "signals": { "line202": ["MAIN.fbDoor.bClosed"] } }`.
 - **The Drives page** (**Drives** in the header; `&page=drives`): the health of every drive in the PLCs' I/O. The gateway reads them itself, from the drive, without the PLC's program.
-  - **Which drives:** an EtherCAT box a drive profile matches. **Lenze i550**, any firmware, matched by its vendor and type. **Any other maker's CiA 402 drive** (a non-Beckhoff box named or typed as a drive, inverter, VFD, spindle or servo), such as an HSD spindle drive. Valve terminals, robots and Beckhoff's own drives are left out.
+  - **Which drives:** an EtherCAT box a drive profile matches. **Lenze i550**, any firmware, matched by its vendor and type. **HSD ES951 spindle** (ES95x), matched by its vendor (0x129) and type. **Any other maker's CiA 402 drive** (a non-Beckhoff box named or typed as a drive, inverter, VFD, spindle or servo). Valve terminals, robots and Beckhoff's own drives are left out.
   - **What is read:** the drive's own parameters (CoE objects) through the EtherCAT master, read-only: an SDO upload at the EtherCAT device's AMS NetId, with the slave's EtherCAT address as the ADS port. Every 30 seconds; hours and counters every 10 minutes; one drive after the other.
     - For the i550, the objects of Lenze's i550 commissioning manual:
       - running: output frequency 0x2DDD, motor current 0x2D88, current and torque of rated 0x6078 and 0x6077;
@@ -229,6 +230,7 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
       - load: motor i²t 0x2D4F, device ixt 0x2D40:4;
       - fault: the error code 0x603F;
       - life diagnosis 0x2D81: operating and power-on hours, mains switching cycles, short circuits, earth faults.
+    - For the ES951, the objects its EtherCAT description maps: spindle speed 0x6FF1:2, draw bar position 0x6FF1:1, P75 status 0x6FF0:1, and its C39 module's status, vibration velocity (RMS) and error flags 0x6010:1 to :3. Their scalings are not given: all ≈ until checked.
     - For CiA 402: the status word, the error code, the actual velocity, current, torque and DC-link voltage.
     - A value whose scaling the manual does not give is shown with ≈ ("to check once against the drive's keypad"). A value a firmware does not have is shown as *n/a*.
   - **How each drive is judged** (a health score, and *Healthy*, *Watch*, *Warning* or *Alarm*, with why):
@@ -237,6 +239,11 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
     - **its siblings:** the same model on the same PLC, today. 6 or 10 °C hotter than their median; its DC bus 10 % apart from theirs.
   - **Alerts:** a drive turning to *Warning* or *Alarm* is an alert in the alert history and on every board, with the chime (again after 12 hours if it stays so). Its recovery is said too. `drives.webhook` posts them.
   - **The page:** a card per drive, problems first, showing its heatsink, current, DC bus, frequency, i²t, hours, 24-hour lines of its heatsink and current, and its findings. There's a filter (name, PLC, model, finding) and **Problems only**. A card opens the drive's history over 24 h, 7 days or 30 days: its heatsink against its baseline (dashed) and its threshold (red), and every value with its scaling. CSV export. Saved filters keep the page (one for maintenance on the Drives page, problems only).
+  - **Check a drive** (the setup page): to compare a drive with its keypad or its maker's software.
+    - **List its drives:** a PLC's boxes of other makers, and which profile knows each one.
+    - **Read its profile:** every value it reads, as bytes, as each integer and float, and as the board reads it (with its scaling).
+    - **Read this object:** any one object (an index in hex, a subindex, a size).
+    - Read only, and it works with the drives monitor off. A value that is off: correct its profile in `drives.profiles`.
   - **Kept:** `drives/<plc>/<day>.jsonl` beside `config.json` (a value when it changes, else every 10 minutes; past days compressed; 90 days), and each day's statistics in `summary.json` (the baselines).
   - **Settings** in `config.json`: `"drives": { "enabled": true, "everySeconds": 30, "slowEveryMinutes": 10, "keepDays": 90, "plcs": ["line202"], "limits": { "heatsinkRise": { "watch": 5, "warn": 8 } }, "webhook": "https://…", "format": "teams", "profiles": [ … ] }`. A profile of your own, for another maker's drive: `{ "id": "acme", "name": "Acme", "match": { "vendorId": 2457, "type": "AD-?" }, "running": "freq", "params": [{ "key": "heatsink", "label": "Heatsink", "index": "0x2001", "sub": 1, "size": 2, "signed": true, "scale": 0.1, "unit": "°C", "trend": true, "peers": true }] }`. The same id replaces a built-in one, for example to correct a scaling. Off with `"enabled": false`, or `allowBrowse: false`.
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
@@ -303,9 +310,13 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
 
 - **Who has which:** by user (a token's name, a company sign-in), by a company sign-in's group or app role, else the default role (none: nothing beyond looking).
 - **What the gateway does with it:** it refuses the rest, with the reason, and writes the refusal in its audit log. The board and the web app hide what a role may not do, and the board shows the role in its header.
+- **Its pages:** the board shows each role its own pages, in one row (icons, the active page named, when the window is not wide; one page only: no row).
+  - By default: operator Andon and Machines; technician those, I/O, Drives, Risk and Work; supervisor those and OEE; engineer every page; manager Andon, Machines, Risk, OEE and Work.
+  - The setup page's Roles changes them (`"pages": { "operator": ["andon", "machines"] }`).
+  - What a role may do there is still its role's.
 - **Start page:** each role can start on a saved filter of the board (an operator on its line's machines, a technician on the Drives page …). The address (`&saved=`) or the viewer's own choice comes first.
 - **Told of alerts:** each role can have channels (Teams, Slack or JSON webhooks) for the alerts it wants (error, stuck, PLC stopped, drive, getting slower, call, recovered, escalated). An on-call schedule (`Bob; Mon-Fri; 06:00-14:00`, overnight too: `22:00-06:00`) names who is on call in each message.
-- Example: `"roles": { "users": { "ann": "operator", "bob@acme.com": "technician" }, "groups": { "Maintenance": "technician" }, "default": "operator", "startPages": { "operator": "<saved filter id>" }, "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive", "call"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }] }`.
+- Example: `"roles": { "users": { "ann": "operator", "bob@acme.com": "technician" }, "groups": { "Maintenance": "technician" }, "default": "operator", "startPages": { "operator": "<saved filter id>" }, "pages": { "manager": ["oee", "risk", "work"] }, "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive", "call"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }] }`.
 
 **Load** (the setup page): what the gateway costs this computer and each PLC, measured every few seconds.
 - **This computer:** its CPU for all programs (the PLC's Windows side, KvalCAM, browsers …) and its free memory.

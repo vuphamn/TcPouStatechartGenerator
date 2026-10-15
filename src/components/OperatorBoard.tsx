@@ -23,6 +23,8 @@ import { formatDuration } from '../utils/liveView.ts';
 import { formatLimit, limitFor, useDefaultLimit, useLimitsOfTypes } from '../utils/stateLimits.ts';
 import { useStoredSecret } from '../hooks/useStoredSecret.ts';
 
+type BoardPage = 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng';
+
 /**
  * Operator board (the web app at ?board, served by a gateway): a full-screen, read-only view for a screen by the
  * line. One tile per state machine of the gateway's PLCs (the gateway follows them, shared by every board): green
@@ -193,13 +195,13 @@ export const OperatorBoard: React.FC = () => {
     const r: Made | undefined = await conn.current?.request<Made>({ type: 'supportCreate', ...supportOpts }, 'supportResult', 120000).catch((e: unknown): Made => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     setSupportRes(r?.ok ? { url: `${window.location.origin}${r.url}`, expires: r.expires, size: r.size } : { error: r?.error ?? 'Not made' });
   };
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng'>(() => {
+  const [page, setPageState] = useState<BoardPage>(() => {
     const f = /^([db]):/.exec(params.get('focus') ?? '');
     if (f) return f[1] === 'd' ? 'drives' : 'io';
     const p = params.get('page') || store.get('kss.board.page');
     return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' || p === 'eng' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng') => {
+  const setPage = (p: BoardPage) => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -259,7 +261,7 @@ export const OperatorBoard: React.FC = () => {
   };
   const [ruleDialog, setRuleDialog] = useState<{ kind: 'alarm' | 'recording'; groups: RuleGroup[] } | null>(null);
   // The user's role on the gateway (roles.cjs): what it may do; roles off: everything
-  const [perm, setPerm] = useState<{ role: string | null; label: string | null; can: string[]; on: boolean }>({ role: null, label: null, can: [], on: false });
+  const [perm, setPerm] = useState<{ role: string | null; label: string | null; can: string[]; on: boolean; pages: string[] | null }>({ role: null, label: null, can: [], on: false, pages: null });
   const may = (cap: string) => !viewOnly && (!perm.on || perm.can.includes(cap));
   const [startFilter, setStartFilter] = useState<string | null>(null);
   // The fault records (gateway/faults.cjs): the list beside the alerts, the one opened
@@ -314,6 +316,24 @@ export const OperatorBoard: React.FC = () => {
   const [flashing, setFlashing] = useState<Record<string, number>>({}); // machine path (lower case) -> until
   // Phones: the machines or the alerts, one at a time
   const narrow = useMediaQuery('(max-width: 760px)');
+  // The pages this user sees: its role's (roles.pages), of those its capabilities allow; compact unless the window is wide
+  const compactPages = useMediaQuery('(max-width: 1600px)');
+  const pageDefs = ([
+    { id: 'andon', icon: Megaphone, label: 'Andon', title: 'Andon: big and plain, for the line: what stopped, what to do, Call maintenance', ok: true },
+    { id: 'machines', icon: LayoutGrid, label: 'Machines', title: 'The state machines', ok: true },
+    { id: 'io', icon: Cpu, label: 'I/O', title: 'The I/O devices, their states, and signals charted live', ok: true },
+    { id: 'drives', icon: Gauge, label: 'Drives', title: "The drives' health: read from each drive, judged against its limits, its own past and its siblings", ok: true },
+    { id: 'oee', icon: BarChart3, label: 'OEE', title: "OEE and downtime: availability, performance, quality, the stops' reasons, by shift", ok: may('reports') },
+    { id: 'work', icon: ClipboardList, label: 'Work', title: "Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)", ok: may('workorder') || may('reports') },
+    { id: 'eng', icon: Code2, label: 'Engineering', title: 'For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects', ok: may('engineering') },
+    { id: 'risk', icon: ShieldAlert, label: 'Risk', title: 'What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box', ok: true },
+  ] as { id: BoardPage; icon: typeof Megaphone; label: string; title: string; ok: boolean }[]).filter((d) => d.ok && (!perm.pages || perm.pages.includes(d.id)));
+  // (on a page its role does not see, e.g. from a link or the last visit: the first of its own)
+  const pageIds = pageDefs.map((d) => d.id).join();
+  useEffect(() => {
+    if (perm.pages && pageDefs.length && !pageDefs.some((d) => d.id === page)) setPageState(pageDefs[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIds, page, perm.pages]);
   const [phoneView, setPhoneView] = useState<'machines' | 'alerts'>('machines');
   useEffect(() => {
     // Browsers play sound only after a click or tap on the page
@@ -416,8 +436,8 @@ export const OperatorBoard: React.FC = () => {
       .then((w) => {
         const { user } = w;
         setMe(user);
-        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean };
-        setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn });
+        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null };
+        setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn, pages: r.pages ?? null });
         setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
@@ -862,39 +882,20 @@ export const OperatorBoard: React.FC = () => {
             </span>
           )}
         </span>
-        {/* (the page: the machines or the I/O) */}
-        <span id="board-pages" className="flex items-center rounded border border-slate-700 overflow-hidden text-sm">
-          <button id="board-page-andon" type="button" onClick={() => setPage('andon')} className={`flex items-center gap-1 px-2 py-1 ${page === 'andon' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'andon'} title="Andon: big and plain, for the line: what stopped, what to do, Call maintenance">
-            <Megaphone className="w-4 h-4" /> Andon
-          </button>
-          <button id="board-page-machines" type="button" onClick={() => setPage('machines')} className={`flex items-center gap-1 px-2 py-1 ${page === 'machines' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'machines'} title="The state machines">
-            <LayoutGrid className="w-4 h-4" /> Machines
-          </button>
-          <button id="board-page-io" type="button" onClick={() => setPage('io')} className={`flex items-center gap-1 px-2 py-1 ${page === 'io' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'io'} title="The I/O devices, their states, and signals charted live">
-            <Cpu className="w-4 h-4" /> I/O
-          </button>
-          <button id="board-page-drives" type="button" onClick={() => setPage('drives')} className={`flex items-center gap-1 px-2 py-1 ${page === 'drives' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'drives'} title="The drives' health: read from each drive, judged against its limits, its own past and its siblings">
-            <Gauge className="w-4 h-4" /> Drives
-          </button>
-          {may('reports') && (
-            <button id="board-page-oee" type="button" onClick={() => setPage('oee')} className={`flex items-center gap-1 px-2 py-1 ${page === 'oee' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'oee'} title="OEE and downtime: availability, performance, the stops' reasons, by shift">
-              <BarChart3 className="w-4 h-4" /> OEE
-            </button>
-          )}
-          {(may('workorder') || may('reports')) && (
-            <button id="board-page-work" type="button" onClick={() => setPage('work')} className={`flex items-center gap-1 px-2 py-1 ${page === 'work' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'work'} title="Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)">
-              <ClipboardList className="w-4 h-4" /> Work
-            </button>
-          )}
-          {may('engineering') && (
-            <button id="board-page-eng" type="button" onClick={() => setPage('eng')} className={`flex items-center gap-1 px-2 py-1 ${page === 'eng' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'eng'} title="For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects">
-              <Code2 className="w-4 h-4" /> Engineering
-            </button>
-          )}
-          <button id="board-page-risk" type="button" onClick={() => setPage('risk')} className={`flex items-center gap-1 px-2 py-1 ${page === 'risk' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'risk'} title="What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box">
-            <ShieldAlert className="w-4 h-4" /> Risk
-          </button>
-        </span>
+        {/* (the pages this user sees: one row; when the window is not wide, icons with the active one named) */}
+        {pageDefs.length > 1 && (
+          <span id="board-pages" className="flex items-center rounded border border-slate-700 overflow-hidden text-sm">
+            {pageDefs.map((d) => {
+              const Icon = d.icon;
+              const named = !compactPages || page === d.id;
+              return (
+                <button key={d.id} id={`board-page-${d.id}`} type="button" onClick={() => setPage(d.id)} className={`flex items-center gap-1 ${named ? 'px-2' : 'px-1.5'} py-1 ${page === d.id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === d.id} title={named ? d.title : `${d.label}: ${d.title}`}>
+                  <Icon className="w-4 h-4" /> <span className={named ? undefined : 'sr-only'}>{d.label}</span>
+                </button>
+              );
+            })}
+          </span>
+        )}
         <span className={`flex items-center gap-2 ${page !== 'machines' ? 'hidden' : ''}`}>
           <span className="relative flex items-center">
             <Search className="absolute left-2 w-4 h-4 text-slate-500 pointer-events-none" />

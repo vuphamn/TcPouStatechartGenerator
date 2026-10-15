@@ -10,6 +10,8 @@ interface OeeMachine {
   availability: number | null;
   performance: number | null;
   quality: number | null;
+  good?: number | null;
+  bad?: number | null;
   oee: number | null;
   cycles: number | null;
   idealCycleSec: number | null;
@@ -34,6 +36,8 @@ interface Line {
   availability: number | null;
   performance: number | null;
   quality: number | null;
+  good?: number | null;
+  bad?: number | null;
   oee: number | null;
   downMs: number;
   stops: number;
@@ -129,7 +133,7 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
   const csv = () => {
     if (!r?.machines) return;
     const q = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
-    const rows = ['plc,machine,availability,performance,oee,cycles,run h,down h,stops', ...r.machines.map((m) => [q(m.plcName), q(m.machine), m.availability ?? '', m.performance ?? '', m.oee ?? '', m.cycles ?? '', (m.runMs / 3600000).toFixed(2), (m.downMs / 3600000).toFixed(2), m.stops].join(',')), '', 'stop from,to,minutes,plc,machine,state,kind,reason,note,by', ...r.stops.map((s) => [new Date(s.from).toISOString(), new Date(s.to).toISOString(), (s.ms / 60000).toFixed(1), q(s.plcName), q(s.machine), q(s.state), s.kind, q(s.reason ?? ''), q(s.note), q(s.by ?? '')].join(','))];
+    const rows = ['plc,machine,availability,performance,quality,good,bad,oee,cycles,run h,down h,stops', ...r.machines.map((m) => [q(m.plcName), q(m.machine), m.availability ?? '', m.performance ?? '', m.quality ?? '', m.good ?? '', m.bad ?? '', m.oee ?? '', m.cycles ?? '', (m.runMs / 3600000).toFixed(2), (m.downMs / 3600000).toFixed(2), m.stops].join(',')), '', 'stop from,to,minutes,plc,machine,state,kind,reason,note,by', ...r.stops.map((s) => [new Date(s.from).toISOString(), new Date(s.to).toISOString(), (s.ms / 60000).toFixed(1), q(s.plcName), q(s.machine), q(s.state), s.kind, q(s.reason ?? ''), q(s.note), q(s.by ?? '')].join(','))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([rows.join('\r\n') + '\r\n'], { type: 'text/csv' }));
     a.download = `oee-${win}-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -170,11 +174,13 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                   ['OEE', r.line.oee],
                   ['Availability', r.line.availability],
                   ['Performance', r.line.performance],
+                  ['Quality', r.line.quality],
                 ] as const
               ).map(([k, v]) => (
                 <div key={k} className="oee-kpi rounded-lg border border-slate-800 bg-slate-900 px-4 py-2" data-kpi={k}>
                   <div className="text-xs uppercase tracking-wide text-slate-400">{k}</div>
-                  <div className={`text-3xl font-bold ${v === null ? 'text-slate-500' : v >= 0.85 ? 'text-emerald-300' : v >= 0.6 ? 'text-amber-300' : 'text-rose-300'}`}>{pct(v)}</div>
+                  <div className={`text-3xl font-bold ${v === null ? 'text-slate-500' : v >= 0.85 ? 'text-emerald-300' : v >= 0.6 ? 'text-amber-300' : 'text-rose-300'}`} title={k === 'Quality' && v === null ? 'Set the good and bad part counters of a machine (the setup page: Monitoring, OEE)' : undefined}>{pct(v)}</div>
+                  {k === 'Quality' && r.line.good != null && <div className="text-xs text-slate-400">{r.line.good} good{r.line.bad != null ? `, ${r.line.bad} bad` : ''}</div>}
                 </div>
               ))}
               <div className="oee-kpi rounded-lg border border-slate-800 bg-slate-900 px-4 py-2" data-kpi="down">
@@ -188,7 +194,7 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                 <div className="mb-2 font-semibold">{r.by === 'day' ? 'By day' : 'By shift'}</div>
                 <table id="oee-windows" className="text-xs">
                   <tbody>
-                    {(['oee', 'availability', 'performance'] as const).map((k) => (
+                    {(['oee', 'availability', 'performance', 'quality'] as const).map((k) => (
                       <tr key={k}>
                         <th className="pr-3 text-left text-slate-400 capitalize">{k === 'oee' ? 'OEE' : k}</th>
                         {r.windows.map((w) => (
@@ -226,6 +232,7 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                   <th>OEE</th>
                   <th>Availability</th>
                   <th>Performance</th>
+                  <th>Quality</th>
                   <th className="text-right">Cycles</th>
                   <th className="text-right">Down</th>
                   <th className="text-right">Stops</th>
@@ -240,6 +247,7 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                     <td><span className="flex items-center gap-2"><Bar value={m.oee} /> {pct(m.oee)}</span></td>
                     <td><span className="flex items-center gap-2"><Bar value={m.availability} /> {pct(m.availability)}</span></td>
                     <td title={m.performance === null ? 'Set its cycle state and ideal cycle time (config.oee.machines)' : `${m.cycles} cycles of ${m.idealCycleSec} s`}>{pct(m.performance)}</td>
+                    <td className="oee-quality" title={m.quality === null ? 'Set its good and bad part counters (the setup page: Monitoring, OEE)' : `${m.good ?? '?'} good, ${m.bad ?? '?'} bad`}>{pct(m.quality)}</td>
                     <td className="text-right font-mono">{m.cycles ?? ''}</td>
                     <td className="text-right font-mono">{dur(m.downMs)}</td>
                     <td className="text-right font-mono">{m.stops}</td>

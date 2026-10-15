@@ -1,6 +1,7 @@
 // OEE and downtime (gateway/oee.cjs; simulated PLC symbols-plc.cjs; the web app from dist/): a recording of aDoors[1]
 // over the last two hours (6 cycles through DOOR_DASHER_ENABLING, its error state for 10 minutes), a reason given for
-// that stop (Jam): the report's availability, cycles, stops and Pareto by reason; by shift. The board: a machine
+// that stop (Jam): the report's availability, cycles, stops and Pareto by reason; quality from its part counters (6
+// good with a counter reset, 2 bad: 75 %); by shift. The board: a machine
 // going into its error state asks Why? (the reason given, the button gone); the OEE page.
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
@@ -41,6 +42,12 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   lines.push({ t, m: M, v: 7 });
   t += 10 * 60000;
   lines.push({ t, m: M, v: 0 });
+  // (its part counters: 6 good, the counter reset once; 2 bad)
+  const G = `${R}.nCount`;
+  const BAD = `${R}.fSpeed`;
+  [100, 101, 102, 103, 104, 105, 0, 1].forEach((v, i) => lines.push({ t: start + i * 10 * 60000 + 1000, x: G, v }));
+  [7, 8, 9].forEach((v, i) => lines.push({ t: stopAt + i * 60000, x: BAD, v }));
+  lines.sort((a, b) => a.t - b.t);
   const byDay = new Map();
   for (const l of lines) byDay.set(dayOf(l.t), [...(byDay.get(dayOf(l.t)) ?? []), JSON.stringify(l)]);
   fs.mkdirSync(path.join(dir, 'recordings', 'r1'), { recursive: true });
@@ -53,7 +60,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     alerts: [{ id: 'a1', name: 'Line 7', enabled: true, plc: 'line', root: R, stateVar: 'machineState', stuckAfterMs: null, stateLimits: {}, onError: true, errorPattern: 'ERROR', notifyRecovery: false, webhook: null, format: 'json' }],
     recordings: [{ id: 'r1', name: 'Doors', enabled: true, plc: 'line', root: R, stateVar: 'machineState', days: 7, machines: [M] }],
     shifts: [{ name: 'Early', from: '06:00', to: '14:00' }, { name: 'Late', from: '14:00', to: '22:00' }, { name: 'Night', from: '22:00', to: '06:00' }],
-    oee: { reasonAfterMin: 0, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30 }] },
+    oee: { reasonAfterMin: 0, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30, goodVar: G, badVar: BAD }] },
     drives: { enabled: false }, fleet: { enabled: false }, faults: { enabled: false }, projectSync: { enabled: false },
   }, null, 2));
   const logFile = h.out('gw-oee-run.txt');
@@ -84,6 +91,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   console.log(`   line ${JSON.stringify(r?.line)}; machine ${JSON.stringify(m)}`);
   expect(m && m.cycles === 6 && m.availability > 0.85 && m.availability < 0.95 && Math.abs(m.downMs - 10 * 60000) < 2000, `aDoors[1]: ${m?.cycles} cycles, availability ${m?.availability?.toFixed(3)}, down ${Math.round((m?.downMs ?? 0) / 60000)} min`);
   expect(m && m.performance > 0 && r.line.oee !== null && r.line.availability !== null, `performance ${m?.performance?.toFixed(3)}, OEE ${r?.line?.oee?.toFixed(3)}`);
+  expect(m && m.good === 6 && m.bad === 2 && m.quality === 0.75 && r.line.quality === 0.75 && r.line.good === 6 && Math.abs(r.line.oee - r.line.availability * r.line.performance * 0.75) < 1e-9, `quality: ${m?.good} good, ${m?.bad} bad: ${m?.quality}; the line ${r?.line?.quality}`);
   const stop = r?.stops?.find((s) => s.machine === M && s.kind === 'error');
   expect(stop?.reason === 'Jam' && stop.note === 'infeed' && stop.by === 'mgr' && r.pareto.reason[0]?.key === 'Jam', `its stop: ${stop?.state} ${Math.round((stop?.ms ?? 0) / 60000)} min, ${stop?.reason} (${stop?.note}); Pareto: ${r?.pareto?.reason?.map((x) => x.key).join(', ')}`);
   expect(r?.windows?.length >= 1 && r.windows.every((w) => /Early|Late|Night/.test(w.label)), `by shift: ${r?.windows?.map((w) => w.label).join(', ')}`);
@@ -113,8 +121,8 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     // 4. The OEE page
     await p.click('#board-page-oee');
     await p.click('.oee-window[data-window="today"]');
-    const page = await h.until(() => p.evaluate(() => ({ kpis: document.querySelectorAll('.oee-kpi').length, machines: document.querySelectorAll('.oee-machine').length, jam: [...document.querySelectorAll('.oee-pareto')].some((e) => /Jam/.test(e.textContent ?? '')) })).then((x) => (x.machines ? x : null)), 30000);
-    expect(page?.kpis === 4 && page.machines >= 1 && page.jam, `the OEE page: ${JSON.stringify(page)}`);
+    const page = await h.until(() => p.evaluate(() => ({ kpis: document.querySelectorAll('.oee-kpi').length, machines: document.querySelectorAll('.oee-machine').length, quality: document.querySelector('.oee-quality')?.textContent, jam: [...document.querySelectorAll('.oee-pareto')].some((e) => /Jam/.test(e.textContent ?? '')) })).then((x) => (x.machines ? x : null)), 30000);
+    expect(page?.kpis === 5 && page.machines >= 1 && page.jam && /^\d+ %$/.test(page.quality ?? ''), `the OEE page: ${JSON.stringify(page)}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

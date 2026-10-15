@@ -473,8 +473,98 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     }
   };
 
+  /** A value's bytes read every way (its own length) */
+  const viewsOf = (buf) => {
+    const v = {};
+    if (buf.length === 1) Object.assign(v, { u8: buf.readUInt8(0), s8: buf.readInt8(0) });
+    if (buf.length >= 2) Object.assign(v, { u16: buf.readUInt16LE(0), s16: buf.readInt16LE(0) });
+    if (buf.length >= 4) Object.assign(v, { u32: buf.readUInt32LE(0), s32: buf.readInt32LE(0), f32: Math.round(buf.readFloatLE(0) * 1e6) / 1e6 });
+    return v;
+  };
+  const numOf = (x, hex) => (typeof x === 'number' ? x : parseInt(String(x ?? '').trim().replace(/^0x/i, ''), hex || /^0x/i.test(String(x ?? '').trim()) ? 16 : 10));
+
+  /**
+   * The setup page's Check a drive (read only): a PLC's boxes of other makers than Beckhoff (and any a profile knows);
+   * a box's profile read, each value raw and as the board reads it; or one object (index hex, sub, size)
+   */
+  async function check({ plc: plcId, path: boxPath, index, sub, size } = {}) {
+    const plc = plcList().find((p) => p.id === plcId);
+    if (!plc) throw new Error(`No PLC "${plcId ?? ''}"`);
+    let conn = monitors.get(plcId)?.conn ?? null;
+    const viewer = { send: () => {}, push: () => {}, lost: () => {} };
+    let borrowed = false;
+    if (!conn?.client) {
+      conn = connectionFor(plc);
+      await conn.connect();
+      conn.viewers.add(viewer);
+      clearTimeout(conn.idleTimer);
+      borrowed = true;
+    }
+    try {
+      const client = conn.client;
+      const tree = await readIoTree((rel) => readBootFile(client, rel)).catch((err) => ({ error: ads.adsErrorText(err) }));
+      if (tree.error) throw new Error(`Its I/O not read: ${tree.error}`);
+      const profiles = settings().profiles;
+      const boxes = [];
+      for (const d of tree.devices ?? []) {
+        if (d.disabled || !d.netId) continue;
+        let slaves = null;
+        try {
+          slaves = (await readEcatStates(client, d.netId)).slaves ?? null;
+        } catch {
+          slaves = null;
+        }
+        const walk = (list) => {
+          for (const b of list ?? []) {
+            const profile = b.disabled ? null : profileFor(b, profiles);
+            if (!b.disabled && (profile || (b.info?.vendorId !== undefined && b.info.vendorId !== 2))) {
+              const known = slaves?.some((s) => s.address === b.address);
+              boxes.push({ path: b.path, name: b.name, device: d.name, netId: d.netId, address: known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address, vendorId: b.info?.vendorId ?? null, type: b.info?.type ?? '', profile });
+            }
+            walk(b.boxes);
+          }
+        };
+        walk(d.boxes);
+      }
+      const view = (b) => ({ path: b.path, name: b.name, device: b.device, netId: b.netId, address: b.address, vendorId: b.vendorId, type: b.type, profile: b.profile ? { id: b.profile.id, name: b.profile.name } : null });
+      if (!boxPath) return { boxes: boxes.map(view) };
+      const b = boxes.find((x) => x.path === boxPath);
+      if (!b) throw new Error(`No box "${boxPath}" of another maker in its I/O`);
+      let wanted;
+      if (index !== undefined && index !== null && String(index).trim() !== '') {
+        const i = numOf(index, true);
+        const s = numOf(sub ?? 0, false);
+        const n = [1, 2, 4, 8].includes(Number(size)) ? Number(size) : 4;
+        if (!Number.isInteger(i) || i < 0 || i > 0xffff || !Number.isInteger(s) || s < 0 || s > 255) throw new Error('An object is an index (hex, e.g. 6ff1) and a subindex (0 to 255)');
+        wanted = [{ key: 'asked', label: 'As asked', index: i, sub: s, size: n, signed: false, scale: 1, unit: '', asked: true }];
+      } else {
+        if (!b.profile) throw new Error(`${b.name}: no profile knows it: read one object of it`);
+        wanted = b.profile.params;
+      }
+      const reads = [];
+      for (const p of wanted) {
+        const base = { key: p.key, label: p.label, index: p.index, sub: p.sub, size: p.size, unit: p.unit, scale: p.scale, verified: p.asked ? null : p.verified !== false };
+        try {
+          const buf = await client.readRaw(COE_SDO, ((p.index & 0xffff) << 16) | (p.sub & 0xff), p.size ?? 4, { amsNetId: b.netId, adsPort: b.address });
+          const dec = p.asked ? null : decodeValue(buf, p);
+          reads.push({ ...base, hex: [...buf].map((x) => x.toString(16).padStart(2, '0')).join(' '), as: viewsOf(buf), value: dec?.value ?? null });
+        } catch (err) {
+          reads.push({ ...base, error: ads.adsErrorText(err) });
+        }
+      }
+      log(`drives: ${plcId}: checked ${b.name} (${reads.length} object(s), ${reads.filter((r) => r.error).length} not answered)`);
+      return { box: view(b), reads };
+    } finally {
+      if (borrowed) {
+        conn.viewers.delete(viewer);
+        if (conn.viewers.size === 0) void conn.unwatch({}).catch(() => {});
+      }
+    }
+  }
+
   return {
     apply,
+    check,
     start: () => apply(),
     stop() {
       for (const m of monitors.values()) m.stop();

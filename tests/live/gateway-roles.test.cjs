@@ -1,9 +1,10 @@
 // Roles on the gateway (gateway/roles.cjs; simulated PLC symbols-plc.cjs; the web app from dist/):
 // - each role may do its own: an operator acknowledges but sets no maintenance and saves no filters; a technician sets
 //   maintenance; a manager gets reports but acknowledges nothing; someone without a role (no default) does nothing;
-// - the board: the role in its header, what it may not do hidden, its start page (a saved filter);
+// - the board: the role in its header, what it may not do hidden, its start page (a saved filter), only its role's
+//   pages (an operator: Andon and Machines; a manager: as the setup page set them), compact (the active page named);
 // - an alert told to the technicians' channel, naming who is on call;
-// - the setup page's Roles: shown, saved.
+// - the setup page's Roles: shown, saved, a role's pages among them.
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -44,7 +45,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
     tokens: ['ann', 'tim', 'mgr', 'zed'].map((n) => ({ name: n, sha256: sha(tok(n)) })),
     alerts: [{ id: 'a1', name: 'Line 4', enabled: true, plc: 'line', root: R, stateVar: 'machineState', stuckAfterMs: null, stateLimits: {}, onError: true, errorPattern: 'ERROR', notifyRecovery: false, webhook: null, format: 'json' }],
     roles: {
-      users: { ann: 'operator', tim: 'technician', mgr: 'manager' }, groups: {}, default: '', startPages: { operator: 'ops1' },
+      users: { ann: 'operator', tim: 'technician', mgr: 'manager' }, groups: {}, default: '', startPages: { operator: 'ops1' }, pages: { manager: ['oee', 'risk'] },
       notify: [{ role: 'technician', webhook: `http://127.0.0.1:${HOOK}/hook`, format: 'json', events: ['error'], onCall: [{ name: 'Tim', days: '', from: '00:00', to: '24:00' }] }],
     },
     drives: { enabled: false },
@@ -90,6 +91,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
   const zed = await session('zed');
   const zedAck = await zed.ask({ type: 'alertAck', id: open?.[0]?.id ?? 'x' }, 'alertAckResult');
   expect(timMaint?.ok === true && !mgrReport?.error && mgrAck?.ok === false && zed.welcome?.role === null && zed.welcome.can.length === 0 && zedAck?.ok === false, `technician maintenance ${timMaint?.ok}; manager report ${!mgrReport?.error}, ack ${mgrAck?.ok}; zed: no role, ack ${zedAck?.ok}`);
+  expect(ann.welcome?.pages?.join() === 'andon,machines' && tim.welcome?.pages?.includes('drives') && !tim.welcome.pages.includes('eng') && mgr.welcome?.pages?.join() === 'oee,risk' && zed.welcome?.pages === null, `the pages: ann ${ann.welcome?.pages}; tim ${tim.welcome?.pages}; mgr ${mgr.welcome?.pages}; zed ${zed.welcome?.pages}`);
   for (const s of [ann, tim, mgr, zed]) s.ws.close();
   // 3. The technicians' channel, with who is on call
   const told = await h.until(() => posted.find((p) => p.event === 'error'), 10000);
@@ -110,14 +112,18 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
     await p.waitForSelector('.board-tile', { timeout: 20000 });
     const seen = await h.until(() => p.evaluate(() => ({ role: document.querySelector('#board-role')?.textContent, start: document.querySelector('#board-filter-active')?.textContent, maint: !!document.querySelector('.board-maintenance-btn'), report: !!document.querySelector('#board-report'), filter: document.querySelector('#board-filter')?.value })).then((x) => (x.start === 'Tables' ? x : null)), 10000);
     expect(seen?.role === 'Operator' && seen.start === 'Tables' && seen.filter === 'table' && !seen.maint && !seen.report, `the board as an operator: ${JSON.stringify(seen)}`);
+    const pagesSeen = await p.$$eval('#board-pages button', (x) => x.map((b) => `${b.id.replace('board-page-', '')}${b.querySelector('.sr-only') ? '' : '*'}`));
+    expect(pagesSeen.join() === 'andon,machines*', `an operator's pages (* named): ${pagesSeen.join(' ')}`);
     // 5. The setup page's Roles
     await p.goto(`${BASE}/admin`, { waitUntil: 'load' });
     await p.waitForSelector('[data-role-user="ann"]', { timeout: 10000 });
     await p.select('[data-role-user="zed"] select', 'manager');
+    await p.click('[data-pages-role="operator"] [data-page="andon"]');
+    await p.click('[data-pages-role="operator"] [data-page="drives"]');
     await p.click('#admin-roles-save');
     const msg = await h.until(() => p.$eval('#admin-roles-msg', (e) => e.textContent).then((t) => (t ? t : null)), 5000);
     const saved = JSON.parse(fs.readFileSync(configPath, 'utf8')).roles;
-    expect(/Saved/.test(msg ?? '') && saved?.users?.zed === 'manager' && saved.users.ann === 'operator' && saved.notify?.[0]?.onCall?.[0]?.name === 'Tim', `the setup page's Roles saved: zed ${saved?.users?.zed} (${msg})`);
+    expect(/Saved/.test(msg ?? '') && saved?.users?.zed === 'manager' && saved.users.ann === 'operator' && saved.notify?.[0]?.onCall?.[0]?.name === 'Tim' && saved.pages?.operator?.join() === 'machines,drives' && saved.pages.manager?.join() === 'risk,oee', `the setup page's Roles saved: zed ${saved?.users?.zed}; pages ${JSON.stringify(saved?.pages)} (${msg})`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

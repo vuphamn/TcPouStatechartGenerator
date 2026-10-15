@@ -9,7 +9,9 @@
 // - by shift (config.shifts) or by day, to compare; a weekly summary to a webhook (config.oee.weekly).
 // config.json "oee": { "reasons": ["Waiting for material", "Jam", …], "reasonAfterMin": 2,
 //   "machines": [{ "plc": "line202", "machine": "MAIN.mainStateMachine.smTable1" (or "type": "SM_TableManager"),
-//                  "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42 }],
+//                  "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42,
+//                  "goodVar": "MAIN.nGoodParts", "badVar": "MAIN.nBadParts" }],     part counters (each optional), for quality;
+//                                                       recorded with that PLC's recordings by themselves (withCounters)
 //   "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee" } }
 const fs = require('fs');
 const path = require('path');
@@ -18,6 +20,37 @@ const { DEFAULT_ERROR } = require('./alerts.cjs');
 
 const REASONS = ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/** A counter's rises over its recorded values (a drop: reset, counted from zero); null: nothing recorded */
+function risesOf(list) {
+  if (!list?.length) return null;
+  let n = 0;
+  for (let i = 1; i < list.length; i++) {
+    const a = Number(list[i - 1].v);
+    const b = Number(list[i].v);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    n += b >= a ? b - a : b;
+  }
+  return n;
+}
+/** Quality: good of good and bad; with one counter only, of the cycles counted */
+function qualityOf(good, bad, cycles) {
+  if (good !== null && bad !== null) return good + bad > 0 ? good / (good + bad) : null;
+  if (bad !== null && cycles) return Math.max(0, cycles - bad) / cycles;
+  if (good !== null && cycles) return Math.min(1, good / cycles);
+  return null;
+}
+/** The recordings as the recorder takes them: each one with its PLC's OEE part counters among its variables */
+function withCounters(recordings, oee) {
+  const machines = Array.isArray(oee?.machines) ? oee.machines : [];
+  return (recordings ?? []).map((r) => {
+    const add = machines.filter((m) => m.plc === r.plc).flatMap((m) => [m.goodVar, m.badVar]).filter(Boolean).map(String);
+    if (!add.length) return r;
+    const vars = [...(r.vars ?? [])];
+    for (const v of add) if (!vars.some((x) => x.toLowerCase() === v.toLowerCase())) vars.push(v);
+    return { ...r, vars: vars.slice(0, 100) };
+  });
+}
 
 function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, audit, postWebhook }) {
   const file = path.join(baseDir, 'downtime.jsonl');
@@ -95,9 +128,18 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     const plannedMs = av ? av.totalMs - av.maintenanceMs - av.noDataMs : 0;
     const availability = av && plannedMs > 0 ? av.normalMs / plannedMs : null;
     const performance = cyc && cyc.idealCycleSec > 0 && runMs > 0 ? Math.min(1, (cycles * cyc.idealCycleSec * 1000) / runMs) : null;
-    const quality = null;
+    // (quality: the parts counted in the window by its counters)
+    let good = null;
+    let bad = null;
+    if (cyc && (cyc.goodVar || cyc.badVar)) {
+      const series = recorders.queryVars(rec.id, [cyc.goodVar, cyc.badVar].filter(Boolean), from, end).series ?? {};
+      if (cyc.goodVar) good = risesOf(series[cyc.goodVar]);
+      if (cyc.badVar) bad = risesOf(series[cyc.badVar]);
+    }
+    const quality = qualityOf(good, bad, cyc ? cycles : null);
+    const partsCounted = good !== null && bad !== null ? good + bad : cyc ? cycles : 0;
     const parts = [availability, performance, quality].filter((x) => x !== null);
-    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, availability, performance, quality, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: cyc?.idealCycleSec ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
+    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, availability, performance, quality, good, bad, partsCounted, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: cyc?.idealCycleSec ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
   }
 
   /** The window's machines (every recording of these PLCs), their stops, the Pareto, and per shift or day */
@@ -133,7 +175,11 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
       const withP = list.filter((m) => m.performance !== null);
       const perf = withP.length ? withP.reduce((a, m) => a + m.performance * m.runMs, 0) / Math.max(1, withP.reduce((a, m) => a + m.runMs, 0)) : null;
       const availability = planned > 0 ? run / planned : null;
-      return { availability, performance: perf, quality: null, oee: availability === null ? null : availability * (perf ?? 1), downMs: list.reduce((a, m) => a + m.downMs, 0), stops: list.reduce((a, m) => a + m.stops.length, 0) };
+      const withQ = list.filter((m) => m.quality !== null && m.partsCounted > 0);
+      const counted = withQ.reduce((a, m) => a + m.partsCounted, 0);
+      const quality = counted > 0 ? withQ.reduce((a, m) => a + m.quality * m.partsCounted, 0) / counted : null;
+      const sum = (k) => (list.some((m) => m[k] !== null && m[k] !== undefined) ? list.reduce((a, m) => a + (m[k] ?? 0), 0) : null);
+      return { availability, performance: perf, quality, good: sum('good'), bad: sum('bad'), oee: availability === null ? null : availability * (perf ?? 1) * (quality ?? 1), downMs: list.reduce((a, m) => a + m.downMs, 0), stops: list.reduce((a, m) => a + m.stops.length, 0) };
     };
     let windows = [];
     if (by === 'shift' || by === 'day') {
@@ -160,7 +206,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     lastWeekly = key;
     const r = report({ from: now.getTime() - 7 * 86400000, to: now.getTime() });
     const top = r.pareto.reason.slice(0, 3).map((x) => `${x.key} ${hours(x.ms)}`).join(', ');
-    const text = `📊 The last 7 days: OEE ${pct(r.line.oee)} (availability ${pct(r.line.availability)}${r.line.performance !== null ? `, performance ${pct(r.line.performance)}` : ''}), ${r.line.stops} stops, ${hours(r.line.downMs)} down${top ? `; most: ${top}` : ''}${w.link ? ` · ${w.link}` : ''}`;
+    const text = `📊 The last 7 days: OEE ${pct(r.line.oee)} (availability ${pct(r.line.availability)}${r.line.performance !== null ? `, performance ${pct(r.line.performance)}` : ''}${r.line.quality !== null ? `, quality ${pct(r.line.quality)}${r.line.bad !== null ? ` (${r.line.bad} bad)` : ''}` : ''}), ${r.line.stops} stops, ${hours(r.line.downMs)} down${top ? `; most: ${top}` : ''}${w.link ? ` · ${w.link}` : ''}`;
     log(`oee: the weekly summary: ${text}`);
     void postWebhook(w.webhook, ['teams', 'slack', 'json'].includes(w.format) ? w.format : 'teams', { event: 'oee.weekly', text, at: now.toISOString(), line: r.line, pareto: r.pareto.reason.slice(0, 10) }, log);
   }, 30000);
@@ -176,4 +222,4 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
   };
 }
 
-module.exports = { createOee, REASONS };
+module.exports = { createOee, REASONS, risesOf, qualityOf, withCounters };

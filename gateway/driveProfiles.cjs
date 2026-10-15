@@ -11,6 +11,11 @@
 //   switching cycles, :006 short-circuit counter, :007 earth-fault counter; 0x603F the error code (CiA 402).
 //   verified: false where the manual gives the object but not its scaling (shown so on the board): check one value
 //   against the drive's keypad once, and correct the profile here or in config.json.
+//
+// HSD ES951 spindle (ES95x, vendor 0x129, product 0x4B): not a CiA 402 drive; its own objects as its EtherCAT
+//   description maps them in the 193 project's I/O: 0x6FF0:01 P75 status, 0x6FF1:01 draw bar position, 0x6FF1:02
+//   spindle speed, and its C39 module's 0x6010:01 status, 0x6010:02 vibration velocity (RMS), 0x6010:03 error flags.
+//   Their scalings are not in it: all unverified (the setup page's Check a drive shows them raw, to compare).
 
 const PROFILES = [
   {
@@ -37,12 +42,26 @@ const PROFILES = [
       { key: 'earthFaults', label: 'Earth faults', index: 0x2d81, sub: 7, signed: false, size: 2, scale: 1, unit: '', verified: true, slow: true, counter: true, bad: true },
     ],
   },
+  {
+    id: 'hsd-es951',
+    name: 'HSD ES951 spindle',
+    match: { vendorId: 0x129, type: /ES95/i },
+    running: 'speed',
+    params: [
+      { key: 'speed', label: 'Spindle speed', index: 0x6ff1, sub: 2, signed: false, size: 2, scale: 1, unit: 'rpm', verified: false, trend: true },
+      { key: 'vibration', label: 'Vibration velocity (RMS)', index: 0x6010, sub: 2, signed: false, size: 2, scale: 1, unit: '', verified: false, trend: true },
+      { key: 'drawBar', label: 'Draw bar position', index: 0x6ff1, sub: 1, signed: false, size: 2, scale: 1, unit: '', verified: false },
+      { key: 'p75', label: 'P75 status', index: 0x6ff0, sub: 1, signed: false, size: 1, scale: 1, unit: '', format: 'hex', verified: false },
+      { key: 'c39', label: 'C39 status', index: 0x6010, sub: 1, signed: false, size: 2, scale: 1, unit: '', format: 'hex', verified: false },
+      { key: 'error', label: 'Error flags', index: 0x6010, sub: 3, signed: false, size: 2, scale: 1, unit: '', format: 'hex', verified: false },
+    ],
+  },
   // Any other maker's drive (not Beckhoff's: a box named or typed as a drive, inverter, spindle, servo): the
   // standard CiA 402 objects every such drive has (its own makers' objects differ: add a profile of its own)
   {
     id: 'cia402',
     name: 'CiA 402 drive',
-    match: { exceptVendorIds: [2], type: /\b(inverter|vfd|drive|spindle|servo|ES95)/i },
+    match: { exceptVendorIds: [2], type: /\b(inverter|vfd|drive|spindle|servo)/i },
     running: 'velocity',
     params: [
       { key: 'status', label: 'Status word', index: 0x6041, sub: 0, signed: false, size: 2, scale: 1, unit: '', format: 'hex', verified: true },

@@ -128,7 +128,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -267,7 +267,7 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     // The PLCs' projects kept here (projectSync.cjs): their state; one checked now
     'GET projects': async () => (projects ? projects.list() : { enabled: false, plcs: [] }),
     // Roles: who has which, the default, groups, start pages, notifications (roles.cjs); null: roles off
-    'GET roles': async () => ({ roles: getConfig().roles ?? null, labels: roles?.labels ?? {}, filters: roles?.filters() ?? [], users: (getConfig().tokens ?? []).map((t) => ({ name: t.name, view: !!t.view })) }),
+    'GET roles': async () => ({ roles: getConfig().roles ?? null, labels: roles?.labels ?? {}, pages: roles?.pages ?? [], pageLabels: roles?.pageLabels ?? {}, pageDefaults: roles?.pageDefaults ?? {}, filters: roles?.filters() ?? [], users: (getConfig().tokens ?? []).map((t) => ({ name: t.name, view: !!t.view })) }),
     'POST roles': async (body) => {
       const checked = body.roles == null ? null : roles.check(body.roles, (roles?.filters() ?? []).map((f) => f.id));
       update((c) => {
@@ -279,6 +279,13 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       return { roles: checked };
     },
     // Monitoring: which monitors on which PLCs, and their settings (one Save)
+    // Check a drive (drives.cjs, read only): a PLC's boxes of other makers; a box's profile read raw; one object
+    'POST drivecheck': async (body) => {
+      if (!driveCheck) throw new Error('Not on this gateway');
+      const r = await driveCheck(body ?? {});
+      if (body?.path) audit?.add('setup page', 'drive.check', { plc: body.plc, path: body.path, index: body.index ?? null });
+      return r;
+    },
     'GET monitoring': async () => {
       const c = getConfig();
       return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
@@ -502,6 +509,14 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-monitoring"></div>
   <div class="row mt"><span class="grow"></span><button class="primary" id="admin-monitoring-save">Save monitoring</button></div>
   <div class="msg" id="admin-monitoring-msg"></div>
+</section>
+<section>
+  <h2>Check a drive</h2>
+  <p class="hint flush">A drive read straight from its PLC (its own CoE objects, through the EtherCAT master), to compare with its keypad or its maker's software: its profile, each value raw and as the board reads it, or any one object. Read only: nothing is written to the drive. A value marked unverified has a scaling its maker does not give: check it here once, and correct its profile (drives.profiles) when it is off.</p>
+  <div class="row"><select id="admin-drive-plc"></select><button id="admin-drive-list">List its drives</button><select id="admin-drive-box" class="grow"></select><button id="admin-drive-read">Read its profile</button></div>
+  <div class="row"><input id="admin-drive-index" class="mono" placeholder="index, e.g. 6ff1" size="12"><input id="admin-drive-sub" class="mono" placeholder="sub" size="4"><select id="admin-drive-size"><option value="1">1 byte</option><option value="2">2 bytes</option><option value="4" selected>4 bytes</option><option value="8">8 bytes</option></select><button id="admin-drive-one">Read this object</button></div>
+  <div class="msg" id="admin-drive-msg"></div>
+  <div id="admin-drive-out"></div>
 </section>
 <section>
   <h2>Load</h2>
@@ -983,6 +998,14 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
       starts.append(el('tr', {}, el('td', {}, rolesData.labels[role]), el('td', {}, s)));
     }
     box.append(el('h3', {}, 'Start pages (a saved filter of the board, as each role first sees it)'), el('div', { class: 'scroll' }, el('table', {}, starts)));
+    // The board pages each role sees
+    r.pages = r.pages || {};
+    const pageRows = el('tbody', {}, el('tr', {}, el('th', {}, ''), ...rolesData.pages.map((p) => el('th', {}, rolesData.pageLabels[p] || p))));
+    for (const role of ROLE_IDS) {
+      const list = () => r.pages[role] || rolesData.pageDefaults[role] || rolesData.pages;
+      pageRows.append(el('tr', { 'data-pages-role': role }, el('td', {}, rolesData.labels[role]), ...rolesData.pages.map((p) => el('td', {}, el('input', { type: 'checkbox', 'data-page': p, checked: list().includes(p), on: { change: (e) => { const cur = list(); r.pages[role] = rolesData.pages.filter((x) => (x === p ? e.target.checked : cur.includes(x))); } } })))));
+    }
+    box.append(el('h3', {}, 'Board pages each role sees (what it may do there is still its role)'), el('div', { class: 'scroll' }, el('table', {}, pageRows)));
     // Notifications
     box.append(el('h3', {}, 'Told of alerts'));
     r.notify.forEach((n, i) => {
@@ -1105,6 +1128,41 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-monitoring-msg', err.message, false); }
   });
   loadMonitoring().catch(() => {});
+
+  // ---- Check a drive ----
+  const hexOf = (n, w) => '0x' + Number(n).toString(16).toUpperCase().padStart(w, '0');
+  const showReads = (r) => {
+    const rows = (r.reads || []).map((x) => el('tr', { 'data-drive-object': Number(x.index).toString(16) + ':' + x.sub },
+      el('td', { class: 'mono' }, hexOf(x.index, 4) + ':' + x.sub),
+      el('td', {}, x.label + (x.verified === false ? ' (unverified)' : '')),
+      el('td', { class: 'mono' }, x.error ? '' : x.hex),
+      el('td', { class: 'mono' }, x.error ? x.error : Object.entries(x.as || {}).map((e) => e[0] + ' ' + e[1]).join(' · ')),
+      el('td', { class: 'mono' }, x.value === null || x.value === undefined ? '' : (Math.round(x.value * 1000) / 1000) + (x.unit ? ' ' + x.unit : '') + (x.scale !== 1 ? ' (raw × ' + Number(Number(x.scale).toPrecision(4)) + ')' : ''))));
+    $('admin-drive-out').replaceChildren(el('div', { class: 'scroll' }, el('table', {}, el('tbody', {}, el('tr', {}, ...['Object', 'Name', 'Bytes', 'Read as', 'As the board reads it'].map((t) => el('th', {}, t))), ...rows))));
+  };
+  $('admin-drive-list').addEventListener('click', async () => {
+    say('admin-drive-msg', 'Reading its I/O ...');
+    try {
+      const r = await call('drivecheck', { plc: $('admin-drive-plc').value });
+      $('admin-drive-box').replaceChildren(...r.boxes.map((b) => el('option', { value: b.path }, b.name + (b.profile ? ' (' + b.profile.name + ')' : ' (no profile)') + ' · EtherCAT ' + b.address)));
+      say('admin-drive-msg', r.boxes.length + ' box(es) of other makers than Beckhoff, ' + r.boxes.filter((b) => b.profile).length + ' a profile knows', true);
+    } catch (err) { say('admin-drive-msg', err.message, false); }
+  });
+  const readDrive = async (one) => {
+    const body = { plc: $('admin-drive-plc').value, path: $('admin-drive-box').value };
+    if (!body.path) { say('admin-drive-msg', 'List its drives, and choose one', false); return; }
+    if (one) Object.assign(body, { index: $('admin-drive-index').value.trim(), sub: $('admin-drive-sub').value.trim() || '0', size: Number($('admin-drive-size').value) });
+    say('admin-drive-msg', 'Reading ...');
+    try {
+      const r = await call('drivecheck', body);
+      showReads(r);
+      const bad = r.reads.filter((x) => x.error).length;
+      say('admin-drive-msg', r.box.name + ': ' + r.reads.length + ' object(s) read' + (bad ? ', ' + bad + ' not answered' : ''), !bad);
+    } catch (err) { say('admin-drive-msg', err.message, false); }
+  };
+  $('admin-drive-read').addEventListener('click', () => readDrive(false));
+  $('admin-drive-one').addEventListener('click', () => readDrive(true));
+  call('monitoring').then((d) => $('admin-drive-plc').replaceChildren(...(d.plcs || []).map((p) => el('option', { value: p.id }, p.name || p.id)))).catch(() => {});
 
   // ---- Load (this computer, the gateway, each PLC) ----
   const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');

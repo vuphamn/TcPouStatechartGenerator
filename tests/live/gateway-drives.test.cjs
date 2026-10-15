@@ -1,8 +1,9 @@
 // The drive health board, the load panel, the shared notifications (simulated PLC symbols-plc.cjs, its EtherCAT
 // master with three Lenze i550 drives and an HSD spindle answering their CoE objects; the web app from dist/):
 // - the drives found in the PLC's I/O (not the valve terminal), read every 5 s, judged: one healthy, one 14 °C warmer
-//   than its last days and its siblings (warning), one in fault (alarm); the spindle by the CiA 402 profile; their
-//   alerts in the alert history; a drive's history kept;
+//   than its last days and its siblings (warning), one in fault (alarm); the spindle by its own (HSD ES951) profile;
+//   their alerts in the alert history; a drive's history kept;
+// - the setup page's Check a drive: the boxes of other makers, the spindle's profile read raw, one object, one absent;
 // - an alert rule, a recording and a board on the same machines: one ADS notification each, not three;
 // - the setup page's Load: the shared notifications, the PLC's task with its overrun counted;
 // - the board's Drives page (filter, problems only, a drive's history) and the I/O page's box properties.
@@ -34,6 +35,16 @@ const api = (method, p) =>
     });
     req.on('error', () => resolve(null));
     req.end();
+  });
+const apiPost = (p, body) =>
+  new Promise((resolve) => {
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: `/admin/api/${p}`, method: 'POST', headers: { host: `localhost:${PORT}`, origin: BASE, 'content-type': 'application/json' } }, (res) => {
+      let t = '';
+      res.on('data', (d) => (t += d));
+      res.on('end', () => resolve((() => { try { return JSON.parse(t); } catch { return null; } })()));
+    });
+    req.on('error', () => resolve(null));
+    req.end(JSON.stringify(body));
   });
 
 (async () => {
@@ -68,7 +79,7 @@ const api = (method, p) =>
     [`${MASTER}|1004`]: lenze(420, 0),
     [`${MASTER}|1005`]: lenze(560, 0),
     [`${MASTER}|1006`]: lenze(430, 0x2250),
-    [`${MASTER}|1007`]: { '6041:0': u16(0x0637), '603f:0': u16(0), '606c:0': { size: 4, value: 12000, signed: true }, '6078:0': s16(250), '6077:0': s16(100), '6079:0': u32(560000) },
+    [`${MASTER}|1007`]: { '6ff0:1': { size: 1, value: 5 }, '6ff1:1': u16(1200), '6ff1:2': u16(12000), '6010:1': u16(0x10), '6010:2': u16(35), '6010:3': u16(0) },
   };
   fs.writeFileSync(cfg, JSON.stringify(c));
   const plcLog = h.out('fake-ams2-drives-run.txt');
@@ -121,7 +132,7 @@ const api = (method, p) =>
   expect(/14 °C warmer than its last 5 days/.test(bTexts) && /hotter than its 2 siblings/.test(bTexts), `Drive B: ${bTexts}`);
   expect(by('Drive C')?.health?.level === 'alarm' && /In fault: error 0x2250/.test(by('Drive C')?.health?.findings?.[0]?.text ?? ''), `Drive C: ${by('Drive C')?.health?.findings?.[0]?.text}`);
   const hsd = by('HSD ES951 Spindle');
-  expect(hsd?.profile === 'cia402' && Math.abs((hsd.latest.dcBus?.v ?? 0) - 560) < 0.01 && hsd.latest.velocity?.v === 12000, `the spindle (CiA 402): DC ${hsd?.latest.dcBus?.v} V, velocity ${hsd?.latest.velocity?.v}`);
+  expect(hsd?.profile === 'hsd-es951' && hsd.latest.speed?.v === 12000 && hsd.latest.vibration?.v === 35 && hsd.latest.p75?.v === 5 && hsd.health?.level !== 'alarm', `the spindle (HSD ES951): ${hsd?.latest.speed?.v} rpm, vibration ${hsd?.latest.vibration?.v}, P75 ${hsd?.latest.p75?.v}, ${hsd?.health?.level}`);
   // 2. Their alerts; their history kept
   ws.send(JSON.stringify({ type: 'alertsList' }));
   const alerts = await h.until(() => got.find((m) => m.type === 'alertsList')?.events, 5000);
@@ -142,6 +153,16 @@ const api = (method, p) =>
   const load = await h.until(() => api('GET', 'load').then((l) => (l?.plcs?.[0]?.tasks?.[0]?.overruns >= 1 ? l : null)), 15000);
   const lp = load?.plcs?.[0];
   expect(lp?.shared?.notifications >= 5 && lp.shared.uses > lp.shared.notifications && lp.tasks[0].name === 'Plant_PlcTask' && lp.tasks[0].cycleUs === 10000 && lp.tasks[0].execUs === 2300 && lp.tasks[0].overruns >= 1 && load.drives?.[0]?.drives === 4 && load.machine?.cpuPct >= 0, `load: ${lp?.shared?.notifications} notifications (${lp?.shared?.uses} uses), task ${lp?.tasks?.[0]?.name} ${lp?.tasks?.[0]?.execUs} of ${lp?.tasks?.[0]?.cycleUs} µs, ${lp?.tasks?.[0]?.overruns} overrun(s); drives ${load?.drives?.[0]?.drives}`);
+  // 5. Check a drive (the setup page): the boxes of other makers; the spindle's profile read raw; one object; one absent
+  const listed = await apiPost('drivecheck', { plc: 'line' });
+  const sp = listed?.boxes?.find((b) => /ES951/.test(b.name));
+  expect(listed?.boxes?.length >= 5 && sp?.profile?.id === 'hsd-es951' && sp.address === 1007 && listed.boxes.some((b) => /EX260/.test(b.name) && !b.profile), `Check a drive: ${listed?.boxes?.map((b) => `${b.name} (${b.profile?.id ?? 'none'}, ${b.address})`).join(', ') ?? listed?.error}`);
+  const prof = await apiPost('drivecheck', { plc: 'line', path: sp?.path });
+  const speed = prof?.reads?.find((x) => x.key === 'speed');
+  expect(prof?.reads?.length === 6 && speed?.hex === 'e0 2e' && speed.as?.u16 === 12000 && speed.value === 12000 && speed.verified === false && prof.reads.find((x) => x.key === 'p75')?.as?.u8 === 5, `its profile read: ${prof?.reads?.map((x) => `${x.label} ${x.hex}`).join(', ') ?? prof?.error}`);
+  const one = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '0x6010', sub: '2', size: 2 });
+  const none = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '2d84', sub: 1, size: 2 });
+  expect(one?.reads?.[0]?.as?.u16 === 35 && /\S/.test(none?.reads?.[0]?.error ?? ''), `one object: 0x6010:2 = ${one?.reads?.[0]?.as?.u16}; one it has not: ${none?.reads?.[0]?.error}`);
   ws.close();
 
   const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('drives-filter'));
@@ -154,6 +175,14 @@ const api = (method, p) =>
     // The setup page's Load
     await p.goto(`${BASE}/admin`, { waitUntil: 'load' });
     const row = await h.until(() => p.$eval('[data-load-plc="line"] .admin-load-tasks', (e) => e.textContent).catch(() => null), 10000);
+    // (Check a drive on the page: the spindle's profile)
+    await p.click('#admin-drive-list');
+    await p.waitForFunction(() => document.querySelectorAll('#admin-drive-box option').length >= 5, { timeout: 15000 }).catch(() => {});
+    const opt = await p.$$eval('#admin-drive-box option', (o) => o.find((x) => /ES951/.test(x.textContent ?? ''))?.value ?? '');
+    if (opt) await p.select('#admin-drive-box', opt);
+    await p.click('#admin-drive-read');
+    const cell = await h.until(() => p.$eval('[data-drive-object="6ff1:2"]', (e) => e.textContent).catch(() => null), 15000);
+    expect(/0x6FF1:2/.test(cell ?? '') && /u16 12000/.test(cell ?? '') && /unverified/.test(cell ?? ''), `the setup page's Check a drive: ${cell}`);
     expect(/PlcTask: 2\.30 ms of 10\.00 ms \(23 %\)/.test(row ?? '') && /overrun/.test(row ?? ''), `the setup page's Load: "${row}"`);
     // The board's Drives page
     await p.goto(`${BASE}/?board&page=drives`, { waitUntil: 'load' });
