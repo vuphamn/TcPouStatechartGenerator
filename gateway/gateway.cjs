@@ -44,7 +44,8 @@ const { risks: risksOf, inventory: inventoryOf } = require('./risk.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
-const { createReports, checkShifts } = require('./report.cjs');
+const { createReports, checkShifts, shiftWindows } = require('./report.cjs');
+const { createOee } = require('./oee.cjs');
 const { createService } = require('./service.cjs');
 
 const VERSION = '1.0.0';
@@ -606,6 +607,20 @@ function start() {
   // The fleet (fleet.cjs): every I/O box, its state over the days; the risk list (risk.cjs) from it, the drives, the alerts
   fleet = createFleet({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log });
   fleet.start();
+  // OEE and downtime (oee.cjs): from the recordings, the reasons operators give, the weekly summary
+  const shiftsNow = () => {
+    try {
+      return checkShifts(config.shifts);
+    } catch {
+      return checkShifts(null);
+    }
+  };
+  const oee = createOee({ baseDir, getConfig: () => config, recorders, rules: rulesNow, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), log, audit, postWebhook });
+  const downtimeListeners = new Set();
+  const oeeConfig = () => {
+    const s = oee.settings();
+    return { type: 'oeeConfig', reasons: s.reasons, reasonAfterMin: s.reasonAfterMin, given: oee.recent().map((e) => `${e.plc}|${e.machine.toLowerCase()}|${e.from}`) };
+  };
   const fleetState = (ids) => {
     const f = fleet.view().filter((p) => !ids?.length || ids.includes(p.id));
     const d = drives.view(ids);
@@ -703,6 +718,7 @@ function start() {
     let drivesOff = null;
     let faultsOff = null;
     let fleetTimer = null;
+    let downtimeOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -818,7 +834,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -826,7 +842,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -904,6 +920,13 @@ function start() {
         sendFilters();
         sendRules();
         faultsOff ??= faults.subscribe((fault, kind) => send({ type: 'faultEvent', fault: { ...fault, file: undefined }, kind }));
+        // (the downtime reasons offered, and the stops given one: sent again when one is given)
+        send(oeeConfig());
+        if (!downtimeOff) {
+          const again = () => send(oeeConfig());
+          downtimeListeners.add(again);
+          downtimeOff = () => downtimeListeners.delete(again);
+        }
         filtersOff ??= boardFilters.subscribe(sendFilters);
         if (!rulesOff) {
           boardRuleListeners.add(sendRules);
@@ -1012,6 +1035,30 @@ function start() {
         send(fleetState(ids));
         fleetTimer = setInterval(() => send(fleetState(ids)), 30000);
         return;
+      }
+      // OEE over a window (the OEE page), and a stop's reason (an operator's Why?)
+      if (m.type === 'oeeReport') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const from = Number(m.from);
+        const to = Number(m.to);
+        if (!(from < to) || to - from > 62 * 86400000) return send({ type: 'oeeReportResult', requestId, error: 'A time window of at most 62 days' });
+        try {
+          const ids = Array.isArray(m.plcs) ? m.plcs.filter((id) => plcs.has(id)) : [];
+          return send({ type: 'oeeReportResult', requestId, ...oee.report({ from, to, plcIds: ids, by: ['shift', 'day'].includes(m.by) ? m.by : 'total' }) });
+        } catch (err) {
+          return send({ type: 'oeeReportResult', requestId, error: err.message });
+        }
+      }
+      if (m.type === 'downtimeReason') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (!plcs.has(m.plc) || typeof m.machine !== 'string' || !ads.isSymbolPath(m.machine) || !(Number(m.from) > 0)) return send({ type: 'downtimeReasonResult', requestId, ok: false, error: 'A PLC, a machine and when it stopped' });
+        try {
+          const e = oee.setReason({ plc: m.plc, machine: m.machine, from: Number(m.from), reason: String(m.reason ?? ''), note: m.note }, user);
+          for (const fn of downtimeListeners) fn();
+          return send({ type: 'downtimeReasonResult', requestId, ok: true, entry: e });
+        } catch (err) {
+          return send({ type: 'downtimeReasonResult', requestId, ok: false, error: err.message });
+        }
       }
       if (m.type === 'fleetStop') {
         clearInterval(fleetTimer);
@@ -1466,6 +1513,7 @@ function start() {
       drivesOff?.();
       faultsOff?.();
       clearInterval(fleetTimer);
+      downtimeOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -1497,6 +1545,7 @@ function start() {
     load.stop();
     faults.stop();
     fleet.stop();
+    oee.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();

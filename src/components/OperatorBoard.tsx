@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -7,6 +7,7 @@ import { BoardPlayback } from './BoardPlayback.tsx';
 import { IoBoard } from './IoBoard.tsx';
 import { DrivesBoard } from './DrivesBoard.tsx';
 import { RiskBoard } from './RiskBoard.tsx';
+import { OeeBoard } from './OeeBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -166,11 +167,11 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk'>(() => {
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee'>(() => {
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' || p === 'risk' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk') => {
+  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -237,6 +238,10 @@ export const OperatorBoard: React.FC = () => {
   const [faultList, setFaultList] = useState<FaultSummary[]>([]);
   const [faultOpen, setFaultOpen] = useState<string | null>(null);
   const [aside, setAside] = useState<'alerts' | 'faults'>('alerts');
+  // Downtime reasons (gateway/oee.cjs): the ones offered, after how long a stop asks Why?, the stops given one
+  const [downtime, setDowntime] = useState<{ reasons: string[]; afterMin: number; given: Set<string> }>({ reasons: [], afterMin: 2, given: new Set() });
+  const [whyFor, setWhyFor] = useState<{ plc: string; plcName: string; machine: string; state: string; from: number } | null>(null);
+  const [whyNote, setWhyNote] = useState('');
   // (the I/O page's messages, handed to it)
   const ioListeners = useRef(new Set<(m: { type: string }) => void>());
   const subscribeIo = useCallback((fn: (m: never) => void) => {
@@ -330,6 +335,11 @@ export const OperatorBoard: React.FC = () => {
         setSavedFilters(x.filters ?? []);
         setCanEdit(!!x.canEdit);
         setStartFilter(x.startFilter ?? null);
+        return;
+      }
+      if (msg.type === 'oeeConfig') {
+        const x = m as unknown as { reasons?: string[]; reasonAfterMin?: number; given?: string[] };
+        setDowntime({ reasons: x.reasons ?? [], afterMin: x.reasonAfterMin ?? 2, given: new Set(x.given ?? []) });
         return;
       }
       if (msg.type === 'faultEvent') {
@@ -709,6 +719,37 @@ export const OperatorBoard: React.FC = () => {
   };
   // (a PLC's closed branches: their keys without its id)
   const collapsedOf = (plc: string) => new Set([...collapsed].filter((k) => k.startsWith(plc + '|')).map((k) => k.slice(plc.length + 1)));
+  // (a stop long enough, its reason not given yet: Why? for those who may give one)
+  const whyOf = (p: Shown, m: Tile) => {
+    if (!may('downtime') || playback || !downtime.reasons.length || !(m.error || m.stuck) || !m.since || m.atLeast) return null;
+    if (now - offset - m.since < downtime.afterMin * 60000 || downtime.given.has(`${p.id}|${m.path.toLowerCase()}|${m.since}`)) return null;
+    return (
+      <button
+        type="button"
+        className="board-why shrink-0 px-1.5 rounded bg-slate-950/70 border border-white/40 text-xs font-semibold hover:bg-slate-950"
+        title="Why did it stop? (for the downtime report)"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setWhyNote('');
+          setWhyFor({ plc: p.id, plcName: p.name, machine: m.path, state: m.state ?? '', from: m.since! });
+        }}
+      >
+        Why?
+      </button>
+    );
+  };
+  const giveReason = async (reason: string) => {
+    if (!whyFor) return;
+    const w = whyFor;
+    setWhyFor(null);
+    try {
+      const r = await conn.current?.request<{ ok: boolean; error?: string }>({ type: 'downtimeReason', plc: w.plc, machine: w.machine, from: w.from, reason, note: whyNote }, 'downtimeReasonResult');
+      if (r?.ok) setDowntime((d) => ({ ...d, given: new Set([...d.given, `${w.plc}|${w.machine.toLowerCase()}|${w.from}`]) }));
+    } catch {
+      // (asked again next time)
+    }
+  };
   const chosenMark = (p: Shown, m: Tile) => (selecting ? selected.has(machineKey(p.id, m.path)) ? <CheckSquare className="w-4 h-4 shrink-0 text-violet-200" /> : <Square className="w-4 h-4 shrink-0 opacity-60" /> : null);
   const tileOf = (p: Shown, m: Tile) => {
     const sel = selecting && selected.has(machineKey(p.id, m.path));
@@ -724,7 +765,7 @@ export const OperatorBoard: React.FC = () => {
         <div className={`flex items-center gap-1 ${narrow ? 'text-xs' : 'text-sm'} opacity-80`}>
           {chosenMark(p, m)}
           <span className="truncate">{short(m.path, root)}</span>
-          <span className="ml-auto flex items-center gap-1 shrink-0">{marks(p, m)}</span>
+          <span className="ml-auto flex items-center gap-1 shrink-0">{whyOf(p, m)}{marks(p, m)}</span>
         </div>
         <div className={`board-state ${narrow ? 'text-sm' : 'text-lg'} font-bold leading-tight break-words`}>{m.state ?? (playback ? '—' : '...')}</div>
         <div className="flex items-center gap-2 text-sm font-mono opacity-90">
@@ -749,6 +790,7 @@ export const OperatorBoard: React.FC = () => {
         <span className={`font-mono ${narrow ? 'text-xs' : 'text-sm'} truncate max-w-[45%]`}>{label}</span>
         <span className={`board-state font-semibold ${narrow ? 'text-sm' : ''} truncate`}>{m.state ?? (playback ? '—' : '...')}</span>
         <span className="ml-auto flex items-center gap-2 shrink-0 text-xs font-mono opacity-90">
+          {whyOf(p, m)}
           {marks(p, m)}
           {m.since ? `${m.atLeast ? '≥ ' : ''}${formatDuration(m.inState)}` : ''}
           {m.stuck && m.limit ? <span>/ {formatLimit(m.limit)}</span> : null}
@@ -791,6 +833,11 @@ export const OperatorBoard: React.FC = () => {
           <button id="board-page-drives" type="button" onClick={() => setPage('drives')} className={`flex items-center gap-1 px-2 py-1 ${page === 'drives' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'drives'} title="The drives' health: read from each drive, judged against its limits, its own past and its siblings">
             <Gauge className="w-4 h-4" /> Drives
           </button>
+          {may('reports') && (
+            <button id="board-page-oee" type="button" onClick={() => setPage('oee')} className={`flex items-center gap-1 px-2 py-1 ${page === 'oee' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'oee'} title="OEE and downtime: availability, performance, the stops' reasons, by shift">
+              <BarChart3 className="w-4 h-4" /> OEE
+            </button>
+          )}
           <button id="board-page-risk" type="button" onClick={() => setPage('risk')} className={`flex items-center gap-1 px-2 py-1 ${page === 'risk' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'risk'} title="What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box">
             <ShieldAlert className="w-4 h-4" /> Risk
           </button>
@@ -994,6 +1041,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'oee' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <OeeBoard conn={conn.current} connected={status.state === 'connected'} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} root={root} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'risk' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} />
@@ -1270,6 +1322,24 @@ export const OperatorBoard: React.FC = () => {
             </aside>
           )}
         </div>
+        </div>
+      )}
+      {whyFor && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setWhyFor(null)}>
+          <div id="board-why" className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-900 p-4 text-sm shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && setWhyFor(null)}>
+            <div className="mb-1 text-base font-semibold">Why did it stop?</div>
+            <div className="mb-3 text-slate-400">
+              {short(whyFor.machine, root)} ({whyFor.plcName}): {whyFor.state} since {new Date(whyFor.from).toLocaleTimeString()}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {downtime.reasons.map((r) => (
+                <button key={r} type="button" className="board-why-reason px-3 py-2 rounded border border-slate-600 hover:bg-slate-800 text-left" onClick={() => void giveReason(r)}>
+                  {r}
+                </button>
+              ))}
+            </div>
+            <input value={whyNote} onChange={(e) => setWhyNote(e.target.value)} placeholder="A note (optional): the jam was at the infeed" className="mt-3 w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" maxLength={200} />
+          </div>
         </div>
       )}
       {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} />}
