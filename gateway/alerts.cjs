@@ -5,6 +5,9 @@
 // state, read every 2 s by its connection) or stops answering: one alert; running again: recovered.
 const ads = require(require('fs').existsSync(require('path').join(__dirname, 'shared', 'tcAds.cjs')) ? './shared/tcAds.cjs' : '../shared/tcAds.cjs');
 const { VarWatcher } = require(require('fs').existsSync(require('path').join(__dirname, 'shared', 'liveVars.cjs')) ? './shared/liveVars.cjs' : '../shared/liveVars.cjs');
+const sharedDir = require('fs').existsSync(require('path').join(__dirname, 'shared', 'tcAds.cjs')) ? './shared' : '../shared';
+const { readPlcSources } = require(`${sharedDir}/tcSources.cjs`);
+const { stateNamesFromSources } = require(`${sharedDir}/enumFromSources.cjs`);
 
 const DEFAULT_ERROR = 'ERROR|FAULT|ALARM|E_?STOP|ABORT';
 const MAX_DEPTH = 5;
@@ -207,12 +210,54 @@ class AlertMonitor {
       this.plcState(conn.plcState);
       this.state = 'watching';
       this.message = `${this.machines.length} machine${this.machines.length === 1 ? '' : 's'} on ${plc.name}`;
-      this.env.log(`alerts: "${this.rule.name}" watches ${this.machines.length} machine(s) under ${this.rule.root} on ${plc.id}`);
+      this.env.log(`alerts: "${this.rule.name}" watches ${this.machines.length} machine(s) under ${this.rule.root} on ${plc.id}${this.failing ? ` (after ${this.failing.count} failed tries since ${new Date(this.failing.since).toISOString()})` : ''}`);
+      this.failing = null;
+      // (the state names the PLC does not describe: from its project's sources, meanwhile)
+      void this.namesFromSources(conn.client, plc);
     } catch (err) {
       this.state = 'error';
       this.message = err instanceof Error ? err.message : String(err);
-      this.env.log(`alerts: "${this.rule.name}": ${this.message}`);
+      // (the same error again, retrying every 30 s: logged once, then every 10 minutes with how often; a new one at once)
+      const now = Date.now();
+      const f = this.failing;
+      if (!f || f.message !== this.message) {
+        this.failing = { message: this.message, since: now, count: 1, logged: now };
+        this.env.log(`alerts: "${this.rule.name}": ${this.message}`);
+      } else {
+        f.count++;
+        if (now - f.logged >= 10 * 60000) {
+          f.logged = now;
+          this.env.log(`alerts: "${this.rule.name}": still failing (${f.count} tries since ${new Date(f.since).toISOString()}): ${this.message}`);
+        }
+      }
       this.later();
+    }
+  }
+
+  /**
+   * State names the PLC does not describe (its state variable an INT, as Kval's KvalStateMachineBase.machineState: the
+   * enum used in the code only): from the PLC project's own sources (its boot folder's copy), once per connection; the
+   * machines then named on the boards and in the alerts. No sources on the PLC: their numbers stay (#3), said in the log
+   */
+  async namesFromSources(client, plc) {
+    const unnamed = this.machines.filter((m) => !Object.keys(m.stateNames ?? {}).length);
+    if (!unnamed.length) return;
+    try {
+      const r = await Promise.race([readPlcSources(client, Number(plc.port) || 851), new Promise((resolve) => setTimeout(() => resolve({ error: 'no answer in 60 s' }), 60000))]);
+      if (this.stopped) return;
+      if (r.error) return this.env.log(`alerts: "${this.rule.name}": ${unnamed.length} machine(s) without state names (the PLC does not describe their enum): ${r.error}`);
+      const names = stateNamesFromSources(r.files ?? [], unnamed.map((m) => m.type), this.rule.stateVar || 'machineState');
+      let named = 0;
+      for (const m of unnamed) {
+        const v = names.get(String(m.type).split('.').pop().toLowerCase());
+        if (v) {
+          m.stateNames = v;
+          named++;
+        }
+      }
+      this.env.log(`alerts: "${this.rule.name}": the state names of ${named} of ${unnamed.length} machine(s) from the PLC's sources`);
+    } catch (err) {
+      this.env.log(`alerts: "${this.rule.name}": state names from the PLC's sources: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

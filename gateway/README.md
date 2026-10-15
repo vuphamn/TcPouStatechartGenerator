@@ -196,6 +196,10 @@ The setup page's **Run at startup** installs the gateway as a Windows scheduled 
 
 A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM or WinSW run it the same way.
 
+**The log:** the gateway writes it to its console and to `gateway.log` beside `config.json` (at 5 MB it moves to `gateway.log.1`): run by the task it has no console, read the file then. A PLC that does not answer is retried every 30 s: the same error is logged once, then every 10 minutes with how many tries, and its connection when it comes back.
+
+**State names:** a board's tiles name each machine's state from its state variable's enum, as the PLC describes it. A state variable the PLC knows only as a number (Kval's `KvalStateMachineBase.machineState : INT`, the enum used in the code) is named from the PLC project's sources on the PLC (its boot folder's copy: the project downloaded with its sources): each type's enum found from its `CASE` labels or assignments, its members from its `.TcDUT`. Without them the tiles show the numbers (`#3`), and the log says why.
+
 ## Audit log
 
 Who did what, one JSON line per event in `audit-YYYY-MM.jsonl` next to `config.json` (kept 24 months): sign-ins (token or company account, with the address), going live (PLC, variable), acknowledgements (with the note), maintenance set and ended (planned too), replays and availability of recordings, reports, and every change on the setup page. The setup page searches it (any text: a user, an action, a PLC, a machine) over the last 24 h to a year, and exports it as CSV.

@@ -47,7 +47,20 @@ const configPath = path.resolve(option('--config') ?? path.join(__dirname, 'conf
 const baseDir = path.dirname(configPath);
 const command = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1]?.startsWith('--') !== true) ?? 'start';
 
-const log = (...a) => console.log(new Date().toISOString(), ...a);
+// The log: the console, and (running: start) gateway.log beside config.json, read when it runs without a console (Run
+// at startup's task, as SYSTEM); at 5 MB it moves to gateway.log.1 (the one before it dropped)
+const logFile = path.join(path.dirname(configPath), 'gateway.log');
+const log = (...a) => {
+  const line = `${new Date().toISOString()} ${require('util').format(...a)}`;
+  console.log(line);
+  if (process.argv[2] !== 'start') return;
+  try {
+    if ((fs.statSync(logFile, { throwIfNoEntry: false })?.size ?? 0) > 5 * 1024 * 1024) fs.renameSync(logFile, `${logFile}.1`);
+    fs.appendFileSync(logFile, `${line}\r\n`);
+  } catch {
+    // (a log that cannot be written: the console's only)
+  }
+};
 const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
 
 function loadConfig() {
@@ -185,7 +198,11 @@ class PlcConnection {
       try {
         await client.connect();
       } catch (err) {
-        throw new Error(`${this.plc.name} (${host}) did not accept the connection: ${ads.adsErrorText(err)}. Does the PLC have an ADS route to the gateway (AMS NetId ${this.localNetId})?`);
+        // (no TCP connection at all: the PLC off, another address, or TCP 48898 blocked; a route is asked for only once
+        // its router answers)
+        const text = ads.adsErrorText(err);
+        const noTcp = /Connecting to .* failed|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|No response from target/i.test(text);
+        throw new Error(`${this.plc.name} (${host}) did not accept the connection: ${text}. ${noTcp ? `Nothing answers at ${host} (TCP 48898): is the PLC on, its address right, TCP 48898 open on its firewall and on the way?` : `Does the PLC have an ADS route to the gateway (AMS NetId ${this.localNetId})?`}`);
       }
       try {
         this.plcState = ads.ADS_STATES[(await client.readState()).adsState] ?? 'unknown';
