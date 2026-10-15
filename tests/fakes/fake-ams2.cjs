@@ -120,6 +120,23 @@ function handle(sock, f) {
   // config.ecat: EtherCAT masters [{ netId, slaves: [[device state, link state], …], down?: { afterReads, slaves } }]
   // on port 0xFFFF at their NetIds: the slave count (index group 6), the slaves' states (9); down: after that many
   // reads of the states, those instead (a terminal gone)
+  // config.coe: EtherCAT slaves' own objects (CoE), read through their master: an SDO upload, index group 0xF302 at
+  // the master's NetId, the slave's EtherCAT address as the port, index offset (index << 16) | subindex:
+  // { "<netId>|<port>": { "<index, hex>:<subindex>": { size, value, signed? } } }; an object not there: 0x706
+  const coeAt = config.coe?.[`${[...target.netId].join('.')}|${target.port}`];
+  if (coeAt) {
+    if (cmd !== 2) return result(0x701);
+    const ig = d.readUInt32LE(0);
+    const io = d.readUInt32LE(4);
+    if (ig !== 0xf302) return result(0x702);
+    const obj = coeAt[`${((io >>> 16) & 0xffff).toString(16)}:${io & 0xff}`];
+    if (!obj) return result(0x706);
+    const b = Buffer.alloc(obj.size);
+    if (obj.size === 4) obj.signed ? b.writeInt32LE(obj.value) : b.writeUInt32LE(obj.value >>> 0);
+    else if (obj.size === 2) obj.signed ? b.writeInt16LE(obj.value) : b.writeUInt16LE(obj.value & 0xffff);
+    else obj.signed ? b.writeInt8(obj.value) : b.writeUInt8(obj.value & 0xff);
+    return result(0, withLength(b));
+  }
   if (target.port === 0xffff) {
     const at = [...target.netId].join('.');
     const m = (config.ecat || []).find((x) => x.netId === at);

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, History, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
 import { BoardPlayback } from './BoardPlayback.tsx';
 import { IoBoard } from './IoBoard.tsx';
+import { DrivesBoard } from './DrivesBoard.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
@@ -69,7 +70,7 @@ interface BoardPlc {
 
 export interface AlertEvent {
   id: string;
-  event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped';
+  event: 'stuck' | 'error' | 'recovered' | 'slower' | 'plcStopped' | 'drive';
   /** Muted when it happened (maintenance, quiet hours): kept to be seen, never open */
   muted?: string;
   plc: string;
@@ -163,8 +164,11 @@ export const OperatorBoard: React.FC = () => {
   const conn = useRef<GatewayConnection | null>(null);
   // The board's pages and views (this viewer's, kept in this browser; the address first): the machines or the I/O;
   // the machines as a tree (nested as in the program) or flat (tiles)
-  const [page, setPageState] = useState<'machines' | 'io'>(() => (params.get('page') === 'io' || (!params.get('page') && store.get('kss.board.page') === 'io') ? 'io' : 'machines'));
-  const setPage = (p: 'machines' | 'io') => {
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives'>(() => {
+    const p = params.get('page') || store.get('kss.board.page');
+    return p === 'io' || p === 'drives' ? p : 'machines';
+  });
+  const setPage = (p: 'machines' | 'io' | 'drives') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -307,7 +311,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io')) {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -759,8 +763,11 @@ export const OperatorBoard: React.FC = () => {
           <button id="board-page-io" type="button" onClick={() => setPage('io')} className={`flex items-center gap-1 px-2 py-1 ${page === 'io' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'io'} title="The I/O devices, their states, and signals charted live">
             <Cpu className="w-4 h-4" /> I/O
           </button>
+          <button id="board-page-drives" type="button" onClick={() => setPage('drives')} className={`flex items-center gap-1 px-2 py-1 ${page === 'drives' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'drives'} title="The drives' health: read from each drive, judged against its limits, its own past and its siblings">
+            <Gauge className="w-4 h-4" /> Drives
+          </button>
         </span>
-        <span className={`flex items-center gap-2 ${page === 'io' ? 'hidden' : ''}`}>
+        <span className={`flex items-center gap-2 ${page !== 'machines' ? 'hidden' : ''}`}>
           <span className="relative flex items-center">
             <Search className="absolute left-2 w-4 h-4 text-slate-500 pointer-events-none" />
             <input
@@ -954,6 +961,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'drives' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <DrivesBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'io' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <IoBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={wanted} onlyPlcs={activeFilter?.plcs ?? []} signals={signals} onSignals={setSignals} recordings={rules.recordings} onRecord={(groups) => setRuleDialog({ kind: 'recording', groups })} canEdit={canEdit} narrow={narrow} />

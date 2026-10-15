@@ -16,7 +16,7 @@ export interface BoardSavedFilter {
   /** "<plc>|<path>": the I/O signals charted */
   signals: string[];
   alerts: boolean;
-  page: 'machines' | 'io';
+  page: 'machines' | 'io' | 'drives';
   by?: string;
   at?: string;
   changedBy?: string;
@@ -138,7 +138,7 @@ export const BoardFiltersMenu: React.FC<{
                         <span className="truncate font-medium">{f.name}</span>
                       </div>
                       <div className="text-xs text-slate-400 truncate">
-                        {[f.layout === 'tree' ? 'tree' : 'flat', f.page === 'io' ? 'I/O page' : '', f.problemsOnly ? 'problems only' : '', f.text ? `"${f.text}"` : '', f.machines.length ? `${f.machines.length} machines` : '', f.signals.length ? `${f.signals.length} signals` : '', f.plcs.length ? `${f.plcs.length} PLC${f.plcs.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}
+                        {[f.layout === 'tree' ? 'tree' : 'flat', f.page === 'io' ? 'I/O page' : f.page === 'drives' ? 'Drives page' : '', f.problemsOnly ? 'problems only' : '', f.text ? `"${f.text}"` : '', f.machines.length ? `${f.machines.length} machines` : '', f.signals.length ? `${f.signals.length} signals` : '', f.plcs.length ? `${f.plcs.length} PLC${f.plcs.length === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ')}
                         {f.note ? ` — ${f.note}` : ''}
                       </div>
                     </button>
@@ -202,7 +202,7 @@ export const BoardFiltersMenu: React.FC<{
                 <input type="checkbox" checked={form.withPlcs} onChange={(e) => setForm({ ...form, withPlcs: e.target.checked })} />
                 Only the {shownPlcs} PLC{shownPlcs === 1 ? '' : 's'} shown now
               </label>
-              <div className="text-xs text-slate-500">Kept with it: the filter's words, problems only, tree or flat, the page (machines or I/O), its signals, the alerts panel.</div>
+              <div className="text-xs text-slate-500">Kept with it: the filter's words, problems only, tree or flat, the page (machines, I/O or drives), its signals, the alerts panel.</div>
               {error && <div className="text-rose-300">{error}</div>}
               <div className="flex gap-2 justify-end">
                 <button type="button" onClick={() => setForm(null)} className="px-3 py-1 rounded border border-slate-700 hover:bg-slate-800">

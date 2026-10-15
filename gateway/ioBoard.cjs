@@ -163,7 +163,7 @@ function createIoBoards({ connectionFor, plcOf, log, sharedDir, retryMs = 30000 
       for (const [k, p] of all) if (!this.signals.has(k)) this.signals.set(k, { path: p, points: [], error: null });
       if (!this.conn?.client) return;
       if (!this.vars) {
-        this.vars = new VarWatcher(this.conn.client, (m) => {
+        this.vars = (this.conn.sharedVars?.() ? (fn) => this.conn.sharedVars().watcher(fn) : (fn) => new VarWatcher(this.conn.client, fn))((m) => {
           for (const r of m?.vars ?? []) {
             const s = this.signals.get(String(r.id));
             if (s) s.error = r.error ?? null;

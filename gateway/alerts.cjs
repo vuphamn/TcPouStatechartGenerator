@@ -214,7 +214,8 @@ class AlertMonitor {
       const only = Array.isArray(this.rule.machines) ? new Set(this.rule.machines.map((p) => p.toLowerCase())) : null;
       this.machines = only && !only.size ? [] : (await this.discover(conn.client)).filter((m) => !only || only.has(m.path.toLowerCase()));
       if (this.stopped) return;
-      this.vars = new VarWatcher(conn.client, () => {});
+      // (the connection's shared notifications: a machine on the board, alarmed and recorded is one notification)
+      this.vars = conn.sharedVars?.()?.watcher(() => {}) ?? new VarWatcher(conn.client, () => {});
       // (and a recording's extra variables, e.g. guard values: ids "var:<path>")
       await this.vars.set([
         ...this.machines.map((m) => ({ id: m.path.toLowerCase(), candidates: [`${m.path}.${this.rule.stateVar}`] })),

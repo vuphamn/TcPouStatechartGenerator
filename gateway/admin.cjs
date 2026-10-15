@@ -57,7 +57,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -195,6 +195,8 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     'POST service/switch': async () => service.switchToTask(),
     // The PLCs' projects kept here (projectSync.cjs): their state; one checked now
     'GET projects': async () => (projects ? projects.list() : { enabled: false, plcs: [] }),
+    // (the load panel: this computer, the gateway, each PLC's notifications and tasks, the drives read)
+    'GET load': async () => (load ? load() : { plcs: [] }),
     'POST projects/check': async (body) => {
       if (!projects) throw new Error('Not available on this gateway');
       const plc = (getConfig().plcs ?? []).find((p) => p.id === String(body.id ?? ''));
@@ -389,6 +391,12 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-recordings"></div>
   <div class="row mt"><button id="admin-recording-add">Add a recording</button><span class="grow"></span><button class="primary" id="admin-recordings-save">Save recordings</button></div>
   <div class="msg" id="admin-recordings-msg"></div>
+</section>
+<section>
+  <h2>Load</h2>
+  <p class="hint flush">What the gateway costs this computer and each PLC, measured every few seconds. The PLC's own tasks run in TwinCAT's real time, before any Windows program: its tasks below show whether they keep their cycle (their execution time, the longest seen, every overrun counted). Each variable the boards, alarms, recordings, live diagrams and I/O charts follow is one ADS notification, shared by all of them.</p>
+  <p class="hint" id="admin-load-sub"></p>
+  <div id="admin-load"></div>
 </section>
 <section>
   <h2>PLC projects</h2>
@@ -815,6 +823,34 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
           say('admin-projects-msg', p.name + ': ' + (projState[r.state] || r.state) + (r.message ? ' (' + r.message + ')' : ''), r.state !== 'error' && r.state !== 'no-sources');
         } catch (err) { say('admin-projects-msg', err.message, false); }
         loadProjects().catch(() => {});
+
+  // ---- Load (this computer, the gateway, each PLC) ----
+  const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');
+  const loadLoad = async () => {
+    const a = await call('load');
+    if (!a.machine) return;
+    $('admin-load-sub').textContent = a.host + ' (' + a.cores + ' cores): all programs ' + a.machine.cpuPct + ' % CPU, ' + a.machine.freeMemMB + ' of ' + a.machine.totalMemMB + ' MB memory free. The gateway: ' + a.gateway.cpuPct + ' % of one core, ' + a.gateway.rssMB + ' MB, answering within ' + a.gateway.loopP99Ms + ' ms (99 %).';
+    const box = $('admin-load');
+    box.replaceChildren();
+    const rows = el('tbody', {});
+    for (const p of a.plcs) {
+      const d = (a.drives || []).find((x) => x.plc === p.id);
+      const tasks = (p.tasks || []).map((t) => {
+        const pct = t.cycleUs && t.execUs != null ? Math.round((t.execUs / t.cycleUs) * 100) : null;
+        return t.name.split('_').pop() + ': ' + timeOf(t.execUs) + ' of ' + timeOf(t.cycleUs) + (pct != null ? ' (' + pct + ' %)' : '') + ', longest ' + timeOf(t.maxExecUs) + ', ' + t.overruns + ' overrun' + (t.overruns === 1 ? '' : 's') + (t.overrunsLastHour ? ' (' + t.overrunsLastHour + ' in the last hour)' : '') + (t.rtViolations ? ', ' + t.rtViolations + ' real-time violations' : '');
+      });
+      rows.append(el('tr', { 'data-load-plc': p.id, class: (p.tasks || []).some((t) => t.overrunsLastHour) ? 'warn' : '' },
+        el('td', {}, p.name),
+        el('td', {}, p.connected ? 'connected' + (p.plcState ? ', PLC ' + p.plcState : '') : 'not connected'),
+        el('td', { class: 'admin-load-shared' }, p.shared ? p.shared.notifications + ' (' + p.shared.uses + ' uses, every ' + p.shared.cycleMs + ' ms on change; ' + p.shared.samplesPerSec + ' changes/s)' : ''),
+        el('td', {}, p.live.notifications ? String(p.live.notifications) : ''),
+        el('td', {}, d ? d.drives + ' every ' + Math.round(d.everyMs / 1000) + ' s' : ''),
+        el('td', { class: 'admin-load-tasks' }, tasks.join(' · '))));
+    }
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Drives read'), el('th', {}, 'Its tasks'))), rows)));
+  };
+  loadLoad().catch(() => {});
+  window.setInterval(() => { if (!document.hidden) loadLoad().catch(() => {}); }, 3000);
       } } }, 'Check now');
       rows.append(el('tr', { 'data-project-plc': p.id },
         el('td', {}, p.name),
@@ -827,6 +863,34 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'State'), el('th', {}, 'Checked'), el('th', {}, 'Its version, downloaded'), el('th', {}, ''), el('th', {}, ''))), rows)));
   };
   loadProjects().catch(() => {});
+
+  // ---- Load (this computer, the gateway, each PLC) ----
+  const timeOf = (us) => (us == null ? '' : us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : Math.round(us) + ' µs');
+  const loadLoad = async () => {
+    const a = await call('load');
+    if (!a.machine) return;
+    $('admin-load-sub').textContent = a.host + ' (' + a.cores + ' cores): all programs ' + a.machine.cpuPct + ' % CPU, ' + a.machine.freeMemMB + ' of ' + a.machine.totalMemMB + ' MB memory free. The gateway: ' + a.gateway.cpuPct + ' % of one core, ' + a.gateway.rssMB + ' MB, answering within ' + a.gateway.loopP99Ms + ' ms (99 %).';
+    const box = $('admin-load');
+    box.replaceChildren();
+    const rows = el('tbody', {});
+    for (const p of a.plcs) {
+      const d = (a.drives || []).find((x) => x.plc === p.id);
+      const tasks = (p.tasks || []).map((t) => {
+        const pct = t.cycleUs && t.execUs != null ? Math.round((t.execUs / t.cycleUs) * 100) : null;
+        return t.name.split('_').pop() + ': ' + timeOf(t.execUs) + ' of ' + timeOf(t.cycleUs) + (pct != null ? ' (' + pct + ' %)' : '') + ', longest ' + timeOf(t.maxExecUs) + ', ' + t.overruns + ' overrun' + (t.overruns === 1 ? '' : 's') + (t.overrunsLastHour ? ' (' + t.overrunsLastHour + ' in the last hour)' : '') + (t.rtViolations ? ', ' + t.rtViolations + ' real-time violations' : '');
+      });
+      rows.append(el('tr', { 'data-load-plc': p.id, class: (p.tasks || []).some((t) => t.overrunsLastHour) ? 'warn' : '' },
+        el('td', {}, p.name),
+        el('td', {}, p.connected ? 'connected' + (p.plcState ? ', PLC ' + p.plcState : '') : 'not connected'),
+        el('td', { class: 'admin-load-shared' }, p.shared ? p.shared.notifications + ' (' + p.shared.uses + ' uses, every ' + p.shared.cycleMs + ' ms on change; ' + p.shared.samplesPerSec + ' changes/s)' : ''),
+        el('td', {}, p.live.notifications ? String(p.live.notifications) : ''),
+        el('td', {}, d ? d.drives + ' every ' + Math.round(d.everyMs / 1000) + ' s' : ''),
+        el('td', { class: 'admin-load-tasks' }, tasks.join(' · '))));
+    }
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Drives read'), el('th', {}, 'Its tasks'))), rows)));
+  };
+  loadLoad().catch(() => {});
+  window.setInterval(() => { if (!document.hidden) loadLoad().catch(() => {}); }, 3000);
 
   // ---- Shift reports ----
   let shiftList = [];

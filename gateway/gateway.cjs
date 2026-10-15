@@ -34,6 +34,9 @@ const { createAuth } = require('./auth.cjs');
 const { createAlertLog, createBoards, createMaintenance, mutedFor } = require('./board.cjs');
 const { createBoardFilters } = require('./boardFilters.cjs');
 const { createIoBoards } = require('./ioBoard.cjs');
+const { SharedVars } = require('./sharedVars.cjs');
+const { createLoad } = require('./load.cjs');
+const { createDrives } = require('./drives.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
@@ -184,6 +187,13 @@ class PlcConnection {
     this.plcState = null;
     // (its symbol version: a change is another program; read again on each connection)
     this.symbolVersion = null;
+  }
+
+  /** Its shared notifications (sharedVars.cjs): one per variable for the boards, alarms, recordings, live sessions */
+  sharedVars() {
+    if (!this.client) return null;
+    if (this.shared?.client !== this.client) this.shared = new SharedVars(this.client, ads);
+    return this.shared;
   }
 
   async connect() {
@@ -418,6 +428,8 @@ function start() {
     recorders?.apply(config.recordings);
     config.oidc = next.oidc;
     config.boardEditors = next.boardEditors;
+    config.drives = next.drives;
+    drives?.apply();
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -437,6 +449,7 @@ function start() {
   // Alerts: the machines of the rules' PLCs followed by the gateway itself (webhooks when stuck / in error)
   let alerts = null;
   let recorders = null;
+  let drives = null;
   setInterval(() => {
     if (mtime() === configMtime) return;
     try {
@@ -559,7 +572,8 @@ function start() {
     plcList: () => [...plcs.values()],
     clientFor: async (plc) => {
       const live = [...connections.values()].find((c) => c.client && c.plc.id === plc.id)?.client;
-      if (live) return { client: live, own: false };
+      // (the live one when it still answers: after the PLC restarted, it may not yet know it is gone)
+      if (live && (await live.readState().then(() => true).catch(() => false))) return { client: live, own: false };
       const own = new Client({ ...adsTarget(plc, Number(plc.port) || 851, plc.localNetId || config.localNetId, 32908), rawClient: true, autoReconnect: false, timeoutDelay: 10000, hideConsoleWarnings: true });
       await own.connect();
       return { client: own, own: true };
@@ -570,6 +584,10 @@ function start() {
     audit,
   });
   projectSync.start();
+  // The drives' health (drives.cjs): each PLC's drives read by the gateway itself; the load panel's numbers (load.cjs)
+  drives = createDrives({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log, onEvent: (e) => alertLog.add(e), postWebhook });
+  drives.start();
+  const load = createLoad({ connections: () => [...connections.entries()], plcOf, plcList: () => [...plcs.values()], ads, log });
   // (From PLC: the copy kept here when it is in step with the PLC, else null: read from the PLC; logged once a minute)
   let keptSaid = 0;
   const keptSources = async (plc, client, key) => {
@@ -604,6 +622,7 @@ function start() {
     audit,
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     projects: projectSync,
+    load: () => ({ ...load.snapshot(), drives: drives.stats() }),
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
@@ -654,6 +673,8 @@ function start() {
     let rulesOff = null;
     let ioWatch = null;
     const ioViewer = {};
+    // (its board's Drives page)
+    let drivesOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -753,7 +774,7 @@ function start() {
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)
-      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
@@ -900,6 +921,29 @@ function start() {
         ioWatch = ioBoards.watch(ids, ioViewer, send);
         log(`io board: ${user} watches ${ids.join(', ') || '(no PLCs)'}`);
         return;
+      }
+      // The Drives page: the drives of these PLCs (all when none), sent after each round of reads; a drive's history
+      if (m.type === 'drivesWatch') {
+        drivesOff?.();
+        const ids = Array.isArray(m.plcs) ? m.plcs.filter((id) => plcs.has(id)) : [];
+        const sendDrives = () => send({ type: 'drivesState', plcs: drives.view(ids), params: drives.params(), ...(config.drives?.enabled === false ? { error: 'The drives are not read on this gateway (drives.enabled is false in config.json)' } : {}) });
+        sendDrives();
+        drivesOff = drives.subscribe((plcId) => (!ids.length || ids.includes(plcId)) && sendDrives());
+        log(`drives: ${user} watches the drives of ${ids.join(', ') || 'every PLC'}`);
+        return;
+      }
+      if (m.type === 'drivesStop') {
+        drivesOff?.();
+        drivesOff = null;
+        return;
+      }
+      if (m.type === 'driveHistory') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const from = Number(m.from);
+        const to = Number(m.to);
+        const keys = Array.isArray(m.keys) ? m.keys.filter((k) => typeof k === 'string' && /^\w{1,32}$/.test(k)).slice(0, 20) : [];
+        if (typeof m.plc !== 'string' || typeof m.path !== 'string' || !keys.length || !(from < to) || to - from > 93 * 86400000) return send({ type: 'driveHistoryResult', requestId, error: 'A PLC, a drive, its values and a time window of at most 93 days' });
+        return send({ type: 'driveHistoryResult', requestId, ...drives.history(m.plc, m.path, keys, from, to) });
       }
       if (m.type === 'ioBoardStop') {
         ioWatch?.stop();
@@ -1248,7 +1292,7 @@ function start() {
           if (seq !== startSeq) return;
           conn.viewers.add(viewer);
           clearTimeout(conn.idleTimer);
-          session = { conn, entry: null, vars: new VarWatcher(conn.client, send) };
+          session = { conn, entry: null, vars: conn.sharedVars()?.watcher(send) ?? new VarWatcher(conn.client, send) };
           if (desiredVars) session.vars.set(desiredVars);
           viewerCount++;
           flushTimer = setInterval(() => {
@@ -1292,7 +1336,7 @@ function start() {
           await conn.unwatch(viewer);
           return;
         }
-        session = { conn, entry, vars: new VarWatcher(conn.client, send) };
+        session = { conn, entry, vars: conn.sharedVars()?.watcher(send) ?? new VarWatcher(conn.client, send) };
         if (desiredVars) session.vars.set(desiredVars);
         viewerCount++;
         flushTimer = setInterval(() => {
@@ -1334,6 +1378,7 @@ function start() {
       filtersOff?.();
       rulesOff?.();
       ioWatch?.stop();
+      drivesOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);
@@ -1361,6 +1406,8 @@ function start() {
     alerts.stop();
     boards.stop();
     ioBoards.stop();
+    drives.stop();
+    load.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();

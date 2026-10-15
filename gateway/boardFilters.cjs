@@ -32,14 +32,14 @@ function checkFilter(f, plcIds) {
     machines: list(f?.machines, 500, keyed),
     signals: list(f?.signals, 50, keyed),
     alerts: f?.alerts === false ? false : true,
-    page: f?.page === 'io' ? 'io' : 'machines',
+    page: ['io', 'drives'].includes(f?.page) ? f.page : 'machines',
   };
 }
 
 function createBoardFilters({ file, log, audit }) {
   let filters = [];
   try {
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
     filters = Array.isArray(raw?.filters) ? raw.filters : [];
   } catch {
     filters = [];

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CircleDot, Cpu, ListTree, Network, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CircleDot, Cpu, Info, ListTree, Network, Search, X } from 'lucide-react';
+import { IoBoxProperties, type DeviceInfo, type DeviceInfoRequest } from './IoBoxProperties.tsx';
 import type { IoBox, IoDevice, IoTree } from './IoTreePanel.tsx';
 import { IoNetworkView, allBoxes, boxStates, stateText, type EcatStatesResult, type SlaveState } from './IoNetworkView.tsx';
 import { SignalTrends, type SignalSeries } from './SignalTrends.tsx';
@@ -52,7 +53,9 @@ const kindOf = (st: SlaveState | undefined, b: IoBox) => (b.disabled ? 'off' : !
  * terminals, drives and valve terminals of any maker the project has), each box's state from its master (OP, or not:
  * red, with why), as a tree or as the network. A filter finds a box, a channel or a PLC variable (every word);
  * problems only; linked only. A linked channel's box (its PLC variable) charts it live (Signals), and Record… keeps it
- * on the gateway. Read-only: nothing is written to the PLC.
+ * on the gateway. A box's ⓘ (the network: right-click or Alt+click) opens its properties as on the I/O tab: its
+ * pictures (front, back, wiring: the gateway's Devices folder), the maker's page, a search, the manual, its channels.
+ * Read-only: nothing is written to the PLC.
  */
 export const IoBoard: React.FC<{
   conn: GatewayConnection | null;
@@ -91,6 +94,23 @@ export const IoBoard: React.FC<{
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [picked, setPicked] = useState<Record<string, string>>({}); // device -> box path (network view)
   const [history, setHistory] = useState<{ from: number; to: number; loading?: string } | null>(null);
+  // A box's properties (the I/O tab's panel); its details from the gateway (TwinCAT's device descriptions there, its
+  // Devices folder's pictures)
+  const [propsAt, setPropsAt] = useState<{ plc: string; path: string } | null>(null);
+  const propsOf = useMemo(() => {
+    const tree = propsAt ? trees[propsAt.plc] : null;
+    if (!propsAt || !tree) return null;
+    for (const d of tree.devices ?? []) {
+      const all = allBoxes(d.boxes);
+      const box = all.find((b) => b.path === propsAt.path);
+      if (box) return { box, device: d, parent: box.portA?.box !== undefined ? all.find((b) => b.id === box.portA!.box) ?? null : null };
+    }
+    return null;
+  }, [propsAt, trees]);
+  const fetchInfo = useMemo(
+    () => (req: DeviceInfoRequest) => (conn ? conn.request<DeviceInfo>({ type: 'deviceInfo', productCode: req.productCode, revision: req.revision, deviceType: req.type, product: req.product }, 'deviceInfoResult', 20000) : Promise.reject(new Error('Not connected'))),
+    [conn]
+  );
   const historyPoints = useRef<Record<string, { t: number; v: unknown }[]>>({});
 
   // The gateway's I/O messages
@@ -297,6 +317,8 @@ export const IoBoard: React.FC<{
                     return arr?.length ? arr[arr.length - 1].v : undefined;
                   }}
                   recorded={(v) => !!recordingOf(p.id, v)}
+                  onProps={(path) => setPropsAt({ plc: p.id, path })}
+                  propsPath={propsAt?.plc === p.id ? propsAt.path : null}
                   narrow={narrow}
                 />
               ))}
@@ -305,6 +327,32 @@ export const IoBoard: React.FC<{
           );
         })}
       </div>
+      {propsOf && propsAt && (
+        <div id="io-board-props" className="fixed inset-y-0 right-0 z-40 w-full max-w-[420px] overflow-y-auto border-l border-slate-700 bg-slate-900 shadow-2xl">
+          <IoBoxProperties
+            box={propsOf.box}
+            device={propsOf.device}
+            parent={propsOf.parent}
+            state={boxStates([propsOf.device], states.find((s) => s.id === propsAt.plc)?.ecat ?? null, () => undefined).get(propsOf.box.path)}
+            events={[]}
+            valueOf={(v) => {
+              const arr = points.current[machineKey(propsAt.plc, v)];
+              return arr?.length ? { v: arr[arr.length - 1].v } : undefined;
+            }}
+            fetchInfo={fetchInfo}
+            picturesWhere="gateway"
+            onShowInTree={(path) => {
+              const key = `${propsAt.plc}|${propsOf.device.name}`;
+              const next = { ...views, [key]: 'tree' as const };
+              setViews(next);
+              store.set(VIEW_KEY, JSON.stringify(next));
+              setOpen((s) => new Set([...s, `${key}|${path}`]));
+              window.setTimeout(() => document.querySelector(`.io-board-box[data-box="${CSS.escape(path)}"]`)?.scrollIntoView({ block: 'center' }), 50);
+            }}
+            onClose={() => setPropsAt(null)}
+          />
+        </div>
+      )}
       {series.length > 0 && (
         <SignalTrends
           signals={series}
@@ -345,8 +393,10 @@ const DeviceView: React.FC<{
   onSignal: (variable: string) => void;
   valueOf: (variable: string) => unknown;
   recorded: (variable: string) => boolean;
+  onProps: (path: string) => void;
+  propsPath: string | null;
   narrow: boolean;
-}> = ({ plc, device, states, ecatError, view, onView, words, problemsOnly, linkedOnly, open, onOpen, picked, onPick, signals, onSignal, valueOf, recorded, narrow }) => {
+}> = ({ plc, device, states, ecatError, view, onView, words, problemsOnly, linkedOnly, open, onOpen, picked, onPick, signals, onSignal, valueOf, recorded, onProps, propsPath, narrow }) => {
   const dKey = `${plc}|${device.name}`;
   const devOpen = !open.has(`${dKey}|closed`);
   // What the filter keeps: a box matching it (all of its channels), or the channels matching it (with their box);
@@ -397,6 +447,9 @@ const DeviceView: React.FC<{
           <span className="truncate text-slate-100">{b.name}</span>
           {vendor && vendor !== 'Beckhoff' && <span className="io-board-vendor shrink-0 px-1.5 rounded border border-slate-700 text-[11px] text-slate-300" title={`${b.info?.type ?? ''} ${b.info?.desc ?? ''}`.trim()}>{vendor}</span>}
           {kind === 'bad' && st && <span className="truncate text-xs text-rose-300">{stateText(st)}</span>}
+          <button type="button" className={`io-board-props-btn shrink-0 p-0.5 rounded ${propsPath === b.path ? 'text-sky-300' : 'text-slate-500 hover:text-white'}`} onClick={() => onProps(b.path)} title="Its properties: pictures (front, back), the maker's page, the manual, its channels">
+            <Info className="w-4 h-4" />
+          </button>
         </div>
         {boxOpen && channels.length > 0 && (
           <ul className="io-board-channels" style={{ paddingLeft: `${depth * (narrow ? 0.8 : 1.2) + 2.2}rem` }}>
@@ -461,7 +514,7 @@ const DeviceView: React.FC<{
                 ))}
               </div>
             )}
-            <IoNetworkView device={device} states={states} stateNote={ecatError ?? null} valueOf={() => undefined} selected={picked ?? matchList[0]} onSelectBox={onPick} />
+            <IoNetworkView device={device} states={states} stateNote={ecatError ?? null} valueOf={() => undefined} selected={propsPath ?? picked ?? matchList[0]} onSelectBox={onPick} onOpenProps={onProps} />
           </div>
         ))}
     </div>
