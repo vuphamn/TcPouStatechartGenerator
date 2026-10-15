@@ -57,7 +57,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -193,6 +193,16 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     'POST service/install': async () => service.install(),
     'POST service/remove': async () => service.remove(),
     'POST service/switch': async () => service.switchToTask(),
+    // The PLCs' projects kept here (projectSync.cjs): their state; one checked now
+    'GET projects': async () => (projects ? projects.list() : { enabled: false, plcs: [] }),
+    'POST projects/check': async (body) => {
+      if (!projects) throw new Error('Not available on this gateway');
+      const plc = (getConfig().plcs ?? []).find((p) => p.id === String(body.id ?? ''));
+      if (!plc) throw new Error('No such PLC: save the PLCs first');
+      // eslint-disable-next-line no-unused-vars
+      const { manifest, fingerprint, ...r } = await projects.check(plc, 'setup page');
+      return r;
+    },
     'GET recordings': async () => ({ rules: getConfig().recordings ?? [], status: recordings?.list() ?? [], plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })) }),
     'POST recordings': async (body) => {
       if (!recordings) throw new Error('Recordings are not available');
@@ -379,6 +389,13 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-recordings"></div>
   <div class="row mt"><button id="admin-recording-add">Add a recording</button><span class="grow"></span><button class="primary" id="admin-recordings-save">Save recordings</button></div>
   <div class="msg" id="admin-recordings-msg"></div>
+</section>
+<section>
+  <h2>PLC projects</h2>
+  <p class="hint flush">Each PLC's project as the PLC keeps it (its TwinCAT configuration and its PLC project's sources), kept here as a TwinCAT project to open: the PLC's copy is the golden one. Checked at start and every few minutes: downloaded when the PLC runs another build (only then), local changes undone; the versions before kept in history. The PLC must keep its sources (PLC project &gt; Settings &gt; Source download).</p>
+  <p class="hint" id="admin-projects-sub"></p>
+  <div id="admin-projects"></div>
+  <div class="msg" id="admin-projects-msg"></div>
 </section>
 <section>
   <h2>Shift reports</h2>
@@ -779,6 +796,37 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-recordings-msg', err.message, false); }
   });
   loadRecordings().catch(() => {});
+
+  // ---- PLC projects (kept here; the PLC's copy the golden one) ----
+  const projState = { 'in-sync': 'In step with the PLC', updated: 'Downloaded', restored: 'Restored from the PLC', 'no-sources': 'No sources on the PLC', error: 'Error', never: 'Not checked yet' };
+  const loadProjects = async () => {
+    const a = await call('projects');
+    const box = $('admin-projects');
+    box.replaceChildren();
+    $('admin-projects-sub').textContent = a.enabled ? 'Checked every ' + a.everyMinutes + ' min, ' + a.keep + ' older versions kept, in ' + a.folder : 'Off (projectSync.enabled, allowSources or allowBrowse is false in config.json)';
+    if (!a.plcs.length) return box.append(el('p', { class: 'hint' }, 'No PLCs yet.'));
+    const rows = el('tbody', {});
+    for (const p of a.plcs) {
+      const check = el('button', { class: 'admin-project-check', on: { click: async () => {
+        check.disabled = true;
+        say('admin-projects-msg', p.name + ': checking…');
+        try {
+          const r = await call('projects/check', { id: p.id });
+          say('admin-projects-msg', p.name + ': ' + (projState[r.state] || r.state) + (r.message ? ' (' + r.message + ')' : ''), r.state !== 'error' && r.state !== 'no-sources');
+        } catch (err) { say('admin-projects-msg', err.message, false); }
+        loadProjects().catch(() => {});
+      } } }, 'Check now');
+      rows.append(el('tr', { 'data-project-plc': p.id },
+        el('td', {}, p.name),
+        el('td', { class: 'admin-project-state' }, (p.checking ? 'Checking… ' : '') + (projState[p.state] || p.state)),
+        el('td', {}, p.lastCheck ? new Date(p.lastCheck).toLocaleString() : ''),
+        el('td', {}, p.downloadedAt ? new Date(p.downloadedAt).toLocaleString() + (p.files ? ' (' + p.files + ' files)' : '') : ''),
+        el('td', {}, (p.stale || p.message || '') + (p.history ? ' · ' + p.history + ' older version' + (p.history === 1 ? '' : 's') : '') + (p.downloadedAt ? ' · ' + p.folder : '')),
+        el('td', { class: 'right' }, check)));
+    }
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'State'), el('th', {}, 'Checked'), el('th', {}, 'Its version, downloaded'), el('th', {}, ''), el('th', {}, ''))), rows)));
+  };
+  loadProjects().catch(() => {});
 
   // ---- Shift reports ----
   let shiftList = [];

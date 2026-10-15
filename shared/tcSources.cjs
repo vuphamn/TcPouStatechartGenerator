@@ -250,4 +250,4 @@ async function readPlcSources(client, adsPort = 851, options = {}) {
   return { project: info?.project?.name ?? name, plcProject: name, projects, files, projectFiles, libraryTypes, ...(stale ? { stale } : {}) };
 }
 
-module.exports = { activeProjectOf, readBootFile, readPlcSources, projectInfoOf, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };
+module.exports = { activeProjectOf, readBootFile, readPlcSources, projectInfoOf, plcProjectsOf, staleCheck, unzip, builtTypes, libraryTypesOf, SYSTEM_SERVICE_PORT, bootFileExists };

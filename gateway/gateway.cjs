@@ -34,6 +34,7 @@ const { createAuth } = require('./auth.cjs');
 const { createAlertLog, createBoards, createMaintenance, mutedFor } = require('./board.cjs');
 const { createRecorders, checkRecording } = require('./recorder.cjs');
 const { createAudit } = require('./audit.cjs');
+const { createProjectSync } = require('./projectSync.cjs');
 const { createReports, checkShifts } = require('./report.cjs');
 const { createService } = require('./service.cjs');
 
@@ -522,6 +523,25 @@ function start() {
       .search({ from, to, q: '"kind":"note"', limit: 1000 })
       .filter((e) => e.action === 'live.event' && e.kind === 'note')
       .map((e) => ({ t: e.at ?? e.t, user: e.user, plc: e.plc, pou: e.pou, text: e.text }));
+  // The PLCs' projects kept here (PlcProjects/<plc id>/), the PLC's copy the golden one (projectSync.cjs): over the
+  // PLC's live connection when there is one (a second one from the same NetId could take its route), else one of its own
+  const projectSync = createProjectSync({
+    baseDir,
+    getConfig: () => config,
+    plcList: () => [...plcs.values()],
+    clientFor: async (plc) => {
+      const live = [...connections.values()].find((c) => c.client && c.plc.id === plc.id)?.client;
+      if (live) return { client: live, own: false };
+      const own = new Client({ ...adsTarget(plc, Number(plc.port) || 851, plc.localNetId || config.localNetId, 32908), rawClient: true, autoReconnect: false, timeoutDelay: 10000, hideConsoleWarnings: true });
+      await own.connect();
+      return { client: own, own: true };
+    },
+    ads,
+    sources: require(`${sharedDir}/tcSources.cjs`),
+    log,
+    audit,
+  });
+  projectSync.start();
   const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween });
   // Run at startup (Windows): the gateway as a scheduled task
   const service = createService({ configPath, log, audit });
@@ -544,6 +564,7 @@ function start() {
     recordings: { list: () => recorders.list(), check: checkRecording, checkSlowerNow: (id) => recorders.checkSlowerNow(id) },
     audit,
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
+    projects: projectSync,
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
