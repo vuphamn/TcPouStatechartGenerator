@@ -193,6 +193,12 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **a machine:** big on the phone: its state and time in it, what to do (as on the Andon), its latest alerts, its fault records, its open work orders; **Call maintenance**, **Work order**, its diagram live; **The whole board** goes back.
   - **a drive:** the Drives page with its health and history.
   - **a box:** the I/O page, filtered to it, with its properties (pictures, the maker's page, the manual).
+- **The board as an app, notifications on a device** (the 🔔 with rays in the header): the board installs as an app on a phone or a PC (the browser's **Install**, or **Add to Home Screen**), and tells that device of the alerts it wants, even with the board closed.
+  - **Turning them on:** choose the kinds (error states, stuck, PLC stopped, drives, calls for maintenance, escalated, work orders, shift handover, spare parts low, recovered), **Turn on**, allow the browser's notifications. The board's PLCs only. **Send a test**; **Turn off**.
+  - **A notification** names the PLC and the alert; a click opens the board at that machine.
+  - **Needs:** the board over https (the gateway's https address; on this computer, `localhost` too), and a browser with push notifications. On an iPhone or iPad: add the board to the Home Screen first and open it from there.
+  - **How:** standard Web Push (VAPID, RFC 8291 encryption), without any other service of Kval's. The gateway's key pair and the devices are kept in `push.json` beside `config.json`. The browser's push service (Google's, Apple's, Mozilla's, Microsoft's) carries the messages, so the gateway needs to reach the internet for this. A device its service no longer knows is dropped.
+  - **Settings:** `"push": { "enabled": true, "subject": "mailto:maintenance@acme.com" }` (the contact the push services are given).
 - **Shift handover** (the 🤝 in the header; amber, with a dot, while the last one is not read yet): what the outgoing shift hands the next one.
   - **This shift so far** (`config.shifts`; none: the last 8 hours), summed up by the gateway for the board's PLCs:
     - its alerts by kind, and the machines with most;

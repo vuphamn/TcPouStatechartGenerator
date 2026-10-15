@@ -50,6 +50,7 @@ const { createHandover } = require('./handover.cjs');
 const { createRecovery } = require('./recovery.cjs');
 const { createEventLog } = require('./eventlog.cjs');
 const { createSpares } = require('./spares.cjs');
+const { createPush } = require('./push.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -368,6 +369,7 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2',
   '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
 };
 
 function serveStatic(config, req, res) {
@@ -392,7 +394,7 @@ function serveStatic(config, req, res) {
     res.writeHead(404, { ...headers, 'Content-Type': 'text/plain' });
     return res.end('The web app is not installed next to the gateway (appDir).');
   }
-  res.writeHead(200, { ...headers, 'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'Cache-Control': file.endsWith('index.html') ? 'no-cache' : 'max-age=3600' });
+  res.writeHead(200, { ...headers, 'Content-Type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'Cache-Control': file.endsWith('index.html') || file.endsWith('sw.js') || file.endsWith('.webmanifest') ? 'no-cache' : 'max-age=3600' });
   if (req.method === 'HEAD') return res.end();
   fs.createReadStream(file).pipe(res);
 }
@@ -542,10 +544,18 @@ function start() {
   const rulesNow = () => config.alerts ?? [];
   // Roles (roles.cjs): who may do what, their start pages, who is told of what
   const roles = createRoles({ getConfig: () => config, postWebhook, log });
-  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow, onNew: (e) => roles.notify(e) });
+  // (who is told: the roles' channels, the devices subscribed to push notifications)
+  let push = null;
+  const notifyAll = (e) => {
+    roles.notify(e);
+    if (push) void push.notify(e).catch((err) => log(`push: ${err.message}`));
+  };
+  const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow, onNew: notifyAll });
   // Maintenance (set on the board: a PLC's alerts muted until a time)
   // Audit log: who did what (audit-YYYY-MM.jsonl next to config.json)
   const audit = createAudit({ dir: baseDir, log });
+  // Push notifications (push.cjs): the board's alerts on devices, the board closed
+  push = createPush({ baseDir, getConfig: () => config, log, audit });
   const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf, audit });
   // The notes written live through this gateway (the Live tab's + Note: the audit log's live.event "note"), the last
   // 24 h per PLC, newest first: on the board's PLCs (a minute's cache; a new one drops it)
@@ -647,7 +657,7 @@ function start() {
   };
   const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
   // Work orders (workorders.cjs): kept in workorders.json, told to the roles that want them
-  const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: (e) => roles.notify(e) });
+  const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: notifyAll });
   // Variables read once (the recovery guides' checks): through the PLC's connection (borrowed: held by none, let go)
   const readVarsOnce = async (plcId, vars) => {
     const plc = plcs.get(plcId);
@@ -687,9 +697,9 @@ function start() {
   // TwinCAT logged events (eventlog.cjs): imported on the setup page, shown with the fault records
   const eventLog = createEventLog({ baseDir, log, audit });
   // Spare parts (spares.cjs): the stock kept for the machines; a work order done takes the parts it used
-  const spares = createSpares({ baseDir, log, audit, notify: (e) => roles.notify(e) });
+  const spares = createSpares({ baseDir, log, audit, notify: notifyAll });
   // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
-  const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: (e) => roles.notify(e) });
+  const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: notifyAll });
   // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
   const engineering = createEngineering({ recorders, projectsDir: () => path.resolve(baseDir, String(config.projectSync?.folder || 'PlcProjects')), sources: require(`${sharedDir}/tcSources.cjs`) });
   // The support bundle (support.cjs): what support needs, in one zip, by a link that expires
@@ -1307,6 +1317,26 @@ function start() {
         }
       }
       // Spare parts: followed (the Work page's Parts), written, removed, received or taken
+      // Push notifications: this device's, turned on (its subscription, the events and PLCs it wants), off, tested
+      if (m.type === 'pushInfo') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        return send({ type: 'pushInfoResult', requestId, enabled: push.enabled(), publicKey: push.publicKey(), sub: typeof m.endpoint === 'string' ? push.of(m.endpoint) : null });
+      }
+      if (m.type === 'pushSubscribe' || m.type === 'pushUnsubscribe' || m.type === 'pushTest') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'pushResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          if (m.type === 'pushSubscribe') return send({ type: 'pushResult', requestId, ok: true, ...push.subscribe(m.subscription, { user, plcs: m.plcs, events: m.events, label: m.label }) });
+          if (m.type === 'pushUnsubscribe') {
+            push.unsubscribe(String(m.endpoint ?? ''), user);
+            return send({ type: 'pushResult', requestId, ok: true });
+          }
+          const status = await push.test(String(m.endpoint ?? ''), user);
+          return send({ type: 'pushResult', requestId, ok: status < 400, ...(status >= 400 ? { error: `Its push service answered ${status}` } : {}) });
+        } catch (err) {
+          return send({ type: 'pushResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'sparesWatch') {
         const sendSpares = () => send({ type: 'spares', ...spares.view() });
         sendSpares();

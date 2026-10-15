@@ -9,7 +9,7 @@ import { boardLangKeys, pickBoardLang, setBoardLang, t } from '../../src/utils/b
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 
-const FILES = ['OperatorBoard.tsx', 'BoardFiltersMenu.tsx', 'AndonBoard.tsx', 'FocusView.tsx', 'RecoveryDialog.tsx', 'HandoverDialog.tsx'];
+const FILES = ['OperatorBoard.tsx', 'BoardFiltersMenu.tsx', 'AndonBoard.tsx', 'FocusView.tsx', 'RecoveryDialog.tsx', 'HandoverDialog.tsx', 'PushDialog.tsx'];
 const es = new Set(boardLangKeys('es'));
 const missing: string[] = [];
 let used = 0;

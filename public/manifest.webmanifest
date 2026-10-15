@@ -1,0 +1,15 @@
+{
+  "name": "Kval MachineScope board",
+  "short_name": "MachineScope",
+  "description": "The machines, their alerts and what to do, live from the gateway",
+  "start_url": "/?board",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

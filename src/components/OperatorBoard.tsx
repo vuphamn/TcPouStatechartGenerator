@@ -16,6 +16,7 @@ import { EngBoard } from './EngBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { HandoverDialog, unreadHandover, type Handover } from './HandoverDialog.tsx';
 import { RecoveryDialog, guideFor, type RecoveryGuide, type RecoveryTarget } from './RecoveryDialog.tsx';
+import { PushDialog } from './PushDialog.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
@@ -291,6 +292,18 @@ export const OperatorBoard: React.FC = () => {
   // Shift handover: the latest ones (the gateway sends them again when one is handed over or read), the dialog
   const [handovers, setHandovers] = useState<Handover[]>([]);
   const [handoverOpen, setHandoverOpen] = useState(false);
+  // Push notifications on this device (the board as an app): the dialog; on or not (from the browser's subscription)
+  const [pushOpen, setPushOpen] = useState(false);
+  const [pushOn, setPushOn] = useState(false);
+  useEffect(() => {
+    if (!window.isSecureContext || !('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+    // (the board's service worker: installable, its notifications)
+    void navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => reg.pushManager?.getSubscription())
+      .then((sub) => setPushOn(!!sub))
+      .catch(() => undefined);
+  }, []);
   // Guided recovery: the guides (sent again when one changes), the machine whose guide is open
   const [guides, setGuides] = useState<RecoveryGuide[]>([]);
   const [recoveryFor, setRecoveryFor] = useState<RecoveryTarget | null>(null);
@@ -1106,6 +1119,11 @@ export const OperatorBoard: React.FC = () => {
             <LifeBuoy className="w-5 h-5" />
           </button>
         )}
+        {status.state === 'connected' && !viewOnly && (
+          <button id="board-push" type="button" onClick={() => setPushOpen(true)} className={`p-2 rounded hover:bg-slate-800 ${pushOn ? 'text-sky-300' : ''}`} title={pushOn ? t('Notifications on this device: on') : t('Notifications on this device (the board closed too)')} aria-pressed={pushOn}>
+            <BellRing className="w-5 h-5" />
+          </button>
+        )}
         <button id="board-lang" type="button" onClick={() => setLang(lang === 'es' ? 'en' : 'es')} className="px-1.5 py-0.5 rounded border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800" title={lang === 'es' ? t('Language: Español (click: English)') : t('Language: English (click: Español)')}>
           {lang.toUpperCase()}
         </button>
@@ -1514,6 +1532,7 @@ export const OperatorBoard: React.FC = () => {
       })()}
       {qrItems && <QrSheet items={qrItems} onClose={() => setQrItems(null)} />}
       {recoveryFor && <RecoveryDialog conn={conn.current} target={recoveryFor} guides={guides} canRun={may('ack')} canEdit={may('boardEdit')} canCall={may('call')} onClose={() => setRecoveryFor(null)} />}
+      {pushOpen && <PushDialog conn={conn.current} plcIds={wanted} onClose={() => setPushOpen(false)} onState={setPushOn} />}
       {handoverOpen && <HandoverDialog conn={conn.current} list={handovers} me={me} root={root} plcIds={wanted} canWrite={may('note')} onClose={() => setHandoverOpen(false)} />}
       {supportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setSupportOpen(false)}>
