@@ -46,7 +46,9 @@ export const AndonBoard: React.FC<{
   calls: AndonCall[];
   canCall: boolean;
   narrow: boolean;
-}> = ({ conn, connected, plcs, root, calls, canCall, narrow }) => {
+  /** A stopped machine's recovery guide button (the board's), when it has one */
+  guideButton?: (p: AndonPlc, m: AndonMachine) => React.ReactNode;
+}> = ({ conn, connected, plcs, root, calls, canCall, narrow, guideButton }) => {
   const [info, setInfo] = useState<{ docs: Record<string, Record<string, string>>; steps: Record<string, string>; reasons: string[] }>({ docs: {}, steps: {}, reasons: [] });
   const [callFor, setCallFor] = useState<{ plc: AndonPlc; machine: AndonMachine | null } | null>(null);
   const [note, setNote] = useState('');
@@ -137,11 +139,14 @@ export const AndonBoard: React.FC<{
                       <div>{todo(m)}</div>
                     </div>
                   )}
-                  {canCall && (
-                    <button type="button" onClick={() => { setNote(''); setCallFor({ plc: p, machine: m }); }} className="andon-call-machine mt-3 flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-950/70 hover:bg-slate-950 text-xl font-bold text-white">
-                      <Megaphone className="w-5 h-5" /> Call maintenance
-                    </button>
-                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {guideButton?.(p, m)}
+                    {canCall && (
+                      <button type="button" onClick={() => { setNote(''); setCallFor({ plc: p, machine: m }); }} className="andon-call-machine mt-3 flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-950/70 hover:bg-slate-950 text-xl font-bold text-white">
+                        <Megaphone className="w-5 h-5" /> Call maintenance
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

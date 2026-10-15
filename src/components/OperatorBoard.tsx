@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, ClipboardList, Code2, LifeBuoy, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Handshake, ListChecks, ClipboardList, Code2, LifeBuoy, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -14,6 +14,8 @@ import { QrSheet, type QrItem } from './QrSheet.tsx';
 import { FocusView } from './FocusView.tsx';
 import { EngBoard } from './EngBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
+import { HandoverDialog, unreadHandover, type Handover } from './HandoverDialog.tsx';
+import { RecoveryDialog, guideFor, type RecoveryGuide, type RecoveryTarget } from './RecoveryDialog.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
@@ -275,6 +277,12 @@ export const OperatorBoard: React.FC = () => {
   // A work order to begin (from an alert, a risk), and who signed in (the Work page's "mine")
   const [workDraft, setWorkDraft] = useState<WorkDraft | null>(null);
   const [me, setMe] = useState('');
+  // Shift handover: the latest ones (the gateway sends them again when one is handed over or read), the dialog
+  const [handovers, setHandovers] = useState<Handover[]>([]);
+  const [handoverOpen, setHandoverOpen] = useState(false);
+  // Guided recovery: the guides (sent again when one changes), the machine whose guide is open
+  const [guides, setGuides] = useState<RecoveryGuide[]>([]);
+  const [recoveryFor, setRecoveryFor] = useState<RecoveryTarget | null>(null);
   const onDraftDone = useCallback(() => setWorkDraft(null), []);
   const toWork = (d: WorkDraft) => {
     setWorkDraft(d);
@@ -401,6 +409,14 @@ export const OperatorBoard: React.FC = () => {
         setDowntime({ reasons: x.reasons ?? [], afterMin: x.reasonAfterMin ?? 2, given: new Set(x.given ?? []) });
         return;
       }
+      if (msg.type === 'recoveryGuides') {
+        setGuides((m as unknown as { guides?: RecoveryGuide[] }).guides ?? []);
+        return;
+      }
+      if (msg.type === 'handoverState') {
+        setHandovers((m as unknown as { list?: Handover[] }).list ?? []);
+        return;
+      }
       if (msg.type === 'faultEvent') {
         const f = (m as unknown as { fault: FaultSummary }).fault;
         setFaultList((list) => [f, ...list.filter((x) => x.id !== f.id)].sort((a, b) => b.at - a.at).slice(0, 300));
@@ -441,6 +457,8 @@ export const OperatorBoard: React.FC = () => {
         setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
+        if (!viewOnly) c.send({ type: 'handoverWatch' });
+        c.send({ type: 'recoveryWatch' });
         if (!viewOnly) void c.request<{ faults?: FaultSummary[] }>({ type: 'faultsList' }, 'faultsListResult').then((r) => setFaultList(r.faults ?? [])).catch(() => undefined);
       })
       .catch((err: Error) => {
@@ -779,6 +797,28 @@ export const OperatorBoard: React.FC = () => {
   };
   // (a PLC's closed branches: their keys without its id)
   const collapsedOf = (plc: string) => new Set([...collapsed].filter((k) => k.startsWith(plc + '|')).map((k) => k.slice(plc.length + 1)));
+  // (a machine in an error state, or stuck: its recovery guide; editors may write one where there is none)
+  const guideButton = (plc: { id: string; name: string }, m: { path: string; type?: string; state?: string | null; error?: boolean; stuck?: boolean }, big = false) => {
+    if (viewOnly || playback || !(m.error || m.stuck) || !m.state) return null;
+    const t: RecoveryTarget = { plc: plc.id, plcName: plc.name, machine: m.path, type: m.type ?? '', state: m.state };
+    const g = guideFor(guides, t);
+    if (!g && !may('boardEdit')) return null;
+    return (
+      <button
+        type="button"
+        className={`board-guide shrink-0 flex items-center gap-1 rounded font-semibold ${big ? 'mt-3 px-4 py-2 text-xl text-white bg-amber-600 hover:bg-amber-500' : g ? 'px-1.5 text-xs bg-amber-500 text-slate-950 hover:bg-amber-400' : 'px-1.5 text-xs border border-white/40 bg-slate-950/50 hover:bg-slate-950'}`}
+        title={g ? `Recovery guide: ${g.title} (${g.steps.length} steps)` : 'Write a recovery guide for this state'}
+        data-guide={g?.id ?? ''}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setRecoveryFor(t);
+        }}
+      >
+        <ListChecks className={big ? 'w-5 h-5' : 'w-3.5 h-3.5'} /> {g ? (big ? 'Recovery steps' : 'Guide') : '+ Guide'}
+      </button>
+    );
+  };
   // (a stop long enough, its reason not given yet: Why? for those who may give one)
   const whyOf = (p: Shown, m: Tile) => {
     if (!may('downtime') || playback || !downtime.reasons.length || !(m.error || m.stuck) || !m.since || m.atLeast) return null;
@@ -825,7 +865,7 @@ export const OperatorBoard: React.FC = () => {
         <div className={`flex items-center gap-1 ${narrow ? 'text-xs' : 'text-sm'} opacity-80`}>
           {chosenMark(p, m)}
           <span className="truncate">{short(m.path, root)}</span>
-          <span className="ml-auto flex items-center gap-1 shrink-0">{whyOf(p, m)}{marks(p, m)}</span>
+          <span className="ml-auto flex items-center gap-1 shrink-0">{guideButton(p, m)}{whyOf(p, m)}{marks(p, m)}</span>
         </div>
         <div className={`board-state ${narrow ? 'text-sm' : 'text-lg'} font-bold leading-tight break-words`}>{m.state ?? (playback ? '—' : '...')}</div>
         <div className="flex items-center gap-2 text-sm font-mono opacity-90">
@@ -850,6 +890,7 @@ export const OperatorBoard: React.FC = () => {
         <span className={`font-mono ${narrow ? 'text-xs' : 'text-sm'} truncate max-w-[45%]`}>{label}</span>
         <span className={`board-state font-semibold ${narrow ? 'text-sm' : ''} truncate`}>{m.state ?? (playback ? '—' : '...')}</span>
         <span className="ml-auto flex items-center gap-2 shrink-0 text-xs font-mono opacity-90">
+          {guideButton(p, m)}
           {whyOf(p, m)}
           {marks(p, m)}
           {m.since ? `${m.atLeast ? '≥ ' : ''}${formatDuration(m.inState)}` : ''}
@@ -1041,6 +1082,12 @@ export const OperatorBoard: React.FC = () => {
           {showAlerts ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
           {open.length > 0 && <span className="absolute -top-1 -right-1 min-w-[1.25rem] px-1 rounded-full bg-rose-600 text-xs font-bold">{open.length}</span>}
         </button>
+        {status.state === 'connected' && !viewOnly && (
+          <button id="board-handover" type="button" onClick={() => setHandoverOpen(true)} className={`relative p-2 rounded hover:bg-slate-800 ${unreadHandover(handovers, me) ? 'text-amber-300' : ''}`} title={unreadHandover(handovers, me) ? `Shift handover: ${unreadHandover(handovers, me)?.shift} from ${unreadHandover(handovers, me)?.by}, not read yet` : 'Shift handover: the last one, this shift so far, hand over'}>
+            <Handshake className="w-5 h-5" />
+            {unreadHandover(handovers, me) && <span id="board-handover-unread" className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-500" />}
+          </button>
+        )}
         {status.state === 'connected' && (may('engineering') || may('assign')) && (
           <button id="board-support" type="button" onClick={() => { setSupportRes(null); setSupportOpen(true); }} className="p-2 rounded hover:bg-slate-800" title="Support bundle: what Kval support needs, in one zip, by a link that expires">
             <LifeBuoy className="w-5 h-5" />
@@ -1112,7 +1159,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'andon' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <AndonBoard conn={conn.current} connected={status.state === 'connected'} plcs={shown} root={root} calls={alerts.filter((a) => a.event === 'call')} canCall={may('call')} narrow={narrow} />
+              <AndonBoard conn={conn.current} connected={status.state === 'connected'} plcs={shown} root={root} calls={alerts.filter((a) => a.event === 'call')} canCall={may('call')} narrow={narrow} guideButton={(pl, m) => guideButton(pl, m, true)} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'oee' && (
@@ -1450,6 +1497,8 @@ export const OperatorBoard: React.FC = () => {
         );
       })()}
       {qrItems && <QrSheet items={qrItems} onClose={() => setQrItems(null)} />}
+      {recoveryFor && <RecoveryDialog conn={conn.current} target={recoveryFor} guides={guides} canRun={may('ack')} canEdit={may('boardEdit')} canCall={may('call')} onClose={() => setRecoveryFor(null)} />}
+      {handoverOpen && <HandoverDialog conn={conn.current} list={handovers} me={me} root={root} plcIds={wanted} canWrite={may('note')} onClose={() => setHandoverOpen(false)} />}
       {supportOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setSupportOpen(false)}>
           <div id="board-support-dialog" className="w-full max-w-lg rounded-lg border border-slate-700 bg-slate-900 p-4 text-sm space-y-3 shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && setSupportOpen(false)}>

@@ -19,13 +19,14 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
     box('Face Inner Router VFD (Inverter i550 Cabinet)', 0x3b, 'i550 Inverter FW V05.02.xx'),
     box('Table 1 VFD (Inverter i550 Cabinet)', 0x3b, 'i550 Cabinet V06.04.xx'),
     box('HSD ES951 Spindle (ES95x)', 0x129, 'ES95x'),
+    box('Saw Drive (Acme Inverter X2)', 0x777, 'Acme Inverter X2'),
     box('Q-A.0 to Q-A.19 (EX260-SEC1)', 0x114, 'EX260-SEC1 EtherCAT SI Unit (32DO_PNP) Rev1.2'),
     box('Robot Arm (FANUC R-30iB Plus)', 0x691, 'FANUC R-30iB Plus'),
     box('Edge X Axis (AX5112-0000-0203)', 2, 'AX5112 servo drive'),
   ].map((b) => profileFor(b, profiles)?.id ?? '-');
-  expect(ids.join(' ') === 'lenze-i550 lenze-i550 cia402 - - -', `which boxes are drives: ${ids.join(' ')}`);
+  expect(ids.join(' ') === 'lenze-i550 lenze-i550 hsd-es951 cia402 - - -', `which boxes are drives: ${ids.join(' ')}`);
   const own = profilesOf([{ id: 'acme', name: 'Acme', match: { vendorId: 0x999 }, params: [{ key: 'heatsink', index: '0x2001', sub: 1, size: 2, signed: true, scale: 0.1, unit: '°C' }] }], () => {});
-  expect(profileFor({ name: 'X', info: { vendorId: 0x999 } }, own)?.id === 'acme' && own.length === 3, 'a profile of config.json\'s added');
+  expect(profileFor({ name: 'X', info: { vendorId: 0x999 } }, own)?.id === 'acme' && own.length === 4, 'a profile of config.json\'s added');
   const p16 = { signed: true, size: 2, scale: 0.1 };
   expect(decodeValue(Buffer.from([0x34, 0x02, 0xff, 0xff]), p16)?.value === 56.400000000000006 || Math.abs(decodeValue(Buffer.from([0x34, 0x02, 0xff, 0xff]), p16).value - 56.4) < 1e-9, 'decoded by its own size (the padding left out)');
   expect(decodeValue(Buffer.from([0xfe, 0xff]), p16)?.raw === -2 && decodeValue(Buffer.from([0x10, 0x0e, 0, 0]), { signed: false, size: 4, scale: 1 / 3600 })?.raw === 3600, 'signed, unsigned, 4 bytes');

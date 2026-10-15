@@ -46,6 +46,8 @@ const { createAudit } = require('./audit.cjs');
 const { createProjectSync } = require('./projectSync.cjs');
 const { createReports, checkShifts, shiftWindows } = require('./report.cjs');
 const { createOee, withCounters } = require('./oee.cjs');
+const { createHandover } = require('./handover.cjs');
+const { createRecovery } = require('./recovery.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -644,6 +646,44 @@ function start() {
   const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
   // Work orders (workorders.cjs): kept in workorders.json, told to the roles that want them
   const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: (e) => roles.notify(e) });
+  // Variables read once (the recovery guides' checks): through the PLC's connection (borrowed: held by none, let go)
+  const readVarsOnce = async (plcId, vars) => {
+    const plc = plcs.get(plcId);
+    if (!plc) throw new Error(`No PLC "${plcId}"`);
+    const conn = connectionFor(plc);
+    const viewer = { send: () => {}, push: () => {}, lost: () => {} };
+    await conn.connect();
+    conn.viewers.add(viewer);
+    clearTimeout(conn.idleTimer);
+    try {
+      const out = {};
+      for (const v of vars) {
+        try {
+          const info = await ads.probe(conn.client, v);
+          if (!info) {
+            out[v] = { error: 'not in the PLC' };
+            continue;
+          }
+          const handle = await ads.createHandle(conn.client, v);
+          try {
+            out[v] = { value: await ads.readTyped(conn.client, handle, info) };
+          } finally {
+            await ads.releaseHandle(conn.client, handle).catch(() => {});
+          }
+        } catch (err) {
+          out[v] = { error: ads.adsErrorText(err) };
+        }
+      }
+      return out;
+    } finally {
+      conn.viewers.delete(viewer);
+      if (conn.viewers.size === 0) void conn.unwatch({}).catch(() => {});
+    }
+  };
+  // Guided recovery (recovery.cjs): the steps to bring a stopped machine back, their checks read from the PLC
+  const recovery = createRecovery({ baseDir, log, audit, readVars: readVarsOnce });
+  // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
+  const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: (e) => roles.notify(e) });
   // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
   const engineering = createEngineering({ recorders, projectsDir: () => path.resolve(baseDir, String(config.projectSync?.folder || 'PlcProjects')), sources: require(`${sharedDir}/tcSources.cjs`) });
   // The support bundle (support.cjs): what support needs, in one zip, by a link that expires
@@ -790,6 +830,8 @@ function start() {
     let fleetTimer = null;
     let downtimeOff = null;
     let workOff = null;
+    let handoverOff = null;
+    let recoveryOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -905,7 +947,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -913,7 +955,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1197,6 +1239,61 @@ function start() {
           return send({ type: 'supportResult', requestId, ok: true, ...support.create(supportFiles(hours, m.faults !== false, user), { days, hours }, user) });
         } catch (err) {
           return send({ type: 'supportResult', requestId, ok: false, error: err.message });
+        }
+      }
+      // Shift handover (handover.cjs): the latest ones (again when one is handed over or read), the shift so far,
+      // handing over (who may write notes), reading one
+      // Guided recovery (recovery.cjs): the guides (again when one changes); one written, removed; a run begun, its
+      // steps, its end; the checks of a guide read from its PLC
+      if (m.type === 'recoveryWatch') {
+        const sendGuides = () => send({ type: 'recoveryGuides', guides: recovery.list() });
+        sendGuides();
+        recoveryOff ??= recovery.subscribe(sendGuides);
+        return;
+      }
+      if (m.type === 'recoveryChecks') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (typeof m.plc !== 'string' || !plcs.has(m.plc)) return send({ type: 'recoveryChecksResult', requestId, checks: [], error: 'No such PLC' });
+        try {
+          return send({ type: 'recoveryChecksResult', requestId, checks: await recovery.checks(m.plc, m.checks) });
+        } catch (err) {
+          return send({ type: 'recoveryChecksResult', requestId, checks: [], error: err.message });
+        }
+      }
+      if (['recoverySave', 'recoveryDelete', 'recoveryStart', 'recoveryStep', 'recoveryEnd'].includes(m.type)) {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'recoveryResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          if (m.type === 'recoverySave') return send({ type: 'recoveryResult', requestId, ok: true, guide: recovery.save(m.guide ?? {}, user) });
+          if (m.type === 'recoveryDelete') {
+            recovery.remove(String(m.id ?? ''), user);
+            return send({ type: 'recoveryResult', requestId, ok: true });
+          }
+          if (m.type === 'recoveryStart') return send({ type: 'recoveryResult', requestId, ok: true, run: recovery.start({ guide: String(m.guide ?? ''), plc: m.plc, plcName: plcs.get(m.plc)?.name ?? m.plcName, machine: m.machine, state: m.state }, user) });
+          if (m.type === 'recoveryStep') return send({ type: 'recoveryResult', requestId, ok: true, run: recovery.step(String(m.id ?? ''), m.step, { skipped: !!m.skipped, value: m.value }, user) });
+          return send({ type: 'recoveryResult', requestId, ok: true, run: recovery.end(String(m.id ?? ''), m.outcome, m.note, user) });
+        } catch (err) {
+          return send({ type: 'recoveryResult', requestId, ok: false, error: err.message });
+        }
+      }
+      if (m.type === 'handoverWatch') {
+        const sendHandovers = () => send({ type: 'handoverState', list: handover.list(10) });
+        sendHandovers();
+        handoverOff ??= handover.subscribe(sendHandovers);
+        return;
+      }
+      if (m.type === 'handoverDraft') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        return send({ type: 'handoverDraftResult', requestId, ...handover.draft(Array.isArray(m.plcs) ? m.plcs.map(String).slice(0, 100) : []) });
+      }
+      if (m.type === 'handoverSave' || m.type === 'handoverRead') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'handoverResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          const e = m.type === 'handoverSave' ? handover.handOver({ note: m.note, plcIds: Array.isArray(m.plcs) ? m.plcs : [] }, user) : handover.read(String(m.id ?? ''), user);
+          return send({ type: 'handoverResult', requestId, ok: true, id: e.id });
+        } catch (err) {
+          return send({ type: 'handoverResult', requestId, ok: false, error: err.message });
         }
       }
       if (m.type === 'workWatch') {
@@ -1689,6 +1786,8 @@ function start() {
       clearInterval(fleetTimer);
       downtimeOff?.();
       workOff?.();
+      handoverOff?.();
+      recoveryOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

@@ -175,14 +175,16 @@ const apiPost = (p, body) =>
     // The setup page's Load
     await p.goto(`${BASE}/admin`, { waitUntil: 'load' });
     const row = await h.until(() => p.$eval('[data-load-plc="line"] .admin-load-tasks', (e) => e.textContent).catch(() => null), 10000);
-    // (Check a drive on the page: the spindle's profile)
+    // (Check a drive on the page: the spindle's profile; its PLCs filled first)
+    await p.waitForSelector('#admin-drive-plc option', { timeout: 10000 }).catch(() => {});
     await p.click('#admin-drive-list');
     await p.waitForFunction(() => document.querySelectorAll('#admin-drive-box option').length >= 5, { timeout: 15000 }).catch(() => {});
     const opt = await p.$$eval('#admin-drive-box option', (o) => o.find((x) => /ES951/.test(x.textContent ?? ''))?.value ?? '');
     if (opt) await p.select('#admin-drive-box', opt);
     await p.click('#admin-drive-read');
     const cell = await h.until(() => p.$eval('[data-drive-object="6ff1:2"]', (e) => e.textContent).catch(() => null), 15000);
-    expect(/0x6FF1:2/.test(cell ?? '') && /u16 12000/.test(cell ?? '') && /unverified/.test(cell ?? ''), `the setup page's Check a drive: ${cell}`);
+    const driveMsg = await p.$eval('#admin-drive-msg', (e) => e.textContent).catch(() => '');
+    expect(/0x6FF1:2/.test(cell ?? '') && /u16 12000/.test(cell ?? '') && /unverified/.test(cell ?? ''), `the setup page's Check a drive: ${cell} (${driveMsg})`);
     expect(/PlcTask: 2\.30 ms of 10\.00 ms \(23 %\)/.test(row ?? '') && /overrun/.test(row ?? ''), `the setup page's Load: "${row}"`);
     // The board's Drives page
     await p.goto(`${BASE}/?board&page=drives`, { waitUntil: 'load' });

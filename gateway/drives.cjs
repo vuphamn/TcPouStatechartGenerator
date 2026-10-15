@@ -487,6 +487,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
    * The setup page's Check a drive (read only): a PLC's boxes of other makers than Beckhoff (and any a profile knows);
    * a box's profile read, each value raw and as the board reads it; or one object (index hex, sub, size)
    */
+  const checkBoxes = new Map(); // PLC id -> { at, boxes }: its I/O read once a minute at most (a zip over ADS)
   async function check({ plc: plcId, path: boxPath, index, sub, size } = {}) {
     const plc = plcList().find((p) => p.id === plcId);
     if (!plc) throw new Error(`No PLC "${plcId ?? ''}"`);
@@ -502,10 +503,11 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     }
     try {
       const client = conn.client;
-      const tree = await readIoTree((rel) => readBootFile(client, rel)).catch((err) => ({ error: ads.adsErrorText(err) }));
+      const cached = checkBoxes.get(plcId);
+      const boxes = cached && Date.now() - cached.at < 60000 && boxPath ? cached.boxes : [];
+      const tree = boxes.length ? { devices: [] } : await readIoTree((rel) => readBootFile(client, rel)).catch((err) => ({ error: ads.adsErrorText(err) }));
       if (tree.error) throw new Error(`Its I/O not read: ${tree.error}`);
       const profiles = settings().profiles;
-      const boxes = [];
       for (const d of tree.devices ?? []) {
         if (d.disabled || !d.netId) continue;
         let slaves = null;
@@ -526,6 +528,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         };
         walk(d.boxes);
       }
+      if (!cached || boxes !== cached.boxes) checkBoxes.set(plcId, { at: Date.now(), boxes });
       const view = (b) => ({ path: b.path, name: b.name, device: b.device, netId: b.netId, address: b.address, vendorId: b.vendorId, type: b.type, profile: b.profile ? { id: b.profile.id, name: b.profile.name } : null });
       if (!boxPath) return { boxes: boxes.map(view) };
       const b = boxes.find((x) => x.path === boxPath);

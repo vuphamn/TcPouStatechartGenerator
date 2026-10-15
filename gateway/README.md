@@ -192,6 +192,22 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **a machine:** big on the phone: its state and time in it, what to do (as on the Andon), its latest alerts, its fault records, its open work orders; **Call maintenance**, **Work order**, its diagram live; **The whole board** goes back.
   - **a drive:** the Drives page with its health and history.
   - **a box:** the I/O page, filtered to it, with its properties (pictures, the maker's page, the manual).
+- **Shift handover** (the 🤝 in the header; amber, with a dot, while the last one is not read yet): what the outgoing shift hands the next one.
+  - **This shift so far** (`config.shifts`; none: the last 8 hours), summed up by the gateway for the board's PLCs:
+    - its alerts by kind, and the machines with most;
+    - its stops, their downtime and top reasons (from the recordings), and how many still lack a reason;
+    - the work orders opened, done and still open;
+    - the drives in warning or alarm;
+    - the alerts still open (and whether anyone took them).
+  - **Hand over:** a note for the next shift (what is running, what to watch, what is waiting), with the summary as it was then. For those who may write notes. Told to the roles that want **handover** (Roles: Told of alerts).
+  - **Read it:** the next shift sees the last handover and marks it read. Who read it is kept. Earlier ones can be chosen.
+  - **Kept:** `handover.json` beside `config.json` (the last 500), each one in the audit log.
+- **Guided recovery** (**Guide** on a stopped machine's tile; **Recovery steps** on the Andon page): the steps to bring a machine back from an error state, one at a time.
+  - **A guide** is for a state, of a type of machine, of one machine, or of every machine in that state. The most particular one is offered.
+  - **Its steps:** a step can be checked by the PLC itself, a variable at a value (`Close the guard | MAIN.bGuardClosed = TRUE`; numbers also `> 2`, `<= 40`). The checks are read from the PLC every 2 seconds while the guide is open: ✓ or ✗ with the value.
+  - **Using it:** **Begin**; each step **Done** (its check's value kept) or **Skip**; then **Recovered**, **Still down: call maintenance** (a call with what was done), or **Stop**. For those who may acknowledge alerts.
+  - **Writing one:** those who may edit the board (supervisors, engineers) write or change a guide from the same dialog (**+ Guide** on a stopped machine without one). One step a line.
+  - **Kept:** `recovery-guides.json` and `recovery-runs.json` beside `config.json` (each use: who, each step's time, how it ended). The dialog shows how often a guide was used in 90 days, how often it recovered, and how long it took.
 - **The Work page** (**Work** in the header; `&page=work`), for technicians and maintenance supervisors:
   - **Work orders:** from an alert (**Work order** on it), a call for maintenance (one by itself; `"workorders": { "fromCalls": false }` turns that off), a risk (**Work order** on the Risk page), or **New work order**. Each has its priority, who it is assigned to, and its log (what was done, what was found). A technician takes it, works on it, and closes it as done with its root cause and the parts used, or cancels it. Assigning it to someone else is for supervisors and engineers. *Open*, *Mine*, *All*; CSV. Kept in `workorders.json`; each change in the audit log; a new one and an assignment told to the roles' channels that want `workorder`.
   - **Calendar:** by month, the maintenance windows (past, in force, planned on the Machines page with **Maintenance…**) and the work orders due.
@@ -315,7 +331,7 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
   - The setup page's Roles changes them (`"pages": { "operator": ["andon", "machines"] }`).
   - What a role may do there is still its role's.
 - **Start page:** each role can start on a saved filter of the board (an operator on its line's machines, a technician on the Drives page …). The address (`&saved=`) or the viewer's own choice comes first.
-- **Told of alerts:** each role can have channels (Teams, Slack or JSON webhooks) for the alerts it wants (error, stuck, PLC stopped, drive, getting slower, call, recovered, escalated). An on-call schedule (`Bob; Mon-Fri; 06:00-14:00`, overnight too: `22:00-06:00`) names who is on call in each message.
+- **Told of alerts:** each role can have channels (Teams, Slack or JSON webhooks) for the alerts it wants (error, stuck, PLC stopped, drive, getting slower, call, work order, shift handover, recovered, escalated). An on-call schedule (`Bob; Mon-Fri; 06:00-14:00`, overnight too: `22:00-06:00`) names who is on call in each message.
 - Example: `"roles": { "users": { "ann": "operator", "bob@acme.com": "technician" }, "groups": { "Maintenance": "technician" }, "default": "operator", "startPages": { "operator": "<saved filter id>" }, "pages": { "manager": ["oee", "risk", "work"] }, "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive", "call"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }] }`.
 
 **Load** (the setup page): what the gateway costs this computer and each PLC, measured every few seconds.
