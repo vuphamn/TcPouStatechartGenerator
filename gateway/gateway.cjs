@@ -49,6 +49,7 @@ const { createOee, withCounters } = require('./oee.cjs');
 const { createHandover } = require('./handover.cjs');
 const { createRecovery } = require('./recovery.cjs');
 const { createEventLog } = require('./eventlog.cjs');
+const { createSpares } = require('./spares.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -685,6 +686,8 @@ function start() {
   const recovery = createRecovery({ baseDir, log, audit, readVars: readVarsOnce });
   // TwinCAT logged events (eventlog.cjs): imported on the setup page, shown with the fault records
   const eventLog = createEventLog({ baseDir, log, audit });
+  // Spare parts (spares.cjs): the stock kept for the machines; a work order done takes the parts it used
+  const spares = createSpares({ baseDir, log, audit, notify: (e) => roles.notify(e) });
   // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
   const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: (e) => roles.notify(e) });
   // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
@@ -836,6 +839,7 @@ function start() {
     let workOff = null;
     let handoverOff = null;
     let recoveryOff = null;
+    let sparesOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -951,7 +955,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -959,7 +963,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1302,6 +1306,27 @@ function start() {
           return send({ type: 'handoverResult', requestId, ok: false, error: err.message });
         }
       }
+      // Spare parts: followed (the Work page's Parts), written, removed, received or taken
+      if (m.type === 'sparesWatch') {
+        const sendSpares = () => send({ type: 'spares', ...spares.view() });
+        sendSpares();
+        sparesOff ??= spares.subscribe(sendSpares);
+        return;
+      }
+      if (m.type === 'spareSave' || m.type === 'spareDelete' || m.type === 'spareMove') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'spareResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          if (m.type === 'spareSave') return send({ type: 'spareResult', requestId, ok: true, part: spares.save(m.part ?? {}, user) });
+          if (m.type === 'spareDelete') {
+            spares.remove(String(m.id ?? ''), user);
+            return send({ type: 'spareResult', requestId, ok: true });
+          }
+          return send({ type: 'spareResult', requestId, ok: true, part: spares.adjust(String(m.id ?? ''), m.delta, m.why, user) });
+        } catch (err) {
+          return send({ type: 'spareResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'workWatch') {
         const sendWork = () => send({ type: 'workOrders', orders: workOrders.list(), people: peopleOf() });
         sendWork();
@@ -1319,7 +1344,16 @@ function start() {
         try {
           const o = m.type === 'workCreate'
             ? workOrders.create({ ...(m.order ?? {}), plcName: plcs.get(m.order?.plc)?.name ?? m.order?.plcName ?? null }, user)
-            : workOrders.update(String(m.id ?? ''), m.change ?? {}, user, roles.enabled() ? may('assign') : true);
+            : (() => {
+                // (done with parts from stock: there, enough of each, checked first; taken once it is done)
+                const ch = { ...(m.change ?? {}) };
+                const id = String(m.id ?? '');
+                const used = ch.status === 'done' && workOrders.get(id)?.status !== 'done' ? spares.check(ch.partsUsed) : [];
+                if (used.length) ch.parts = [String(ch.parts ?? '').trim(), used.map(({ p, qty }) => `${qty} × ${p.number} ${p.name}`).join('; ')].filter(Boolean).join('; ');
+                const done = workOrders.update(id, ch, user, roles.enabled() ? may('assign') : true);
+                spares.take(used, user, done.number);
+                return done;
+              })();
           return send({ type: 'workResult', requestId, ok: true, order: o });
         } catch (err) {
           return send({ type: 'workResult', requestId, ok: false, error: err.message });
@@ -1794,6 +1828,7 @@ function start() {
       workOff?.();
       handoverOff?.();
       recoveryOff?.();
+      sparesOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

@@ -404,7 +404,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }

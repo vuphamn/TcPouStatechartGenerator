@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Plus, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Package, Plus, X } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import { WorkParts, type SpareMove, type SparePart } from './WorkParts.tsx';
 
 export interface WorkOrder {
   id: string;
@@ -79,7 +80,8 @@ export const WorkBoard: React.FC<{
   /** A fault record opened (a work order made of one) */
   onFault?: (id: string) => void;
 }> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow, onFault }) => {
-  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability'>('orders');
+  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability' | 'parts'>('orders');
+  const [spares, setSpares] = useState<{ parts: SparePart[]; moves: SpareMove[] }>({ parts: [], moves: [] });
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [people, setPeople] = useState<string[]>([]);
   const [show, setShow] = useState<'open' | 'mine' | 'all'>('open');
@@ -89,6 +91,11 @@ export const WorkBoard: React.FC<{
   useEffect(
     () =>
       subscribe((m) => {
+        if (m.type === 'spares') {
+          const x = m as unknown as { parts?: SparePart[]; moves?: SpareMove[] };
+          setSpares({ parts: x.parts ?? [], moves: x.moves ?? [] });
+          return;
+        }
         if (m.type !== 'workOrders') return;
         setOrders(m.orders ?? []);
         if (m.people) setPeople(m.people);
@@ -98,6 +105,7 @@ export const WorkBoard: React.FC<{
   useEffect(() => {
     if (!connected || !conn) return;
     conn.send({ type: 'workWatch' });
+    conn.send({ type: 'sparesWatch' });
     return () => {
       conn.send({ type: 'workStop' });
     };
@@ -143,6 +151,7 @@ export const WorkBoard: React.FC<{
               ['orders', 'Work orders', ClipboardList],
               ['calendar', 'Calendar', CalendarDays],
               ['reliability', 'Reliability', HeartPulse],
+              ['parts', `Parts${spares.parts.some((p) => p.low) ? ` (${spares.parts.filter((p) => p.low).length} low)` : ''}`, Package],
             ] as const
           ).map(([id, label, Icon]) => (
             <button key={id} id={`work-tab-${id}`} type="button" onClick={() => setTab(id)} className={`flex items-center gap-1 px-2 py-1 ${tab === id ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
@@ -189,6 +198,7 @@ export const WorkBoard: React.FC<{
         )}
         {tab === 'calendar' && <WorkCalendar conn={conn} connected={connected} orders={orders} onOpen={setOpenId} />}
         {tab === 'reliability' && <WorkReliability conn={conn} connected={connected} root={root} />}
+        {tab === 'parts' && <WorkParts conn={conn} parts={spares.parts} moves={spares.moves} canWork={canWork} canEdit={canAssign} />}
       </div>
       {form && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setForm(null)}>
@@ -213,12 +223,14 @@ export const WorkBoard: React.FC<{
           </form>
         </div>
       )}
-      {opened && <WorkDetail order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} onFault={onFault} />}
+      {opened && <WorkDetail order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} onFault={onFault} spareParts={spares.parts} />}
     </div>
   );
 };
 
-const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void; onFault?: (id: string) => void }> = ({ order: o, user, people, canWork, canAssign, root, onChange, onClose, onFault }) => {
+const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void; onFault?: (id: string) => void; spareParts?: SparePart[] }> = ({ order: o, user, people, canWork, canAssign, root, onChange, onClose, onFault, spareParts = [] }) => {
+  const [used, setUsed] = useState<{ id: string; qty: number }[]>([]);
+  const [pick, setPick] = useState('');
   const [note, setNote] = useState('');
   const [closing, setClosing] = useState(false);
   const [rootCause, setRootCause] = useState('');
@@ -292,7 +304,36 @@ const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; c
           <div id="work-close" className="space-y-2 rounded border border-emerald-800 p-3">
             <input id="work-rootcause" autoFocus value={rootCause} onChange={(e) => setRootCause(e.target.value)} placeholder="Root cause: what was wrong" className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" maxLength={500} />
             <input id="work-parts" value={parts} onChange={(e) => setParts(e.target.value)} placeholder="Parts used (optional)" className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" maxLength={300} />
-            <button id="work-done-save" type="button" onClick={() => void act({ status: 'done', rootCause, parts, note })} className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
+            {spareParts.length > 0 && (
+              <div id="work-parts-stock" className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <select id="work-parts-pick" value={pick} onChange={(e) => setPick(e.target.value)} className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1">
+                    <option value="">From stock…</option>
+                    {spareParts.filter((sp) => sp.qty > 0).map((sp) => (
+                      <option key={sp.id} value={sp.id}>
+                        {sp.number} {sp.name} ({sp.qty} in stock)
+                      </option>
+                    ))}
+                  </select>
+                  <button id="work-parts-add" type="button" disabled={!pick} onClick={() => { setUsed((u) => [...u.filter((x) => x.id !== pick), { id: pick, qty: (u.find((x) => x.id === pick)?.qty ?? 0) + 1 }]); setPick(''); }} className="px-2 py-1 rounded border border-slate-600 hover:bg-slate-800 disabled:opacity-40">
+                    Add
+                  </button>
+                </div>
+                {used.map((u) => {
+                  const sp = spareParts.find((x) => x.id === u.id);
+                  return (
+                    <div key={u.id} className="work-part-used flex items-center gap-2 text-xs">
+                      <input type="number" min={1} value={u.qty} onChange={(e) => setUsed((all) => all.map((x) => (x.id === u.id ? { ...x, qty: Math.max(1, Number(e.target.value) || 1) } : x)))} className="w-16 bg-slate-950 border border-slate-700 rounded px-1" />
+                      × {sp?.number} {sp?.name}
+                      <button type="button" onClick={() => setUsed((all) => all.filter((x) => x.id !== u.id))} className="ml-auto text-slate-400 hover:text-white" title="Not used">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button id="work-done-save" type="button" onClick={() => void act({ status: 'done', rootCause, parts, note, partsUsed: used })} className="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white">
               Mark it done
             </button>
           </div>
