@@ -44,6 +44,8 @@
   Var kssLinkStartupBox
   Var kssGatewayBox
   Var kssGatewayDir
+  ; (the gateway's startup task, running before an update: "task")
+  Var kssGwTask
   Var kssCode
   Var kssCodeBox
   Var kssCodeNames
@@ -382,6 +384,7 @@
     File "${KSS_EXTRAS}\vscode-extension.ps1"
     ; What the installer set up, checked (read-only): its Start menu shortcut
     File "${KSS_EXTRAS}\check-install.ps1"
+    File "${KSS_EXTRAS}\gateway-ctl.ps1"
     CreateShortCut "$SMPROGRAMS\Kval MachineScope - check installation.lnk" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -NoExit -File "$INSTDIR\installer\check-install.ps1"' "$appExe" 0
 
     ${If} $kssVs == 1
@@ -434,15 +437,37 @@
       ${Else}
         StrCpy $kssGatewayDir "$LOCALAPPDATA\KvalMachineScope\Gateway"
       ${EndIf}
+      ; (an update over a running gateway: stopped first, its node.exe in use could not be replaced; its startup task
+      ; started again after)
+      StrCpy $kssGwTask ""
+      ${If} ${FileExists} "$kssGatewayDir\gateway.cjs"
+        nsExec::ExecToStack '${KSS_PS} "$INSTDIR\installer\gateway-ctl.ps1" -Action Stop -Dir "$kssGatewayDir"'
+        Pop $0
+        Pop $1
+        StrCpy $kssGwTask $1 4
+      ${EndIf}
       SetOutPath "$kssGatewayDir"
       File /r "${KSS_EXTRAS}\gateway\*.*"
       CreateShortCut "$SMPROGRAMS\Kval MachineScope Gateway.lnk" "$kssGatewayDir"
+      CreateShortCut "$SMPROGRAMS\Kval MachineScope Gateway - setup page.lnk" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\installer\gateway-ctl.ps1" -Action Open -Dir "$kssGatewayDir"' "$appExe" 0
       WriteRegStr SHCTX "${KSS_REG}" "GatewayDir" "$kssGatewayDir"
       ; (Node.js comes with it: node\node.exe, run by gateway.cmd. A new gateway: its config.json and certificate made for
       ; this computer's name; an existing one's kept as they are)
       ${IfNot} ${FileExists} "$kssGatewayDir\config.json"
         nsExec::ExecToLog 'cmd.exe /d /c ""$kssGatewayDir\gateway.cmd" init"'
         Pop $0
+      ${EndIf}
+      ${If} $kssGwTask == "task"
+        nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\gateway-ctl.ps1" -Action StartTask -Dir "$kssGatewayDir"'
+        Pop $0
+      ${EndIf}
+      ; (what to do next; the gateway started and its setup page opened when asked)
+      ${If} ${Cmd} `MessageBox MB_YESNO|MB_ICONQUESTION "The gateway is installed, with its own Node.js.$\n$\nNext, on its setup page (https://localhost:8443/admin; accept the certificate warning):$\n1. PLCs: Find, or add by hand (one on this computer: 127.0.0.1); Test, Save.$\n2. Other PLCs: an ADS route to the gateway (its AMS NetId: top of the page).$\n3. Access tokens: one per person or team.$\n4. Run at startup: Install, then Switch to the task now.$\n5. Firewall: allow TCP 8443 in.$\n$\nThen browsers open https://<this computer>:8443/. Start menu: Kval MachineScope Gateway - setup page.$\n$\nStart the gateway now and open its setup page?" /SD IDNO IDYES`
+        nsExec::ExecToLog '${KSS_PS} "$INSTDIR\installer\gateway-ctl.ps1" -Action Open -Dir "$kssGatewayDir"'
+        Pop $0
+        ${If} $0 != 0
+          MessageBox MB_OK|MB_ICONEXCLAMATION "The gateway did not start: see its console window. Its folder: $kssGatewayDir" /SD IDOK
+        ${EndIf}
       ${EndIf}
     ${EndIf}
 
@@ -511,6 +536,7 @@
       Delete "$1\README.md"
       RMDir "$1"
       Delete "$SMPROGRAMS\Kval MachineScope Gateway.lnk"
+      Delete "$SMPROGRAMS\Kval MachineScope Gateway - setup page.lnk"
     ${EndIf}
     DeleteRegKey SHCTX "${KSS_REG}"
   ${EndIf}

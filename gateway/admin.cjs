@@ -60,7 +60,7 @@ function checkBoard(b, i, plcIds) {
 function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
-    const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
     change(onDisk);
     const tmp = `${configPath}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(onDisk, null, 2) + '\n');

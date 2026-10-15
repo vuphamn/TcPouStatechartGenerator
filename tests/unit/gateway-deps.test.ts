@@ -26,6 +26,15 @@ for (const dir of ['gateway', 'shared']) {
   }
 }
 const missing = [...needed].filter(([p]) => !deps.includes(p));
+// (the shared modules: installed, they are in the gateway's own shared/ folder, in the repo ../shared: a require of
+// '../shared/…' works in the tests only (the I/O tab failed so, installed, on 2026-10-15); sharedDir picks the one there)
+const fixedPaths: string[] = [];
+for (const f of fs.readdirSync(path.join(repo, 'gateway')).filter((x) => /\.cjs$/.test(x))) {
+  fs.readFileSync(path.join(repo, 'gateway', f), 'utf8').split(/\r?\n/).forEach((line, i) => {
+    if (/require\(\s*['"]\.\.\/shared\//.test(line)) fixedPaths.push(`${f}:${i + 1}`);
+  });
+}
+expect(!fixedPaths.length, fixedPaths.length ? `'../shared/' required as is (installed: not found; use sharedDir): ${fixedPaths.join(', ')}` : "no '../shared/' required as is: the installed gateway finds every shared module");
 expect(needed.has('ads-client') && needed.has('ws'), `the code's packages found: ${[...needed.keys()].join(', ')}`);
 expect(!missing.length, missing.length ? `missing from gateway/package.json: ${missing.map(([p, f]) => `${p} (${[...new Set(f)].slice(0, 3).join(', ')})`).join('; ')}` : 'gateway/package.json names them all');
 // (its package-lock.json in step: CI's "npm ci --prefix gateway" refuses one that lacks a dependency; on 2026-10-14

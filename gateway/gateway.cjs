@@ -55,7 +55,8 @@ function loadConfig() {
     console.error(`No configuration at ${configPath}: run "node gateway.cjs init" first.`);
     process.exit(1);
   }
-  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  // (saved with a BOM by an editor or PowerShell: read all the same)
+  return JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
 }
 const saveConfig = (config) => fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
 
@@ -404,7 +405,7 @@ function start() {
   setInterval(() => {
     if (mtime() === configMtime) return;
     try {
-      applyConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+      applyConfig(JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '')));
       log(`config: reloaded (${plcs.size} PLC(s), ${config.tokens.length} token(s))`);
     } catch {
       // keep the previous settings (a file being written)
@@ -979,8 +980,8 @@ function start() {
         if (config.allowBrowse === false || config.allowSources === false) return send({ type: 'ioTreeResult', requestId, error: 'Reading the PLC\'s configuration is turned off on this gateway' });
         if (!session?.conn.client) return send({ type: 'ioTreeResult', requestId, error: 'Not connected' });
         try {
-          const { readIoTree } = require('../shared/tcIoTree.cjs');
-          const { readBootFile } = require('../shared/tcSources.cjs');
+          const { readIoTree } = require(`${sharedDir}/tcIoTree.cjs`);
+          const { readBootFile } = require(`${sharedDir}/tcSources.cjs`);
           send({ type: 'ioTreeResult', requestId, ...(await readIoTree((rel) => readBootFile(session.conn.client, rel))) });
         } catch (err) {
           send({ type: 'ioTreeResult', requestId, error: ads.adsErrorText(err) });
@@ -994,7 +995,7 @@ function start() {
         if (config.allowBrowse === false) return send({ type: 'deviceInfoResult', requestId, esi: null, images: [], folder: '', error: 'Turned off on this gateway' });
         const req = { productCode: String(m.productCode ?? ''), revision: String(m.revision ?? ''), type: String(m.deviceType ?? ''), product: String(m.product ?? '') };
         const folder = path.resolve(baseDir, config.devicesFolder || 'Devices');
-        return send({ type: 'deviceInfoResult', requestId, ...require('../shared/tcDeviceInfo.cjs').deviceInfo(req, null, folder) });
+        return send({ type: 'deviceInfoResult', requestId, ...require(`${sharedDir}/tcDeviceInfo.cjs`).deviceInfo(req, null, folder) });
       }
       // The EtherCAT masters' slave states (read-only), with the browser's permission (the connected PLC's own devices)
       if (m.type === 'ecatStates') {
@@ -1002,7 +1003,7 @@ function start() {
         if (config.allowBrowse === false) return send({ type: 'ecatStatesResult', requestId, error: 'Reading the PLC\'s I/O states is turned off on this gateway' });
         if (!session?.conn.client) return send({ type: 'ecatStatesResult', requestId, error: 'Not connected' });
         try {
-          const { readMasters } = require('../shared/tcEcat.cjs');
+          const { readMasters } = require(`${sharedDir}/tcEcat.cjs`);
           send({ type: 'ecatStatesResult', requestId, ...(await readMasters(session.conn.client, session.conn.plc.netId, m.netIds)) });
         } catch (err) {
           send({ type: 'ecatStatesResult', requestId, error: ads.adsErrorText(err) });

@@ -70,6 +70,8 @@ fs.renameSync(path.join(out, codeVsix), path.join(out, 'kval-machinescope-vscode
 fs.copyFileSync(path.join(root, 'build', 'installer', 'vscode-extension.ps1'), path.join(out, 'vscode-extension.ps1'));
 // (what the installer set up, checked: read-only; its Start menu shortcut)
 fs.copyFileSync(path.join(root, 'build', 'installer', 'check-install.ps1'), path.join(out, 'check-install.ps1'));
+// (the gateway: stopped for an update, started and its setup page opened at the end, from the Start menu)
+fs.copyFileSync(path.join(root, 'build', 'installer', 'gateway-ctl.ps1'), path.join(out, 'gateway-ctl.ps1'));
 
 // 2. Kval MachineScope Link (a single exe)
 run(process.execPath, [path.join(root, 'scripts', 'build-link.cjs')]);

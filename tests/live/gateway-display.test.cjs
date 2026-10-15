@@ -55,7 +55,9 @@ function client(token) {
   const month = `${new Date(now).getFullYear()}-${String(new Date(now).getMonth() + 1).padStart(2, '0')}`;
   fs.writeFileSync(path.join(dir, `audit-${month}.jsonl`), `${JSON.stringify({ t: now - 60_000, user: 'ann', action: 'live.event', plc: 'line202', pou: 'SM_Door', instance: `${R}.aDoors[1]`, kind: 'note', text: 'jam cleared here', at: now - 60_000 })}\n`);
   const configPath = path.join(dir, 'config.json');
-  fs.writeFileSync(configPath, JSON.stringify({
+  // (saved with a BOM, as PowerShell's Set-Content -Encoding UTF8 or an editor may: read all the same, by the gateway and
+  // its setup page)
+  fs.writeFileSync(configPath, String.fromCharCode(0xfeff) + JSON.stringify({
     port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [],
     plcs: [{ id: 'line202', name: 'Line 202', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48950', port: 851 }],
     tokens: [{ name: 'operator', sha256: crypto.createHash('sha256').update(TOKEN).digest('hex') }],
