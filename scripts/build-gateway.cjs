@@ -13,7 +13,9 @@ fs.mkdirSync(out, { recursive: true });
 for (const entry of fs.readdirSync(out)) {
   if (!keep.has(entry)) fs.rmSync(path.join(out, entry), { recursive: true, force: true });
 }
-for (const file of ['gateway.cjs', 'admin.cjs', 'alerts.cjs', 'auth.cjs', 'board.cjs', 'recorder.cjs', 'trends.cjs', 'audit.cjs', 'report.cjs', 'service.cjs', 'gateway.cmd', 'package.json', 'README.md']) fs.copyFileSync(path.join(root, 'gateway', file), path.join(out, file));
+// (every module of the gateway: a new one is not forgotten, as projectSync.cjs nearly was)
+const modules = fs.readdirSync(path.join(root, 'gateway')).filter((f) => /\.cjs$/i.test(f));
+for (const file of [...modules, 'gateway.cmd', 'package.json', 'package-lock.json', 'README.md']) fs.copyFileSync(path.join(root, 'gateway', file), path.join(out, file));
 fs.cpSync(path.join(root, 'shared'), path.join(out, 'shared'), { recursive: true });
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('dist/ is missing: run "npm run build" first');
 fs.cpSync(path.join(root, 'dist'), path.join(out, 'public'), { recursive: true });

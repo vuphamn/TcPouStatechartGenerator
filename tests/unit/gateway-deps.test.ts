@@ -37,6 +37,14 @@ for (const f of fs.readdirSync(path.join(repo, 'gateway')).filter((x) => /\.cjs$
 expect(!fixedPaths.length, fixedPaths.length ? `'../shared/' required as is (installed: not found; use sharedDir): ${fixedPaths.join(', ')}` : "no '../shared/' required as is: the installed gateway finds every shared module");
 expect(needed.has('ads-client') && needed.has('ws'), `the code's packages found: ${[...needed.keys()].join(', ')}`);
 expect(!missing.length, missing.length ? `missing from gateway/package.json: ${missing.map(([p, f]) => `${p} (${[...new Set(f)].slice(0, 3).join(', ')})`).join('; ')}` : 'gateway/package.json names them all');
+// (every module the gateway requires (./x.cjs) is shipped: build-gateway.cjs copies all of gateway/*.cjs)
+const build = fs.readFileSync(path.join(repo, 'scripts', 'build-gateway.cjs'), 'utf8');
+const locals = new Set<string>();
+for (const f of fs.readdirSync(path.join(repo, 'gateway')).filter((x) => /\.cjs$/.test(x))) {
+  for (const m of fs.readFileSync(path.join(repo, 'gateway', f), 'utf8').matchAll(/require\(\s*['"]\.\/([\w.-]+\.cjs)['"]\s*\)/g)) locals.add(m[1]);
+}
+const notThere = [...locals].filter((m) => !fs.existsSync(path.join(repo, 'gateway', m)));
+expect(/readdirSync\(path\.join\(root, 'gateway'\)\)\.filter\(\(f\) => \/\\\.cjs\$\/i\.test\(f\)\)/.test(build) && !notThere.length && locals.has('projectSync.cjs'), `the gateway's own modules shipped (all of gateway/*.cjs): ${[...locals].join(', ')}${notThere.length ? `; missing: ${notThere.join(', ')}` : ''}`);
 // (its package-lock.json in step: CI's "npm ci --prefix gateway" refuses one that lacks a dependency; on 2026-10-14
 // every job failed so: npm install --package-lock-only in gateway/ brings it in step)
 const lock = JSON.parse(fs.readFileSync(path.join(repo, 'gateway', 'package-lock.json'), 'utf8'));
