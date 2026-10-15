@@ -2,7 +2,8 @@
 // into an error state (aDoors[1] to DOOR_DASHER_ERROR, seconds after the start) is kept by itself: the seconds before
 // (every machine, the signals chosen) and after; one already in an error state at the start (aDoors[2]) makes none.
 // The board: its Faults list, the alert's Fault record, the viewer (a lane per machine, the moment marked, the
-// signals); the I/O page's "Keep with fault records".
+// signals); the I/O page's "Keep with fault records"; the PLC's TwinCAT logged events imported (the setup page) and
+// shown with the record (its window's only); a work order made of it, listed with it, linking back.
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -15,6 +16,18 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
 const PORT = 8493;
 const BASE = `http://localhost:${PORT}`;
 const TOKEN = 'faults-test-token';
+const post = (p, body) =>
+  new Promise((resolve) => {
+    const r = require('http').request({ host: '127.0.0.1', port: PORT, path: `/admin/api/${p}`, method: 'POST', headers: { host: `localhost:${PORT}`, origin: BASE, 'content-type': 'application/json' } }, (res) => {
+      let t = '';
+      res.on('data', (d) => (t += d));
+      res.on('end', () => resolve((() => { try { return JSON.parse(t); } catch { return { status: res.statusCode }; } })()));
+    });
+    r.on('error', () => resolve(null));
+    r.end(JSON.stringify(body));
+  });
+// (a time as the Logged Events window of an en-US XAE writes it)
+const usTime = (t) => { const d = new Date(t); const h = d.getHours() % 12 || 12; const p = (n, k = 2) => String(n).padStart(k, '0'); return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()} ${h}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)} ${d.getHours() < 12 ? 'AM' : 'PM'}`; };
 
 (async () => {
   const cfg = writeSymbolsPlc('fake-ams2-faults.json', [], { sources: true });
@@ -59,6 +72,15 @@ const TOKEN = 'faults-test-token';
   expect(rec && rec.to - rec.from === 10000 && rec.from === rec.at - 5000 && door[0]?.t >= rec.from && door.some((p) => p.v === 7 && p.t === rec.at) && door.some((p) => p.v === 1 && p.t < rec.at), `its record: ${Object.keys(rec?.machines ?? {}).length} machines, aDoors[1] ${door.map((p) => p.v).join(' > ')}, ${rec?.stateNames?.[`${R}.aDoors[1]`]?.['7']}`);
   expect((rec?.signals?.[`${R}.nCount`] ?? []).some((p) => p.v === 99) && (rec?.signals?.[`${R}.fSpeed`] ?? []).length >= 1, `its signals: nCount ${(rec?.signals?.[`${R}.nCount`] ?? []).map((p) => p.v).join(' > ')}`);
   expect(fs.existsSync(path.join(dir, 'faults', 'line')), 'kept in faults/line/<day>/<id>.json');
+  // (its TwinCAT logged events: two in its window, one an hour before)
+  const csv = ['"Severity","Event Class","Event Id","Source","Time Raised","Text"', `"Error","DoorEvents","3","Door1","${usTime(rec.at - 1500)}","Door 1, sensor S12 lost"`, `"Warning","DoorEvents","5","Door1","${usTime(rec.at + 500)}","Door 1 stopped"`, `"Info","Main","1","Main","${usTime(rec.at - 3600000)}","Shift started"`, '"x","y","z","w","not a time","?"'].join('\r\n');
+  const imported = await post('eventlog', { plc: 'line', csv });
+  const again = await post('eventlog', { plc: 'line', csv });
+  ws.send(JSON.stringify({ type: 'workCreate', requestId: 5, order: { title: 'Door 1 sensor', plc: 'line', machine: `${R}.aDoors[1]`, priority: 'high', source: { kind: 'fault', id: done?.id, text: 'fault record' } } }));
+  await h.until(() => got.find((m) => m.type === 'workResult' && m.requestId === 5), 5000);
+  ws.send(JSON.stringify({ type: 'faultGet', requestId: 6, id: done?.id }));
+  const linked = (await h.until(() => got.find((m) => m.type === 'faultGetResult' && m.requestId === 6), 5000))?.fault;
+  expect(imported?.read === 3 && imported.added === 3 && imported.skipped === 1 && again?.added === 0 && linked?.events?.length === 2 && linked.events[0].text === 'Door 1, sensor S12 lost' && linked.events[0].severity === 'Error' && Math.abs(linked.events[0].t - (rec.at - 1500)) < 2 && linked.orders?.[0]?.title === 'Door 1 sensor', `logged events: ${imported?.read} read (${imported?.skipped} not), again ${again?.added} new; the record's ${linked?.events?.map((e) => e.text).join(' | ')}; its work orders ${linked?.orders?.map((o) => o.title)}`);
   // 2. The signals kept with the faults: changed from the board
   ws.send(JSON.stringify({ type: 'faultSignalsSet', requestId: 3, plc: 'line', signals: [`${R}.bEnable`] }));
   const set = await h.until(() => got.find((m) => m.type === 'faultSignalsResult' && m.requestId === 3), 5000);
@@ -80,8 +102,8 @@ const TOKEN = 'faults-test-token';
     const button = await h.until(() => p.$('.board-alert-fault'), 15000);
     await button?.click();
     await p.waitForSelector('#fault-viewer .board-playback-lane', { timeout: 10000 });
-    const view = await h.until(() => p.evaluate(() => ({ title: document.querySelector('#fault-viewer-title')?.textContent ?? '', lanes: document.querySelectorAll('#fault-viewer .board-playback-lane').length, marks: document.querySelectorAll('#fault-viewer .board-playback-mark').length, signals: document.querySelectorAll('#fault-viewer .board-trend-lane').length })).then((x) => (x.signals ? x : null)), 8000);
-    expect(/aDoors\[1\] went into DOOR_DASHER_ERROR/.test(view?.title ?? '') && view.lanes >= 1 && view.marks >= 1 && view.signals === 2, `the viewer: ${JSON.stringify(view)}`);
+    const view = await h.until(() => p.evaluate(() => ({ title: document.querySelector('#fault-viewer-title')?.textContent ?? '', lanes: document.querySelectorAll('#fault-viewer .board-playback-lane').length, marks: document.querySelectorAll('#fault-viewer .board-playback-mark').length, signals: document.querySelectorAll('#fault-viewer .board-trend-lane').length, events: document.querySelectorAll('#fault-events .fault-event').length, orders: document.querySelector('#fault-orders')?.textContent ?? '', work: !!document.querySelector('#fault-work') })).then((x) => (x.signals ? x : null)), 8000);
+    expect(/aDoors\[1\] went into DOOR_DASHER_ERROR/.test(view?.title ?? '') && view.lanes >= 1 && view.marks >= 3 && view.signals === 2 && view.events === 2 && /Door 1 sensor/.test(view.orders) && view.work, `the viewer: ${JSON.stringify(view)}`);
     await p.click('#fault-viewer button[title^="Close"]');
     // 4. The Faults list
     await p.click('#board-aside-faults');

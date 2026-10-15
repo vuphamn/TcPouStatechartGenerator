@@ -48,6 +48,7 @@ const { createReports, checkShifts, shiftWindows } = require('./report.cjs');
 const { createOee, withCounters } = require('./oee.cjs');
 const { createHandover } = require('./handover.cjs');
 const { createRecovery } = require('./recovery.cjs');
+const { createEventLog } = require('./eventlog.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -682,6 +683,8 @@ function start() {
   };
   // Guided recovery (recovery.cjs): the steps to bring a stopped machine back, their checks read from the PLC
   const recovery = createRecovery({ baseDir, log, audit, readVars: readVarsOnce });
+  // TwinCAT logged events (eventlog.cjs): imported on the setup page, shown with the fault records
+  const eventLog = createEventLog({ baseDir, log, audit });
   // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
   const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: (e) => roles.notify(e) });
   // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
@@ -769,6 +772,7 @@ function start() {
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
+    eventLog: { import: (plc, csv, user) => eventLog.import(plc, csv, user), stats: () => eventLog.stats([...plcs.keys()]) },
     load: () => ({ ...load.snapshot(), drives: drives.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
     roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS, pages: BOARD_PAGES, pageLabels: PAGE_LABELS, pageDefaults: DEFAULT_PAGES, langDefaults: DEFAULT_LANGS },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
@@ -1128,7 +1132,9 @@ function start() {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const fault = typeof m.id === 'string' ? faults.get(m.id) : null;
         if (fault) audit.add(user, 'fault.view', { id: fault.id, plc: fault.plc, machine: fault.machine });
-        return send({ type: 'faultGetResult', requestId, ...(fault ? { fault } : { error: 'No such fault record (kept for config.faults.keepDays days)' }) });
+        // (with the PLC's logged events of its window, and the work orders made of it)
+        const withLinks = fault && { ...fault, events: eventLog.between(fault.plc, fault.from, fault.to), orders: workOrders.list().filter((o) => o.source?.kind === 'fault' && o.source.id === fault.id).map((o) => ({ id: o.id, number: o.number, title: o.title, status: o.status, assignee: o.assignee })) };
+        return send({ type: 'faultGetResult', requestId, ...(fault ? { fault: withLinks } : { error: 'No such fault record (kept for config.faults.keepDays days)' }) });
       }
       if (m.type === 'faultSignalsSet') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;

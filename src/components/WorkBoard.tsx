@@ -76,7 +76,9 @@ export const WorkBoard: React.FC<{
   draft: WorkDraft | null;
   onDraftDone: () => void;
   narrow: boolean;
-}> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow }) => {
+  /** A fault record opened (a work order made of one) */
+  onFault?: (id: string) => void;
+}> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow, onFault }) => {
   const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability'>('orders');
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [people, setPeople] = useState<string[]>([]);
@@ -211,12 +213,12 @@ export const WorkBoard: React.FC<{
           </form>
         </div>
       )}
-      {opened && <WorkDetail order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} />}
+      {opened && <WorkDetail order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} onFault={onFault} />}
     </div>
   );
 };
 
-const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void }> = ({ order: o, user, people, canWork, canAssign, root, onChange, onClose }) => {
+const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void; onFault?: (id: string) => void }> = ({ order: o, user, people, canWork, canAssign, root, onChange, onClose, onFault }) => {
   const [note, setNote] = useState('');
   const [closing, setClosing] = useState(false);
   const [rootCause, setRootCause] = useState('');
@@ -244,7 +246,13 @@ const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; c
           </button>
         </div>
         <div className="text-lg font-semibold">{o.title}</div>
-        <div className="text-slate-400">{o.plcName}{o.machine ? ` · ${short(o.machine, root)}` : ''}{o.source?.text ? ` · from: ${o.source.text}` : ''}</div>
+        <div className="text-slate-400">{o.plcName}{o.machine ? ` · ${short(o.machine, root)}` : ''}{o.source?.text ? ` · from: ${o.source.text}` : ''}
+          {o.source?.kind === 'fault' && o.source.id && onFault && (
+            <button type="button" className="work-fault ml-2 underline text-sky-300 hover:text-white" onClick={() => onFault(o.source!.id!)}>
+              its fault record
+            </button>
+          )}
+        </div>
         <div className="text-xs text-slate-500">Created {when(o.createdAt)} by {o.createdBy}{o.assignee ? ` · ${o.assignee}` : ''}{o.doneAt ? ` · done ${when(o.doneAt)}` : ''}</div>
         {o.status === 'done' && (
           <div className="rounded border border-emerald-900 bg-emerald-950/40 px-3 py-2">

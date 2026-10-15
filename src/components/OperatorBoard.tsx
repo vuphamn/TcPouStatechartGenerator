@@ -1170,7 +1170,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'work' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} />
+              <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} onFault={(fid) => setFaultOpen(fid)} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'andon' && (
@@ -1557,7 +1557,7 @@ export const OperatorBoard: React.FC = () => {
           </div>
         </div>
       )}
-      {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} />}
+      {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} onWork={may('workorder') && !viewOnly ? (d) => { setFaultOpen(null); toWork(d); } : undefined} />}
       {ruleDialog && (
         <BoardRuleDialog
           kind={ruleDialog.kind}

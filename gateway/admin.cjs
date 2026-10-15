@@ -128,7 +128,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -286,6 +286,14 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (body?.path) audit?.add('setup page', 'drive.check', { plc: body.plc, path: body.path, index: body.index ?? null });
       return r;
     },
+    // TwinCAT logged events (eventlog.cjs): each PLC's kept; an export of the Logged Events window imported
+    'GET eventlog': async () => ({ plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })), stats: eventLog?.stats() ?? {} }),
+    'POST eventlog': async (body) => {
+      if (!eventLog) throw new Error('Not on this gateway');
+      if (!(getConfig().plcs ?? []).some((p) => p.id === body?.plc)) throw new Error('Choose its PLC');
+      if (typeof body?.csv !== 'string' || !body.csv.trim()) throw new Error('No file: the CSV the Logged Events window exported');
+      return eventLog.import(body.plc, body.csv, 'setup page');
+    },
     'GET monitoring': async () => {
       const c = getConfig();
       return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
@@ -386,7 +394,8 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     let raw = '';
     req.on('data', (d) => {
       raw += d;
-      if (raw.length > 64 * 1024) req.destroy();
+      // (a logged events export: up to 16 MB)
+      if (raw.length > (/\/eventlog$/.test(req.url ?? '') ? 16 * 1024 * 1024 : 64 * 1024)) req.destroy();
     });
     req.on('end', async () => {
       try {
@@ -509,6 +518,13 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-monitoring"></div>
   <div class="row mt"><span class="grow"></span><button class="primary" id="admin-monitoring-save">Save monitoring</button></div>
   <div class="msg" id="admin-monitoring-msg"></div>
+</section>
+<section>
+  <h2>TwinCAT logged events</h2>
+  <p class="hint flush">The PLC's own alarms and messages (its EventLogger) beside the gateway's fault records: each fault record shows the events of its window, on its timeline and listed. In TwinCAT XAE, open View &gt; Other Windows &gt; TwinCAT Logged Events, read the PLC's events, export them (CSV), and import that file here for its PLC. The same event is kept once; the last 50 000 a PLC.</p>
+  <div class="row"><select id="admin-eventlog-plc"></select><input type="file" id="admin-eventlog-file" accept=".csv,text/csv,text/plain"><button class="primary" id="admin-eventlog-import">Import</button></div>
+  <div class="msg" id="admin-eventlog-msg"></div>
+  <p class="hint" id="admin-eventlog-stats"></p>
 </section>
 <section>
   <h2>Check a drive</h2>
@@ -1137,6 +1153,23 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-monitoring-msg', err.message, false); }
   });
   loadMonitoring().catch(() => {});
+
+  // ---- TwinCAT logged events ----
+  const showEventStats = (d) => {
+    const parts = (d.plcs || []).map((p) => { const s = (d.stats || {})[p.id]; return (p.name || p.id) + ': ' + (s && s.count ? s.count + ' events, ' + new Date(s.from).toLocaleString() + ' to ' + new Date(s.to).toLocaleString() : 'none yet'); });
+    $('admin-eventlog-stats').textContent = parts.join(' · ');
+  };
+  call('eventlog').then((d) => { $('admin-eventlog-plc').replaceChildren(...(d.plcs || []).map((p) => el('option', { value: p.id }, p.name || p.id))); showEventStats(d); }).catch(() => {});
+  $('admin-eventlog-import').addEventListener('click', async () => {
+    const f = $('admin-eventlog-file').files[0];
+    if (!f) { say('admin-eventlog-msg', 'Choose the CSV the Logged Events window exported', false); return; }
+    say('admin-eventlog-msg', 'Importing ...');
+    try {
+      const r = await call('eventlog', { plc: $('admin-eventlog-plc').value, csv: await f.text() });
+      say('admin-eventlog-msg', r.read + ' event(s) read, ' + r.added + ' new' + (r.skipped ? ', ' + r.skipped + ' line(s) not understood' : ''), true);
+      showEventStats(await call('eventlog'));
+    } catch (err) { say('admin-eventlog-msg', err.message, false); }
+  });
 
   // ---- Check a drive ----
   const hexOf = (n, w) => '0x' + Number(n).toString(16).toUpperCase().padStart(w, '0');

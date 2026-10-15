@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { AlertTriangle, ClipboardList, X } from 'lucide-react';
 import { BoardPlayback } from './BoardPlayback.tsx';
 import { SignalTrends, type SignalSeries } from './SignalTrends.tsx';
 import type { PlaybackMachine } from '../utils/boardPlayback.ts';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import type { WorkDraft } from './WorkBoard.tsx';
 
 /** A fault record as the gateway keeps it (gateway/faults.cjs) */
 export interface FaultRecord {
@@ -21,6 +22,10 @@ export interface FaultRecord {
   machines: Record<string, { t: number; v: number }[]>;
   signals: Record<string, { t: number; v: unknown }[]>;
   complete: boolean;
+  /** The PLC's TwinCAT logged events of its window (imported on the setup page) */
+  events?: { t: number; severity: string; source: string; text: string; eventClass: string; eventId: string; state: string }[];
+  /** The work orders made of it */
+  orders?: { id: string; number: number; title: string; status: string; assignee: string | null }[];
 }
 export interface FaultSummary {
   id: string;
@@ -45,7 +50,7 @@ const short = (p: string, root: string) => (p.toLowerCase().startsWith(root.toLo
  * request), the moment of the fault marked; the cursor moves through it (play, the change before or after); the
  * signals kept with it charted over the same two minutes.
  */
-export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string; onClose: () => void; narrow: boolean }> = ({ conn, id, onClose, narrow }) => {
+export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string; onClose: () => void; narrow: boolean; onWork?: (d: WorkDraft) => void }> = ({ conn, id, onClose, narrow, onWork }) => {
   const [rec, setRec] = useState<FaultRecord | null>(null);
   const [error, setError] = useState('');
   const [t, setT] = useState(0);
@@ -108,11 +113,21 @@ export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string;
               {!rec.complete && <span className="ml-2 text-amber-300">(still keeping the minute after…)</span>}
             </span>
           )}
-          <button type="button" onClick={onClose} className="ml-auto p-1 rounded hover:bg-slate-800" title="Close (Esc)">
+          {rec && onWork && (
+            <button id="fault-work" type="button" onClick={() => onWork({ title: `${rec.state} at ${short(rec.machine, rec.root)}`.slice(0, 100), plc: rec.plc, plcName: rec.plcName, machine: rec.machine, priority: 'high', source: { kind: 'fault', id: rec.id, text: `fault record: ${short(rec.machine, rec.root)} ${rec.state}, ${clock(rec.at)}` } })} className="ml-auto flex items-center gap-1 px-2 py-1 rounded border border-slate-600 hover:bg-slate-800 text-xs" title="A work order made of this fault record (linked to it)">
+              <ClipboardList className="w-3.5 h-3.5" /> Work order
+            </button>
+          )}
+          <button type="button" onClick={onClose} className={`${rec && onWork ? '' : 'ml-auto '}p-1 rounded hover:bg-slate-800`} title="Close (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>
         {error && <div className="px-4 py-3 text-rose-300">{error}</div>}
+        {rec?.orders && rec.orders.length > 0 && (
+          <div id="fault-orders" className="px-4 py-2 border-b border-slate-800 text-xs text-slate-300">
+            Work orders: {rec.orders.map((o) => `#${o.number} ${o.title} (${o.status}${o.assignee ? `, ${o.assignee}` : ''})`).join(' · ')}
+          </div>
+        )}
         {!rec && !error && <div className="px-4 py-3 text-slate-400">Reading the fault record…</div>}
         {rec && (
           <>
@@ -134,7 +149,7 @@ export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string;
               onSpeed={setSpeed}
               onClose={onClose}
               narrow={narrow}
-              marks={[{ t: rec.at, label: `${short(rec.machine, rec.root)}: ${rec.state}` }]}
+              marks={[{ t: rec.at, label: `${short(rec.machine, rec.root)}: ${rec.state}` }, ...(rec.events ?? []).slice(0, 50).map((e) => ({ t: e.t, label: `${e.severity ? `${e.severity}: ` : ''}${e.text}` }))]}
               title="Fault record"
               closeLabel="Close"
             />
@@ -154,6 +169,25 @@ export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string;
               <SignalTrends signals={signals} history={{ from: rec.from, to: rec.to }} onHistory={() => undefined} onRemove={() => undefined} narrow={narrow} />
             ) : (
               <div className="px-4 py-2 text-xs text-slate-500">No signals kept with this PLC's faults: on the I/O page, chart the ones to keep and click Add to fault records.</div>
+            )}
+            {rec.events && rec.events.length > 0 ? (
+              <div className="px-4 py-2">
+                <div className="mb-1 font-semibold">TwinCAT logged events</div>
+                <table id="fault-events" className="w-full text-xs">
+                  <tbody>
+                    {rec.events.map((e, i) => (
+                      <tr key={i} className={`fault-event border-t border-slate-800 ${/error|critical/i.test(e.severity) ? 'text-rose-300' : /warn/i.test(e.severity) ? 'text-amber-200' : 'text-slate-300'}`}>
+                        <td className="py-0.5 pr-2 font-mono whitespace-nowrap">{new Date(e.t).toLocaleTimeString()}</td>
+                        <td className="pr-2">{e.severity}</td>
+                        <td className="pr-2 text-slate-400">{e.source}</td>
+                        <td>{e.text}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="px-4 py-2 text-xs text-slate-500">No TwinCAT logged events of this window: the setup page imports them (an export of the Logged Events window).</div>
             )}
           </>
         )}

@@ -235,6 +235,11 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **What makes one:** a machine already in an error state when the gateway starts makes none. One that keeps falling into errors makes one every 5 minutes at most.
   - **The viewer:** a lane per machine (the faulted one first, then the ones that changed; the others on request), the moment of the fault marked. The cursor moves through it (play, the change before or after), and the signals kept with it are charted over the same two minutes.
   - **Its signals:** on the I/O page, chart the ones to keep and click **Keep with fault records** (technicians, supervisors, engineers when roles are on).
+  - **TwinCAT logged events:** the PLC's own alarms and messages (its EventLogger) of the record's window, on its timeline and listed under it.
+    - **How they get there:** in TwinCAT XAE, **View > Other Windows > TwinCAT Logged Events**, read the PLC's events, export them (CSV), and import that file on the setup page's **TwinCAT logged events** for its PLC.
+    - Its columns are found by their names (English or German), its separator and date format by what it has. The same event is kept once; the last 50 000 a PLC (`eventlog/<plc>.jsonl`).
+    - Not read live: the EventLogger has no interface documented for a program like the gateway (only Beckhoff's .NET one).
+  - **Work orders:** **Work order** in the record makes one linked to it (technicians, supervisors, engineers when roles are on). The record lists its work orders, and the work order opens **its fault record**.
   - **Kept:** `faults/<plc>/<day>/<id>.json` beside `config.json`, 30 days.
   - **Cost:** it uses the shared notifications, so the machines the boards, alarms and recordings follow cost nothing more.
   - **Settings:** `"faults": { "enabled": true, "preSeconds": 60, "postSeconds": 60, "keepDays": 30, "root": "MAIN.mainStateMachine", "signals": { "line202": ["MAIN.fbDoor.bClosed"] } }`.
