@@ -79,10 +79,12 @@ const expect = (c, w) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) f
   expect(!!before && !!moved && Math.hypot(moved[0] - before[0], moved[1] - before[1]) > 20, `${S} dragged (${before} → ${moved})`);
   // (its menu: right-clicked where it is now, read again; a slow machine: the drawing may still be settling)
   let noteOpen = false;
-  for (let k = 0; k < 3 && !noteOpen; k++) {
+  // (again: centred first, as the drag may have left it outside a small screen's view: CI's is 1024x768)
+  for (let k = 0; k < 4 && !noteOpen; k++) {
     if (k) {
       await page.keyboard.press('Escape');
-      await sleep(800);
+      await page.evaluate((s) => document.getElementById(`btn-goto-state-${s}`)?.click(), S);
+      await sleep(1200);
     }
     const at = await page.evaluate((s) => { const n = document.querySelector(`#mermaid-canvas-area g.node[data-state-id="${s}"]`); const r = (n?.querySelector('rect, path') ?? n)?.getBoundingClientRect(); return r ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null; }, S);
     if (!at) continue;
