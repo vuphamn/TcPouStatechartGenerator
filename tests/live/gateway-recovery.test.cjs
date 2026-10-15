@@ -85,7 +85,7 @@ const M = `${R}.aDoors[1]`;
     const p = await browser.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     // 3. The operator at the board: the guide on the stopped door's tile
-    await p.goto(`${BASE}/?board&page=machines`, { waitUntil: 'load' });
+    await p.goto(`${BASE}/?board&page=machines&lang=en`, { waitUntil: 'load' });
     await p.waitForSelector('#board-token', { timeout: 10000 });
     await p.type('#board-token', tok('ann'));
     await p.keyboard.press('Enter');

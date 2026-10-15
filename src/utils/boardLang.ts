@@ -1,0 +1,191 @@
+/**
+ * The operator board's languages: English, and Spanish for the pages operators use (the Andon page, the machines'
+ * tiles and header, alerts, Why?, calls, recovery guides, shift handover, a machine's label on a phone). Engineering,
+ * OEE, work orders and the drives stay English. Text is written in English in the components, wrapped in t(); the
+ * Spanish is looked up here by that English text ({name} parts filled in).
+ * Which: the address (&lang=es), else the viewer's own choice (the header's EN/ES), else the role's on the gateway
+ * (roles.languages; an operator: Spanish), else the browser's.
+ */
+export type BoardLang = 'en' | 'es';
+export const BOARD_LANGS: BoardLang[] = ['en', 'es'];
+
+const ES: Record<string, string> = {
+  // The header
+  '{n} machines': '{n} máquinas',
+  '{a} of {n} machines': '{a} de {n} máquinas',
+  '{n} in error': 'En error: {n}',
+  '{n} escalated': 'Escaladas: {n}',
+  '{n} stuck': 'Atascadas: {n}',
+  'Signed in as {who}': 'Conectado como {who}',
+  'View only ({who})': 'Solo vista ({who})',
+  Select: 'Seleccionar',
+  'Play back…': 'Reproducir…',
+  'Play back again…': 'Reproducir de nuevo…',
+  Filters: 'Filtros',
+  'PLC runs': 'PLC en marcha',
+  'PLC: no program': 'PLC: sin programa',
+  '{n} open': '{n} abiertas',
+  Faults: 'Fallas',
+  Operator: 'Operador',
+  'Service / maintenance technician': 'Técnico de servicio / mantenimiento',
+  'Maintenance supervisor': 'Supervisor de mantenimiento',
+  Engineer: 'Ingeniero',
+  'Production / office manager': 'Gerente de producción / oficina',
+  Andon: 'Andon',
+  Machines: 'Máquinas',
+  'I/O': 'E/S',
+  Drives: 'Variadores',
+  Risk: 'Riesgo',
+  OEE: 'OEE',
+  Work: 'Trabajo',
+  Engineering: 'Ingeniería',
+  'Andon: big and plain, for the line: what stopped, what to do, Call maintenance': 'Andon: grande y claro, para la línea: qué se detuvo, qué hacer, Llamar a mantenimiento',
+  'The state machines': 'Las máquinas de estados',
+  'The I/O devices, their states, and signals charted live': 'Los dispositivos de E/S, sus estados y señales en vivo',
+  "The drives' health: read from each drive, judged against its limits, its own past and its siblings": 'La salud de los variadores: leída de cada uno, comparada con sus límites, su historial y sus hermanos',
+  "OEE and downtime: availability, performance, quality, the stops' reasons, by shift": 'OEE y paros: disponibilidad, rendimiento, calidad, los motivos de los paros, por turno',
+  "Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)": 'Órdenes de trabajo, el calendario de mantenimiento, la confiabilidad de cada máquina (MTBF, MTTR)',
+  'For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects': 'Para ingenieros: tiempos de los estados contra lo normal, transiciones nuevas y raras, comparar periodos o máquinas, qué cambió en los proyectos del PLC',
+  'What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box': 'Qué revisar primero en todos los PLC (variadores, módulos de E/S, máquinas), y el inventario de cada módulo',
+  'Filter machines… ( / )': 'Filtrar máquinas… ( / )',
+  'Problems only': 'Solo problemas',
+  Tree: 'Árbol',
+  Flat: 'Plano',
+  Alerts: 'Alertas',
+  'Full screen': 'Pantalla completa',
+  'Language: English (click: Español)': 'Idioma: English (clic: Español)',
+  'Language: Español (click: English)': 'Idioma: Español (clic: English)',
+  'Shift handover: the last one, this shift so far, hand over': 'Entrega de turno: la última, este turno hasta ahora, entregar',
+  'Shift handover: {shift} from {who}, not read yet': 'Entrega de turno: {shift} de {who}, aún no leída',
+  // Alerts
+  'No alerts. The gateway\'s alert rules (its setup page) decide what is reported.': 'Sin alertas. Las reglas de alerta del gateway (su página de configuración) deciden qué se informa.',
+  Acknowledge: 'Atender',
+  'Note (optional): e.g. on my way': 'Nota (opcional): p. ej. voy en camino',
+  // Why? (downtime reasons)
+  'Why?': '¿Por qué?',
+  'Why did it stop? (for the downtime report)': '¿Por qué se detuvo? (para el informe de paros)',
+  'Why did it stop?': '¿Por qué se detuvo?',
+  'A note (optional): the jam was at the infeed': 'Una nota (opcional): el atasco fue en la entrada',
+  'Waiting for material': 'Esperando material',
+  Jam: 'Atasco',
+  'Tool change': 'Cambio de herramienta',
+  Changeover: 'Cambio de formato',
+  'Electrical fault': 'Falla eléctrica',
+  'Mechanical fault': 'Falla mecánica',
+  Maintenance: 'Mantenimiento',
+  'Operator break': 'Descanso del operador',
+  'Quality check': 'Control de calidad',
+  Other: 'Otro',
+  // Calls for maintenance (their reasons)
+  Mechanical: 'Mecánico',
+  Electrical: 'Eléctrico',
+  Material: 'Material',
+  Quality: 'Calidad',
+  Safety: 'Seguridad',
+  'Call maintenance': 'Llamar a mantenimiento',
+  'Maintenance called: {reason}': 'Mantenimiento llamado: {reason}',
+  'Not sent': 'No enviado',
+  'What you see (optional)': 'Lo que ve (opcional)',
+  // The Andon page
+  '{t} ago': 'hace {t}',
+  '{who} is on it': '{who} lo está atendiendo',
+  'Waiting for someone to take it': 'Esperando a que alguien lo atienda',
+  '{n} stopped': 'Detenidas: {n}',
+  Running: 'En marcha',
+  'What to do': 'Qué hacer',
+  // A machine's label (a phone)
+  'The whole board': 'Todo el tablero',
+  'Not on this board': 'No está en este tablero',
+  'Work order': 'Orden de trabajo',
+  'Its diagram, live': 'Su diagrama, en vivo',
+  'Open work orders': 'Órdenes de trabajo abiertas',
+  'Fault records': 'Registros de fallas',
+  'Latest alerts': 'Últimas alertas',
+  'None lately.': 'Ninguna últimamente.',
+  // Recovery guides
+  Guide: 'Guía',
+  '+ Guide': '+ Guía',
+  'Recovery steps': 'Pasos de recuperación',
+  'Recovery guide: {title} ({n} steps)': 'Guía de recuperación: {title} ({n} pasos)',
+  'Write a recovery guide for this state': 'Escribir una guía de recuperación para este estado',
+  'Recovery guide': 'Guía de recuperación',
+  'No recovery guide for this state yet.': 'Aún no hay guía de recuperación para este estado.',
+  ' · used {n} times in 90 days, recovered {r}': ' · usada {n} veces en 90 días, recuperada {r}',
+  ', in {t} on average': ', en {t} en promedio',
+  Begin: 'Comenzar',
+  Done: 'Hecho',
+  Skip: 'Omitir',
+  skipped: 'omitido',
+  'Its check does not pass yet': 'Su verificación aún no se cumple',
+  'A note (what you found)': 'Una nota (lo que encontró)',
+  Recovered: 'Recuperada',
+  'Every step first': 'Primero todos los pasos',
+  'Still down': 'Sigue detenida',
+  'Still down: call maintenance': 'Sigue detenida: llamar a mantenimiento',
+  Stop: 'Detener',
+  'Edit the guide': 'Editar la guía',
+  'Recovered: kept with the guide': 'Recuperada: guardado con la guía',
+  'Maintenance called': 'Mantenimiento llamado',
+  'Maintenance not called': 'No se llamó a mantenimiento',
+  Stopped: 'Detenida',
+  'Not done': 'No hecho',
+  Close: 'Cerrar',
+  // Shift handover
+  'Shift handover': 'Entrega de turno',
+  'Earlier handovers': 'Entregas anteriores',
+  'handed over by {who}': 'entregado por {who}',
+  'Read by {who}': 'Leído por {who}',
+  'Not read yet': 'Aún no leído',
+  'Read it': 'Leído',
+  'No shift handed over yet.': 'Aún no se ha entregado ningún turno.',
+  'This shift': 'Este turno',
+  'now': 'ahora',
+  'summing up…': 'resumiendo…',
+  'For the next shift: what is running, what to watch, what is waiting (parts, a call back, a test)…': 'Para el siguiente turno: qué está en marcha, qué vigilar, qué está pendiente (piezas, una llamada, una prueba)…',
+  'Hand over': 'Entregar',
+  'Handed over: the next shift sees it on the board': 'Entregado: el siguiente turno lo ve en el tablero',
+  'Not handed over': 'No entregado',
+  'Your role may read handovers, not write them.': 'Su rol puede leer las entregas, no escribirlas.',
+  'The last 8 hours': 'Las últimas 8 horas',
+  '{n} alerts': '{n} alertas',
+  '{n} alert': '{n} alerta',
+  'most': 'más',
+  '{n} stops': '{n} paros',
+  '{n} stop': '{n} paro',
+  '{t} down': '{t} detenida',
+  'availability {a}, OEE {o}': 'disponibilidad {a}, OEE {o}',
+  '{n} without a reason': '{n} sin motivo',
+  'Work orders: {opened} opened, {done} done, {open} open': 'Órdenes de trabajo: {opened} nuevas, {done} terminadas, {open} abiertas',
+  'Drives to watch:': 'Variadores a vigilar:',
+  'Still open:': 'Aún abiertas:',
+  '(not acknowledged)': '(sin atender)',
+  errors: 'errores',
+  stuck: 'atascadas',
+  'PLC stopped': 'PLC detenido',
+  drives: 'variadores',
+  slower: 'más lentas',
+  calls: 'llamadas',
+  'work orders': 'órdenes de trabajo',
+};
+const DICTS: Record<BoardLang, Record<string, string>> = { en: {}, es: ES };
+
+let current: BoardLang = 'en';
+/** The board's language now (set by the board as it renders) */
+export const setBoardLang = (l: BoardLang) => {
+  current = l;
+};
+export const boardLang = () => current;
+/** The text in the board's language: its English as the key, {name} parts filled in */
+export function t(en: string, vars?: Record<string, string | number>): string {
+  let s = DICTS[current][en] ?? en;
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+  return s;
+}
+/** The keys a language has (a test: every t('…') of the board's components has its Spanish) */
+export const boardLangKeys = (l: BoardLang) => Object.keys(DICTS[l]);
+
+/** Which language: the address, the viewer's own, the role's, the browser's */
+export function pickBoardLang(fromUrl: string | null, stored: string | null, fromRole: string | null | undefined, browser: string | undefined): BoardLang {
+  for (const x of [fromUrl, stored, fromRole]) if (x === 'en' || x === 'es') return x;
+  return /^es\b/i.test(browser ?? '') ? 'es' : 'en';
+}

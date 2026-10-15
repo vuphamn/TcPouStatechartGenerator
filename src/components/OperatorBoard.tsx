@@ -24,6 +24,7 @@ import { GatewayConnection, detectGatewayOrigin, fetchGatewaySso, type GatewaySs
 import { formatDuration } from '../utils/liveView.ts';
 import { formatLimit, limitFor, useDefaultLimit, useLimitsOfTypes } from '../utils/stateLimits.ts';
 import { useStoredSecret } from '../hooks/useStoredSecret.ts';
+import { pickBoardLang, setBoardLang, t, type BoardLang } from '../utils/boardLang.ts';
 
 type BoardPage = 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng';
 
@@ -197,6 +198,16 @@ export const OperatorBoard: React.FC = () => {
     const r: Made | undefined = await conn.current?.request<Made>({ type: 'supportCreate', ...supportOpts }, 'supportResult', 120000).catch((e: unknown): Made => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     setSupportRes(r?.ok ? { url: `${window.location.origin}${r.url}`, expires: r.expires, size: r.size } : { error: r?.error ?? 'Not made' });
   };
+  // The board's language: the address, the viewer's own choice, the role's (from the gateway), the browser's
+  const [lang, setLangState] = useState<BoardLang>(() => pickBoardLang(params.get('lang'), store.get('kss.board.lang'), null, navigator.language));
+  setBoardLang(lang);
+  const setLang = (l: BoardLang) => {
+    setLangState(l);
+    store.set('kss.board.lang', l);
+  };
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
   const [page, setPageState] = useState<BoardPage>(() => {
     const f = /^([db]):/.exec(params.get('focus') ?? '');
     if (f) return f[1] === 'd' ? 'drives' : 'io';
@@ -335,7 +346,7 @@ export const OperatorBoard: React.FC = () => {
     { id: 'work', icon: ClipboardList, label: 'Work', title: "Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)", ok: may('workorder') || may('reports') },
     { id: 'eng', icon: Code2, label: 'Engineering', title: 'For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects', ok: may('engineering') },
     { id: 'risk', icon: ShieldAlert, label: 'Risk', title: 'What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box', ok: true },
-  ] as { id: BoardPage; icon: typeof Megaphone; label: string; title: string; ok: boolean }[]).filter((d) => d.ok && (!perm.pages || perm.pages.includes(d.id)));
+  ] as { id: BoardPage; icon: typeof Megaphone; label: string; title: string; ok: boolean }[]).filter((d) => d.ok && (!perm.pages || perm.pages.includes(d.id))).map((d) => ({ ...d, label: t(d.label), title: t(d.title) }));
   // (on a page its role does not see, e.g. from a link or the last visit: the first of its own)
   const pageIds = pageDefs.map((d) => d.id).join();
   useEffect(() => {
@@ -452,9 +463,11 @@ export const OperatorBoard: React.FC = () => {
       .then((w) => {
         const { user } = w;
         setMe(user);
-        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null };
+        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null };
+        // (the role's language, unless the address or the viewer chose one)
+        if (!params.get('lang') && !store.get('kss.board.lang') && r.lang) setLangState(pickBoardLang(null, null, r.lang, navigator.language));
         setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn, pages: r.pages ?? null });
-        setStatus({ state: 'connected', message: viewOnly ? `View only (${user})` : `Signed in as ${user}` });
+        setStatus({ state: 'connected', message: viewOnly ? t('View only ({who})', { who: user }) : t('Signed in as {who}', { who: user }) });
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
         if (!viewOnly) c.send({ type: 'handoverWatch' });
@@ -800,22 +813,22 @@ export const OperatorBoard: React.FC = () => {
   // (a machine in an error state, or stuck: its recovery guide; editors may write one where there is none)
   const guideButton = (plc: { id: string; name: string }, m: { path: string; type?: string; state?: string | null; error?: boolean; stuck?: boolean }, big = false) => {
     if (viewOnly || playback || !(m.error || m.stuck) || !m.state) return null;
-    const t: RecoveryTarget = { plc: plc.id, plcName: plc.name, machine: m.path, type: m.type ?? '', state: m.state };
-    const g = guideFor(guides, t);
+    const target: RecoveryTarget = { plc: plc.id, plcName: plc.name, machine: m.path, type: m.type ?? '', state: m.state };
+    const g = guideFor(guides, target);
     if (!g && !may('boardEdit')) return null;
     return (
       <button
         type="button"
         className={`board-guide shrink-0 flex items-center gap-1 rounded font-semibold ${big ? 'mt-3 px-4 py-2 text-xl text-white bg-amber-600 hover:bg-amber-500' : g ? 'px-1.5 text-xs bg-amber-500 text-slate-950 hover:bg-amber-400' : 'px-1.5 text-xs border border-white/40 bg-slate-950/50 hover:bg-slate-950'}`}
-        title={g ? `Recovery guide: ${g.title} (${g.steps.length} steps)` : 'Write a recovery guide for this state'}
+        title={g ? t('Recovery guide: {title} ({n} steps)', { title: g.title, n: g.steps.length }) : t('Write a recovery guide for this state')}
         data-guide={g?.id ?? ''}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setRecoveryFor(t);
+          setRecoveryFor(target);
         }}
       >
-        <ListChecks className={big ? 'w-5 h-5' : 'w-3.5 h-3.5'} /> {g ? (big ? 'Recovery steps' : 'Guide') : '+ Guide'}
+        <ListChecks className={big ? 'w-5 h-5' : 'w-3.5 h-3.5'} /> {g ? (big ? t('Recovery steps') : t('Guide')) : t('+ Guide')}
       </button>
     );
   };
@@ -827,7 +840,7 @@ export const OperatorBoard: React.FC = () => {
       <button
         type="button"
         className="board-why shrink-0 px-1.5 rounded bg-slate-950/70 border border-white/40 text-xs font-semibold hover:bg-slate-950"
-        title="Why did it stop? (for the downtime report)"
+        title={t('Why did it stop? (for the downtime report)')}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -835,7 +848,7 @@ export const OperatorBoard: React.FC = () => {
           setWhyFor({ plc: p.id, plcName: p.name, machine: m.path, state: m.state ?? '', from: m.since! });
         }}
       >
-        Why?
+        {t('Why?')}
       </button>
     );
   };
@@ -906,20 +919,20 @@ export const OperatorBoard: React.FC = () => {
         <Radio className={`${narrow ? 'w-5 h-5' : 'w-6 h-6'} text-sky-400`} />
         <h1 id="board-title" className={`${narrow ? 'text-lg' : 'text-2xl'} font-semibold tracking-wide`}>{title}</h1>
         <span id="board-counts" className={`flex items-center gap-3 ${narrow ? 'text-sm' : 'text-lg'}`}>
-          <span id="board-machine-count" className="text-slate-400">{filtering ? `${shownCount} of ${counts.all} machines` : `${counts.all} machines`}</span>
+          <span id="board-machine-count" className="text-slate-400">{filtering ? t('{a} of {n} machines', { a: shownCount, n: counts.all }) : t('{n} machines', { n: counts.all })}</span>
           {counts.error > 0 && (
             <span className="flex items-center gap-1 px-2.5 rounded-full bg-rose-700 text-white">
-              <AlertTriangle className="w-4 h-4" /> {counts.error} in error
+              <AlertTriangle className="w-4 h-4" /> {t('{n} in error', { n: counts.error })}
             </span>
           )}
           {open.some((a) => a.escalatedAt) && (
             <span id="board-escalated-count" className="flex items-center gap-1 px-2.5 rounded-full bg-fuchsia-700 text-white" title="Alerts nobody acknowledged in time">
-              ⏰ {open.filter((a) => a.escalatedAt).length} escalated
+              ⏰ {t('{n} escalated', { n: open.filter((a) => a.escalatedAt).length })}
             </span>
           )}
           {counts.stuck > 0 && (
             <span className="flex items-center gap-1 px-2.5 rounded-full bg-amber-500 text-slate-950">
-              <Timer className="w-4 h-4" /> {counts.stuck} stuck
+              <Timer className="w-4 h-4" /> {t('{n} stuck', { n: counts.stuck })}
             </span>
           )}
         </span>
@@ -951,7 +964,7 @@ export const OperatorBoard: React.FC = () => {
                   e.currentTarget.blur();
                 }
               }}
-              placeholder="Filter machines… ( / )"
+              placeholder={t('Filter machines… ( / )')}
               title="The machines whose path, state, type or PLC has every word typed, e.g. lockhead axis. Esc clears it"
               className={`${narrow ? 'w-40' : 'w-72'} pl-7 pr-7 py-1 rounded bg-slate-950 border border-slate-700 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-600 select-text`}
             />
@@ -969,11 +982,11 @@ export const OperatorBoard: React.FC = () => {
             title="Only the machines in error or stuck"
             aria-pressed={problemsOnly}
           >
-            Problems only
+            {t('Problems only')}
           </button>
           <button id="board-layout" type="button" onClick={() => setLayout(layout === 'tree' ? 'flat' : 'tree')} className={`flex items-center gap-1 px-2 py-1 rounded border text-sm ${layout === 'tree' ? 'border-sky-600 bg-sky-900/40 text-sky-100' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`} title={layout === 'tree' ? 'Tree: nested as in the program (click: flat tiles)' : 'Flat tiles (click: a tree, nested as in the program)'} aria-pressed={layout === 'tree'}>
             {layout === 'tree' ? <ListTree className="w-4 h-4" /> : <LayoutGrid className="w-4 h-4" />}
-            {layout === 'tree' ? 'Tree' : 'Flat'}
+            {layout === 'tree' ? t('Tree') : t('Flat')}
           </button>
         </span>
         {status.state === 'connected' && (
@@ -992,7 +1005,7 @@ export const OperatorBoard: React.FC = () => {
               title="Choose machines: record them, alarm on them, play them back, or save them as a filter"
               aria-pressed={selecting}
             >
-              <CheckSquare className="w-4 h-4" /> Select
+              <CheckSquare className="w-4 h-4" /> {t('Select')}
             </button>
             <select
               id="board-playback-start"
@@ -1001,7 +1014,7 @@ export const OperatorBoard: React.FC = () => {
               className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-slate-300"
               title="Play back the chosen machines (else the ones shown) from the gateway's recordings"
             >
-              <option value="">{playback ? 'Play back again…' : 'Play back…'}</option>
+              <option value="">{playback ? t('Play back again…') : t('Play back…')}</option>
               {PLAYBACK_WINDOWS.map((w) => (
                 <option key={w.ms} value={w.ms}>
                   {w.label}
@@ -1056,7 +1069,7 @@ export const OperatorBoard: React.FC = () => {
         )}
         {perm.on && perm.label && !viewOnly && (
           <span id="board-role" className="px-2 py-0.5 rounded-full border border-sky-800 text-xs text-sky-200" title={`Your role on this gateway: ${perm.label}`}>
-            {perm.label}
+            {t(perm.label)}
           </span>
         )}
         {viewOnly && (
@@ -1083,7 +1096,7 @@ export const OperatorBoard: React.FC = () => {
           {open.length > 0 && <span className="absolute -top-1 -right-1 min-w-[1.25rem] px-1 rounded-full bg-rose-600 text-xs font-bold">{open.length}</span>}
         </button>
         {status.state === 'connected' && !viewOnly && (
-          <button id="board-handover" type="button" onClick={() => setHandoverOpen(true)} className={`relative p-2 rounded hover:bg-slate-800 ${unreadHandover(handovers, me) ? 'text-amber-300' : ''}`} title={unreadHandover(handovers, me) ? `Shift handover: ${unreadHandover(handovers, me)?.shift} from ${unreadHandover(handovers, me)?.by}, not read yet` : 'Shift handover: the last one, this shift so far, hand over'}>
+          <button id="board-handover" type="button" onClick={() => setHandoverOpen(true)} className={`relative p-2 rounded hover:bg-slate-800 ${unreadHandover(handovers, me) ? 'text-amber-300' : ''}`} title={unreadHandover(handovers, me) ? t('Shift handover: {shift} from {who}, not read yet', { shift: unreadHandover(handovers, me)?.shift ?? '', who: unreadHandover(handovers, me)?.by ?? '' }) : t('Shift handover: the last one, this shift so far, hand over')}>
             <Handshake className="w-5 h-5" />
             {unreadHandover(handovers, me) && <span id="board-handover-unread" className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-500" />}
           </button>
@@ -1093,7 +1106,10 @@ export const OperatorBoard: React.FC = () => {
             <LifeBuoy className="w-5 h-5" />
           </button>
         )}
-        <button onClick={() => void document.documentElement.requestFullscreen?.().catch(() => undefined)} className="p-2 rounded hover:bg-slate-800" title="Full screen">
+        <button id="board-lang" type="button" onClick={() => setLang(lang === 'es' ? 'en' : 'es')} className="px-1.5 py-0.5 rounded border border-slate-700 text-xs font-semibold text-slate-300 hover:bg-slate-800" title={lang === 'es' ? t('Language: Español (click: English)') : t('Language: English (click: Español)')}>
+          {lang.toUpperCase()}
+        </button>
+        <button onClick={() => void document.documentElement.requestFullscreen?.().catch(() => undefined)} className="p-2 rounded hover:bg-slate-800" title={t('Full screen')}>
           <Maximize2 className="w-5 h-5" />
         </button>
       </header>
@@ -1258,7 +1274,7 @@ export const OperatorBoard: React.FC = () => {
                   {/* (its PLC: green when it runs; amber, and said, when it does not: the machines below are frozen) */}
                   {p.plcState && (
                     <span className={`board-plc-state px-2 py-0.5 rounded-full text-sm ${p.plcState === 'Run' ? 'bg-emerald-900/70 text-emerald-200' : 'bg-amber-700 text-amber-50'}`} title={p.plcState === 'Run' ? 'Its PLC runs' : 'Its PLC does not run: the machines below keep their last states'}>
-                      {p.plcState === 'Run' ? 'PLC runs' : p.plcState === 'Invalid' ? 'PLC: no program' : `PLC: ${p.plcState}`}
+                      {p.plcState === 'Run' ? t('PLC runs') : p.plcState === 'Invalid' ? t('PLC: no program') : `PLC: ${p.plcState}`}
                     </span>
                   )}
                   <span className={`text-sm ${p.state === 'watching' ? 'text-emerald-400' : p.state === 'error' ? 'text-rose-400' : 'text-sky-400'}`}>{p.state === 'watching' ? '' : p.message || p.state}</span>
@@ -1364,12 +1380,12 @@ export const OperatorBoard: React.FC = () => {
               <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                 <button id="board-aside-alerts" type="button" onClick={() => setAside('alerts')} className={`flex items-center gap-1.5 ${aside === 'alerts' ? 'text-white' : 'text-slate-500 hover:text-slate-200'}`}>
                   <Bell className="w-4 h-4 text-sky-400" />
-                  <span className="font-semibold">Alerts</span>
-                  <span className="text-sm text-slate-400">{open.length} open</span>
+                  <span className="font-semibold">{t('Alerts')}</span>
+                  <span className="text-sm text-slate-400">{t('{n} open', { n: open.length })}</span>
                 </button>
                 {!viewOnly && (
                   <button id="board-aside-faults" type="button" onClick={() => setAside('faults')} className={`ml-auto flex items-center gap-1 ${aside === 'faults' ? 'text-white' : 'text-slate-500 hover:text-slate-200'}`} title="Fault records: the minute before and after each fault, kept by the gateway">
-                    <AlertTriangle className="w-4 h-4 text-rose-400" /> Faults <span className="text-xs text-slate-400">{faultList.length}</span>
+                    <AlertTriangle className="w-4 h-4 text-rose-400" /> {t('Faults')} <span className="text-xs text-slate-400">{faultList.length}</span>
                   </button>
                 )}
               </div>
@@ -1392,7 +1408,7 @@ export const OperatorBoard: React.FC = () => {
               ) : (
               <>
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                {alerts.length === 0 && <div className="p-3 text-slate-500 text-sm">No alerts. The gateway's alert rules (its setup page) decide what is reported.</div>}
+                {alerts.length === 0 && <div className="p-3 text-slate-500 text-sm">{t("No alerts. The gateway's alert rules (its setup page) decide what is reported.")}</div>}
                 {alerts.slice(0, 200).map((a) => {
                   const openOne = a.event !== 'recovered' && !a.ack && !a.resolvedAt;
                   return (
@@ -1420,13 +1436,13 @@ export const OperatorBoard: React.FC = () => {
                               void acknowledge(a);
                             }}
                           >
-                            <input autoFocus className="board-ack-note flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm" placeholder="Note (optional): e.g. on my way" value={note} onChange={(e) => setNote(e.target.value)} />
+                            <input autoFocus className="board-ack-note flex-1 min-w-0 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-sm" placeholder={t('Note (optional): e.g. on my way')} value={note} onChange={(e) => setNote(e.target.value)} />
                             <button className="board-ack-send px-2 rounded bg-sky-700 hover:bg-sky-600">OK</button>
                           </form>
                         ) : (
                           may('ack') && (
                             <button className="board-ack-btn mt-2 px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => setNoteFor(a.id)}>
-                              Acknowledge
+                              {t('Acknowledge')}
                             </button>
                           )
                         ))}
@@ -1458,18 +1474,18 @@ export const OperatorBoard: React.FC = () => {
       {whyFor && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setWhyFor(null)}>
           <div id="board-why" className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-900 p-4 text-sm shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && setWhyFor(null)}>
-            <div className="mb-1 text-base font-semibold">Why did it stop?</div>
+            <div className="mb-1 text-base font-semibold">{t('Why did it stop?')}</div>
             <div className="mb-3 text-slate-400">
               {short(whyFor.machine, root)} ({whyFor.plcName}): {whyFor.state} since {new Date(whyFor.from).toLocaleTimeString()}
             </div>
             <div className="grid grid-cols-2 gap-2">
               {downtime.reasons.map((r) => (
                 <button key={r} type="button" className="board-why-reason px-3 py-2 rounded border border-slate-600 hover:bg-slate-800 text-left" onClick={() => void giveReason(r)}>
-                  {r}
+                  {t(r)}
                 </button>
               ))}
             </div>
-            <input value={whyNote} onChange={(e) => setWhyNote(e.target.value)} placeholder="A note (optional): the jam was at the infeed" className="mt-3 w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" maxLength={200} />
+            <input value={whyNote} onChange={(e) => setWhyNote(e.target.value)} placeholder={t('A note (optional): the jam was at the infeed')} className="mt-3 w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" maxLength={200} />
           </div>
         </div>
       )}

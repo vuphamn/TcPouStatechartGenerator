@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, CircleDashed, ListChecks, Megaphone, Pencil, X, XCircle } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { formatDuration } from '../utils/liveView.ts';
+import { t } from '../utils/boardLang.ts';
 
 /** A recovery guide (gateway/recovery.cjs) */
 export interface RecoveryGuide {
@@ -93,7 +94,7 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
   type R = { ok: boolean; run?: Run; error?: string; message?: string };
   const ask = async (m: Record<string, unknown>) => {
     const r: R | undefined = await conn?.request<R>(m, 'recoveryResult', 15000).catch((e: unknown): R => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
-    if (!r?.ok) setMsg({ text: r?.error ?? r?.message ?? 'Not done', ok: false });
+    if (!r?.ok) setMsg({ text: r?.error ?? r?.message ?? t('Not done'), ok: false });
     else if (r.run) setRun(r.run);
     return r;
   };
@@ -112,8 +113,8 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
     if (outcome === 'called' && canCall) {
       const done = (run?.steps ?? []).filter((s) => !s.skipped).length;
       const c = await conn?.request<{ ok: boolean; error?: string }>({ type: 'callMaintenance', plc: target.plc, machine: target.machine, reason: 'Other', note: `${guide!.title}: ${done} of ${guide!.steps.length} steps done, still down${note ? `. ${note}` : ''}`.slice(0, 200) }, 'callMaintenanceResult', 15000).catch(() => null);
-      setMsg(c?.ok ? { text: 'Maintenance called', ok: true } : { text: c?.error ?? 'Maintenance not called', ok: false });
-    } else setMsg({ text: outcome === 'recovered' ? 'Recovered: kept with the guide' : 'Stopped', ok: true });
+      setMsg(c?.ok ? { text: t('Maintenance called'), ok: true } : { text: c?.error ?? t('Maintenance not called'), ok: false });
+    } else setMsg({ text: outcome === 'recovered' ? t('Recovered: kept with the guide') : t('Stopped'), ok: true });
   };
   const save = async () => {
     setMsg(null);
@@ -130,14 +131,14 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div id="board-recovery" className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-lg border border-amber-600 bg-slate-900 p-4 space-y-3 shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
         <div className="flex items-center gap-2 text-lg font-semibold">
-          <ListChecks className="w-5 h-5 text-amber-300" /> {guide && !editing ? guide.title : 'Recovery guide'}
-          <button type="button" onClick={onClose} className="ml-auto p-1 rounded text-slate-400 hover:text-white" title="Close">
+          <ListChecks className="w-5 h-5 text-amber-300" /> {guide && !editing ? guide.title : t('Recovery guide')}
+          <button type="button" onClick={onClose} className="ml-auto p-1 rounded text-slate-400 hover:text-white" title={t('Close')}>
             <X className="w-4 h-4" />
           </button>
         </div>
         <div className="text-sm text-slate-400">
           {target.machine} <span className="text-slate-500">({target.plcName})</span> in <b className="text-amber-200">{target.state}</b>
-          {guide && guide.used ? ` · used ${guide.used} time${guide.used === 1 ? '' : 's'} in 90 days, recovered ${guide.recovered}${guide.meanMs ? `, in ${formatDuration(guide.meanMs)} on average` : ''}` : ''}
+          {guide && guide.used ? `${t(' · used {n} times in 90 days, recovered {r}', { n: guide.used, r: guide.recovered ?? 0 })}${guide.meanMs ? t(', in {t} on average', { t: formatDuration(guide.meanMs) }) : ''}` : ''}
         </div>
         {editing ? (
           <div id="recovery-editor" className="space-y-2 text-sm">
@@ -163,7 +164,7 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
             </div>
           </div>
         ) : !guide ? (
-          <div className="text-slate-400">No recovery guide for this state yet.</div>
+          <div className="text-slate-400">{t('No recovery guide for this state yet.')}</div>
         ) : (
           <ol id="recovery-steps-list" className="space-y-2">
             {guide.steps.map((s, i) => {
@@ -184,15 +185,15 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
                   </span>
                   {isNow && canRun && (
                     <span className="flex gap-1 shrink-0">
-                      <button type="button" onClick={() => step(i, false)} className={`recovery-done px-3 py-1 rounded text-white text-sm ${c && !c.ok ? 'bg-amber-700 hover:bg-amber-600' : 'bg-emerald-700 hover:bg-emerald-600'}`} title={c && !c.ok ? 'Its check does not pass yet' : undefined}>
-                        Done
+                      <button type="button" onClick={() => step(i, false)} className={`recovery-done px-3 py-1 rounded text-white text-sm ${c && !c.ok ? 'bg-amber-700 hover:bg-amber-600' : 'bg-emerald-700 hover:bg-emerald-600'}`} title={c && !c.ok ? t('Its check does not pass yet') : undefined}>
+                        {t('Done')}
                       </button>
                       <button type="button" onClick={() => step(i, true)} className="recovery-skip px-2 py-1 rounded border border-slate-600 text-sm hover:bg-slate-800">
-                        Skip
+                        {t('Skip')}
                       </button>
                     </span>
                   )}
-                  {done && <span className="text-xs text-slate-500">{done.skipped ? 'skipped' : '✓'}</span>}
+                  {done && <span className="text-xs text-slate-500">{done.skipped ? t('skipped') : '✓'}</span>}
                 </li>
               );
             })}
@@ -202,27 +203,27 @@ export function RecoveryDialog({ conn, target, guides, canRun, canEdit, canCall,
           <div className="flex flex-wrap items-center gap-2">
             {!run && canRun && (
               <button id="recovery-begin" type="button" onClick={() => void begin()} className="px-4 py-2 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold">
-                Begin
+                {t('Begin')}
               </button>
             )}
             {run && !run.endedAt && (
               <>
                 <span className="text-sm text-slate-400 font-mono">{formatDuration(Date.now() - started)}</span>
-                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="A note (what you found)" className="flex-1 min-w-[10rem] rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm select-text" />
-                <button id="recovery-recovered" type="button" disabled={current >= 0} onClick={() => void end('recovered')} className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-40" title={current >= 0 ? 'Every step first' : undefined}>
-                  Recovered
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('A note (what you found)')} className="flex-1 min-w-[10rem] rounded bg-slate-950 border border-slate-700 px-2 py-1 text-sm select-text" />
+                <button id="recovery-recovered" type="button" disabled={current >= 0} onClick={() => void end('recovered')} className="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-40" title={current >= 0 ? t('Every step first') : undefined}>
+                  {t('Recovered')}
                 </button>
                 <button id="recovery-called" type="button" onClick={() => void end('called')} className="flex items-center gap-1 px-3 py-1.5 rounded bg-rose-700 hover:bg-rose-600 text-white">
-                  <Megaphone className="w-4 h-4" /> Still down{canCall ? ': call maintenance' : ''}
+                  <Megaphone className="w-4 h-4" /> {canCall ? t('Still down: call maintenance') : t('Still down')}
                 </button>
                 <button type="button" onClick={() => void end('stopped')} className="px-3 py-1.5 rounded border border-slate-600 hover:bg-slate-800 text-sm">
-                  Stop
+                  {t('Stop')}
                 </button>
               </>
             )}
             {canEdit && !run && (
               <button id="recovery-edit" type="button" onClick={() => setEditing(true)} className="ml-auto flex items-center gap-1 px-2 py-1 rounded border border-slate-600 text-sm hover:bg-slate-800">
-                <Pencil className="w-3.5 h-3.5" /> Edit the guide
+                <Pencil className="w-3.5 h-3.5" /> {t('Edit the guide')}
               </button>
             )}
           </div>

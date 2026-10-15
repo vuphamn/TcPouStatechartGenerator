@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Megaphone, Timer } from 'lucide-react';
 import { formatDuration } from '../utils/liveView.ts';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import { t } from '../utils/boardLang.ts';
 
 export interface AndonMachine {
   path: string;
@@ -79,7 +80,7 @@ export const AndonBoard: React.FC<{
     setCallFor(null);
     try {
       const r = await conn.request<{ ok: boolean; error?: string }>({ type: 'callMaintenance', plc: c.plc.id, machine: c.machine?.path ?? null, reason, note }, 'callMaintenanceResult');
-      setSaid(r.ok ? `Maintenance called: ${reason}` : r.error ?? 'Not sent');
+      setSaid(r.ok ? t('Maintenance called: {reason}', { reason: t(reason) }) : r.error ?? t('Not sent'));
     } catch (e) {
       setSaid(e instanceof Error ? e.message : String(e));
     }
@@ -95,8 +96,8 @@ export const AndonBoard: React.FC<{
             <div key={c.id} className={`andon-call flex flex-wrap items-center gap-3 rounded-lg border-2 px-4 py-2 text-lg ${c.ack ? 'border-sky-600 bg-sky-950/60' : 'border-amber-500 bg-amber-950/60 board-tile-flash'}`} data-call={c.id}>
               <Megaphone className="w-6 h-6 text-amber-300" />
               <span className="font-semibold">{c.text.replace(/^[^:]*:\s*/, '')}</span>
-              <span className="text-base text-slate-300">{ago(c.at)} ago</span>
-              <span className={`ml-auto text-base ${c.ack ? 'text-sky-200' : 'text-amber-200'}`}>{c.ack ? `${c.ack.by} is on it${c.ack.note ? `: ${c.ack.note}` : ''}` : 'Waiting for someone to take it'}</span>
+              <span className="text-base text-slate-300">{t('{t} ago', { t: ago(c.at) })}</span>
+              <span className={`ml-auto text-base ${c.ack ? 'text-sky-200' : 'text-amber-200'}`}>{c.ack ? `${t('{who} is on it', { who: c.ack.by })}${c.ack.note ? `: ${c.ack.note}` : ''}` : t('Waiting for someone to take it')}</span>
             </div>
           ))}
         </div>
@@ -110,17 +111,17 @@ export const AndonBoard: React.FC<{
               <span className={`${narrow ? 'text-2xl' : 'text-4xl'} font-bold`}>{p.name}</span>
               {down.length ? (
                 <span className="flex items-center gap-2 px-4 py-1 rounded-full bg-rose-700 text-2xl font-bold text-white">
-                  <AlertTriangle className="w-7 h-7" /> {down.length} stopped
+                  <AlertTriangle className="w-7 h-7" /> {t('{n} stopped', { n: down.length })}
                 </span>
               ) : (
                 <span className="flex items-center gap-2 px-4 py-1 rounded-full bg-emerald-800 text-2xl font-bold text-emerald-50">
-                  <CheckCircle2 className="w-7 h-7" /> Running
+                  <CheckCircle2 className="w-7 h-7" /> {t('Running')}
                 </span>
               )}
               {p.plcState && p.plcState !== 'Run' && <span className="px-3 py-1 rounded-full bg-amber-600 text-xl text-white">PLC: {p.plcState}</span>}
               {canCall && (
                 <button type="button" onClick={() => { setNote(''); setCallFor({ plc: p, machine: null }); }} className="andon-call-line ml-auto flex items-center gap-2 px-5 py-3 rounded-lg bg-amber-600 hover:bg-amber-500 text-xl font-bold text-white">
-                  <Megaphone className="w-6 h-6" /> Call maintenance
+                  <Megaphone className="w-6 h-6" /> {t('Call maintenance')}
                 </button>
               )}
             </h2>
@@ -135,7 +136,7 @@ export const AndonBoard: React.FC<{
                   </div>
                   {todo(m) && (
                     <div className="andon-todo mt-3 rounded-lg bg-slate-950/50 px-3 py-2 text-xl text-white">
-                      <span className="text-sm uppercase tracking-wide opacity-70">What to do</span>
+                      <span className="text-sm uppercase tracking-wide opacity-70">{t('What to do')}</span>
                       <div>{todo(m)}</div>
                     </div>
                   )}
@@ -143,7 +144,7 @@ export const AndonBoard: React.FC<{
                     {guideButton?.(p, m)}
                     {canCall && (
                       <button type="button" onClick={() => { setNote(''); setCallFor({ plc: p, machine: m }); }} className="andon-call-machine mt-3 flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-950/70 hover:bg-slate-950 text-xl font-bold text-white">
-                        <Megaphone className="w-5 h-5" /> Call maintenance
+                        <Megaphone className="w-5 h-5" /> {t('Call maintenance')}
                       </button>
                     )}
                   </div>
@@ -165,7 +166,7 @@ export const AndonBoard: React.FC<{
       {callFor && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setCallFor(null)}>
           <div id="andon-call-dialog" className="w-full max-w-lg rounded-xl border border-amber-600 bg-slate-900 p-5 shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && setCallFor(null)}>
-            <div className="text-2xl font-bold">Call maintenance</div>
+            <div className="text-2xl font-bold">{t('Call maintenance')}</div>
             <div className="mb-4 text-lg text-slate-300">
               {callFor.plc.name}
               {callFor.machine ? ` · ${short(callFor.machine.path, root)}: ${callFor.machine.state ?? ''}` : ''}
@@ -173,11 +174,11 @@ export const AndonBoard: React.FC<{
             <div className="grid grid-cols-2 gap-3">
               {info.reasons.map((r) => (
                 <button key={r} type="button" onClick={() => void call(r)} className="andon-reason px-4 py-3 rounded-lg border-2 border-slate-600 hover:border-amber-500 hover:bg-slate-800 text-xl font-semibold text-left">
-                  {r}
+                  {t(r)}
                 </button>
               ))}
             </div>
-            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What you see (optional)" className="mt-4 w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-lg select-text" maxLength={200} />
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('What you see (optional)')} className="mt-4 w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-lg select-text" maxLength={200} />
           </div>
         </div>
       )}

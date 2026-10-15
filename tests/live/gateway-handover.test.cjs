@@ -93,7 +93,7 @@ const M = `${R}.aDoors[2]`;
     const p = await browser.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     // 3. The next shift's operator: unread on the board; read
-    await p.goto(`${BASE}/?board`, { waitUntil: 'load' });
+    await p.goto(`${BASE}/?board&lang=en`, { waitUntil: 'load' });
     await p.waitForSelector('#board-token', { timeout: 10000 });
     await p.type('#board-token', tok('ann'));
     await p.keyboard.press('Enter');

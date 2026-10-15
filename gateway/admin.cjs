@@ -267,7 +267,7 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     // The PLCs' projects kept here (projectSync.cjs): their state; one checked now
     'GET projects': async () => (projects ? projects.list() : { enabled: false, plcs: [] }),
     // Roles: who has which, the default, groups, start pages, notifications (roles.cjs); null: roles off
-    'GET roles': async () => ({ roles: getConfig().roles ?? null, labels: roles?.labels ?? {}, pages: roles?.pages ?? [], pageLabels: roles?.pageLabels ?? {}, pageDefaults: roles?.pageDefaults ?? {}, filters: roles?.filters() ?? [], users: (getConfig().tokens ?? []).map((t) => ({ name: t.name, view: !!t.view })) }),
+    'GET roles': async () => ({ roles: getConfig().roles ?? null, labels: roles?.labels ?? {}, pages: roles?.pages ?? [], pageLabels: roles?.pageLabels ?? {}, pageDefaults: roles?.pageDefaults ?? {}, langDefaults: roles?.langDefaults ?? {}, filters: roles?.filters() ?? [], users: (getConfig().tokens ?? []).map((t) => ({ name: t.name, view: !!t.view })) }),
     'POST roles': async (body) => {
       const checked = body.roles == null ? null : roles.check(body.roles, (roles?.filters() ?? []).map((f) => f.id));
       update((c) => {
@@ -1006,6 +1006,15 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
       pageRows.append(el('tr', { 'data-pages-role': role }, el('td', {}, rolesData.labels[role]), ...rolesData.pages.map((p) => el('td', {}, el('input', { type: 'checkbox', 'data-page': p, checked: list().includes(p), on: { change: (e) => { const cur = list(); r.pages[role] = rolesData.pages.filter((x) => (x === p ? e.target.checked : cur.includes(x))); } } })))));
     }
     box.append(el('h3', {}, 'Board pages each role sees (what it may do there is still its role)'), el('div', { class: 'scroll' }, el('table', {}, pageRows)));
+    // The board language each role starts in
+    r.languages = r.languages || {};
+    const langRows = el('tbody', {});
+    for (const role of ROLE_IDS) {
+      const s = el('select', { 'data-lang-role': role, on: { change: (e) => { r.languages[role] = e.target.value; } } }, el('option', { value: 'en' }, 'English'), el('option', { value: 'es' }, 'Español'));
+      s.value = r.languages[role] || (rolesData.langDefaults || {})[role] || 'en';
+      langRows.append(el('tr', {}, el('td', {}, rolesData.labels[role]), el('td', {}, s)));
+    }
+    box.append(el('h3', {}, 'Board language each role starts in (each viewer can switch it: EN / ES in the header)'), el('div', { class: 'scroll' }, el('table', {}, langRows)));
     // Notifications
     box.append(el('h3', {}, 'Told of alerts'));
     r.notify.forEach((n, i) => {

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, ArrowLeft, ClipboardList, ExternalLink, Megaphone, Timer } from 'lucide-react';
 import { formatDuration } from '../utils/liveView.ts';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import { t } from '../utils/boardLang.ts';
 import type { WorkOrder, WorkDraft } from './WorkBoard.tsx';
 import type { FaultSummary } from './FaultViewer.tsx';
 
@@ -78,21 +79,21 @@ export const FocusView: React.FC<{
   const call = async (reason: string) => {
     setCalling(false);
     const r = await conn?.request<{ ok: boolean; error?: string }>({ type: 'callMaintenance', plc: plc.id, machine: path, reason, note: '' }, 'callMaintenanceResult').catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
-    setSaid(r?.ok ? `Maintenance called: ${reason}` : r?.error ?? 'Not sent');
+    setSaid(r?.ok ? t('Maintenance called: {reason}', { reason: t(reason) }) : r?.error ?? t('Not sent'));
   };
   const down = !!m && (m.error || m.stuck);
   return (
     <div id="focus-view" className="fixed inset-0 z-30 overflow-y-auto bg-slate-950 text-slate-100">
       <div className="sticky top-0 flex items-center gap-2 border-b border-slate-800 bg-slate-900 px-3 py-2">
         <button id="focus-back" type="button" onClick={onClose} className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-800 text-sm">
-          <ArrowLeft className="w-4 h-4" /> The whole board
+          <ArrowLeft className="w-4 h-4" /> {t('The whole board')}
         </button>
         <span className="ml-auto text-sm text-slate-400">{plc.name}</span>
       </div>
       <div className="p-4 space-y-4 max-w-xl mx-auto">
         <div className={`rounded-xl border-4 px-4 py-3 ${!m ? 'border-slate-700' : m.error ? 'border-rose-500 bg-rose-900/70' : m.stuck ? 'border-amber-400 bg-amber-600/80 text-slate-950' : m.state ? 'border-emerald-700 bg-emerald-950' : 'border-slate-700'}`} data-path={path}>
           <div className="text-xl font-semibold">{short(path, root)}</div>
-          <div id="focus-state" className="text-4xl font-black break-words">{m?.state ?? (m ? '…' : 'Not on this board')}</div>
+          <div id="focus-state" className="text-4xl font-black break-words">{m?.state ?? (m ? '…' : t('Not on this board'))}</div>
           {m?.since && (
             <div className="flex items-center gap-2 text-xl font-mono">
               {m.error ? <AlertTriangle className="w-5 h-5" /> : m.stuck ? <Timer className="w-5 h-5" /> : null}
@@ -101,7 +102,7 @@ export const FocusView: React.FC<{
           )}
           {info.todo && (
             <div id="focus-todo" className="mt-2 rounded bg-slate-950/60 px-3 py-2 text-lg text-white">
-              <div className="text-xs uppercase tracking-wide opacity-70">What to do</div>
+              <div className="text-xs uppercase tracking-wide opacity-70">{t('What to do')}</div>
               {info.todo}
             </div>
           )}
@@ -110,17 +111,17 @@ export const FocusView: React.FC<{
         <div className="flex flex-wrap gap-2">
           {canCall && (
             <button id="focus-call" type="button" onClick={() => setCalling((v) => !v)} className={`flex items-center gap-2 px-4 py-3 rounded-lg text-lg font-bold text-white ${down ? 'bg-amber-600 hover:bg-amber-500' : 'bg-slate-700 hover:bg-slate-600'}`}>
-              <Megaphone className="w-5 h-5" /> Call maintenance
+              <Megaphone className="w-5 h-5" /> {t('Call maintenance')}
             </button>
           )}
           {canWork && (
             <button id="focus-work" type="button" onClick={() => onWork({ title: `${m?.state ?? 'Check'} at ${short(path, root)}`, plc: plc.id, plcName: plc.name, machine: path, priority: down ? 'high' : 'normal', source: { kind: 'qr', text: `${plc.name}: ${short(path, root)} (${m?.state ?? ''})` } })} className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-700 hover:bg-slate-600 text-lg font-bold">
-              <ClipboardList className="w-5 h-5" /> Work order
+              <ClipboardList className="w-5 h-5" /> {t('Work order')}
             </button>
           )}
           {diagramUrl && (
             <a href={diagramUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-4 py-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-lg">
-              <ExternalLink className="w-5 h-5" /> Its diagram, live
+              <ExternalLink className="w-5 h-5" /> {t('Its diagram, live')}
             </a>
           )}
         </div>
@@ -128,14 +129,14 @@ export const FocusView: React.FC<{
           <div className="grid grid-cols-2 gap-2">
             {info.reasons.map((r) => (
               <button key={r} type="button" onClick={() => void call(r)} className="focus-reason px-3 py-3 rounded-lg border-2 border-slate-600 hover:border-amber-500 text-lg font-semibold">
-                {r}
+                {t(r)}
               </button>
             ))}
           </div>
         )}
         {open.length > 0 && (
           <section>
-            <h3 className="mb-1 font-semibold">Open work orders</h3>
+            <h3 className="mb-1 font-semibold">{t('Open work orders')}</h3>
             {open.map((o) => (
               <div key={o.id} className="focus-order rounded border border-slate-800 px-3 py-2 text-sm">
                 #{o.number} {o.title} · <span className="text-sky-300">{o.status}{o.assignee ? `, ${o.assignee}` : ''}</span>
@@ -145,7 +146,7 @@ export const FocusView: React.FC<{
         )}
         {faults.length > 0 && (
           <section>
-            <h3 className="mb-1 font-semibold">Fault records</h3>
+            <h3 className="mb-1 font-semibold">{t('Fault records')}</h3>
             {faults.slice(0, 5).map((f) => (
               <button key={f.id} type="button" onClick={() => onFault(f.id)} className="focus-fault block w-full text-left rounded border border-rose-900 bg-rose-950/40 px-3 py-2 text-sm hover:bg-rose-950/70">
                 {new Date(f.at).toLocaleString()} · <b className="text-rose-300">{f.state}</b>
@@ -154,8 +155,8 @@ export const FocusView: React.FC<{
           </section>
         )}
         <section>
-          <h3 className="mb-1 font-semibold">Latest alerts</h3>
-          {!alerts.length && <div className="text-sm text-slate-500">None lately.</div>}
+          <h3 className="mb-1 font-semibold">{t('Latest alerts')}</h3>
+          {!alerts.length && <div className="text-sm text-slate-500">{t('None lately.')}</div>}
           {alerts.slice(0, 6).map((a) => (
             <div key={a.id} className="focus-alert border-b border-slate-800 py-1 text-sm">
               <span className="font-mono text-xs text-slate-500">{new Date(a.at).toLocaleString()}</span> {a.text.replace(/^[^:]*:\s*/, '')}

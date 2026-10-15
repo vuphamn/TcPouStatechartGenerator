@@ -37,7 +37,7 @@ const { createIoBoards } = require('./ioBoard.cjs');
 const { SharedVars } = require('./sharedVars.cjs');
 const { createLoad } = require('./load.cjs');
 const { createDrives } = require('./drives.cjs');
-const { createRoles, checkRoles, LABELS: ROLE_LABELS, PAGES: BOARD_PAGES, PAGE_LABELS, DEFAULT_PAGES } = require('./roles.cjs');
+const { createRoles, checkRoles, LABELS: ROLE_LABELS, PAGES: BOARD_PAGES, PAGE_LABELS, DEFAULT_PAGES, DEFAULT_LANGS } = require('./roles.cjs');
 const { createFaults } = require('./faults.cjs');
 const { createFleet } = require('./fleet.cjs');
 const { risks: risksOf, inventory: inventoryOf } = require('./risk.cjs');
@@ -770,7 +770,7 @@ function start() {
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
     load: () => ({ ...load.snapshot(), drives: drives.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
-    roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS, pages: BOARD_PAGES, pageLabels: PAGE_LABELS, pageDefaults: DEFAULT_PAGES },
+    roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS, pages: BOARD_PAGES, pageLabels: PAGE_LABELS, pageDefaults: DEFAULT_PAGES, langDefaults: DEFAULT_LANGS },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
@@ -866,7 +866,7 @@ function start() {
     const may = (cap) => roles.can(user, groups(), viewOnly).includes(cap);
     const roleInfo = () => {
       const role = viewOnly ? null : roles.roleOf(user, groups());
-      return { role, roleLabel: role ? ROLE_LABELS[role] : null, can: roles.can(user, groups(), viewOnly), rolesOn: roles.enabled(), pages: roles.pagesOf(role) };
+      return { role, roleLabel: role ? ROLE_LABELS[role] : null, can: roles.can(user, groups(), viewOnly), rolesOn: roles.enabled(), pages: roles.pagesOf(role), lang: roles.langOf(role) };
     };
     // (what this gateway offers its pages, by its settings and the user's role)
     const features = () => {

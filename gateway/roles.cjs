@@ -7,6 +7,7 @@
 //     "default": "operator",                                              everyone else signed in ("" or none: nothing)
 //     "startPages": { "operator": "<saved filter id>" },                  the board's page for a role (a saved filter)
 //     "pages": { "operator": ["andon", "machines"] },                     the board's pages a role sees (else its defaults)
+//     "languages": { "operator": "es" },                                  the board's language a role starts in (en, es)
 //     "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive",
 //                 "call", "plcStopped"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }]
 //   }
@@ -24,6 +25,9 @@ const ALL = [...new Set(Object.values(CAN).flat())];
 /** The board's pages, and those each role sees unless the setup page says otherwise */
 const PAGES = ['andon', 'machines', 'io', 'drives', 'risk', 'oee', 'work', 'eng'];
 const PAGE_LABELS = { andon: 'Andon', machines: 'Machines', io: 'I/O', drives: 'Drives', risk: 'Risk', oee: 'OEE', work: 'Work', eng: 'Engineering' };
+/** The board's language each role starts in, unless the setup page says otherwise (a viewer can switch it) */
+const LANGS = ['en', 'es'];
+const DEFAULT_LANGS = { operator: 'es' };
 const DEFAULT_PAGES = {
   operator: ['andon', 'machines'],
   technician: ['andon', 'machines', 'io', 'drives', 'risk', 'work'],
@@ -89,6 +93,12 @@ function checkRoles(r, filterIds = []) {
     if (!l.length) throw new Error(`${LABELS[k]}: at least one page of the board`);
     if (l.join() !== DEFAULT_PAGES[k].join()) pages[k] = l;
   }
+  const languages = {};
+  for (const [k, l] of Object.entries(r.languages ?? {})) {
+    if (!role(k, 'A language')) continue;
+    if (!LANGS.includes(l)) throw new Error(`${LABELS[k]}: a language of ${LANGS.join(', ')}`);
+    if (l !== (DEFAULT_LANGS[k] ?? 'en')) languages[k] = l;
+  }
   const notify = (Array.isArray(r.notify) ? r.notify : []).map((n, i) => {
     const where = `Notification ${i + 1}`;
     const rl = role(n?.role, `${where}: its role`);
@@ -104,7 +114,7 @@ function checkRoles(r, filterIds = []) {
     });
     return { role: rl, webhook, format: ['teams', 'slack', 'json'].includes(n?.format) ? n.format : 'teams', events, onCall };
   });
-  return { users, groups, default: role(r.default, 'The default role'), startPages, pages, notify };
+  return { users, groups, default: role(r.default, 'The default role'), startPages, pages, languages, notify };
 }
 
 /** Who is on call now in a notification's schedule (several: all of them) */
@@ -146,6 +156,8 @@ function createRoles({ getConfig, postWebhook, log }) {
     enabled: () => !!conf(),
     startPage: (role) => (role ? conf()?.startPages?.[role] ?? null : null),
     /** The board's pages a role sees (null: every page its capabilities allow) */
+    /** The board's language a role starts in (null: roles off or no role: the viewer's browser decides) */
+    langOf: (role) => (role && conf() ? conf().languages?.[role] ?? DEFAULT_LANGS[role] ?? 'en' : null),
     pagesOf: (role) => (role && conf() ? conf().pages?.[role] ?? DEFAULT_PAGES[role] ?? null : null),
     /** A new alert or call: posted to the roles that want it, with who is on call */
     notify(event) {
@@ -162,4 +174,4 @@ function createRoles({ getConfig, postWebhook, log }) {
   };
 }
 
-module.exports = { createRoles, checkRoles, onCallNow, daysOf, ROLES, LABELS, CAN, EVENTS, PAGES, PAGE_LABELS, DEFAULT_PAGES };
+module.exports = { createRoles, checkRoles, onCallNow, daysOf, ROLES, LABELS, CAN, EVENTS, PAGES, PAGE_LABELS, DEFAULT_PAGES, DEFAULT_LANGS };

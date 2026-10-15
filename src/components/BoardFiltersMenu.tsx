@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Copy, Filter, Pencil, Save, Trash2, X } from 'lucide-react';
+import { t } from '../utils/boardLang.ts';
 
 /** A saved filter of the operator board (gateway/boardFilters.cjs) */
 export interface BoardSavedFilter {
@@ -110,7 +111,7 @@ export const BoardFiltersMenu: React.FC<{
           aria-expanded={open}
         >
           <Filter className="w-4 h-4" />
-          <span id="board-filter-active" className={`${narrow ? 'max-w-[6rem]' : 'max-w-[12rem]'} truncate`}>{active ? active.name : 'Filters'}</span>
+          <span id="board-filter-active" className={`${narrow ? 'max-w-[6rem]' : 'max-w-[12rem]'} truncate`}>{active ? active.name : t('Filters')}</span>
           <ChevronDown className="w-3.5 h-3.5" />
         </button>
         {active && (

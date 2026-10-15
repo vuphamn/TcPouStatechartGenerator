@@ -105,7 +105,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
     const p = await browser.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     // 4. The board as an operator: its role, its start page, no maintenance or reports
-    await p.goto(`${BASE}/?board`, { waitUntil: 'load' });
+    await p.goto(`${BASE}/?board&lang=en`, { waitUntil: 'load' });
     await p.waitForSelector('#board-token', { timeout: 10000 });
     await p.type('#board-token', tok('ann'));
     await p.keyboard.press('Enter');
