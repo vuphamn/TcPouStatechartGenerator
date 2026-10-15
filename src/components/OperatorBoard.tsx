@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, ClipboardList, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, ClipboardList, Code2, LifeBuoy, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -12,6 +12,7 @@ import { AndonBoard } from './AndonBoard.tsx';
 import { WorkBoard, type WorkDraft } from './WorkBoard.tsx';
 import { QrSheet, type QrItem } from './QrSheet.tsx';
 import { FocusView } from './FocusView.tsx';
+import { EngBoard } from './EngBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
@@ -182,13 +183,23 @@ export const OperatorBoard: React.FC = () => {
     window.history.replaceState(null, '', u.toString());
   };
   const [qrItems, setQrItems] = useState<QrItem[] | null>(null);
-  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work'>(() => {
+  // A support bundle: its choices, its link
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [supportOpts, setSupportOpts] = useState({ hours: 24, days: 3, faults: true });
+  const [supportRes, setSupportRes] = useState<{ url?: string; expires?: string; size?: number; error?: string; busy?: boolean } | null>(null);
+  const makeSupport = async () => {
+    setSupportRes({ busy: true });
+    type Made = { ok: boolean; url?: string; expires?: string; size?: number; error?: string };
+    const r: Made | undefined = await conn.current?.request<Made>({ type: 'supportCreate', ...supportOpts }, 'supportResult', 120000).catch((e: unknown): Made => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    setSupportRes(r?.ok ? { url: `${window.location.origin}${r.url}`, expires: r.expires, size: r.size } : { error: r?.error ?? 'Not made' });
+  };
+  const [page, setPageState] = useState<'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng'>(() => {
     const f = /^([db]):/.exec(params.get('focus') ?? '');
     if (f) return f[1] === 'd' ? 'drives' : 'io';
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' || p === 'eng' ? p : 'machines';
   });
-  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work') => {
+  const setPage = (p: 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng') => {
     setPageState(p);
     store.set('kss.board.page', p);
   };
@@ -872,6 +883,11 @@ export const OperatorBoard: React.FC = () => {
               <ClipboardList className="w-4 h-4" /> Work
             </button>
           )}
+          {may('engineering') && (
+            <button id="board-page-eng" type="button" onClick={() => setPage('eng')} className={`flex items-center gap-1 px-2 py-1 ${page === 'eng' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'eng'} title="For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects">
+              <Code2 className="w-4 h-4" /> Engineering
+            </button>
+          )}
           <button id="board-page-risk" type="button" onClick={() => setPage('risk')} className={`flex items-center gap-1 px-2 py-1 ${page === 'risk' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} aria-pressed={page === 'risk'} title="What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box">
             <ShieldAlert className="w-4 h-4" /> Risk
           </button>
@@ -1021,6 +1037,11 @@ export const OperatorBoard: React.FC = () => {
           {showAlerts ? <Bell className="w-5 h-5" /> : <BellOff className="w-5 h-5" />}
           {open.length > 0 && <span className="absolute -top-1 -right-1 min-w-[1.25rem] px-1 rounded-full bg-rose-600 text-xs font-bold">{open.length}</span>}
         </button>
+        {status.state === 'connected' && (may('engineering') || may('assign')) && (
+          <button id="board-support" type="button" onClick={() => { setSupportRes(null); setSupportOpen(true); }} className="p-2 rounded hover:bg-slate-800" title="Support bundle: what Kval support needs, in one zip, by a link that expires">
+            <LifeBuoy className="w-5 h-5" />
+          </button>
+        )}
         <button onClick={() => void document.documentElement.requestFullscreen?.().catch(() => undefined)} className="p-2 rounded hover:bg-slate-800" title="Full screen">
           <Maximize2 className="w-5 h-5" />
         </button>
@@ -1075,6 +1096,11 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'eng' && (
+            <div className="flex-1 min-w-0 flex flex-col">
+              <EngBoard conn={conn.current} connected={status.state === 'connected'} root={root} plcs={plcs.map((p) => ({ id: p.id, name: p.name }))} narrow={narrow} />
+            </div>
+          )}
           {(!narrow || phoneView === 'machines') && page === 'work' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <WorkBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} user={me} canWork={may('workorder')} canAssign={may('assign')} root={root} draft={workDraft} onDraftDone={onDraftDone} narrow={narrow} />
@@ -1420,6 +1446,48 @@ export const OperatorBoard: React.FC = () => {
         );
       })()}
       {qrItems && <QrSheet items={qrItems} onClose={() => setQrItems(null)} />}
+      {supportOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-3" onMouseDown={(e) => e.target === e.currentTarget && setSupportOpen(false)}>
+          <div id="board-support-dialog" className="w-full max-w-lg rounded-lg border border-slate-700 bg-slate-900 p-4 text-sm space-y-3 shadow-2xl" onKeyDown={(e) => e.key === 'Escape' && setSupportOpen(false)}>
+            <div className="flex items-center gap-2 text-base font-semibold">
+              <LifeBuoy className="w-5 h-5 text-sky-300" /> Support bundle
+            </div>
+            <p className="text-slate-400">One zip for Kval support: the gateway and its settings (no tokens, webhooks or passwords), the alerts, fault records, drives, I/O fleet and risks, PLC project versions, work orders, recordings, its audit log and the end of its log. Shared by a link that expires (or downloaded and sent).</p>
+            <label className="flex items-center gap-2">
+              The last
+              <select value={supportOpts.hours} onChange={(e) => setSupportOpts({ ...supportOpts, hours: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded px-2 py-1">
+                <option value={24}>24 hours</option>
+                <option value={72}>3 days</option>
+                <option value={168}>7 days</option>
+              </select>
+              ; its link valid
+              <select value={supportOpts.days} onChange={(e) => setSupportOpts({ ...supportOpts, days: Number(e.target.value) })} className="bg-slate-950 border border-slate-700 rounded px-2 py-1">
+                <option value={1}>1 day</option>
+                <option value={3}>3 days</option>
+                <option value={7}>7 days</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={supportOpts.faults} onChange={(e) => setSupportOpts({ ...supportOpts, faults: e.target.checked })} /> With the fault records (the last 50)
+            </label>
+            {supportRes?.error && <div className="text-rose-300">{supportRes.error}</div>}
+            {supportRes?.url && (
+              <div id="board-support-link" className="space-y-1 rounded border border-emerald-800 bg-emerald-950/40 p-2">
+                <div className="break-all font-mono text-xs">{supportRes.url}</div>
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  {Math.round((supportRes.size ?? 0) / 1024)} KB · until {supportRes.expires ? new Date(supportRes.expires).toLocaleString() : ''}
+                  <button type="button" onClick={() => void navigator.clipboard?.writeText(supportRes.url!)} className="ml-auto px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800">Copy the link</button>
+                  <a href={supportRes.url} className="px-2 py-0.5 rounded bg-sky-700 hover:bg-sky-600 text-white">Download</a>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setSupportOpen(false)} className="px-3 py-1 rounded border border-slate-700 hover:bg-slate-800">Close</button>
+              <button id="board-support-make" type="button" disabled={supportRes?.busy} onClick={() => void makeSupport()} className="px-3 py-1 rounded bg-sky-700 hover:bg-sky-600 text-white disabled:opacity-50">{supportRes?.busy ? 'Making it…' : 'Make it'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       {faultOpen && <FaultViewer conn={conn.current} id={faultOpen} onClose={() => setFaultOpen(null)} narrow={narrow} />}
       {ruleDialog && (
         <BoardRuleDialog

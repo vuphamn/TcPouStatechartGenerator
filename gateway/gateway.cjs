@@ -47,6 +47,8 @@ const { createProjectSync } = require('./projectSync.cjs');
 const { createReports, checkShifts, shiftWindows } = require('./report.cjs');
 const { createOee } = require('./oee.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
+const { createEngineering } = require('./engineering.cjs');
+const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
 
 const VERSION = '1.0.0';
@@ -637,6 +639,45 @@ function start() {
   const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
   // Work orders (workorders.cjs): kept in workorders.json, told to the roles that want them
   const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: (e) => roles.notify(e) });
+  // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
+  const engineering = createEngineering({ recorders, projectsDir: () => path.resolve(baseDir, String(config.projectSync?.folder || 'PlcProjects')), sources: require(`${sharedDir}/tcSources.cjs`) });
+  // The support bundle (support.cjs): what support needs, in one zip, by a link that expires
+  const support = createSupport({ baseDir, log, audit });
+  const supportFiles = (hours, withFaults, user) => {
+    const since = Date.now() - hours * 3600_000;
+    const j = (x) => JSON.stringify(x, null, 2);
+    const files = {
+      'gateway.json': j({ gateway: 'Kval MachineScope', version: VERSION, host: os.hostname(), at: new Date().toISOString(), uptimeS: Math.round(process.uptime()), node: process.version, platform: `${os.platform()} ${os.release()}`, by: user, hours }),
+      'config.json': j(support.sanitized(config)),
+      'load.json': j(load.snapshot()),
+      'alerts.json': j(alertLog.all().filter((a) => Date.parse(a.at) >= since)),
+      'faults.json': j(faults.list({ since, limit: 500 })),
+      'drives.json': j(drives.view()),
+      'fleet.json': j(fleetState([])),
+      'projects.json': j(projectSync.list()),
+      'workorders.json': j(workOrders.list().filter((o) => (o.status !== 'done' && o.status !== 'cancelled') || Date.parse(o.doneAt ?? o.createdAt) >= since)),
+      'recordings.json': j(recorders.list().map((r) => ({ ...r, machines: r.machines.map((x) => ({ path: x.path, type: x.type })) }))),
+      'audit.jsonl': audit.search({ from: since, limit: 5000 }).map((e) => JSON.stringify(e)).join('\n'),
+    };
+    if (withFaults) for (const f of faults.list({ since, limit: 50 })) {
+      const r = faults.get(f.id);
+      if (r) files[`faults/${f.id}.json`] = JSON.stringify(r);
+    }
+    // (the end of its log: the last 2 MB)
+    try {
+      const lf = path.join(baseDir, 'gateway.log');
+      const st = fs.statSync(lf);
+      const fd = fs.openSync(lf, 'r');
+      const n = Math.min(st.size, 2 * 1024 * 1024);
+      const buf = Buffer.alloc(n);
+      fs.readSync(fd, buf, 0, n, st.size - n);
+      fs.closeSync(fd);
+      files['gateway.log'] = buf;
+    } catch {
+      // (no log file: started by hand)
+    }
+    return files;
+  };
   const peopleOf = () => [...new Set([...Object.keys(config.roles?.users ?? {}), ...(config.tokens ?? []).filter((t) => !t.view).map((t) => t.name)])].sort();
   const oeeConfig = () => {
     const s = oee.settings();
@@ -690,6 +731,8 @@ function start() {
   const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
   const handleRequest = async (req, res) => {
     if (await auth.handle(req, res)) return;
+    // (a support bundle's link: /support/<id>.zip?key=…)
+    if (support.serve(req, res)) return;
     if (!admin(req, res)) serveStatic(config, req, res);
   };
 
@@ -856,7 +899,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { workCreate: 'workorder', workUpdate: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -864,7 +907,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { workCreate: 'workResult', workUpdate: 'workResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1114,6 +1157,42 @@ function start() {
       }
       // Work orders: followed (the Work page), created, changed (assigning another: those who assign); each machine's
       // reliability; the maintenance calendar
+      // The Engineering page's answers
+      if (m.type === 'engTiming' || m.type === 'engTransitions' || m.type === 'engCompare' || m.type === 'engVersions' || m.type === 'engDiff') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const reply = `${m.type}Result`;
+        if (viewOnly) return send({ type: reply, requestId, error: 'A display: the board only' });
+        const sym = (x) => typeof x === 'string' && ads.isSymbolPath(x);
+        const win = (w) => w && typeof w.id === 'string' && sym(w.machine) && Number(w.from) < Number(w.to) && Number(w.to) - Number(w.from) <= 62 * 86400000 ? { id: w.id, machine: w.machine, from: Number(w.from), to: Number(w.to) } : null;
+        try {
+          if (m.type === 'engTiming') return send({ type: reply, requestId, ...(typeof m.id === 'string' && sym(m.machine) ? engineering.timing(m.id, m.machine) : { error: 'A recording and a machine' }) });
+          if (m.type === 'engTransitions') return send({ type: reply, requestId, ...(typeof m.id === 'string' && sym(m.machine) ? engineering.transitions(m.id, m.machine, Math.max(1, Math.min(168, Number(m.hours) || 24))) : { error: 'A recording and a machine' }) });
+          if (m.type === 'engCompare') {
+            const a = win(m.a);
+            const b = win(m.b);
+            return send({ type: reply, requestId, ...(a && b ? engineering.compare(a, b) : { error: 'Two recordings, their machines and windows' }) });
+          }
+          if (!plcs.has(m.plc)) return send({ type: reply, requestId, error: 'A PLC of the gateway' });
+          if (m.type === 'engVersions') return send({ type: reply, requestId, versions: engineering.versions(m.plc) });
+          const ok = (v) => typeof v === 'string' && /^[\w.-]{1,60}$/.test(v);
+          if (!ok(m.a) || !ok(m.b) || (m.path != null && (typeof m.path !== 'string' || m.path.length > 300 || m.path.includes('..')))) return send({ type: reply, requestId, error: 'Two versions (and a file)' });
+          return send({ type: reply, requestId, ...engineering.diff(m.plc, m.a, m.b, m.path ?? undefined) });
+        } catch (err) {
+          return send({ type: reply, requestId, error: err.message });
+        }
+      }
+      // A support bundle made (engineers, supervisors; roles off: anyone signed in), its link
+      if (m.type === 'supportCreate') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly || (roles.enabled() && !may('engineering') && !may('assign'))) return send({ type: 'supportResult', requestId, ok: false, error: `${user} may not make support bundles (engineers and supervisors)` });
+        const hours = [24, 72, 168].includes(Number(m.hours)) ? Number(m.hours) : 24;
+        const days = [1, 3, 7].includes(Number(m.days)) ? Number(m.days) : 3;
+        try {
+          return send({ type: 'supportResult', requestId, ok: true, ...support.create(supportFiles(hours, m.faults !== false, user), { days, hours }, user) });
+        } catch (err) {
+          return send({ type: 'supportResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'workWatch') {
         const sendWork = () => send({ type: 'workOrders', orders: workOrders.list(), people: peopleOf() });
         sendWork();
@@ -1636,6 +1715,7 @@ function start() {
     faults.stop();
     fleet.stop();
     oee.stop();
+    support.stop();
     recorders.stop();
     reports.stop();
     maintenance.stop();
