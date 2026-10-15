@@ -29,6 +29,7 @@ Requires Node.js 20 or later on the gateway machine.
    npm install --omit=dev
    node gateway.cjs init --host machinescope-gw.example.local
    ```
+   (PowerShell says *running scripts is disabled on this system*: run `npm.cmd install --omit=dev` instead; it changes no security setting.) Installed by the Kval MachineScope setup, the gateway is in `C:ProgramDataKvalMachineScopeGateway` (for all users) or `%LOCALAPPDATA%KvalMachineScopeGateway` (for one user); the Start menu's **Kval MachineScope Gateway** opens it.
    `init` creates `config.json` and a self-signed certificate for that host name. For browsers to trust the gateway, replace `cert.pem` / `key.pem` with a certificate from your company CA. Alternatively, set `tls.pfx` and `tls.passphrase`.
 3. **Set up the PLCs:** start the gateway (step 6) and open its **setup page** on the gateway machine, `https://localhost:8443/admin` (see [Setup page](#setup-page)): search the network for the PLCs, tick them, test them, save. Or edit `config.json` by hand:
    ```json
