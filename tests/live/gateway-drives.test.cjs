@@ -173,7 +173,7 @@ const apiPost = (p, body) =>
   expect(listed?.boxes?.length >= 5 && sp?.profile?.id === 'hsd-es951' && sp.address === 1007 && listed.boxes.some((b) => /EX260/.test(b.name) && !b.profile), `Check a drive: ${listed?.boxes?.map((b) => `${b.name} (${b.profile?.id ?? 'none'}, ${b.address})`).join(', ') ?? listed?.error}`);
   const prof = await apiPost('drivecheck', { plc: 'line', path: sp?.path });
   const speed = prof?.reads?.find((x) => x.key === 'speed');
-  expect(prof?.reads?.length === 8 && prof.reads[1].as?.u32 === 0x4b && speed?.hex === 'e0 2e' && speed.as?.u16 === 12000 && speed.value === 12000 && speed.verified === false && prof.reads.find((x) => x.key === 'p75')?.as?.u8 === 5, `its profile read: ${prof?.reads?.map((x) => `${x.label} ${x.hex}`).join(', ') ?? prof?.error}`);
+  expect(prof?.reads?.length === 9 && prof.reads[1].as?.u32 === 0x4b && speed?.hex === 'e0 2e' && speed.as?.u16 === 12000 && speed.value === 12000 && speed.verified === false && prof.reads.find((x) => x.key === 'p75')?.as?.u8 === 5, `its profile read: ${prof?.reads?.map((x) => `${x.label} ${x.hex}`).join(', ') ?? prof?.error}`);
   const one = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '0x6010', sub: '2', size: 2 });
   const none = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '2d84', sub: 1, size: 2 });
   expect(one?.reads?.[0]?.as?.u16 === 35 && /\S/.test(none?.reads?.[0]?.error ?? ''), `one object: 0x6010:2 = ${one?.reads?.[0]?.as?.u16}; one it has not: ${none?.reads?.[0]?.error}`);
