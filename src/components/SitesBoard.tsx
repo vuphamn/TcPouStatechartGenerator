@@ -19,9 +19,38 @@ export interface Site {
   awaySince?: number | null;
 }
 
+/** A window of a gateway's summary (gateway/plant.cjs) */
+interface Window {
+  oee: number | null;
+  availability: number | null;
+  downMs: number;
+  stops: number;
+  plannedMs?: number;
+}
+/** The plant roll-up: this gateway's summary and those it follows, the plant's totals */
+interface Rollup {
+  rows: { id: string; name: string; self?: boolean; away?: boolean; message?: string; day?: Window; week?: Window; openAlerts?: number; alarmsPerHour?: number | null; top?: { reason: string; ms: number }[] }[];
+  total: { day: Window; week: Window; openAlerts: number; alarmsPerHour: number };
+}
+const pct = (x: number | null | undefined) => (x === null || x === undefined ? '—' : `${Math.round(x * 100)} %`);
+const hours = (ms: number | undefined) => (ms === undefined ? '—' : `${(ms / 3600000).toFixed(1)} h`);
+
 /** The board's Sites page: the plant's other gateways, each one's PLCs, machines in error or stuck, open alerts; its board */
 export const SitesBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: { type: string }) => void) => () => void; narrow: boolean }> = ({ conn, connected, subscribe, narrow }) => {
   const [sites, setSites] = useState<Site[]>([]);
+  const [rollup, setRollup] = useState<Rollup | null>(null);
+  // (the plant roll-up: now, then every minute)
+  useEffect(() => {
+    if (!connected || !conn) return;
+    let live = true;
+    const ask = () => void conn.request<Rollup>({ type: 'plantRollup' }, 'plantRollupResult', 60000).then((r) => live && r?.rows && setRollup(r)).catch(() => {});
+    ask();
+    const t = window.setInterval(ask, 60000);
+    return () => {
+      live = false;
+      window.clearInterval(t);
+    };
+  }, [connected, conn]);
   useEffect(
     () =>
       subscribe((m) => {
@@ -36,6 +65,52 @@ export const SitesBoard: React.FC<{ conn: GatewayConnection | null; connected: b
   const shown = [...sites].sort((a, b) => Number(b.state !== 'connected') - Number(a.state !== 'connected') || down(b) - down(a) || a.name.localeCompare(b.name));
   return (
     <div id="sites-board" className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
+      {rollup && rollup.rows.length > 1 && (
+        <div className="mb-4 overflow-x-auto">
+          <table id="plant-rollup" className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-slate-500">
+                <th className="py-1">{t('The plant')}</th>
+                <th>{t('OEE 24 h')}</th>
+                <th>{t('OEE 7 days')}</th>
+                <th>{t('Availability')}</th>
+                <th className="text-right">{t('Down')}</th>
+                <th className="text-right">{t('Stops')}</th>
+                <th className="text-right">{t('Open alerts')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rollup.rows.map((r) => (
+                <tr key={r.id} className="plant-row border-t border-slate-800" data-site={r.id} data-away={r.away ? 'true' : undefined}>
+                  <td className="py-1">{r.self ? `${r.name} (${t('this gateway')})` : r.name}</td>
+                  {r.away ? (
+                    <td colSpan={6} className="text-amber-300">{t('not answering')}</td>
+                  ) : (
+                    <>
+                      <td>{pct(r.day?.oee)}</td>
+                      <td className="font-semibold">{pct(r.week?.oee)}</td>
+                      <td>{pct(r.week?.availability)}</td>
+                      <td className="text-right font-mono">{hours(r.week?.downMs)}</td>
+                      <td className="text-right font-mono">{r.week?.stops ?? '—'}</td>
+                      <td className="text-right font-mono">{r.openAlerts ?? '—'}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+              <tr className="plant-total border-t-2 border-slate-600 font-semibold">
+                <td className="py-1">{t('All of it')}</td>
+                <td>{pct(rollup.total.day.oee)}</td>
+                <td>{pct(rollup.total.week.oee)}</td>
+                <td>{pct(rollup.total.week.availability)}</td>
+                <td className="text-right font-mono">{hours(rollup.total.week.downMs)}</td>
+                <td className="text-right font-mono">{rollup.total.week.stops}</td>
+                <td className="text-right font-mono">{rollup.total.openAlerts}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="mt-1 text-xs text-slate-500">{t('Down, stops, availability: the last 7 days; OEE and availability weighted by each one’s planned time')}</div>
+        </div>
+      )}
       {!sites.length && <div className="text-slate-400">{t('No other gateways: the setup page’s Other gateways adds them.')}</div>}
       <div className={`grid ${narrow ? 'gap-2' : 'gap-4 [grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))]'}`}>
         {shown.map((s) => {

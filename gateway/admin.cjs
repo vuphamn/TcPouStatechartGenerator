@@ -198,7 +198,7 @@ function expiryOf(x) {
   return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v) ? new Date(v + 'T23:59:59') : new Date(v);
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, plantSend, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -427,6 +427,24 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     },
     // Other gateways (sites.cjs): config.sites; their tokens never sent back (kept when left empty)
     'GET sites': async () => ({ sites: (getConfig().sites ?? []).map(({ token, ...s }) => ({ ...s, hasToken: !!token })), status: sitesView ? sitesView() : [] }),
+    // (the plant roll-up: its weekly email, its webhook; sent now)
+    'GET plant': async () => ({ plantReport: getConfig().plantReport ?? {}, siteName: getConfig().siteName ?? '' }),
+    'POST plant': async (body) => {
+      const p = body?.plantReport ?? {};
+      const to = String(Array.isArray(p.to) ? p.to.join(',') : p.to ?? '').split(/[,; ]+/).map((x) => x.trim()).filter(Boolean);
+      for (const a of to) if (!/^[^@\s]+@[^@\s]+$/.test(a)) throw new Error(`Not an email address: ${a}`);
+      const webhook = String(p.webhook ?? '').trim();
+      if (webhook && !/^https?:\/\//i.test(webhook)) throw new Error('Its webhook: an http(s) address');
+      const plantReport = { day: String(p.day || 'mon').slice(0, 3).toLowerCase(), at: /^[0-2][0-9]:[0-5][0-9]$/.test(String(p.at)) ? p.at : '07:00', ...(to.length ? { to } : {}), ...(webhook ? { webhook, format: ['teams', 'slack', 'json'].includes(p.format) ? p.format : 'teams' } : {}), ...(String(p.link ?? '').trim() ? { link: String(p.link).trim().slice(0, 300) } : {}) };
+      const siteName = String(body?.siteName ?? '').trim().slice(0, 80);
+      update((c) => { c.plantReport = to.length || webhook ? plantReport : undefined; c.siteName = siteName || undefined; });
+      audit?.add('setup page', 'plant.report', { to: to.length, webhook: !!webhook });
+      return { ok: true };
+    },
+    'POST plant/send': async () => {
+      if (!plantSend) throw new Error('Not on this gateway');
+      return plantSend('setup page');
+    },
     'POST sites': async (body) => {
       const list = Array.isArray(body?.sites) ? body.sites : [];
       const ids = new Set();
@@ -841,6 +859,12 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-sites"></div>
   <div class="row mt"><button id="admin-site-add">Add a gateway</button><span class="grow"></span><button class="primary" id="admin-sites-save">Save other gateways</button></div>
   <div class="msg" id="admin-sites-msg"></div>
+  <h3>The plant, each week</h3>
+  <p class="hint flush">The roll-up of this gateway and those it follows (OEE, availability, downtime, stops, open alerts), on the Sites page, and each week by email (its mail server: Email and SMS) and to a webhook.</p>
+  <div class="row">This gateway is <input type="text" id="admin-plant-name" placeholder="its name in the roll-up (this computer's name)"> sent each <select id="admin-plant-day"><option value="mon">Mon</option><option value="tue">Tue</option><option value="wed">Wed</option><option value="thu">Thu</option><option value="fri">Fri</option><option value="sat">Sat</option><option value="sun">Sun</option></select> at <input type="text" class="mono" id="admin-plant-at" size="5" placeholder="07:00"></div>
+  <div class="row"><input type="text" class="grow" id="admin-plant-to" placeholder="emailed to: plant.manager@acme.com, maintenance@acme.com"><input type="text" class="grow mono" id="admin-plant-webhook" placeholder="and to a webhook (Teams, Slack): https://…"></div>
+  <div class="row"><input type="text" class="grow mono" id="admin-plant-link" placeholder="the link it carries: https://gateway:8443/?board&amp;page=sites"><button id="admin-plant-save">Save</button><button id="admin-plant-send">Send it now</button></div>
+  <div class="msg" id="admin-plant-msg"></div>
 </section>
 <section>
   <h2>Email and SMS</h2>
@@ -1707,6 +1731,28 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     renderSites(d.status);
   };
   $('admin-site-add').addEventListener('click', () => { sitesRows.push({ name: '', url: '', token: '' }); renderSites(); });
+  call('plant').then((d) => {
+    const p = d.plantReport || {};
+    $('admin-plant-name').value = d.siteName || '';
+    $('admin-plant-day').value = p.day || 'mon';
+    $('admin-plant-at').value = p.at || '';
+    $('admin-plant-to').value = (p.to || []).join(', ');
+    $('admin-plant-webhook').value = p.webhook || '';
+    $('admin-plant-link').value = p.link || '';
+  }).catch(() => {});
+  $('admin-plant-save').addEventListener('click', async () => {
+    try {
+      await call('plant', { siteName: $('admin-plant-name').value, plantReport: { day: $('admin-plant-day').value, at: $('admin-plant-at').value, to: $('admin-plant-to').value, webhook: $('admin-plant-webhook').value, link: $('admin-plant-link').value } });
+      say('admin-plant-msg', 'Saved', true);
+    } catch (err) { say('admin-plant-msg', err.message, false); }
+  });
+  $('admin-plant-send').addEventListener('click', async () => {
+    say('admin-plant-msg', 'Sending ...');
+    try {
+      const r = await call('plant/send', {});
+      say('admin-plant-msg', r.sent.length ? 'Sent (' + r.sent.join(', ') + ')' : 'Nowhere to send it: an email address or a webhook first', !!r.sent.length);
+    } catch (err) { say('admin-plant-msg', err.message, false); }
+  });
   $('admin-sites-save').addEventListener('click', async () => {
     try {
       await call('sites', { sites: sitesRows });

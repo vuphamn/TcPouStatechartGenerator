@@ -69,6 +69,7 @@ const { maintenanceKpis } = require('./kpis.cjs');
 const { createShelves } = require('./shelves.cjs');
 const { createHealth } = require('./health.cjs');
 const { tokenFor, allowedOf, scopeIn, scopeOut, watchExpiry } = require('./tokens.cjs');
+const { summaryOf, createPlant } = require('./plant.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -459,6 +460,10 @@ function start() {
     // (with the new settings' part counters, product variables, energy meters)
     config.energy = next.energy;
     config.backup = next.backup;
+    config.plantReport = next.plantReport;
+    config.siteName = next.siteName;
+    config.alarms = next.alarms;
+    config.sitesDownAfterMin = next.sitesDownAfterMin;
     recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
     config.boardEditors = next.boardEditors;
@@ -511,6 +516,7 @@ function start() {
   let axes = null;
   let sites = null;
   let health = null;
+  let plant = null;
   let faults = null;
   let fleet = null;
   setInterval(() => {
@@ -657,6 +663,8 @@ function start() {
   health = createHealth({ baseDir, getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
   // (tokens near their expiry: told, once a day)
   watchExpiry({ getConfig: () => config, onEvent: (e) => alertLog.add(e), log });
+  // (the plant roll-up: this gateway's summary and those it follows; weekly emailed)
+  plant = createPlant({ getConfig: () => config, ownSummary: () => summaryOf({ name: config.siteName || os.hostname(), report: (q) => oee.report(q), events: alertLog.all(), alarmHealth }), siteRows: () => sites.rows(), sendEmail: (x) => sendEmail(config.smtp, x), postWebhook, log, audit });
   sites.start();
   // Change control (changes.cjs): each change of a PLC's program (seen by the project copy), explained, approved
   const changes = createChanges({ baseDir, log, audit, notify: notifyAll, rolesOn: () => roles.enabled() });
@@ -878,6 +886,7 @@ function start() {
     driveCheck: (b) => drives.check(b),
     findMeters: (plcId) => drives.findMeters(plcId),
     health: () => health?.now() ?? null,
+    plantSend: (user) => plant.send(user),
     certs,
     backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit, getConfig: () => config, onEvent: (e) => alertLog.add(e) }),
     restart: async () => {
@@ -1085,7 +1094,7 @@ function start() {
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)
-      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'fleetWatch', 'fleetStop', 'andonInfo', 'axesWatch', 'sitesWatch', 'changesWatch', 'alarmHealth', 'recoveryWatch', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'fleetWatch', 'fleetStop', 'andonInfo', 'axesWatch', 'sitesWatch', 'siteSummary', 'changesWatch', 'alarmHealth', 'recoveryWatch', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
@@ -1294,6 +1303,19 @@ function start() {
         } catch (err) {
           return send({ type: 'shelfResult', requestId, ok: false, error: err.message });
         }
+      }
+      // The plant roll-up: this gateway's summary (a gateway following it asks, with a view-only token), the roll-up
+      if (m.type === 'siteSummary') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        try {
+          return send({ type: 'siteSummaryResult', requestId, ...plant.own() });
+        } catch (err) {
+          return send({ type: 'siteSummaryResult', requestId, error: err.message });
+        }
+      }
+      if (m.type === 'plantRollup') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        return send({ type: 'plantRollupResult', requestId, ...plant.rollup() });
       }
       if (m.type === 'lastTime') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;

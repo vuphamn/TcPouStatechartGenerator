@@ -33,7 +33,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
   await h.waitForText(line.logFile, /Setup page/);
   // The hub: no PLC of its own; the line's gateway, and one with a wrong token
   const hub = start('hub', {
-    port: HUB, plcs: [], tokens: [{ name: 'mgr', sha256: sha('sites-mgr') }], sitesDownAfterMin: 0.05,
+    port: HUB, plcs: [], tokens: [{ name: 'mgr', sha256: sha('sites-mgr') }], sitesDownAfterMin: 0.05, siteName: 'Plant hub',
     sites: [{ id: 'line4', name: 'Line 4 gateway', url: `http://localhost:${LINE}`, token: 'sites-view' }, { id: 'bad', name: 'Wrong token', url: `http://localhost:${LINE}`, token: 'nope' }],
   });
   await h.waitForText(hub.logFile, /Setup page/);
@@ -54,7 +54,24 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
   const l4 = st?.find((x) => x.id === 'line4');
   const bad = st?.find((x) => x.id === 'bad');
   expect(typeof l4?.health?.freePct === 'number' && welcome?.sites === 2 && l4?.state === 'connected' && l4.plcs[0].name === 'Line 4' && l4.plcs[0].error >= 1 && l4.url === `http://localhost:${LINE}` && bad?.state === 'error', `the sites: ${l4?.name} ${l4?.state}, ${l4?.plcs?.[0]?.name}: ${l4?.plcs?.[0]?.machines} machines, ${l4?.plcs?.[0]?.error} in error, its disk ${Math.round(l4?.health?.freePct ?? -1)} % free; ${bad?.name}: ${bad?.message}`);
+  // (the plant roll-up: the hub itself, the line's gateway with its summary (asked with its view-only token), one away)
+  ws.send(JSON.stringify({ type: 'plantRollup', requestId: 7 }));
+  const roll = await h.until(() => got.find((m) => m.type === 'plantRollupResult' && m.requestId === 7 && m.rows?.find((r) => r.id === 'line4')?.week ? m : null), 15000).catch(() => null)
+    ?? (await (async () => { for (let i = 0; i < 10; i++) { ws.send(JSON.stringify({ type: 'plantRollup', requestId: 70 + i })); const r = await h.until(() => got.find((m) => m.type === 'plantRollupResult' && m.requestId === 70 + i), 5000); if (r?.rows?.find((x) => x.id === 'line4')?.week) return r; await h.sleep(1000); } return null; })());
+  const rl4 = roll?.rows?.find((r) => r.id === 'line4');
+  expect(roll?.rows?.length === 3 && roll.rows[0].self && roll.rows[0].name === 'Plant hub' && rl4?.name === 'Line 4 gateway' && rl4.week && typeof rl4.openAlerts === 'number' && roll.rows.find((r) => r.id === 'bad')?.away === true && typeof roll.total.openAlerts === 'number', `the plant roll-up: ${roll?.rows?.map((r) => `${r.name}${r.away ? ' (away)' : `: ${r.openAlerts} open`}`).join('; ')}`);
   ws.close();
+  // (the weekly roll-up: sent now to its webhook)
+  const posts = [];
+  const hook = http.createServer((req, res) => { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { try { posts.push(JSON.parse(b)); } catch { posts.push(b); } res.writeHead(200); res.end('1'); }); });
+  await new Promise((r) => hook.listen(8537, '127.0.0.1', r));
+  const postJson = (p, body) => new Promise((resolve) => { const r = http.request({ host: '127.0.0.1', port: HUB, path: p, method: 'POST', headers: { host: `localhost:${HUB}`, origin: `http://localhost:${HUB}`, 'content-type': 'application/json' } }, (res) => { let t = ''; res.on('data', (d) => (t += d)); res.on('end', () => resolve({ status: res.statusCode, json: (() => { try { return JSON.parse(t); } catch { return null; } })() })); }); r.end(JSON.stringify(body)); });
+  const badMail = await postJson('/admin/api/plant', { plantReport: { to: 'not an address' } });
+  await postJson('/admin/api/plant', { siteName: 'Plant hub', plantReport: { day: 'mon', at: '07:00', webhook: 'http://127.0.0.1:8537/plant', format: 'json' } });
+  const sentNow = await postJson('/admin/api/plant/send', {});
+  const weekly = await h.until(() => posts.find((p) => p.event === 'plant.weekly'), 8000);
+  expect(badMail.status >= 400 && /Not an email address/.test(badMail.json?.error ?? '') && sentNow.json?.sent?.join() === 'webhook' && /Line 4 gateway: OEE/.test(weekly?.text ?? '') && /Wrong token: not answering/.test(weekly.text) && /The plant: OEE/.test(weekly.text), `the weekly roll-up sent now: ${sentNow.json?.sent}; ${(weekly?.text ?? '').split('\n')[0]}`);
+  hook.close();
   // The setup page: its token not shown
   const shown = await new Promise((resolve) => {
     http.get({ host: '127.0.0.1', port: HUB, path: '/admin/api/sites', headers: { host: `localhost:${HUB}` } }, (res) => {
@@ -80,6 +97,8 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
       const c = document.querySelector('.site-card[data-site="line4"]');
       return c ? { text: c.textContent, link: c.querySelector('.site-open')?.getAttribute('href'), down: c.getAttribute('data-down'), tab: !!document.querySelector('#board-page-sites') } : null;
     }), 20000);
+    const plantRows = await h.until(() => p.$$eval('#plant-rollup .plant-row', (x) => x.map((e) => e.getAttribute('data-site'))).then((x) => (x.length === 3 ? x : null)), 70000);
+    expect(plantRows?.join() === 'self,line4,bad', `the Sites page's plant: ${plantRows?.join(', ')}`);
     expect(/Line 4 gateway/.test(card?.text ?? '') && card.link === `http://localhost:${LINE}/?board` && Number(card.down) >= 1 && card.tab, `the Sites page: ${JSON.stringify(card)}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();

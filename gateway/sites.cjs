@@ -46,6 +46,12 @@ function createSites({ getConfig, log, onEvent }) {
         s.names = Object.fromEntries((m.plcs ?? []).map((p) => [p.id, p.name]));
         ws.send(JSON.stringify({ type: 'boardWatch', plcs: [], root: s.conf.root || 'MAIN.mainStateMachine' }));
         ws.send(JSON.stringify({ type: 'alertsList' }));
+        // (its summary for the plant roll-up: now, then every 10 minutes)
+        const ask = () => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ type: 'siteSummary', requestId: 1 }));
+        ask();
+        clearInterval(s.summaryTimer);
+        s.summaryTimer = setInterval(ask, 10 * 60000);
+        s.summaryTimer.unref?.();
         publish();
       } else if (m.type === 'boardState' && Array.isArray(m.plcs)) {
         s.plcs = m.plcs.map((p) => ({ id: p.id, name: p.name ?? s.names?.[p.id] ?? p.id, plcState: p.plcState ?? null, machines: (p.machines ?? []).length, error: (p.machines ?? []).filter((x) => x.error).length, stuck: (p.machines ?? []).filter((x) => x.stuck && !x.error).length, message: p.message ?? '' }));
@@ -59,6 +65,10 @@ function createSites({ getConfig, log, onEvent }) {
         (s.events ??= new Map()).set(m.event.id, m.event);
         s.alerts = [...s.events.values()].filter((e) => !e.resolvedAt && !e.muted && e.event !== 'recovered').length;
         publish();
+      } else if (m.type === 'siteSummaryResult' && m.day) {
+        const { type: _t, requestId: _r, ...summary } = m;
+        s.summary = summary;
+        publish();
       } else if (m.type === 'denied') {
         s.message = 'Its token was not accepted: a view-only token of that gateway (its setup page, Tokens)';
       } else if (m.type === 'error' || m.type === 'closed') {
@@ -66,6 +76,7 @@ function createSites({ getConfig, log, onEvent }) {
       }
     });
     ws.on('close', (code, reason) => {
+      clearInterval(s.summaryTimer);
       if (s.stopped) return;
       if (s.state === 'connected' || !s.lostAt) s.lostAt ??= Date.now();
       s.state = 'error';
@@ -131,6 +142,8 @@ function createSites({ getConfig, log, onEvent }) {
       sites.clear();
     },
     count: () => sites.size,
+    /** The plant roll-up's rows: each one's summary (its last), away or not */
+    rows: () => [...sites.values()].map((s) => ({ id: s.conf.id, ...(s.summary ?? {}), name: s.conf.name || s.conf.id, away: s.state !== 'connected', message: s.message, url: String(s.conf.url).replace(/\/+$/, '') })),
     view: () => [...sites.values()].map((s) => ({ id: s.conf.id, name: s.conf.name || s.conf.id, url: String(s.conf.url).replace(/\/+$/, ''), state: s.state, message: s.message, plcs: s.plcs, alerts: s.alerts ?? 0, at: s.at, health: s.health ?? null, awaySince: s.state === 'connected' ? null : s.lostAt ?? null })),
     subscribe(fn) {
       listeners.add(fn);
