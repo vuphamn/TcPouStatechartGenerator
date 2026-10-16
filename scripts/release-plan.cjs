@@ -36,7 +36,8 @@ const EDITIONS = {
   },
   desktop: {
     title: 'Desktop edition',
-    paths: [...APP, 'electron', 'shared', 'build', 'scripts/prepare-installer.cjs'],
+    // (its installer carries the gateway, with Node.js, and Link: their changes are desktop changes too)
+    paths: [...APP, 'electron', 'shared', 'build', 'scripts/prepare-installer.cjs', 'gateway', 'scripts/build-gateway.cjs', 'link', 'scripts/build-link.cjs'],
     version: () => JSON.parse(read('package.json')).version,
     stamp: (v) => write('package.json', read('package.json').replace(/("version":\s*")\d+\.\d+\.\d+(")/, `$1${v}$2`)),
   },
