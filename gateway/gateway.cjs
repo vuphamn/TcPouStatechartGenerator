@@ -64,6 +64,7 @@ const { createCerts } = require('./certs.cjs');
 const { zipOf } = require('./support.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createAttachments } = require('./attachments.cjs');
+const { lastTime } = require('./lastTime.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -1241,6 +1242,20 @@ function start() {
       if (m.type === 'faultsList') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         return send({ type: 'faultsListResult', requestId, faults: faults.list({ plc: typeof m.plc === 'string' ? m.plc : undefined, machine: typeof m.machine === 'string' ? m.machine : undefined, since: Number(m.since) || undefined, limit: Math.min(500, Number(m.limit) || 200) }), signals: Object.fromEntries([...plcs.keys()].map((id) => [id, faults.signalsOf(id)])) });
+      }
+      // Last time this happened: a machine in a state, what is known of it (earlier alerts, work orders done and their
+      // root causes, its recovery guide, earlier fault records)
+      if (m.type === 'lastTime') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'lastTimeResult', requestId, ok: false, error: 'A display: the board only' });
+        const plc = typeof m.plc === 'string' ? m.plc : '';
+        const machine = typeof m.machine === 'string' ? m.machine.slice(0, 300) : '';
+        const state = typeof m.state === 'string' ? m.state.slice(0, 120) : '';
+        if (!plcs.has(plc) || !machine) return send({ type: 'lastTimeResult', requestId, ok: false, error: 'A PLC of the gateway and a machine' });
+        const fl = faults ? faults.list({ plc, machine, limit: 500 }) : [];
+        const type = typeof m.machineType === 'string' ? m.machineType : fl[0]?.type ?? '';
+        const at = Number.isFinite(Number(m.at)) && Number(m.at) > 0 ? Number(m.at) : Date.now();
+        return send({ type: 'lastTimeResult', requestId, ok: true, ...lastTime({ alerts: alertLog.all(), orders: workOrders.list(), faults: fl, guide: state ? recovery.match({ plc, machine, type, state }) : null, plc, machine, state, at, excludeId: typeof m.alertId === 'string' ? m.alertId : null }) });
       }
       if (m.type === 'faultGet') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;

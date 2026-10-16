@@ -117,6 +117,9 @@ const M = `${R}.aDoors[2]`;
   expect(assigned?.order?.status === 'assigned' && assigned.order.assignee === 'tech', `a supervisor assigns: ${assigned?.order?.status} to ${assigned?.order?.assignee}`);
   expect(row?.failures === 3 && row.orders === 1 && Math.abs(row.mtbfMs - 10 * DAY) < 60000 && row.mttrMs > 0 && row.causes[0]?.cause === 'Sensor cable cut at the hinge', `reliability: ${row?.failures} failures, MTBF ${(row?.mtbfMs / DAY).toFixed(1)} days, MTTR ${Math.round(row?.mttrMs / 60000)} min, cause ${row?.causes?.[0]?.cause}`);
   expect(cal?.windows?.length === 1 && cal.windows[0].planned && cal.windows[0].plcName === 'Line 9' && cal.windows[0].note === 'belt', `the calendar: ${JSON.stringify(cal?.windows?.[0])}`);
+  // (last time this happened: aDoors[2] in its error state: 3 times before, the work order done on it, its root cause)
+  const last = await sup.ask({ type: 'lastTime', plc: 'line', machine: M, state: 'DOOR_DASHER_ERROR' }, 'lastTimeResult');
+  expect(last?.ok && last.before.count === 3 && last.before.recoverMs === 10 * 60000 && last.orders[0]?.rootCause === 'Sensor cable cut at the hinge' && last.orders[0].number === o?.number, `last time: ${last?.before?.count}× in ${last?.before?.days} days, recovered in ${last?.before?.recoverMs / 60000} min; #${last?.orders?.[0]?.number} ${last?.orders?.[0]?.rootCause}`);
   sup.ws.close();
   expect(fs.existsSync(path.join(dir, 'workorders.json')), 'kept in workorders.json');
 
@@ -155,6 +158,12 @@ const M = `${R}.aDoors[2]`;
     const tabText = await p.$eval('#work-tab-parts', (e) => e.textContent);
     expect(/1/.test(lowRow ?? '') && /1 low/.test(tabText ?? ''), `the Parts tab: S12-SENS ${lowRow} (low), the tab "${tabText}"`);
     expect(orders >= 2 && /Sensor cable cut at the hinge/.test(detail ?? '') && /Line 9/.test(win ?? '') && /10\.0 days/.test(rel2 ?? ''), `the Work page: ${orders} orders, the done one's root cause, the calendar's window, reliability "${rel2}"`);
+    // (an alert's Last time on the board)
+    await p.goto(`${BASE}/?board`, { waitUntil: 'load' });
+    await h.until(() => p.$('.board-alert[data-alert="f0"] .board-alert-last'), 15000);
+    await p.click('.board-alert[data-alert="f0"] .board-alert-last').catch(() => {});
+    const lastText = await h.until(() => p.$eval('.board-alert[data-alert="f0"] .board-last-time', (e) => (/Sensor cable cut/.test(e.textContent ?? '') ? e.textContent : null)).catch(() => null), 8000);
+    expect(/2× in the last 90 days/.test(lastText ?? '') && /Sensor cable cut at the hinge/.test(lastText ?? ''), `the board's Last time: ${lastText}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

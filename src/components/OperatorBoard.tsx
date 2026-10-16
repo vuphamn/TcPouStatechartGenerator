@@ -16,6 +16,7 @@ import { EngBoard } from './EngBoard.tsx';
 import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { HandoverDialog, unreadHandover, type Handover } from './HandoverDialog.tsx';
 import { RecoveryDialog, guideFor, type RecoveryGuide, type RecoveryTarget } from './RecoveryDialog.tsx';
+import { LastTime } from './LastTime.tsx';
 import { PushDialog } from './PushDialog.tsx';
 import { SitesBoard } from './SitesBoard.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
@@ -1496,6 +1497,13 @@ export const OperatorBoard: React.FC = () => {
                             Fault record
                           </button>
                         ) : null;
+                      })()}
+                      {!viewOnly && a.event !== 'recovered' && !a.machine.startsWith('(') && (() => {
+                        // (last time: the same machine in the same state; its type for its guide)
+                        const p = plcs.find((x) => x.id === a.plc);
+                        const bm = p?.machines.find((x) => x.path.toLowerCase() === a.machine.toLowerCase());
+                        const target: RecoveryTarget | null = p && a.state ? { plc: p.id, plcName: p.name, machine: a.machine, type: bm?.type ?? '', state: a.state } : null;
+                        return <LastTime conn={conn.current} plc={a.plc} machine={a.machine} state={a.event === 'error' || a.event === 'stuck' ? a.state ?? '' : ''} machineType={bm?.type} at={Date.parse(a.at)} alertId={a.id} onGuide={target ? () => setRecoveryFor(target) : undefined} />;
                       })()}
                     </div>
                   );
