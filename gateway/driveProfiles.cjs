@@ -20,6 +20,8 @@
 const PROFILES = [
   {
     id: 'lenze-i550',
+    // (its error codes named as the i550 commissioning manual's table names them: lenzeErrors.cjs)
+    errors: 'lenze',
     name: 'Lenze i550',
     match: { vendorId: 0x3b, type: /i550/i },
     running: 'freq',
@@ -88,7 +90,7 @@ function checkProfile(p, i) {
     return { key: x.key, label: String(x.label ?? x.key).slice(0, 60), index, sub: Number(x.sub) || 0, signed: x.signed === true, size: [1, 2, 4, 8].includes(Number(x.size)) ? Number(x.size) : 2, scale: Number.isFinite(Number(x.scale)) ? Number(x.scale) : 1, unit: String(x.unit ?? '').slice(0, 8), verified: x.verified !== false, trend: x.trend === true, peers: x.peers === true, slow: x.slow === true, counter: x.counter === true, bad: x.bad === true, ...(x.format === 'hex' ? { format: 'hex' } : {}) };
   });
   if (!params.length) throw new Error(`${where}: its params`);
-  return { id: p.id, name: String(p.name ?? p.id).slice(0, 60), match: { vendorId, type, productCode }, running: typeof p.running === 'string' ? p.running : null, params };
+  return { id: p.id, name: String(p.name ?? p.id).slice(0, 60), match: { vendorId, type, productCode }, running: typeof p.running === 'string' ? p.running : null, ...(p.errors === 'lenze' ? { errors: 'lenze' } : {}), params };
 }
 
 /** The profiles: the built-in ones, with config.json's added (the same id: replaced) */

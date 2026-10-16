@@ -21,6 +21,10 @@ const DEFAULTS = {
   noMainsV: 50, // V: a DC bus below it: no mains (its 24 V only): not judged
 };
 const hex4 = (x) => x.toString(16).toUpperCase().padStart(4, '0');
+const { lenzeError } = require('./lenzeErrors.cjs');
+/** A drive's error code as its maker names it (its profile's errors: "lenze"), else null */
+const errorOf = (profile, code) => (profile?.errors === 'lenze' ? lenzeError(code) : null);
+const errorText = (code, named) => (named ? `${named.warning ? 'Warning' : 'In fault'}: error 0x${hex4(code)} "${named.text}"` : `In fault: error 0x${hex4(code)}`);
 
 const median = (xs) => {
   if (!xs.length) return null;
@@ -86,13 +90,17 @@ function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers =
     const err = v('error');
     const supply = !!err && err >= 0x3200 && err <= 0x32ff;
     const f = [];
-    if (err && !supply) f.push({ level: 'alarm', key: 'error', text: `In fault: error 0x${hex4(err)}` });
-    f.push({ level: 'off', key: 'dcBus', text: `No mains: DC bus ${fmt(dc, 0)} V${supply ? ` (error 0x${hex4(err)}: a voltage inside the drive, as without mains)` : ''}; not judged until it is powered` });
+    const named = err ? errorOf(profile, err) : null;
+    if (err && !supply) f.push({ level: named?.warning ? 'warn' : 'alarm', key: 'error', text: errorText(err, named) });
+    f.push({ level: 'off', key: 'dcBus', text: `No mains: DC bus ${fmt(dc, 0)} V${supply ? ` (error 0x${hex4(err)}${named ? ` "${named.text}"` : ': a voltage inside the drive'}, as without mains)` : ''}; not judged until it is powered` });
     return { level: f[0].level, score: null, findings: f, baseline: {} };
   }
-  // In fault
+  // In fault (or a warning, as its maker names its code)
   const error = v('error');
-  if (error) add('alarm', 'error', `In fault: error 0x${error.toString(16).toUpperCase().padStart(4, '0')}`);
+  if (error) {
+    const named = errorOf(profile, error);
+    add(named?.warning ? 'warn' : 'alarm', 'error', errorText(error, named));
+  }
   // The heatsink against its limit, its past, its siblings
   const hs = v('heatsink');
   const limit = v('heatsinkLimit') ?? L.heatsinkLimit;

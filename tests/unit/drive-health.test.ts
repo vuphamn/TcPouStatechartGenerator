@@ -80,6 +80,11 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const replaced = reconcileSerials(rotated, pins, 2000);
   const placed = (l: { path: string; address: number }[]) => l.map((d) => `${d.path}@${d.address}`).join(' ');
   expect(Object.keys(pins).length === 4 && placed(rotated) === 'A@1003 B@1001 C@1002 D@1004' && /by its serial 11/.test(rotated[0].identity ?? '') && replaced.length === 1 && replaced[0].was === 44 && replaced[0].now === 55 && pins.D.serial === 55 && pins.D.since === 2000 && pins.A.since === null, `serials: ${placed(rotated)}; replaced ${replaced.map((r) => `${r.d.path} ${r.was} > ${r.now}`)}`);
+  // (Lenze's names for its codes: a fault, a warning; the one without mains named too)
+  const named = evaluate({ latest: latest({ heatsink: 42, dcBus: 560, error: 0x2250 }), today: day(42), past, peers: [], profile: lenze });
+  const fan = evaluate({ latest: latest({ heatsink: 42, dcBus: 560, error: 0x4281 }), today: day(42), past, peers: [], profile: lenze });
+  const off = evaluate({ latest: latest({ heatsink: 0, dcBus: 0, error: 0x3222 }), today: {}, past, peers: [], profile: lenze });
+  expect(named.level === 'alarm' && named.findings[0].text === 'In fault: error 0x2250 "CiA: Continuous over current (internal)"' && fan.level === 'warn' && fan.findings[0].text === 'Warning: error 0x4281 "Heat sink fan warning"' && /0x3222 "DC-bus voltage to low for power up", as without mains/.test(off.findings[0].text), `Lenze's names: "${named.findings[0]?.text}"; "${fan.findings[0]?.text}"; "${off.findings[0]?.text}"`);
   const unread = evaluate({ latest: { heatsink: { v: null, error: 'timeout' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(unread.level === 'unknown' && /Not read: timeout/.test(unread.findings[0]?.text ?? ''), 'nothing read: unknown, with why');
 
