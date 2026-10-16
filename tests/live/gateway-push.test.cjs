@@ -144,7 +144,8 @@ const device = () => {
     await p.waitForSelector('#board-push', { timeout: 20000 });
     await p.click('#board-push');
     const dlg = await h.until(() => p.evaluate(() => ({ on: !!document.querySelector('#push-on'), kinds: document.querySelectorAll('.push-kind').length, sw: !!navigator.serviceWorker?.controller || null })).then((x) => (x.on ? x : null)), 10000);
-    const reg = await p.evaluate(() => navigator.serviceWorker.getRegistration('/').then((r) => r?.active?.scriptURL ?? r?.installing?.scriptURL ?? r?.waiting?.scriptURL ?? null));
+    // (its registration: done a moment after the page, on a slow machine)
+    const reg = await h.until(() => p.evaluate(() => navigator.serviceWorker.getRegistration('/').then((r) => r?.active?.scriptURL ?? r?.installing?.scriptURL ?? r?.waiting?.scriptURL ?? null)), 15000);
     expect(dlg?.kinds === 12 && /\/sw\.js$/.test(reg ?? ''), `the dialog (${dlg?.kinds} kinds), the service worker registered: ${reg}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
