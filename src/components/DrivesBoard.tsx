@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Download, Gauge, HeartPulse, Search, Thermometer, X, Zap } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { AxesList, type AxesPlc } from './AxesList.tsx';
+import { SparesFor, useSpares } from './SparesFor.tsx';
+import { sparesFor } from '../utils/spares.ts';
+import type { SparePart } from './WorkParts.tsx';
 
 /** The gateway's drive monitor as the board gets it (gateway/drives.cjs view()) */
 export interface DriveView {
@@ -176,6 +179,7 @@ export const DrivesBoard: React.FC<{
     }
   }, [focusPath, focused, plcs]);
   const [axesPlcs, setAxesPlcs] = useState<AxesPlc[]>([]);
+  const spareParts = useSpares(conn, connected, subscribe as unknown as Parameters<typeof useSpares>[2]);
   useEffect(
     () =>
       subscribe((m) => {
@@ -328,6 +332,11 @@ export const DrivesBoard: React.FC<{
                         </span>
                       )}
                     </div>
+                    {(() => {
+                      // (its spare parts: how many fit it, red when none of them is in stock)
+                      const fit = sparesFor(spareParts, d.name, d.box, d.product, d.vendor, d.firmware);
+                      return fit.length ? <div className={`drive-spares mt-1 text-[11px] ${fit.some((p) => p.qty > 0) ? 'text-slate-400' : 'text-rose-300'}`} title={fit.map((p) => `${p.number} ${p.name}: ${p.qty}`).join(', ')}>📦 {fit.length} spare part{fit.length === 1 ? '' : 's'} · {fit.reduce((a, p) => a + p.qty, 0)} in stock</div> : null;
+                    })()}
                     {d.notAnswering && <div className="mt-1 text-xs text-amber-300">Not answering: {Object.values(d.latest).find((x) => x.error)?.error ?? 'no answer'}</div>}
                     {(d.health?.findings ?? []).slice(0, 3).map((f, i) => (
                       <div key={i} className={`drive-finding mt-1 flex gap-1 text-xs ${f.level === 'alarm' ? 'text-rose-300' : f.level === 'warn' ? 'text-amber-200' : f.level === 'watch' ? 'text-sky-300' : 'text-slate-400'}`}>
@@ -343,13 +352,13 @@ export const DrivesBoard: React.FC<{
         ))}
         <AxesList plcs={axesPlcs} filter={words} problemsOnly={problemsOnly} narrow={narrow} />
       </div>
-      {detail && open && <DriveDetail conn={conn} plc={open.plc} plcName={plcs.find((p) => p.id === open.plc)?.name ?? open.plc} drive={detail} params={params[detail.profile]?.params ?? []} settingParams={params[detail.profile]?.settings ?? []} onClose={() => setOpen(null)} />}
+      {detail && open && <DriveDetail conn={conn} plc={open.plc} plcName={plcs.find((p) => p.id === open.plc)?.name ?? open.plc} drive={detail} params={params[detail.profile]?.params ?? []} settingParams={params[detail.profile]?.settings ?? []} spareParts={spareParts} onClose={() => setOpen(null)} />}
     </div>
   );
 };
 
 /** One drive: its history against its baseline, every value it has now (with its object, its scaling checked or not) */
-const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcName: string; drive: DriveView; params: ParamInfo[]; settingParams: ParamInfo[]; onClose: () => void }> = ({ conn, plc, plcName, drive, params, settingParams, onClose }) => {
+const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcName: string; drive: DriveView; params: ParamInfo[]; settingParams: ParamInfo[]; spareParts: SparePart[]; onClose: () => void }> = ({ conn, plc, plcName, drive, params, settingParams, spareParts, onClose }) => {
   const [range, setRange] = useState(RANGES[0].ms);
   const [data, setData] = useState<{ from: number; to: number; series: Record<string, { t: number; v: number }[]>; baseline: Record<string, number>; error?: string } | null>(null);
   const keys = useMemo(() => CHART_KEYS.filter((k) => params.some((p) => p.key === k)), [params]);
@@ -440,6 +449,7 @@ const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcNa
               ))}
             </tbody>
           </table>
+          <SparesFor parts={spareParts} texts={[drive.name, drive.box, drive.product, drive.vendor, drive.firmware]} className="mt-3" />
           {drive.settings && settingParams.length > 0 && (
             <div id="drive-settings" className="mt-3">
               <div className="text-sm font-semibold text-slate-200">

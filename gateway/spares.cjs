@@ -8,6 +8,24 @@ const path = require('path');
 const crypto = require('crypto');
 
 const MAX_MOVES = 5000;
+const DAY = 86400000;
+
+/**
+ * A part's reorder suggestion: its use (taken or used by work orders, not counted, the last 90 days) a day, the days
+ * its stock lasts at that, and, when it lasts less than its lead time (its supplier's, 14 days by default) and a
+ * week, or it is at its reorder level: how many to order (its reorder level and its use over its lead time and 30
+ * days, less its stock)
+ */
+function reorderOf(p, moves, now = Date.now()) {
+  const used = moves.filter((m) => m.part === p.id && m.delta < 0 && m.why !== 'counted' && m.at >= now - 90 * DAY).reduce((a, m) => a - m.delta, 0);
+  const perDay = used / 90;
+  const lead = Number.isFinite(p.leadDays) && p.leadDays !== null ? p.leadDays : 14;
+  const daysLeft = perDay > 0 ? p.qty / perDay : null;
+  const isLow = p.min > 0 && p.qty <= p.min;
+  const due = isLow || (daysLeft !== null && daysLeft <= lead + 7);
+  const suggest = due ? Math.max(0, Math.ceil((p.min || 0) + perDay * (lead + 30) - p.qty)) || (isLow ? Math.max(1, p.min) : 0) : 0;
+  return { usedPerDay: Math.round(perDay * 1000) / 1000, used90: used, daysLeft: daysLeft === null ? null : Math.round(daysLeft), leadDays: lead, suggest };
+}
 
 function createSpares({ baseDir, log, audit, notify }) {
   const file = path.join(baseDir, 'spares.json');
@@ -52,10 +70,10 @@ function createSpares({ baseDir, log, audit, notify }) {
   };
 
   return {
-    /** The parts (low ones flagged) and the latest changes of stock */
     /** Every move kept (the KPIs: parts per machine) */
     moves: () => state.moves,
-    view: () => ({ parts: state.parts.map((p) => ({ ...p, low: low(p) })), moves: state.moves.slice(-200).reverse() }),
+    /** The parts (low ones flagged, each with its reorder suggestion) and the latest changes of stock */
+    view: () => ({ parts: state.parts.map((p) => ({ ...p, low: low(p), reorder: reorderOf(p, state.moves) })), moves: state.moves.slice(-200).reverse() }),
     /** A part written (new, or changed: its stock set here is a change of stock too) */
     save(p0, user) {
       const number = text(p0?.number, 60);
@@ -63,7 +81,7 @@ function createSpares({ baseDir, log, audit, notify }) {
       if (!number || !name) throw new Error('A part has its number and its name');
       const id = typeof p0?.id === 'string' && state.parts.some((x) => x.id === p0.id) ? p0.id : null;
       if (state.parts.some((x) => x.id !== id && x.number.toLowerCase() === number.toLowerCase())) throw new Error(`Part ${number} is there already`);
-      const fields = { number, name, location: text(p0?.location, 80), min: num(p0?.min, 0, 1e6) ?? 0, unit: text(p0?.unit, 20), fits: text(p0?.fits, 300), supplier: text(p0?.supplier, 120), notes: text(p0?.notes, 500) };
+      const fields = { number, name, location: text(p0?.location, 80), min: num(p0?.min, 0, 1e6) ?? 0, unit: text(p0?.unit, 20), leadDays: num(p0?.leadDays, 0, 365) ?? null, fits: text(p0?.fits, 300), supplier: text(p0?.supplier, 120), notes: text(p0?.notes, 500) };
       const qty = num(p0?.qty, 0, 1e7) ?? 0;
       let p;
       if (id) {
@@ -122,4 +140,4 @@ function createSpares({ baseDir, log, audit, notify }) {
   };
 }
 
-module.exports = { createSpares };
+module.exports = { reorderOf, createSpares };

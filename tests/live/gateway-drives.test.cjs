@@ -151,6 +151,10 @@ const apiPost = (p, body) =>
   expect(by('Drive C')?.health?.level === 'alarm' && /In fault: error 0x2250/.test(by('Drive C')?.health?.findings?.[0]?.text ?? ''), `Drive C: ${by('Drive C')?.health?.findings?.[0]?.text}`);
   const hsd = by('HSD ES951 Spindle');
   expect(hsd?.profile === 'hsd-es951' && hsd.latest.speed?.v === 12000 && hsd.latest.vibration?.v === 35 && hsd.latest.p75?.v === 5 && hsd.health?.level !== 'alarm', `the spindle (HSD ES951): ${hsd?.latest.speed?.v} rpm, vibration ${hsd?.latest.vibration?.v}, P75 ${hsd?.latest.p75?.v}, ${hsd?.health?.level}`);
+  // (a spare part that fits the i550s: on their cards)
+  ws.send(JSON.stringify({ type: 'spareSave', requestId: 41, part: { number: 'I550-075', name: 'Lenze i550 0.75 kW', fits: 'i550', qty: 2, location: 'Cabinet 3' } }));
+  const spare = await h.until(() => got.find((m) => m.type === 'spareResult' && m.requestId === 41), 5000);
+  expect(spare?.ok && spare.part?.qty === 2, `a spare part for the i550s: ${spare?.part?.number ?? spare?.error}`);
   // 2. Their alerts; their history kept
   ws.send(JSON.stringify({ type: 'alertsList' }));
   const alerts = await h.until(() => got.find((m) => m.type === 'alertsList')?.events, 5000);
@@ -257,6 +261,8 @@ const apiPost = (p, body) =>
     await p.keyboard.press('Enter');
     const cards = await h.until(() => p.$$eval('.drive-card', (cs) => cs.map((c) => `${c.getAttribute('data-level')}`)).then((x) => (x.length === 4 ? x : null)), 20000);
     expect(cards?.[0] === 'alarm' && cards?.[1] === 'warn', `the Drives page: ${cards?.join(', ')} (problems first)`);
+    const spareChips = await h.until(() => p.$$eval('.drive-spares', (cs) => cs.map((c) => c.textContent)).then((x) => (x.length === 3 ? x : null)), 10000);
+    expect(spareChips?.every((t) => /1 spare part · 2 in stock/.test(t ?? '')), `the i550 cards' spare parts: ${spareChips?.join(' | ')}`);
     await p.click('#drives-problems');
     const problems = await p.$$eval('.drive-card', (cs) => cs.length);
     await p.click('#drives-problems');
@@ -288,7 +294,8 @@ const apiPost = (p, body) =>
     expect(/1 Hot Connect group not attached/.test(hc?.chip ?? '') && hc.bad === null && hc.kinds === 2 && /SHOOTER\.v1: not attached/.test(hc.tag ?? ''), `a Hot Connect group not attached: ${JSON.stringify(hc)}`);
     await p.click('.io-board-box[data-box$="Drive A (Inverter i550 Cabinet)"] .io-board-props-btn');
     const props = await h.until(() => p.$eval('#io-board-props', (e) => e.textContent).catch(() => null), 8000);
-    expect(/Drive A/.test(props ?? '') && /i550/.test(props ?? ''), `the I/O page's box properties: ${(props ?? '').slice(0, 120)}`);
+    const propSpare = await h.until(() => p.$eval('#io-board-props .spares-for-part', (e) => e.getAttribute('data-part')).catch(() => null), 8000);
+    expect(/Drive A/.test(props ?? '') && /i550/.test(props ?? '') && propSpare === 'I550-075', `the I/O page's box properties: ${(props ?? '').slice(0, 120)}; its spare part ${propSpare}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

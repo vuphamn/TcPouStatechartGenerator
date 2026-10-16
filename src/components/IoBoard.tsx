@@ -7,6 +7,7 @@ import { SignalTrends, type SignalSeries } from './SignalTrends.tsx';
 import type { BoardRule, RuleGroup } from './BoardRuleDialog.tsx';
 import { machineKey } from '../utils/boardTree.ts';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import { SparesFor, useSpares } from './SparesFor.tsx';
 
 interface IoPlcState {
   id: string;
@@ -109,6 +110,8 @@ export const IoBoard: React.FC<{
   // A box's properties (the I/O tab's panel); its details from the gateway (TwinCAT's device descriptions there, its
   // Devices folder's pictures)
   const [propsAt, setPropsAt] = useState<{ plc: string; path: string } | null>(null);
+  // (the spare parts: those that fit a box, in its properties)
+  const spareParts = useSpares(conn, connected, subscribe as unknown as Parameters<typeof useSpares>[2]);
   const propsOf = useMemo(() => {
     const tree = propsAt ? trees[propsAt.plc] : null;
     if (!propsAt || !tree) return null;
@@ -409,6 +412,7 @@ export const IoBoard: React.FC<{
             }}
             onClose={() => setPropsAt(null)}
           />
+          <SparesFor parts={spareParts} texts={[propsOf.box.name, propsOf.box.product, propsOf.box.info?.type, propsOf.box.info?.desc]} className="px-4 pb-4" />
         </div>
       )}
       {series.length > 0 && (

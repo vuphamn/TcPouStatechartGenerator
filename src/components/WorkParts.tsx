@@ -16,6 +16,10 @@ export interface SparePart {
   notes: string;
   low: boolean;
   updatedAt: number;
+  /** Its supplier's lead time (days; none: 14) */
+  leadDays?: number | null;
+  /** Its use a day (the last 90 days), the days its stock lasts, how many to order now (0: none) */
+  reorder?: { usedPerDay: number; used90: number; daysLeft: number | null; leadDays: number; suggest: number };
 }
 export interface SpareMove {
   at: number;
@@ -28,7 +32,7 @@ export interface SpareMove {
   order?: number;
 }
 
-const EMPTY = { number: '', name: '', location: '', qty: 0, min: 0, unit: '', fits: '', supplier: '', notes: '' };
+const EMPTY = { number: '', name: '', location: '', qty: 0, min: 0, unit: '', fits: '', supplier: '', notes: '', leadDays: null as number | null };
 
 /**
  * The Work page's Parts: the spare parts kept (low ones first and red), a filter (number, name, what it fits, where);
@@ -45,7 +49,7 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
   const [error, setError] = useState('');
   const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = parts
-    .filter((p) => (!lowOnly || p.low) && words.every((w) => `${p.number} ${p.name} ${p.fits} ${p.location} ${p.supplier}`.toLowerCase().includes(w)))
+    .filter((p) => (!lowOnly || p.low || (p.reorder?.suggest ?? 0) > 0) && words.every((w) => `${p.number} ${p.name} ${p.fits} ${p.location} ${p.supplier}`.toLowerCase().includes(w)))
     .sort((a, b) => Number(b.low) - Number(a.low) || a.number.localeCompare(b.number, undefined, { numeric: true }));
   type R = { ok: boolean; error?: string; message?: string };
   const ask = async (m: Record<string, unknown>) => {
@@ -56,14 +60,14 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
   };
   const csv = () => {
     const q = (s: unknown) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const rows = ['number,name,location,qty,unit,reorder at,fits,supplier,notes', ...parts.map((p) => [q(p.number), q(p.name), q(p.location), p.qty, q(p.unit), p.min, q(p.fits), q(p.supplier), q(p.notes)].join(','))];
+    const rows = ['number,name,location,qty,unit,reorder at,to order,used a day,lead days,fits,supplier,notes', ...parts.map((p) => [q(p.number), q(p.name), q(p.location), p.qty, q(p.unit), p.min, p.reorder?.suggest ?? '', p.reorder?.usedPerDay ?? '', p.reorder?.leadDays ?? '', q(p.fits), q(p.supplier), q(p.notes)].join(','))];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([rows.join('\r\n')], { type: 'text/csv' }));
     a.download = 'spare-parts.csv';
     a.click();
   };
   const opened = parts.find((p) => p.id === openId) ?? null;
-  const lowCount = parts.filter((p) => p.low).length;
+  const lowCount = parts.filter((p) => p.low || (p.reorder?.suggest ?? 0) > 0).length;
   return (
     <div id="work-parts" className="space-y-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
@@ -95,6 +99,7 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
               <th>Where</th>
               <th className="text-right">In stock</th>
               <th className="text-right">Reorder at</th>
+              <th className="text-right">To order</th>
               <th>Fits</th>
             </tr>
           </thead>
@@ -108,6 +113,9 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
                   {p.qty} {p.unit}
                 </td>
                 <td className="text-right font-mono text-slate-400">{p.min || ''}</td>
+                <td className="spare-order text-right font-mono text-amber-300" title={p.reorder?.daysLeft !== null && p.reorder?.daysLeft !== undefined ? `its stock lasts about ${p.reorder.daysLeft} days at its use; its supplier takes ${p.reorder.leadDays}` : undefined}>
+                  {p.reorder?.suggest ? p.reorder.suggest : ''}
+                </td>
                 <td className="text-slate-400">{p.fits}</td>
               </tr>
             ))}
@@ -120,12 +128,19 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
             <b>{opened.number}</b> {opened.name}
             <span className="text-slate-400">{opened.supplier ? `· from ${opened.supplier}` : ''}</span>
             {canEdit && (
-              <button type="button" onClick={() => setForm({ ...opened })} className="ml-auto px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800">
+              <button type="button" onClick={() => setForm({ ...opened, leadDays: opened.leadDays ?? null })} className="ml-auto px-2 py-0.5 rounded border border-slate-600 hover:bg-slate-800">
                 Edit
               </button>
             )}
           </div>
           {opened.notes && <div className="text-slate-400 whitespace-pre-wrap">{opened.notes}</div>}
+          {opened.reorder && (
+            <div id="parts-reorder" className="text-xs text-slate-300">
+              {opened.reorder.used90 ? `Used ${opened.reorder.used90} in 90 days (${opened.reorder.usedPerDay} a day)` : 'Not used in 90 days'}
+              {opened.reorder.daysLeft !== null ? `; its stock lasts about ${opened.reorder.daysLeft} days` : ''}; its supplier takes {opened.reorder.leadDays} days
+              {opened.reorder.suggest ? <b className="text-amber-300">: order {opened.reorder.suggest} {opened.unit}</b> : ''}
+            </div>
+          )}
           {canWork && (
             <div className="flex flex-wrap items-center gap-2">
               <input id="parts-delta" type="number" min={1} value={delta} onChange={(e) => setDelta(Math.max(1, Number(e.target.value) || 1))} className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
@@ -182,6 +197,11 @@ export const WorkParts: React.FC<{ conn: GatewayConnection | null; parts: SpareP
               <label className="flex items-center gap-2">
                 Reorder at
                 <input name="min" type="number" min={0} value={form.min} onChange={(e) => setForm({ ...form, min: Number(e.target.value) || 0 })} className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
+              </label>
+              <label className="flex items-center gap-2" title="How many days its supplier takes (none: 14)">
+                Lead time
+                <input name="leadDays" type="number" min={0} value={form.leadDays ?? ''} placeholder="14" onChange={(e) => setForm({ ...form, leadDays: e.target.value === '' ? null : Number(e.target.value) })} className="w-16 bg-slate-950 border border-slate-700 rounded px-2 py-1" />
+                days
               </label>
             </div>
             <textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} rows={2} placeholder="Notes (its settings, a replacement for it)" className="w-full bg-slate-950 border border-slate-700 rounded px-2 py-1 select-text" />
