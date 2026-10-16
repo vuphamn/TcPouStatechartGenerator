@@ -299,7 +299,20 @@ export const OperatorBoard: React.FC = () => {
   const [pushOpen, setPushOpen] = useState(false);
   const [pushOn, setPushOn] = useState(false);
   useEffect(() => {
-    if (!window.isSecureContext || !('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+    if (!/^https?:$/.test(location.protocol)) return;
+    // (the board as an app: its manifest, its icon, its colour; here only, not in the editors' webviews and their policies)
+    for (const [tag, attrs] of [
+      ['link', { rel: 'manifest', href: '/manifest.webmanifest' }],
+      ['link', { rel: 'apple-touch-icon', href: '/icon-192.png' }],
+      ['meta', { name: 'theme-color', content: '#0f172a' }],
+    ] as const) {
+      const key = 'rel' in attrs ? `${tag}[rel="${attrs.rel}"]` : `${tag}[name="${attrs.name}"]`;
+      if (document.head.querySelector(key)) continue;
+      const el = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+      document.head.appendChild(el);
+    }
+    if (!window.isSecureContext || !('serviceWorker' in navigator)) return;
     // (the board's service worker: installable, its notifications)
     void navigator.serviceWorker
       .register('/sw.js')
