@@ -87,7 +87,8 @@ const get = (p) => new Promise((resolve) => http.get({ host: '127.0.0.1', port: 
     await p.click('#board-support');
     await p.click('#board-support-make');
     const link = await h.until(() => p.$eval('#board-support-link', (e) => e.textContent).catch(() => null), 30000);
-    const url = /http\S+\.zip\?key=\S+?(?=\d+ KB|$)/.exec(link ?? '')?.[0] ?? '';
+    // (its Download's address: the text runs the key into its size, "…ab3" then "45 KB")
+    const url = (await p.$eval('#board-support-link a[href]', (e) => e.getAttribute('href')).catch(() => '')) ?? '';
     const again = url ? await get(url.replace(BASE, '')) : { status: 0 };
     expect(/\/support\/[a-f0-9]{16}\.zip\?key=/.test(link ?? '') && again.status === 200, `the board's dialog: its link works (${again.status})`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
