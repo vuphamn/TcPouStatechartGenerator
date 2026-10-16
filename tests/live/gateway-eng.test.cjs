@@ -93,7 +93,8 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   const tr = await ask({ type: 'engTransitions', id: 'r1', machine: M, hours: 24 }, 'engTransitionsResult');
   const intoErr = tr?.rows?.find((r) => r.from === 'DOOR_DASHER_ENABLING' && r.to === 'DOOR_DASHER_ERROR');
   const usual = tr?.rows?.find((r) => r.from === 'DOOR_DASHER_DISABLED' && r.to === 'DOOR_DASHER_ENABLING');
-  expect(intoErr?.isNew === true && usual && !usual.isNew && usual.before >= 280, `transitions: ENABLING → ERROR new (${intoErr?.recent}), DISABLED → ENABLING usual (${usual?.recent} / ${usual?.before})`);
+  // (yesterday's noon in the last 24 hours or not, as the test runs before 12:30 or after: 260 before, or 280)
+  expect(intoErr?.isNew === true && usual && !usual.isNew && usual.before >= 260 && usual.recent + usual.before === 285, `transitions: ENABLING → ERROR new (${intoErr?.recent}), DISABLED → ENABLING usual (${usual?.recent} / ${usual?.before})`);
   // 3. Compare today and yesterday
   const midnight = new Date(new Date().toDateString()).getTime();
   const cmp = await ask({ type: 'engCompare', a: { id: 'r1', machine: M, from: midnight - 86400000, to: midnight }, b: { id: 'r1', machine: M, from: midnight, to: Date.now() } }, 'engCompareResult');
