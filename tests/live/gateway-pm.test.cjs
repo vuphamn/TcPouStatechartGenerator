@@ -88,6 +88,10 @@ const DAY = 86400000;
     await p.click('#work-tab-pm');
     const rows = await h.until(() => p.$$eval('.pm-plan', (x) => x.map((e) => `${e.getAttribute('data-state')}:${e.getAttribute('data-plan')}`)).then((x) => (x.length === 3 ? x : null)), 8000);
     expect(/Preventive \(1 due\)/.test(tab ?? '') && rows?.[0] === 'due:Check the belt', `the Preventive tab "${tab}": ${rows?.join(', ')}`);
+    await p.click('#board-page-risk');
+    await p.click('#risk-tab-alarms');
+    const kpis = await h.until(() => p.$$eval('#alarm-health .alarm-kpi', (x) => x.length).then((n) => (n ? n : null)), 10000);
+    expect(kpis === 6, `the Risk page's Alarm health: ${kpis} figures`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { AlarmHealth } from './AlarmHealth.tsx';
+import { ChangesList, type PlcChange } from './ChangesList.tsx';
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Gauge, Cpu, ListChecks, Search, ShieldAlert, X } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 
@@ -53,8 +55,20 @@ const Spark: React.FC<{ values: number[] }> = ({ values }) => {
  * faulting more than the week before), worst first; and the Inventory: every I/O box by maker, type and firmware
  * (how many, where; a type with several firmware versions marked), CSV.
  */
-export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean; onWork?: (r: RiskItem) => void }> = ({ conn, connected, subscribe, plcIds, narrow, onWork }) => {
-  const [tab, setTab] = useState<'risk' | 'inventory'>('risk');
+export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean; onWork?: (r: RiskItem) => void; root?: string; canExplain?: boolean; canApprove?: boolean }> = ({ conn, connected, subscribe, plcIds, narrow, onWork, root = '', canExplain = false, canApprove = false }) => {
+  const [tab, setTab] = useState<'risk' | 'inventory' | 'alarms' | 'changes'>('risk');
+  const [changes, setChanges] = useState<PlcChange[]>([]);
+  useEffect(
+    () =>
+      subscribe((m) => {
+        if ((m as { type: string }).type === 'changes') setChanges((m as unknown as { changes?: PlcChange[] }).changes ?? []);
+      }),
+    [subscribe]
+  );
+  useEffect(() => {
+    if (connected && conn) conn.send({ type: 'changesWatch' });
+  }, [connected, conn]);
+  const openChanges = changes.filter((c) => !c.approvedBy).length;
   const [risks, setRisks] = useState<RiskItem[]>([]);
   const [inv, setInv] = useState<InventoryRow[]>([]);
   const [plcs, setPlcs] = useState<{ id: string; name: string; state: string; message: string }[]>([]);
@@ -114,6 +128,12 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
           <button id="risk-tab-inventory" type="button" onClick={() => setTab('inventory')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'inventory' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
             <ListChecks className="w-4 h-4" /> Inventory
           </button>
+          <button id="risk-tab-alarms" type="button" onClick={() => setTab('alarms')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'alarms' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Alarm health: the alert history as ISA-18.2 measures an alarm system">
+            <ShieldAlert className="w-4 h-4" /> Alarm health
+          </button>
+          <button id="risk-tab-changes" type="button" onClick={() => setTab('changes')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'changes' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Changes of the PLCs' programs: explained, approved">
+            <ListChecks className="w-4 h-4" /> Changes{openChanges ? <span className="ml-1 px-1.5 rounded-full bg-amber-500 text-slate-950 text-xs font-semibold">{openChanges}</span> : null}
+          </button>
         </span>
         <span className="relative flex items-center">
           <Search className="absolute left-2 w-4 h-4 text-slate-500 pointer-events-none" />
@@ -138,7 +158,17 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
           </button>
         </span>
       </div>
-      <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
+      {tab === 'changes' && (
+        <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
+          <ChangesList conn={conn} changes={changes} canExplain={canExplain} canApprove={canApprove} />
+        </div>
+      )}
+      {tab === 'alarms' && (
+        <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
+          <AlarmHealth conn={conn} connected={connected} plcIds={plcIds} root={root} />
+        </div>
+      )}
+      <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'} ${tab === 'alarms' || tab === 'changes' ? 'hidden' : ''}`}>
         {error && <div className="mb-2 px-4 py-2 rounded bg-rose-950 border border-rose-800 text-rose-200">{error}</div>}
         {plcs.filter((p) => p.state === 'error' || p.message).map((p) => (
           <div key={p.id} className="mb-1 text-xs text-amber-300">

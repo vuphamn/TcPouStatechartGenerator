@@ -146,6 +146,7 @@ const ES: Record<string, string> = {
   Escalated: 'Escaladas',
   'Work orders': 'Órdenes de trabajo',
   'Spare parts low': 'Repuestos bajos',
+  'PLC program changes': 'Cambios del programa del PLC',
   Save: 'Guardar',
   'Turn on': 'Activar',
   'Send a test': 'Enviar una prueba',

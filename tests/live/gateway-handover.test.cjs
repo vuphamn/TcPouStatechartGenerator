@@ -81,6 +81,8 @@ const M = `${R}.aDoors[2]`;
   const denied = await zed.ask({ type: 'handoverSave', note: 'x' }, 'handoverResult');
   const told = await h.until(() => posted.find((p) => p.event === 'handover'), 8000);
   expect(saved?.ok && denied?.ok === false && /handed over by tim: 3 alert\(s\)/.test(told?.text ?? '') && /Door 2 sensor loose/.test(told?.text ?? ''), `handed over (${saved?.ok}); zed may not (${denied?.message ?? denied?.error}); told: ${told?.text}`);
+  const health = await tim.ask({ type: 'alarmHealth', days: 1, plcs: ['line'] }, 'alarmHealthResult');
+  expect(health?.total === 2 && health.top[0]?.count === 2 && health.top[0].machine === M && health.ack.notAcked === 2 && health.rating === 'acceptable', `alarm health of the same history: ${health?.total} alarms (the call not one), worst ${health?.top?.[0]?.count}, ${health?.rating}`);
   zed.ws.close();
   tim.ws.send(JSON.stringify({ type: 'handoverWatch' }));
   await h.until(() => tim.got.find((m) => m.type === 'handoverState' && m.list?.length), 5000);

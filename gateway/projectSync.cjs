@@ -14,7 +14,9 @@ const crypto = require('crypto');
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const APP_INFO = 'TwinCAT_SystemInfoVarList._AppInfo';
 
-function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, sources, log, audit }) {
+const { kindOf, filesChanged } = require('./changes.cjs');
+
+function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, sources, log, audit, onVersion }) {
   const settings = () => {
     const c = getConfig();
     const s = c.projectSync ?? {};
@@ -155,6 +157,8 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
         } catch {
           tszip = null;
         }
+        // (another program on the PLC, without its sources: a change too)
+        if (!tpzip && prev?.fingerprint && fp && (fp.appTimestamp !== prev.fingerprint.appTimestamp || fp.onlineChanges !== prev.fingerprint.onlineChanges)) onVersion?.({ plc: plc.id, plcName: plc.name, kind: kindOf(prev.fingerprint, fp, false), project: sub.name, files: [], onlineChanges: fp.onlineChanges, appTimestamp: fp.appTimestamp });
         if (!tpzip) return result({ state: 'no-sources', fingerprint: fp, message: `The PLC keeps no sources of ${sub.name}: download the project with its sources (PLC project > Settings > Source download)` });
         const hash = sha256(Buffer.concat([tszip ?? Buffer.alloc(0), tpzip]));
         // (its sources older than the program it runs: downloaded without them)
@@ -178,6 +182,8 @@ function createProjectSync({ baseDir, getConfig, plcList, clientFor, ads, source
         if (tszip) fs.writeFileSync(path.join(dir, 'system.tszip'), tszip);
         else fs.rmSync(path.join(dir, 'system.tszip'), { force: true });
         const manifest = unpack(plc, tszip, tpzip, sub.name);
+        // (a change of its program: change control's)
+        if (prev?.sha256) onVersion?.({ plc: plc.id, plcName: plc.name, kind: kindOf(prev.fingerprint, fp), project: info?.project?.name ?? sub.name, files: filesChanged(prev.manifest ?? {}, manifest), onlineChanges: fp?.onlineChanges ?? null, appTimestamp: fp?.appTimestamp ?? null });
         log(`projects: ${plc.id}: ${prev?.sha256 ? 'a new version' : 'its project'} downloaded from the PLC: ${info?.project?.name ?? sub.name}, ${Object.keys(manifest).length} files${staleText ? ` (${staleText})` : ''}`);
         audit?.add(by, 'project.download', { plc: plc.id, project: info?.project?.name ?? sub.name, files: Object.keys(manifest).length });
         return result({ state: 'updated', fingerprint: fp, sha256: hash, manifest, downloadedAt: now, project: info?.project?.name ?? sub.name, plcProject: sub.name, projects, files: Object.keys(manifest).length, stale: staleText, message: staleText ?? (prev?.sha256 ? 'A new version from the PLC' : 'Downloaded from the PLC') });

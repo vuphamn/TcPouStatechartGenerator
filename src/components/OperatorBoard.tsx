@@ -417,7 +417,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares' || msg.type === 'pmPlans') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares' || msg.type === 'pmPlans' || msg.type === 'changes') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -1203,7 +1203,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'risk' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} onWork={may('workorder') ? (r) => toWork({ title: r.reason.split(':')[0].slice(0, 100), plc: r.plc, plcName: r.plcName, machine: r.path, priority: r.level === 'alarm' ? 'urgent' : r.level === 'warn' ? 'high' : 'normal', source: { kind: 'risk', id: r.id, text: `${r.name}: ${r.reason}` } }) : undefined} />
+              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} root={root} canExplain={may('engineering') && !viewOnly} canApprove={may('assign') && !viewOnly} onWork={may('workorder') ? (r) => toWork({ title: r.reason.split(':')[0].slice(0, 100), plc: r.plc, plcName: r.plcName, machine: r.path, priority: r.level === 'alarm' ? 'urgent' : r.level === 'warn' ? 'high' : 'normal', source: { kind: 'risk', id: r.id, text: `${r.name}: ${r.reason}` } }) : undefined} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'drives' && (

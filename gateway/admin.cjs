@@ -128,7 +128,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -293,6 +293,48 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (!(getConfig().plcs ?? []).some((p) => p.id === body?.plc)) throw new Error('Choose its PLC');
       if (typeof body?.csv !== 'string' || !body.csv.trim()) throw new Error('No file: the CSV the Logged Events window exported');
       return eventLog.import(body.plc, body.csv, 'setup page');
+    },
+    // Email and SMS (channels.cjs): config.smtp, config.sms; their secrets never sent back (kept when left empty)
+    'GET channels': async () => {
+      const c = getConfig();
+      const { pass, ...smtp } = c.smtp ?? {};
+      const { authToken, ...sms } = c.sms ?? {};
+      return { smtp: { ...smtp, hasPass: !!pass }, sms: { ...sms, hasToken: !!authToken } };
+    },
+    'POST channels': async (body) => {
+      const s = body?.smtp ?? {};
+      const m = body?.sms ?? {};
+      const text = (x, n) => String(x ?? '').trim().slice(0, n);
+      await update((c) => {
+        if (text(s.host, 200)) {
+          const port = Number(s.port) || 587;
+          if (port < 1 || port > 65535) throw new Error('The mail server: its port');
+          c.smtp = { host: text(s.host, 200), port, secure: port === 465, user: text(s.user, 200), pass: s.pass ? String(s.pass) : c.smtp?.pass ?? '', from: text(s.from, 200), rejectUnauthorized: s.rejectUnauthorized !== false };
+        } else delete c.smtp;
+        if (m.provider === 'twilio') {
+          if (!text(m.accountSid, 80) || !text(m.from, 30)) throw new Error('Twilio: its account SID and its From number');
+          c.sms = { provider: 'twilio', accountSid: text(m.accountSid, 80), authToken: m.authToken ? String(m.authToken) : c.sms?.authToken ?? '', from: text(m.from, 30) };
+        } else if (m.provider === 'http') {
+          if (!/^https?:\/\/\S+$/i.test(text(m.url, 500))) throw new Error('The SMS provider: its URL, with {to} and {text}');
+          c.sms = { provider: 'http', url: text(m.url, 500), method: m.method === 'GET' ? 'GET' : 'POST', body: text(m.body, 1000), ...(m.headers && typeof m.headers === 'object' ? { headers: m.headers } : {}) };
+        } else delete c.sms;
+      });
+      audit?.add('setup page', 'channels', { smtp: !!getConfig().smtp, sms: getConfig().sms?.provider ?? null });
+      return { ok: true };
+    },
+    'POST channelsTest': async (body) => {
+      if (!channels) throw new Error('Not on this gateway');
+      const c = getConfig();
+      if (body?.kind === 'sms') {
+        const to = String(body.to ?? '').replace(/[\s()-]/g, '');
+        if (!/^\+?\d{6,15}$/.test(to)) throw new Error('A phone number to text (+15551234567)');
+        await channels.sendSms(c.sms, { to: [to], text: 'Kval MachineScope: a test of the gateway\'s SMS' });
+      } else {
+        const to = String(body?.to ?? '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error('An email address to write to');
+        await channels.sendEmail(c.smtp, { to: [to], subject: 'Kval MachineScope: a test', text: 'A test of the gateway\'s email: its alerts will come like this.' });
+      }
+      return { ok: true };
     },
     'GET monitoring': async () => {
       const c = getConfig();
@@ -518,6 +560,17 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-monitoring"></div>
   <div class="row mt"><span class="grow"></span><button class="primary" id="admin-monitoring-save">Save monitoring</button></div>
   <div class="msg" id="admin-monitoring-msg"></div>
+</section>
+<section>
+  <h2>Email and SMS</h2>
+  <p class="hint flush">For the roles&#39; alerts by email or text message (Roles, Told of alerts: a channel of email or SMS). Email through your mail server (SMTP: port 587 with STARTTLS, 465 with TLS); SMS through Twilio, or any provider&#39;s web API (its address with {to} and {text}). Passwords and tokens are kept in config.json and never shown again: left empty, the saved one stays.</p>
+  <h3>Email (SMTP)</h3>
+  <div class="row"><input id="admin-smtp-host" placeholder="mail server (smtp.office365.com)"><input id="admin-smtp-port" size="5" placeholder="587"><input id="admin-smtp-user" placeholder="user"><input id="admin-smtp-pass" type="password" placeholder="password"><input id="admin-smtp-from" class="grow" placeholder="From: MachineScope &lt;alerts@acme.com&gt;"></div>
+  <h3>SMS</h3>
+  <div class="row"><select id="admin-sms-provider"><option value="">(none)</option><option value="twilio">Twilio</option><option value="http">Another provider (web API)</option></select><input id="admin-sms-sid" placeholder="Twilio account SID"><input id="admin-sms-token" type="password" placeholder="Twilio auth token"><input id="admin-sms-from" placeholder="From (+15550001111)"></div>
+  <div class="row"><input id="admin-sms-url" class="grow mono" placeholder="https://provider/send?to={to}&amp;text={text}"><select id="admin-sms-method"><option>POST</option><option>GET</option></select><input id="admin-sms-body" class="grow mono" placeholder="its body (POST)"></div>
+  <div class="row mt"><input id="admin-test-email" placeholder="email a test to"><button id="admin-test-email-btn">Send a test email</button><input id="admin-test-sms" placeholder="text a test to (+1…)"><button id="admin-test-sms-btn">Send a test SMS</button><span class="grow"></span><button class="primary" id="admin-channels-save">Save email and SMS</button></div>
+  <div class="msg" id="admin-channels-msg"></div>
 </section>
 <section>
   <h2>TwinCAT logged events</h2>
@@ -981,7 +1034,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1035,12 +1088,16 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     box.append(el('h3', {}, 'Told of alerts'));
     r.notify.forEach((n, i) => {
       const events = el('span', {}, ...EVENT_IDS.map((ev) => el('label', { class: 'inline' }, el('input', { type: 'checkbox', checked: n.events.includes(ev), on: { change: (e) => { n.events = e.target.checked ? [...n.events, ev] : n.events.filter((x) => x !== ev); } } }), ' ' + ev + ' ')));
-      const onCall = el('textarea', { rows: 3, placeholder: 'Who is on call, one a line: Bob; Mon-Fri; 06:00-14:00', value: n.onCall.map((o) => o.name + '; ' + (o.days || 'every day') + '; ' + o.from + '-' + o.to).join('\\n'), on: { input: (e) => {
-        n.onCall = e.target.value.split('\\n').map((l) => l.split(';').map((x) => x.trim())).filter((p) => p[0]).map((p) => { const [from, to] = (p[2] || '00:00-24:00').split('-').map((x) => x.trim()); return { name: p[0], days: p[1] === 'every day' ? '' : (p[1] || ''), from: from || '00:00', to: to || '24:00' }; });
+      const onCall = el('textarea', { rows: 3, placeholder: 'Who is on call, one a line: Bob; Mon-Fri; 06:00-14:00 (and, for email or SMS, his address or number: ; +15551234567)', value: n.onCall.map((o) => o.name + '; ' + (o.days || 'every day') + '; ' + o.from + '-' + o.to + (o.contact ? '; ' + o.contact : '')).join('\\n'), on: { input: (e) => {
+        n.onCall = e.target.value.split('\\n').map((l) => l.split(';').map((x) => x.trim())).filter((p) => p[0]).map((p) => { const [from, to] = (p[2] || '00:00-24:00').split('-').map((x) => x.trim()); return { name: p[0], days: p[1] === 'every day' ? '' : (p[1] || ''), from: from || '00:00', to: to || '24:00', ...(p[3] ? { contact: p[3] } : {}) }; });
       } } });
       box.append(el('div', { class: 'card admin-role-notify' },
-        el('div', { class: 'row' }, roleSelect(n.role, (v) => { n.role = v; }, '(choose)'), el('input', { class: 'mono grow', placeholder: 'https://… (Teams, Slack or JSON webhook)', value: n.webhook, on: { input: (e) => { n.webhook = e.target.value.trim(); } } }),
-          (() => { const f = el('select', { on: { change: (e) => { n.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); f.value = n.format || 'teams'; return f; })(),
+        el('div', { class: 'row' }, roleSelect(n.role, (v) => { n.role = v; }, '(choose)'),
+          (() => { const ch = el('select', { class: 'admin-notify-channel', on: { change: (e) => { n.channel = e.target.value; renderRoles(); } } }, el('option', { value: 'webhook' }, 'Webhook'), el('option', { value: 'email' }, 'Email'), el('option', { value: 'sms' }, 'SMS')); ch.value = n.channel || 'webhook'; return ch; })(),
+          (n.channel === 'email' || n.channel === 'sms')
+            ? el('input', { class: 'mono grow admin-notify-to', placeholder: n.channel === 'email' ? 'to: maintenance@acme.com, bob@acme.com (or the on-call people below)' : 'to: +15551234567, … (or the on-call people below)', value: Array.isArray(n.to) ? n.to.join(', ') : (n.to || ''), on: { input: (e) => { n.to = e.target.value; } } })
+            : el('input', { class: 'mono grow', placeholder: 'https://… (Teams, Slack or JSON webhook)', value: n.webhook || '', on: { input: (e) => { n.webhook = e.target.value.trim(); } } }),
+          (n.channel === 'email' || n.channel === 'sms') ? el('span', {}) : (() => { const f = el('select', { on: { change: (e) => { n.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); f.value = n.format || 'teams'; return f; })(),
           el('button', { on: { click: () => { r.notify.splice(i, 1); renderRoles(); } } }, 'Remove')),
         el('div', { class: 'row' }, 'Of: ', events), onCall));
     });
@@ -1153,6 +1210,46 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-monitoring-msg', err.message, false); }
   });
   loadMonitoring().catch(() => {});
+
+  // ---- Email and SMS ----
+  const loadChannels = async () => {
+    const d = await call('channels');
+    const s = d.smtp || {};
+    const m = d.sms || {};
+    $('admin-smtp-host').value = s.host || '';
+    $('admin-smtp-port').value = s.port || '';
+    $('admin-smtp-user').value = s.user || '';
+    $('admin-smtp-pass').placeholder = s.hasPass ? '(saved: unchanged)' : 'password';
+    $('admin-smtp-from').value = s.from || '';
+    $('admin-sms-provider').value = m.provider || '';
+    $('admin-sms-sid').value = m.accountSid || '';
+    $('admin-sms-token').placeholder = m.hasToken ? '(saved: unchanged)' : 'Twilio auth token';
+    $('admin-sms-from').value = m.from || '';
+    $('admin-sms-url').value = m.url || '';
+    $('admin-sms-method').value = m.method || 'POST';
+    $('admin-sms-body').value = m.body || '';
+  };
+  $('admin-channels-save').addEventListener('click', async () => {
+    try {
+      await call('channels', {
+        smtp: { host: $('admin-smtp-host').value, port: $('admin-smtp-port').value, user: $('admin-smtp-user').value, pass: $('admin-smtp-pass').value, from: $('admin-smtp-from').value },
+        sms: { provider: $('admin-sms-provider').value, accountSid: $('admin-sms-sid').value, authToken: $('admin-sms-token').value, from: $('admin-sms-from').value, url: $('admin-sms-url').value, method: $('admin-sms-method').value, body: $('admin-sms-body').value },
+      });
+      $('admin-smtp-pass').value = '';
+      $('admin-sms-token').value = '';
+      await loadChannels();
+      say('admin-channels-msg', 'Saved', true);
+    } catch (err) { say('admin-channels-msg', err.message, false); }
+  });
+  $('admin-test-email-btn').addEventListener('click', async () => {
+    say('admin-channels-msg', 'Sending ...');
+    try { await call('channelsTest', { kind: 'email', to: $('admin-test-email').value }); say('admin-channels-msg', 'Sent: check that mailbox', true); } catch (err) { say('admin-channels-msg', err.message, false); }
+  });
+  $('admin-test-sms-btn').addEventListener('click', async () => {
+    say('admin-channels-msg', 'Sending ...');
+    try { await call('channelsTest', { kind: 'sms', to: $('admin-test-sms').value }); say('admin-channels-msg', 'Sent: check that phone', true); } catch (err) { say('admin-channels-msg', err.message, false); }
+  });
+  loadChannels().catch(() => {});
 
   // ---- TwinCAT logged events ----
   const showEventStats = (d) => {

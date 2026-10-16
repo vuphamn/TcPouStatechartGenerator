@@ -52,6 +52,9 @@ const { createEventLog } = require('./eventlog.cjs');
 const { createSpares } = require('./spares.cjs');
 const { createPush } = require('./push.cjs');
 const { createPm } = require('./pm.cjs');
+const { alarmHealth } = require('./alarmHealth.cjs');
+const { sendEmail, sendSms } = require('./channels.cjs');
+const { createChanges } = require('./changes.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -455,6 +458,9 @@ function start() {
     config.oee = next.oee;
     config.andon = next.andon;
     config.workorders = next.workorders;
+    config.smtp = next.smtp;
+    config.sms = next.sms;
+    config.push = next.push;
     configMtime = mtime();
     // (the boards: which machines are recorded or alarmed now)
     for (const fn of boardRuleListeners) fn();
@@ -544,7 +550,7 @@ function start() {
   const plcOf = (id) => plcs.get(id);
   const rulesNow = () => config.alerts ?? [];
   // Roles (roles.cjs): who may do what, their start pages, who is told of what
-  const roles = createRoles({ getConfig: () => config, postWebhook, log });
+  const roles = createRoles({ getConfig: () => config, postWebhook, log, sendEmail: (x) => sendEmail(config.smtp, x), sendSms: (x) => sendSms(config.sms, x) });
   // (who is told: the roles' channels, the devices subscribed to push notifications)
   let push = null;
   const notifyAll = (e) => {
@@ -603,7 +609,10 @@ function start() {
       .map((e) => ({ t: e.at ?? e.t, user: e.user, plc: e.plc, pou: e.pou, text: e.text }));
   // The PLCs' projects kept here (PlcProjects/<plc id>/), the PLC's copy the golden one (projectSync.cjs): over the
   // PLC's live connection when there is one (a second one from the same NetId could take its route), else one of its own
+  // Change control (changes.cjs): each change of a PLC's program (seen by the project copy), explained, approved
+  const changes = createChanges({ baseDir, log, audit, notify: notifyAll, rolesOn: () => roles.enabled() });
   const projectSync = createProjectSync({
+    onVersion: (c) => changes.add(c),
     baseDir,
     getConfig: () => config,
     plcList: () => [...plcs.values()],
@@ -795,6 +804,7 @@ function start() {
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
+    channels: { sendEmail: (smtp, x) => sendEmail(smtp, x), sendSms: (sms, x) => sendSms(sms, x) },
     eventLog: { import: (plc, csv, user) => eventLog.import(plc, csv, user), stats: () => eventLog.stats([...plcs.keys()]) },
     load: () => ({ ...load.snapshot(), drives: drives.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
     roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS, pages: BOARD_PAGES, pageLabels: PAGE_LABELS, pageDefaults: DEFAULT_PAGES, langDefaults: DEFAULT_LANGS },
@@ -861,6 +871,7 @@ function start() {
     let recoveryOff = null;
     let sparesOff = null;
     let pmOff = null;
+    let changesOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -976,7 +987,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -984,7 +995,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', changeExplain: 'changeResult', changeApprove: 'changeResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1349,6 +1360,30 @@ function start() {
         }
       }
       // Preventive maintenance: the plans (again when one or a work order changes); written, removed; a work order now
+      // Alarm health (alarmHealth.cjs): the alert history as ISA-18.2 measures it, over 1, 7 or 30 days
+      // Change control: the changes (again when one is added, explained, approved); explained; approved
+      if (m.type === 'changesWatch') {
+        const sendChanges = () => send({ type: 'changes', changes: changes.list(200), open: changes.open() });
+        sendChanges();
+        changesOff ??= changes.subscribe(sendChanges);
+        return;
+      }
+      if (m.type === 'changeExplain' || m.type === 'changeApprove') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'changeResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          const c = m.type === 'changeExplain' ? changes.explain(String(m.id ?? ''), { reason: m.reason, workOrder: m.workOrder }, user) : changes.approve(String(m.id ?? ''), user);
+          return send({ type: 'changeResult', requestId, ok: true, change: c });
+        } catch (err) {
+          return send({ type: 'changeResult', requestId, ok: false, error: err.message });
+        }
+      }
+      if (m.type === 'alarmHealth') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const days = [1, 7, 30].includes(Number(m.days)) ? Number(m.days) : 7;
+        const to = Date.now();
+        return send({ type: 'alarmHealthResult', requestId, ...alarmHealth({ events: alertLog.all(), from: to - days * 86400000, to, plcIds: Array.isArray(m.plcs) ? m.plcs.map(String) : [] }) });
+      }
       if (m.type === 'pmWatch') {
         const sendPm = () => send({ type: 'pmPlans', plans: pm.list() });
         sendPm();
@@ -1901,6 +1936,7 @@ function start() {
       recoveryOff?.();
       sparesOff?.();
       pmOff?.();
+      changesOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

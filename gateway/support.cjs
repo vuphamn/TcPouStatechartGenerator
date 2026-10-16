@@ -74,14 +74,22 @@ function zipOf(files) {
   return Buffer.concat([...locals, cd, end]);
 }
 
-/** config.json without its secrets: tokens by name, webhooks and passwords left out */
+/**
+ * config.json without its secrets: tokens by name, webhooks, passwords (the mail server's), tokens (the SMS
+ * provider's) left out; the people's email addresses and phone numbers (alerts by email or SMS) too
+ */
 function sanitized(config) {
   const out = JSON.parse(JSON.stringify(config ?? {}));
   if (Array.isArray(out.tokens)) out.tokens = out.tokens.map((t) => ({ name: t.name, view: !!t.view }));
   const walk = (o) => {
     if (!o || typeof o !== 'object') return;
     for (const k of Object.keys(o)) {
-      if (/webhook|secret|password|passphrase|sha256|key$|token/i.test(k) && typeof o[k] === 'string') o[k] = o[k] ? '(set, left out)' : '';
+      if (/webhook|secret|password|passphrase|sha256|key$|token|^pass$|^accountSid$/i.test(k) && typeof o[k] === 'string') o[k] = o[k] ? '(set, left out)' : '';
+      else if (k === 'contact' && typeof o[k] === 'string') o[k] = '(set, left out)';
+      // (an address with its key in it: an SMS provider's)
+      else if (k === 'url' && /[?&](key|token|api|auth|pass|secret)/i.test(String(o[k]))) o[k] = '(set, left out)';
+      // (a channel's addresses or numbers; not the "to" of a time window, "14:00")
+      else if (k === 'to' && (Array.isArray(o[k]) || /@|^\+?\d{6,}/.test(String(o[k])))) o[k] = '(set, left out)';
       else walk(o[k]);
     }
   };

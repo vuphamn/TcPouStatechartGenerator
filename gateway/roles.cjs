@@ -9,8 +9,13 @@
 //     "pages": { "operator": ["andon", "machines"] },                     the board's pages a role sees (else its defaults)
 //     "languages": { "operator": "es" },                                  the board's language a role starts in (en, es)
 //     "notify": [{ "role": "technician", "webhook": "https://…", "format": "teams", "events": ["error", "stuck", "drive",
-//                 "call", "plcStopped"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] }]
+//                 "call", "plcStopped"], "onCall": [{ "name": "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00" }] },
+//                { "role": "technician", "channel": "sms", "to": "+15551234567", "events": ["error"], "onCall": [{ "name":
+//                  "Bob", "days": "Mon-Fri", "from": "06:00", "to": "14:00", "contact": "+15557654321" }] }]
+//     (a channel: "webhook" (Teams, Slack, JSON), "email" or "sms" (channels.cjs; config.smtp, config.sms); with an
+//     on-call schedule whose people have a contact, only those on call now are emailed or texted, else its "to")
 //   }
+const { emailsOf, phonesOf } = require('./channels.cjs');
 const ROLES = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
 const LABELS = { operator: 'Operator', technician: 'Service / maintenance technician', supervisor: 'Maintenance supervisor', engineer: 'Engineer', manager: 'Production / office manager' };
 /** What each role may do (the gateway refuses the rest; the board and the web app hide it) */
@@ -35,7 +40,7 @@ const DEFAULT_PAGES = {
   engineer: PAGES,
   manager: ['andon', 'machines', 'risk', 'oee', 'work'],
 };
-const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'recovered', 'escalated'];
+const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'recovered', 'escalated'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 /** "Mon-Fri", "Sat,Sun", "Mon" -> day numbers (0 Sunday); empty: every day */
@@ -103,22 +108,34 @@ function checkRoles(r, filterIds = []) {
     const where = `Notification ${i + 1}`;
     const rl = role(n?.role, `${where}: its role`);
     if (!rl) throw new Error(`${where}: choose its role`);
+    const channel = ['email', 'sms'].includes(n?.channel) ? n.channel : 'webhook';
     const webhook = String(n?.webhook ?? '').trim();
-    if (!/^https?:\/\/\S+$/i.test(webhook)) throw new Error(`${where}: the webhook is an http(s) URL`);
+    let to = [];
+    if (channel === 'webhook' && !/^https?:\/\/\S+$/i.test(webhook)) throw new Error(`${where}: the webhook is an http(s) URL`);
+    if (channel === 'email') to = emailsOf(Array.isArray(n?.to) ? n.to.join(',') : n?.to);
+    if (channel === 'sms') to = phonesOf(Array.isArray(n?.to) ? n.to.join(',') : n?.to);
     const events = (Array.isArray(n?.events) && n.events.length ? n.events : ['error', 'stuck', 'plcStopped', 'drive', 'call']).filter((e) => EVENTS.includes(e));
     const onCall = (Array.isArray(n?.onCall) ? n.onCall : []).filter((o) => o && String(o.name ?? '').trim()).map((o) => {
       daysOf(o.days);
       minutesOf(o.from || '00:00');
       minutesOf(o.to || '24:00');
-      return { name: String(o.name).trim().slice(0, 60), days: String(o.days ?? '').trim(), from: o.from || '00:00', to: o.to || '24:00' };
+      const contact = String(o.contact ?? '').trim();
+      if (contact && channel === 'email') emailsOf(contact);
+      if (contact && channel === 'sms') phonesOf(contact);
+      return { name: String(o.name).trim().slice(0, 60), days: String(o.days ?? '').trim(), from: o.from || '00:00', to: o.to || '24:00', ...(contact ? { contact: channel === 'sms' ? phonesOf(contact)[0] : contact } : {}) };
     });
-    return { role: rl, webhook, format: ['teams', 'slack', 'json'].includes(n?.format) ? n.format : 'teams', events, onCall };
+    if (channel !== 'webhook' && !to.length && !onCall.some((o) => o.contact)) throw new Error(`${where}: who is ${channel === 'email' ? 'emailed' : 'texted'} (its addresses, or contacts in its on-call schedule)`);
+    return channel === 'webhook' ? { role: rl, webhook, format: ['teams', 'slack', 'json'].includes(n?.format) ? n.format : 'teams', events, onCall } : { role: rl, channel, to, events, onCall };
   });
   return { users, groups, default: role(r.default, 'The default role'), startPages, pages, languages, notify };
 }
 
-/** Who is on call now in a notification's schedule (several: all of them) */
+/** Who is on call now in a notification's schedule (several: all of them): their names */
 function onCallNow(onCall, now = new Date()) {
+  return onCallEntries(onCall, now).map((o) => o.name);
+}
+/** … their entries (name, contact) */
+function onCallEntries(onCall, now = new Date()) {
   const day = now.getDay();
   const min = now.getHours() * 60 + now.getMinutes();
   return (onCall ?? [])
@@ -129,11 +146,10 @@ function onCallNow(onCall, now = new Date()) {
       // (overnight: 22:00 to 06:00 is the evening of its days and the morning after)
       if (from <= to) return days.includes(day) && min >= from && min < to;
       return (days.includes(day) && min >= from) || (days.includes((day + 6) % 7) && min < to);
-    })
-    .map((o) => o.name);
+    });
 }
 
-function createRoles({ getConfig, postWebhook, log }) {
+function createRoles({ getConfig, postWebhook, sendEmail, sendSms, log }) {
   const conf = () => getConfig().roles ?? null;
   /** A user's role (null: roles are off on this gateway, or none for this user) */
   const roleOf = (user, groups = []) => {
@@ -166,12 +182,25 @@ function createRoles({ getConfig, postWebhook, log }) {
       const kind = event.escalatedAt && !event.ack ? 'escalated' : event.event;
       for (const n of r.notify) {
         if (!n.events.includes(kind)) continue;
-        const who = onCallNow(n.onCall);
+        const on = onCallEntries(n.onCall);
+        const who = on.map((o) => o.name);
         const text = `${event.text}${who.length ? ` · on call (${LABELS[n.role] ?? n.role}): ${who.join(', ')}` : ''}`;
-        void postWebhook(n.webhook, n.format, { ...event, role: n.role, onCall: who, text }, log);
+        if (!n.channel || n.channel === 'webhook') {
+          void postWebhook(n.webhook, n.format, { ...event, role: n.role, onCall: who, text }, log);
+          continue;
+        }
+        // (email, SMS: those on call now with a contact, else the channel's own)
+        const contacts = on.map((o) => o.contact).filter(Boolean);
+        // (its "to" as saved, a list; or as written in config.json by hand, "a@b.com, c@d.com")
+        const own = Array.isArray(n.to) ? n.to : String(n.to ?? '').split(n.channel === 'email' ? /[\s,;]+/ : /[,;]+/).map((x) => x.trim()).filter(Boolean);
+        const to = contacts.length ? contacts : own;
+        if (!to.length) continue;
+        const subject = `${event.plcName ? `${event.plcName}: ` : ''}${kind === 'escalated' ? 'escalated: ' : ''}${String(event.text ?? '').replace(/^[^:]*:\s*/, '').slice(0, 90)}`;
+        const send = n.channel === 'email' ? sendEmail?.({ to, subject, text: `${text}\n\n${event.at ?? ''}\nKval MachineScope gateway` }) : sendSms?.({ to, text: text.slice(0, 300) });
+        void Promise.resolve(send).catch((err) => log(`roles: ${n.channel} to ${to.join(', ')}: ${err.message}`));
       }
     },
   };
 }
 
-module.exports = { createRoles, checkRoles, onCallNow, daysOf, ROLES, LABELS, CAN, EVENTS, PAGES, PAGE_LABELS, DEFAULT_PAGES, DEFAULT_LANGS };
+module.exports = { createRoles, checkRoles, onCallNow, onCallEntries, daysOf, ROLES, LABELS, CAN, EVENTS, PAGES, PAGE_LABELS, DEFAULT_PAGES, DEFAULT_LANGS };

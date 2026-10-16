@@ -13,6 +13,7 @@ const KINDS: [string, string][] = [
   ['workorder', 'Work orders'],
   ['handover', 'Shift handover'],
   ['parts', 'Spare parts low'],
+  ['change', 'PLC program changes'],
   ['recovered', 'Recovered'],
 ];
 const keyOf = (b64: string) => {

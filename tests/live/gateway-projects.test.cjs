@@ -101,6 +101,17 @@ const api = (method, p, body) =>
     return h.until(() => got.find((m) => m.type === 'plcSourcesResult' && m.requestId === requestId) ?? null, 15000);
   };
   const v2pou = (r) => (r?.files ?? []).find((x) => x.path === pou)?.content ?? '';
+  // (change control: the new version a change, its files; explained (not without why), approved)
+  ws.send(JSON.stringify({ type: 'changesWatch' }));
+  const seen = await h.until(() => [...got].reverse().find((m) => m.type === 'changes')?.changes, 5000);
+  const ch = seen?.[0];
+  ws.send(JSON.stringify({ type: 'changeApprove', requestId: 31, id: ch?.id }));
+  ws.send(JSON.stringify({ type: 'changeExplain', requestId: 32, id: ch?.id, reason: '' }));
+  ws.send(JSON.stringify({ type: 'changeExplain', requestId: 33, id: ch?.id, reason: 'Version 2 of the door: the clamp timeout', workOrder: '1042' }));
+  ws.send(JSON.stringify({ type: 'changeApprove', requestId: 34, id: ch?.id }));
+  const res = async (n) => h.until(() => got.find((m) => m.type === 'changeResult' && m.requestId === n), 5000);
+  const [early, noWhy, why, ok] = [await res(31), await res(32), await res(33), await res(34)];
+  expect(seen?.length === 1 && ch.kind === 'download' && ch.files.some((f) => /^~ Plant\/.*TcPOU$/.test(f)) && early?.ok === false && /Explain it first/.test(early.error) && noWhy?.ok === false && why?.ok && ok?.ok && ok.change.approvedBy === 'tester' && ok.change.workOrder === '1042', `change control: ${ch?.kind}, ${ch?.fileCount} file(s) (${ch?.files?.join(' ')}); approve first: ${early?.error}; explained, approved by ${ok?.change?.approvedBy}`);
   const kept = await sourcesOf(21);
   expect(!!kept?.fromGateway && /version 2/.test(v2pou(kept)) && kept.plcProject === 'Plant' && kept.projects?.length >= 1 && (kept.projectFiles ?? []).some((x) => /\.plcproj$/.test(x.path)), `From PLC: the copy kept here: ${kept?.error ?? (kept?.fromGateway ? `${kept.files?.length} files, read ${kept.fromGateway.downloadedAt}` : 'read from the PLC')}`);
   // (another PLC project than the one kept: from the PLC)
