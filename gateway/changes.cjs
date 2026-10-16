@@ -36,14 +36,14 @@ function createChanges({ baseDir, log, audit, notify, rolesOn }) {
     add(ch) {
       const c = {
         id: crypto.randomBytes(5).toString('hex'), at: Date.now(), plc: ch.plc, plcName: ch.plcName ?? ch.plc, kind: ch.kind, project: ch.project ?? '',
-        files: (ch.files ?? []).slice(0, 100), fileCount: ch.files?.length ?? 0, onlineChanges: ch.onlineChanges ?? null, appTimestamp: ch.appTimestamp ?? null,
+        files: (ch.files ?? []).slice(0, 100), fileCount: ch.files?.length ?? 0, onlineChanges: ch.onlineChanges ?? null, appTimestamp: ch.appTimestamp ?? null, unit: ch.unit === 'setting' ? 'setting' : 'file',
         reason: '', workOrder: null, explainedBy: null, explainedAt: null, approvedBy: null, approvedAt: null,
       };
       list.push(c);
       if (list.length > 1000) list = list.slice(-1000);
       save();
-      log(`changes: ${c.plcName}: ${c.kind}${c.fileCount ? ` (${c.fileCount} file(s) changed)` : ''}: to be explained`);
-      notify?.({ event: 'change', plc: c.plc, plcName: c.plcName, machine: '', state: c.kind, at: new Date(c.at).toISOString(), text: `${c.plcName}: 🧾 its PLC program changed (${c.kind}${c.fileCount ? `, ${c.fileCount} file(s)` : ''}): not explained yet` });
+      log(`changes: ${c.plcName}: ${c.kind}${c.fileCount ? ` (${c.fileCount} ${c.unit}(s) changed)` : ''}: to be explained`);
+      notify?.({ event: 'change', plc: c.plc, plcName: c.plcName, machine: '', state: c.kind, at: new Date(c.at).toISOString(), text: ch.text ?? `${c.plcName}: 🧾 its PLC program changed (${c.kind}${c.fileCount ? `, ${c.fileCount} file(s)` : ''}): not explained yet` });
       return c;
     },
     /** Why: its reason, its work order (an engineer) */

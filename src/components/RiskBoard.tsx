@@ -131,7 +131,7 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
           <button id="risk-tab-alarms" type="button" onClick={() => setTab('alarms')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'alarms' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Alarm health: the alert history as ISA-18.2 measures an alarm system">
             <ShieldAlert className="w-4 h-4" /> Alarm health
           </button>
-          <button id="risk-tab-changes" type="button" onClick={() => setTab('changes')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'changes' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Changes of the PLCs' programs: explained, approved">
+          <button id="risk-tab-changes" type="button" onClick={() => setTab('changes')} className={`flex items-center gap-1 px-2 py-1 ${tab === 'changes' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800'}`} title="Changes of the PLCs' programs and the drives' settings: explained, approved">
             <ListChecks className="w-4 h-4" /> Changes{openChanges ? <span className="ml-1 px-1.5 rounded-full bg-amber-500 text-slate-950 text-xs font-semibold">{openChanges}</span> : null}
           </button>
         </span>

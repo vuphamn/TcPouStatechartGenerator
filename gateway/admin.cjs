@@ -68,7 +68,7 @@ function checkMonitoring(body, plcIds, current) {
   const sym = (x) => !!String(x ?? '') && String(x).split('.').every((part) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(part.split('[')[0]));
   const b = body ?? {};
   const d = b.drives ?? {};
-  const drives = { ...(current.drives ?? {}), enabled: d.enabled !== false, everySeconds: num(d.everySeconds, 5, 3600, 30), slowEveryMinutes: num(d.slowEveryMinutes, 1, 1440, 10), keepDays: num(d.keepDays, 2, 3650, 90), plcs: plcList(d.plcs), webhook: url(d.webhook, 'The drives\' webhook'), format: fmt(d.format) };
+  const drives = { ...(current.drives ?? {}), enabled: d.enabled !== false, everySeconds: num(d.everySeconds, 5, 3600, 30), slowEveryMinutes: num(d.slowEveryMinutes, 1, 1440, 10), keepDays: num(d.keepDays, 2, 3650, 90), settingsEveryHours: num(d.settingsEveryHours, 1, 720, undefined), plcs: plcList(d.plcs), webhook: url(d.webhook, 'The drives\' webhook'), format: fmt(d.format) };
   // (each PLC's mains signal: a BOOL symbol, TRUE its mains on; NOT x: TRUE off)
   if (d.mains !== undefined) {
     const out = {};
@@ -1323,7 +1323,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     d.limits = d.limits || {};
     for (const k of ['heatsinkRise', 'currentRise', 'utilisation', 'peerHotter']) d.limits[k] = d.limits[k] || {};
     box.append(el('h3', {}, 'Drives'),
-      el('div', { class: 'row' }, 'Read every ', numIn(d, 'everySeconds', { min: 5, placeholder: '30' }), ' s; hours and counters every ', numIn(d, 'slowEveryMinutes', { min: 1, placeholder: '10' }), ' min; kept ', numIn(d, 'keepDays', { min: 2, placeholder: '90' }), ' days'),
+      el('div', { class: 'row' }, 'Read every ', numIn(d, 'everySeconds', { min: 5, placeholder: '30' }), ' s; hours and counters every ', numIn(d, 'slowEveryMinutes', { min: 1, placeholder: '10' }), ' min; kept ', numIn(d, 'keepDays', { min: 2, placeholder: '90' }), ' days; its settings (a change: to explain) every ', numIn(d, 'settingsEveryHours', { min: 1, placeholder: '24' }), ' h'),
       el('div', { class: 'row' }, 'Warmer than its past: watch ', numIn(d.limits.heatsinkRise, 'watch', { placeholder: '5' }), ' °C, warning ', numIn(d.limits.heatsinkRise, 'warn', { placeholder: '8' }), ' °C; more current at the same speed: watch ', numIn(d.limits.currentRise, 'watch', { placeholder: '10' }), ' %, warning ', numIn(d.limits.currentRise, 'warn', { placeholder: '20' }), ' %'),
       el('div', { class: 'row' }, 'i²t / ixt: warning ', numIn(d.limits.utilisation, 'warn', { placeholder: '80' }), ' %, alarm ', numIn(d.limits.utilisation, 'alarm', { placeholder: '95' }), ' %; hotter than its siblings: watch ', numIn(d.limits.peerHotter, 'watch', { placeholder: '6' }), ' °C, warning ', numIn(d.limits.peerHotter, 'warn', { placeholder: '10' }), ' °C'),
       (() => {

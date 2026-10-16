@@ -662,7 +662,7 @@ function start() {
   });
   projectSync.start();
   // The drives' health (drives.cjs): each PLC's drives read by the gateway itself; the load panel's numbers (load.cjs)
-  drives = createDrives({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log, onEvent: (e) => alertLog.add(e), postWebhook });
+  drives = createDrives({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log, onEvent: (e) => alertLog.add(e), postWebhook, onSettingsChange: (c) => changes.add(c) });
   drives.start();
   // Servo axis health (axes.cjs): each AXIS_REF's following error and torque against its own past, NC errors
   axes = createAxes({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, ads, log, onEvent: (e) => alertLog.add(e) });

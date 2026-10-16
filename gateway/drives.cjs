@@ -153,7 +153,7 @@ function reconcileSerials(list, pins, now = Date.now()) {
   return replaced;
 }
 
-function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, ads, log, onEvent, postWebhook }) {
+function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, ads, log, onEvent, postWebhook, onSettingsChange }) {
   const { readIoTree } = require(`${sharedDir}/tcIoTree.cjs`);
   const { readBootFile } = require(`${sharedDir}/tcSources.cjs`);
   const { readEcatStates } = require(`${sharedDir}/tcEcat.cjs`);
@@ -172,8 +172,11 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       // (a PLC's mains signal, a BOOL: TRUE its mains on; "NOT x": TRUE off, an E-stop say; { plc id: symbol }, or
       // one symbol for every PLC)
       mains: typeof c.mains === 'string' || (c.mains && typeof c.mains === 'object') ? c.mains : null,
+      // (each drive's settings read: once a day by default)
+      settingsMs: Math.max(0.01, Math.min(24 * 30, Number(c.settingsEveryHours) || 24)) * 3600000,
     };
   };
+  const fmtSetting = (v, unit) => `${Math.round(v * 1000) / 1000}${unit ? ` ${unit}` : ''}`;
   /** A PLC's mains signal: { symbol, invert, name } or null */
   const mainsOf = (s, plcId) => {
     const raw = typeof s.mains === 'string' ? s.mains : s.mains?.[plcId];
@@ -420,6 +423,43 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       return decodeValue(buf, p);
     }
 
+    /**
+     * A drive's settings (its profile's settings: its ramps, limits, motor nameplate), read once a day (and when the
+     * gateway starts), against the last ones kept (summary.json): a change told (an alert) and kept to explain and
+     * approve (change control: onSettingsChange), with what it was
+     */
+    async readSettings(client, d, now, s) {
+      d.settingsAt = now;
+      const values = {};
+      for (const p of d.profile.settings) {
+        try {
+          const r = await this.readParam(client, d, p);
+          if (typeof r?.value === 'number') values[p.key] = Math.round(r.value * 1e6) / 1e6;
+        } catch {
+          // (not answered: not this drive's object, or its firmware's: left out)
+        }
+      }
+      if (!Object.keys(values).length) return;
+      const kept = (this.summary.settings ??= {});
+      const prev = kept[d.path];
+      const changes = [];
+      for (const p of d.profile.settings) {
+        const was = prev?.values?.[p.key];
+        const v = values[p.key];
+        if (typeof was === 'number' && typeof v === 'number' && Math.abs(was - v) > 1e-9) changes.push({ key: p.key, label: p.label, unit: p.unit, was, now: v });
+      }
+      kept[d.path] = { t: now, values, ...(prev?.since && !changes.length ? { since: prev.since } : { since: now }) };
+      if (changes.length) {
+        const hist = ((this.summary.settingsChanges ??= {})[d.path] ??= []);
+        hist.push({ t: now, changes });
+        if (hist.length > 50) hist.splice(0, hist.length - 50);
+        const one = (c) => `${c.label}: ${fmtSetting(c.was, c.unit)} → ${fmtSetting(c.now, c.unit)}`;
+        this.say(d, 'drive', `🔧 ${d.name}: its settings changed: ${changes.map(one).join('; ')}`, 'watch', s);
+        onSettingsChange?.({ plc: this.plc.id, plcName: this.plc.name, kind: 'drive settings', project: d.name, files: changes.map((c) => `${d.name}: ${one(c)}`), unit: 'setting', text: `${this.plc.name}: 🧾 ${d.name}: its settings changed (${changes.length}): not explained yet` });
+      }
+      this.saveSummary();
+    }
+
     /** The PLC's mains signal, when one is set: this.mains { name, on: true / false / null, error } */
     async readMains(client, s) {
       const m = mainsOf(s, this.plc.id);
@@ -477,6 +517,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           }
           if (slow) d.slowAt = now;
           d.failing = ok ? 0 : d.failing + 1;
+          if (ok && d.profile.settings?.length && now - (d.settingsAt ?? 0) >= s.settingsMs) await this.readSettings(client, d, now, s);
           const values = {};
           for (const [k, x] of Object.entries(d.latest)) if (typeof x.v === 'number') values[k] = x.v;
           if (!ok) continue;
@@ -648,6 +689,9 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           spark: Object.fromEntries(Object.entries(d.spark).map(([k, list]) => [k, list.map((b) => ({ t: b.t, v: Math.round((b.sum / b.n) * 10) / 10 }))])),
           notAnswering: d.failing >= 3,
           identity: d.identity ?? null,
+          // (its settings, the last read, and their changes, newest last)
+          settings: this.summary.settings?.[d.path] ?? null,
+          settingsChanges: (this.summary.settingsChanges?.[d.path] ?? []).slice(-10),
         })),
       };
     }
@@ -867,7 +911,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     /** Each PLC's drives' daily heatsink medians (the risk list) */
     daily: () => Object.fromEntries([...monitors.entries()].map(([id, m]) => [id, m.daily()])),
     /** The drives' parameters, by profile, for the board's labels */
-    params: () => Object.fromEntries(settings().profiles.map((p) => [p.id, { name: p.name, params: p.params.map(({ key, label, unit, verified, format, counter, slow, trend }) => ({ key, label, unit, verified, format, counter, slow, trend })) }])),
+    params: () => Object.fromEntries(settings().profiles.map((p) => [p.id, { name: p.name, params: p.params.map(({ key, label, unit, verified, format, counter, slow, trend }) => ({ key, label, unit, verified, format, counter, slow, trend })), settings: (p.settings ?? []).map(({ key, label, unit, verified }) => ({ key, label, unit, verified })) }])),
     history(plcId, drivePath, keys, from, to) {
       const m = monitors.get(plcId);
       if (!m) return { error: 'This gateway does not follow that PLC\'s drives' };

@@ -24,6 +24,9 @@ export interface DriveView {
   serial?: number | null;
   /** Its identity at its address: checked, found at another address, not found, unverified */
   identity?: string | null;
+  /** Its settings, the last read (once a day), and their changes (newest last) */
+  settings?: { t: number; since?: number; values: Record<string, number> } | null;
+  settingsChanges?: { t: number; changes: { key: string; label: string; unit: string; was: number; now: number }[] }[];
 }
 interface DrivePlc {
   id: string;
@@ -45,7 +48,7 @@ interface ParamInfo {
   slow?: boolean;
   trend?: boolean;
 }
-type Msg = { type: string; plcs?: DrivePlc[]; params?: Record<string, { name: string; params: ParamInfo[] }>; error?: string };
+type Msg = { type: string; plcs?: DrivePlc[]; params?: Record<string, { name: string; params: ParamInfo[]; settings?: ParamInfo[] }>; error?: string };
 
 const LEVEL = {
   alarm: { text: 'Alarm', cls: 'bg-rose-700 text-white', border: 'border-rose-500' },
@@ -143,7 +146,7 @@ export const DrivesBoard: React.FC<{
   onQr?: (items: { plc: string; plcName: string; path: string; label: string; detail: string }[]) => void;
 }> = ({ conn, connected, subscribe, plcIds, onlyPlcs, narrow, focusPath, onQr }) => {
   const [plcs, setPlcs] = useState<DrivePlc[]>([]);
-  const [params, setParams] = useState<Record<string, { name: string; params: ParamInfo[] }>>({});
+  const [params, setParams] = useState<Record<string, { name: string; params: ParamInfo[]; settings?: ParamInfo[] }>>({});
   const [error, setError] = useState('');
   const [filter, setFilterState] = useState(() => {
     try {
@@ -340,13 +343,13 @@ export const DrivesBoard: React.FC<{
         ))}
         <AxesList plcs={axesPlcs} filter={words} problemsOnly={problemsOnly} narrow={narrow} />
       </div>
-      {detail && open && <DriveDetail conn={conn} plc={open.plc} plcName={plcs.find((p) => p.id === open.plc)?.name ?? open.plc} drive={detail} params={params[detail.profile]?.params ?? []} onClose={() => setOpen(null)} />}
+      {detail && open && <DriveDetail conn={conn} plc={open.plc} plcName={plcs.find((p) => p.id === open.plc)?.name ?? open.plc} drive={detail} params={params[detail.profile]?.params ?? []} settingParams={params[detail.profile]?.settings ?? []} onClose={() => setOpen(null)} />}
     </div>
   );
 };
 
 /** One drive: its history against its baseline, every value it has now (with its object, its scaling checked or not) */
-const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcName: string; drive: DriveView; params: ParamInfo[]; onClose: () => void }> = ({ conn, plc, plcName, drive, params, onClose }) => {
+const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcName: string; drive: DriveView; params: ParamInfo[]; settingParams: ParamInfo[]; onClose: () => void }> = ({ conn, plc, plcName, drive, params, settingParams, onClose }) => {
   const [range, setRange] = useState(RANGES[0].ms);
   const [data, setData] = useState<{ from: number; to: number; series: Record<string, { t: number; v: number }[]>; baseline: Record<string, number>; error?: string } | null>(null);
   const keys = useMemo(() => CHART_KEYS.filter((k) => params.some((p) => p.key === k)), [params]);
@@ -437,6 +440,29 @@ const DriveDetail: React.FC<{ conn: GatewayConnection | null; plc: string; plcNa
               ))}
             </tbody>
           </table>
+          {drive.settings && settingParams.length > 0 && (
+            <div id="drive-settings" className="mt-3">
+              <div className="text-sm font-semibold text-slate-200">
+                Its settings <span className="text-xs font-normal text-slate-500">read {new Date(drive.settings.t).toLocaleString()} (once a day){drive.settings.since ? ` · as they are since ${new Date(drive.settings.since).toLocaleDateString()}` : ''}</span>
+              </div>
+              <table className="w-full text-xs">
+                <tbody>
+                  {settingParams.map((p) => {
+                    const v = drive.settings?.values[p.key];
+                    const last = [...(drive.settingsChanges ?? [])].reverse().find((h) => h.changes.some((c) => c.key === p.key));
+                    const c = last?.changes.find((x) => x.key === p.key);
+                    return (
+                      <tr key={p.key} className="drive-setting border-t border-slate-800" data-key={p.key} data-changed={c ? 'true' : undefined}>
+                        <td className="py-1">{p.label}</td>
+                        <td className="font-mono">{typeof v === 'number' ? `${p.verified === false ? '≈' : ''}${num(v, p.unit, 3)}` : 'n/a'}</td>
+                        <td className={c ? 'text-amber-300' : 'text-slate-500'}>{c && last ? `changed ${new Date(last.t).toLocaleDateString()}: was ${num(c.was, c.unit, 3)}` : ''}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

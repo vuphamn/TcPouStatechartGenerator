@@ -80,6 +80,8 @@ const apiPost = (p, body) =>
     ...id(0x3b, 0x69055000),
     '2ddd:0': s16(500), '2d88:0': u16(52), '6078:0': s16(400), '6077:0': s16(300), '2d87:0': u16(560), '2d89:0': u16(400),
     '2d84:1': s16(heatsink), '2d84:2': s16(800), '2d4f:0': u16(30), '2d40:4': u16(40), '603f:0': u16(error),
+    // (its settings: read once a day)
+    '2915:0': u16(0), '2916:0': u16(500), '2917:0': u16(50), '2918:0': u16(50), '2c00:0': { size: 1, value: 6 }, '2c01:4': u16(1450), '2c01:5': u16(500), '2c01:6': u16(75), '2c01:7': u16(400), '2c01:8': u16(80), '6073:0': u16(2000), '6075:0': u32(1700),
     '2d81:1': u32(1234 * 3600), '2d81:2': u32(2000 * 3600), '2d81:4': u32(77), '2d81:6': u16(0), '2d81:7': u16(0),
   });
   // (the test's changes while it runs: the drives without mains, a mains signal off)
@@ -102,7 +104,7 @@ const apiPost = (p, body) =>
   fs.rmSync(dir, { recursive: true, force: true });
   // (five days before today: each drive's heatsink 42 °C running, its current per Hz 0.104)
   // (Drive A pinned to an older serial: its drive replaced since)
-  const summary = { days: {}, serials: { [`${DEV}^Drive A (Inverter i550 Cabinet)`]: { serial: 9999, since: Date.now() - 10 * 86400000 } } };
+  const summary = { days: {}, settings: { [`${DEV}^Drive B (Inverter i550 Cabinet)`]: { t: Date.now() - 86400000, since: Date.now() - 30 * 86400000, values: { maxFreq: 50, accel1: 10, decel1: 5 } } }, serials: { [`${DEV}^Drive A (Inverter i550 Cabinet)`]: { serial: 9999, since: Date.now() - 10 * 86400000 } } };
   for (let k = 5; k >= 1; k--) {
     const day = dayOf(Date.now() - k * 86400000);
     summary.days[day] = {};
@@ -157,6 +159,11 @@ const apiPost = (p, body) =>
   const pinsNow = JSON.parse(fs.readFileSync(path.join(dir, "drives", "line", "summary.json"), "utf8")).serials ?? {};
   expect(driveAlerts.some((e) => /Drive A: replaced\? Its serial 1111, was 9999/.test(e.text)) && pinsNow[`${DEV}^Drive A (Inverter i550 Cabinet)`]?.serial === 1111 && pinsNow[`${DEV}^Drive B (Inverter i550 Cabinet)`]?.serial === 2222 && by("Drive A")?.serial === 1111, `serials: Drive A replaced (${driveAlerts.find((e) => /replaced/.test(e.text))?.text}); pinned ${Object.values(pinsNow).map((p) => p.serial).join(", ")}`);
   expect(driveAlerts.some((e) => /Drive C: In fault/.test(e.text)) && driveAlerts.some((e) => /Drive B: Running 14 °C warmer/.test(e.text)), `alerts: ${driveAlerts.map((e) => e.text).join(' | ')}`);
+  // (its settings read: Drive B's acceleration time changed since the last read: told, to explain in change control)
+  const bSet = by('Drive B')?.settings;
+  ws.send(JSON.stringify({ type: 'changesWatch' }));
+  const chg = await h.until(() => got.find((m) => m.type === 'changes')?.changes?.find((c) => c.kind === 'drive settings'), 5000);
+  expect(driveAlerts.some((e) => /Drive B: its settings changed: Acceleration time 1: 10 s → 5 s$/.test(e.text)) && !driveAlerts.some((e) => /Drive A: its settings/.test(e.text)) && bSet?.values?.accel1 === 5 && bSet.values.ratedCurrent === 1.7 && bSet.values.cosPhi === 0.8 && chg?.project === 'Drive B' && chg.unit === 'setting' && chg.files?.[0] === 'Drive B: Acceleration time 1: 10 s → 5 s' && !chg.explainedBy, `settings: ${driveAlerts.find((e) => /settings changed/.test(e.text))?.text}; Drive B accel ${bSet?.values?.accel1} s, ${bSet?.values?.ratedCurrent} A, cos phi ${bSet?.values?.cosPhi}; to explain: ${chg?.kind} ${chg?.project} ${chg?.files?.join(', ')}`);
   ws.send(JSON.stringify({ type: 'driveHistory', requestId: 3, plc: 'line', path: `${DEV}^Drive B (Inverter i550 Cabinet)`, keys: ['heatsink', 'current'], from: Date.now() - 3600_000, to: Date.now() }));
   const hist = await h.until(() => got.find((m) => m.type === 'driveHistoryResult' && m.requestId === 3), 5000);
   expect(hist?.series?.heatsink?.length >= 1 && Math.abs(hist.series.heatsink[0].v - 56) < 0.01 && hist.baseline?.heatsink === 42, `Drive B's history: ${hist?.series?.heatsink?.length} heatsink value(s), baseline ${hist?.baseline?.heatsink}`);
@@ -261,6 +268,8 @@ const apiPost = (p, body) =>
     await p.click('.drive-card[data-level="warn"]');
     await p.waitForSelector('#drive-detail', { timeout: 5000 });
     const detail = await h.until(() => p.evaluate(() => ({ charts: document.querySelectorAll('#drive-detail .drive-chart').length, values: document.querySelectorAll('#drive-detail .drive-value').length, text: document.querySelector('#drive-detail')?.textContent ?? '' })).then((x) => (x.charts ? x : null)), 8000);
+    const setRows = await p.$$eval('#drive-detail .drive-setting', (rs) => rs.map((r) => `${r.getAttribute('data-key')}${r.getAttribute('data-changed') ? '*' : ''} ${r.textContent}`));
+    expect(setRows.length === 12 && setRows.some((r) => /^accel1\* .*changed .*was 10 s/.test(r)) && setRows.filter((r) => /^\w+\*/.test(r)).length === 1, `its settings on the board: ${setRows.filter((r) => /\*/.test(r)).join(' | ')} (${setRows.length} rows)`);
     expect(detail?.charts >= 5 && detail.values === 16 && /baseline 42/.test(detail.text), `a drive's detail: ${detail?.charts} charts, ${detail?.values} values, its baseline shown`);
     await p.keyboard.press('Escape');
     await p.click('#drive-detail button[title^="Close"]').catch(() => {});

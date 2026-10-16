@@ -11,6 +11,8 @@ export interface PlcChange {
   project: string;
   files: string[];
   fileCount: number;
+  /** What its count counts: the files of a program, a drive's settings */
+  unit?: 'file' | 'setting';
   reason: string;
   workOrder: string | null;
   explainedBy: string | null;
@@ -41,7 +43,7 @@ export const ChangesList: React.FC<{ conn: GatewayConnection | null; changes: Pl
   const shown = [...changes].sort((a, b) => Number(!!a.approvedBy) - Number(!!b.approvedBy) || b.at - a.at);
   return (
     <div id="plc-changes" className="space-y-1.5 text-sm">
-      <p className="text-xs text-slate-400">Each change of a PLC's program the gateway saw (its project copy: Monitoring on the setup page): explained by an engineer (why, its work order), then approved by a supervisor or another engineer.</p>
+      <p className="text-xs text-slate-400">Each change of a PLC's program the gateway saw (its project copy: Monitoring on the setup page), and of a drive's settings (read once a day): explained by an engineer (why, its work order), then approved by a supervisor or another engineer.</p>
       {error && <div className="text-rose-300">{error}</div>}
       {!changes.length && <div className="text-slate-400">No change seen yet.</div>}
       {shown.map((c) => {
@@ -51,7 +53,7 @@ export const ChangesList: React.FC<{ conn: GatewayConnection | null; changes: Pl
             <button type="button" className="w-full text-left flex flex-wrap items-center gap-2 px-3 py-1.5 hover:bg-slate-800/60" onClick={() => { setOpen(open === c.id ? null : c.id); setReason(c.reason); setOrder(c.workOrder ?? ''); }}>
               <span className={`shrink-0 px-2 rounded-full text-xs font-semibold ${st === 'approved' ? 'bg-emerald-900 text-emerald-200' : st === 'to approve' ? 'bg-sky-700 text-white' : 'bg-amber-500 text-slate-950'}`}>{st}</span>
               <span className="font-semibold">{c.plcName}</span>
-              <span className="text-slate-300">{c.kind}{c.fileCount ? `, ${c.fileCount} file${c.fileCount === 1 ? '' : 's'}` : ''}</span>
+              <span className="text-slate-300">{c.kind}{c.unit === 'setting' && c.project ? `: ${c.project}` : ''}{c.fileCount ? `, ${c.fileCount} ${c.unit ?? 'file'}${c.fileCount === 1 ? '' : 's'}` : ''}</span>
               <span className="text-xs text-slate-500">{when(c.at)}</span>
               {c.reason && <span className="truncate text-xs text-slate-400">· {c.reason}</span>}
             </button>

@@ -9,6 +9,11 @@
 //   0x2D84:001 (x.x °C; 0x2D84:002 its warning threshold), P123 motor i²t utilisation 0x2D4F, P135.04 device ixt
 //   utilisation 0x2D40:004, P151 life diagnosis 0x2D81:001 operating time (s), :002 power-on time (s), :004 mains
 //   switching cycles, :006 short-circuit counter, :007 earth-fault counter; 0x603F the error code (CiA 402).
+//   Its settings (read once a day, a change of them told: drives.cjs), as the manual's parameter attribute list
+//   gives them (its data type / factor): 0x2915 minimum and 0x2916 maximum frequency, 0x2917 acceleration and
+//   0x2918 deceleration time 1 (U16 / 10), 0x2C00 motor control type (U8), 0x2C01 the motor's nameplate: :004 rated
+//   speed (U16 / 1), :005 rated frequency (U16 / 10), :006 rated power (U16 / 100), :007 rated voltage (U16 / 1),
+//   :008 cos phi (U16 / 100); 0x6073 max current (U16 / 10, % of rated), 0x6075 motor rated current (U32 / 1000).
 //   verified: false where the manual gives the object but not its scaling (shown so on the board): check one value
 //   against the drive's keypad once, and correct the profile here or in config.json.
 //
@@ -43,6 +48,20 @@ const PROFILES = [
       { key: 'shortCircuits', label: 'Short circuits', index: 0x2d81, sub: 6, signed: false, size: 2, scale: 1, unit: '', verified: true, slow: true, counter: true, bad: true },
       { key: 'earthFaults', label: 'Earth faults', index: 0x2d81, sub: 7, signed: false, size: 2, scale: 1, unit: '', verified: true, slow: true, counter: true, bad: true },
     ],
+    settings: [
+      { key: 'minFreq', label: 'Minimum frequency', index: 0x2915, sub: 0, size: 2, scale: 0.1, unit: 'Hz' },
+      { key: 'maxFreq', label: 'Maximum frequency', index: 0x2916, sub: 0, size: 2, scale: 0.1, unit: 'Hz' },
+      { key: 'accel1', label: 'Acceleration time 1', index: 0x2917, sub: 0, size: 2, scale: 0.1, unit: 's' },
+      { key: 'decel1', label: 'Deceleration time 1', index: 0x2918, sub: 0, size: 2, scale: 0.1, unit: 's' },
+      { key: 'motorControl', label: 'Motor control type', index: 0x2c00, sub: 0, size: 1, scale: 1, unit: '' },
+      { key: 'ratedSpeed', label: 'Motor rated speed', index: 0x2c01, sub: 4, size: 2, scale: 1, unit: 'rpm' },
+      { key: 'ratedFreq', label: 'Motor rated frequency', index: 0x2c01, sub: 5, size: 2, scale: 0.1, unit: 'Hz' },
+      { key: 'ratedPower', label: 'Motor rated power', index: 0x2c01, sub: 6, size: 2, scale: 0.01, unit: 'kW' },
+      { key: 'ratedVoltage', label: 'Motor rated voltage', index: 0x2c01, sub: 7, size: 2, scale: 1, unit: 'V' },
+      { key: 'cosPhi', label: 'Motor cos phi', index: 0x2c01, sub: 8, size: 2, scale: 0.01, unit: '' },
+      { key: 'maxCurrent', label: 'Max current', index: 0x6073, sub: 0, size: 2, scale: 0.1, unit: '%' },
+      { key: 'ratedCurrent', label: 'Motor rated current', index: 0x6075, sub: 0, size: 4, scale: 0.001, unit: 'A' },
+    ].map((x) => ({ signed: false, verified: true, ...x })),
   },
   {
     id: 'hsd-es951',
@@ -73,6 +92,14 @@ const PROFILES = [
       { key: 'torque', label: 'Torque', index: 0x6077, sub: 0, signed: true, size: 2, scale: 0.1, unit: '%', verified: true },
       { key: 'dcBus', label: 'DC-link voltage', index: 0x6079, sub: 0, signed: false, size: 4, scale: 0.001, unit: 'V', verified: true, peers: true },
     ],
+    // (CiA 402's own: max current in ‰ of the rated, the rated current in mA; its speeds and ramps in its own units)
+    settings: [
+      { key: 'maxCurrent', label: 'Max current', index: 0x6073, sub: 0, size: 2, scale: 0.1, unit: '%', verified: true },
+      { key: 'ratedCurrent', label: 'Motor rated current', index: 0x6075, sub: 0, size: 4, scale: 0.001, unit: 'A', verified: true },
+      { key: 'maxSpeed', label: 'Max motor speed', index: 0x6080, sub: 0, size: 4, scale: 1, unit: '', verified: false },
+      { key: 'accel', label: 'Profile acceleration', index: 0x6083, sub: 0, size: 4, scale: 1, unit: '', verified: false },
+      { key: 'decel', label: 'Profile deceleration', index: 0x6084, sub: 0, size: 4, scale: 1, unit: '', verified: false },
+    ].map((x) => ({ signed: false, ...x })),
   },
 ];
 
@@ -84,13 +111,16 @@ function checkProfile(p, i) {
   const type = typeof p.match?.type === 'string' && p.match.type ? new RegExp(p.match.type, 'i') : null;
   const productCode = typeof p.match?.productCode === 'string' ? p.match.productCode.toLowerCase() : null;
   if (vendorId === null && !type && !productCode) throw new Error(`${where}: match a vendorId, a type or a productCode`);
-  const params = (Array.isArray(p.params) ? p.params : []).map((x, k) => {
+  const paramOf = (list) => (x, k) => {
     const index = typeof x.index === 'string' ? parseInt(x.index, 16) : Number(x.index);
-    if (!/^[A-Za-z]\w{0,30}$/.test(String(x.key ?? '')) || !(index > 0 && index <= 0xffff)) throw new Error(`${where}.params[${k}]: a key and an index (0x2D84)`);
+    if (!/^[A-Za-z]\w{0,30}$/.test(String(x.key ?? '')) || !(index > 0 && index <= 0xffff)) throw new Error(`${where}.${list}[${k}]: a key and an index (0x2D84)`);
     return { key: x.key, label: String(x.label ?? x.key).slice(0, 60), index, sub: Number(x.sub) || 0, signed: x.signed === true, size: [1, 2, 4, 8].includes(Number(x.size)) ? Number(x.size) : 2, scale: Number.isFinite(Number(x.scale)) ? Number(x.scale) : 1, unit: String(x.unit ?? '').slice(0, 8), verified: x.verified !== false, trend: x.trend === true, peers: x.peers === true, slow: x.slow === true, counter: x.counter === true, bad: x.bad === true, ...(x.format === 'hex' ? { format: 'hex' } : {}) };
-  });
+  };
+  const params = (Array.isArray(p.params) ? p.params : []).map(paramOf('params'));
+  // (its settings: read once a day, a change told)
+  const settings = (Array.isArray(p.settings) ? p.settings : []).map(paramOf('settings'));
   if (!params.length) throw new Error(`${where}: its params`);
-  return { id: p.id, name: String(p.name ?? p.id).slice(0, 60), match: { vendorId, type, productCode }, running: typeof p.running === 'string' ? p.running : null, ...(p.errors === 'lenze' ? { errors: 'lenze' } : {}), params };
+  return { id: p.id, name: String(p.name ?? p.id).slice(0, 60), match: { vendorId, type, productCode }, running: typeof p.running === 'string' ? p.running : null, ...(p.errors === 'lenze' ? { errors: 'lenze' } : {}), params, ...(settings.length ? { settings } : {}) };
 }
 
 /** The profiles: the built-in ones, with config.json's added (the same id: replaced) */
