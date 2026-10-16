@@ -169,7 +169,17 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       profiles: profilesOf(c.profiles, log),
       webhook: typeof c.webhook === 'string' && /^https?:\/\//i.test(c.webhook) ? c.webhook : null,
       format: ['teams', 'slack', 'json'].includes(c.format) ? c.format : 'teams',
+      // (a PLC's mains signal, a BOOL: TRUE its mains on; "NOT x": TRUE off, an E-stop say; { plc id: symbol }, or
+      // one symbol for every PLC)
+      mains: typeof c.mains === 'string' || (c.mains && typeof c.mains === 'object') ? c.mains : null,
     };
+  };
+  /** A PLC's mains signal: { symbol, invert, name } or null */
+  const mainsOf = (s, plcId) => {
+    const raw = typeof s.mains === 'string' ? s.mains : s.mains?.[plcId];
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    const m = /^\s*NOT\s+(.+?)\s*$/i.exec(raw);
+    return { symbol: (m ? m[1] : raw).trim(), invert: !!m, name: raw.trim() };
   };
   const dirOf = (plcId) => path.join(baseDir, 'drives', String(plcId).replace(/[^\w.-]/g, '_'));
   const monitors = new Map(); // plc id -> monitor
@@ -410,6 +420,27 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       return decodeValue(buf, p);
     }
 
+    /** The PLC's mains signal, when one is set: this.mains { name, on: true / false / null, error } */
+    async readMains(client, s) {
+      const m = mainsOf(s, this.plc.id);
+      if (!m) {
+        this.mains = null;
+        return;
+      }
+      try {
+        const handle = await ads.createHandle(client, m.symbol);
+        try {
+          const buf = await client.readRaw(0xf005, handle, 1);
+          this.mains = { name: m.name, on: !!buf[0] !== m.invert, error: null };
+        } finally {
+          await ads.releaseHandle(client, handle).catch(() => {});
+        }
+      } catch (err) {
+        if (!this.mains?.error) log(`drives: ${this.plc.id}: its mains signal ${m.name}: ${ads.adsErrorText(err)}`);
+        this.mains = { name: m.name, on: null, error: ads.adsErrorText(err) };
+      }
+    }
+
     /** One round: every drive's values, kept, judged, sent */
     async round() {
       const client = this.conn?.client;
@@ -420,6 +451,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         if (Date.now() - this.treeAt > TREE_EVERY_MS) await this.readTree();
         const now = Date.now();
         const lines = [];
+        await this.readMains(client, s);
         for (const d of this.drives) {
           // (a drive not answering: tried every 5 minutes only)
           if (d.failing >= 3 && now - (d.lastTry ?? 0) < 5 * 60000) continue;
@@ -449,7 +481,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           for (const [k, x] of Object.entries(d.latest)) if (typeof x.v === 'number') values[k] = x.v;
           if (!ok) continue;
           // (no mains: its 0 °C, 0 A not its day's values)
-          const noMains = typeof values.dcBus === 'number' && values.dcBus < (s.limits?.noMainsV ?? 50);
+          const noMains = (typeof values.dcBus === 'number' && values.dcBus < (s.limits?.noMainsV ?? 50)) || this.mains?.on === false;
           if (!noMains) d.today.push({ t: now, values });
           if (d.today.length > 6000) d.today.splice(0, d.today.length - 6000);
           // (kept when it changed, else every 10 minutes)
@@ -548,6 +580,19 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       const days = Object.keys(this.summary.days).sort();
       const pastDays = days.slice(-14);
       const weekAgo = days.filter((x) => x <= dayOf(Date.now() - 7 * 86400000)).pop() ?? days[0];
+      // (the machine powered down: its mains signal off, or, without one, most of its drives without mains (at
+      // least 2, 60 % of those whose DC bus answers): one line, not a turn of each drive)
+      const noMainsV = s.limits?.noMainsV ?? 50;
+      const dcOf = (d) => (typeof d.latest.dcBus?.v === 'number' ? d.latest.dcBus.v : null);
+      const withDc = this.drives.filter((d) => dcOf(d) !== null);
+      const offNow = withDc.filter((d) => dcOf(d) < noMainsV).length;
+      const signal = this.mains?.on ?? null;
+      const down = signal === false || (signal === null && offNow >= 2 && offNow >= 0.6 * withDc.length);
+      // (its first round: as it was, nothing said: a gateway restarted on a machine powered down)
+      const wasDown = this.power ? !!this.power.down : down;
+      const now0 = Date.now();
+      this.power = { down, off: offNow, total: this.drives.length, signal: this.mains?.name ?? null, on: signal, signalError: this.mains?.error ?? null, since: down === wasDown ? this.power?.since ?? null : down ? now0 : null };
+      const quietlyOff = [];
       for (const d of this.drives) {
         const past = {};
         // (its past since its serial was pinned: a drive replaced is not judged against the one before)
@@ -555,7 +600,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         for (const day of pastDays) if (this.summary.days[day]?.[d.path] && (!since || day >= dayOf(since))) past[day] = this.summary.days[day][d.path];
         const peers = this.drives.filter((x) => x !== d && x.profile.id === d.profile.id).map((x) => ({ today: todayStats.get(x.path) }));
         const before = d.health;
-        d.health = evaluate({ latest: d.latest, today: todayStats.get(d.path), past, counters7d: weekAgo ? this.summary.days[weekAgo]?.[d.path]?.counters ?? {} : {}, peers, profile: d.profile, limits: s.limits });
+        d.health = evaluate({ latest: d.latest, today: todayStats.get(d.path), past, counters7d: weekAgo ? this.summary.days[weekAgo]?.[d.path]?.counters ?? {} : {}, peers, profile: d.profile, limits: s.limits, mains: signal, mainsName: this.mains?.name ?? '', powerDown: down });
         d.todayStats = todayStats.get(d.path);
         const bad = (h) => h && (h.level === 'warn' || h.level === 'alarm');
         const now = Date.now();
@@ -567,13 +612,20 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         }
         if (bad(before) && !bad(d.health) && d.health.level !== 'unknown') {
           d.sent = {};
-          this.say(d, 'recovered', d.health.level === 'off' ? `⏻ ${d.name}: no mains now (its DC bus off): not judged until it is powered` : `✅ ${d.name}: healthy again`, d.health.level, s);
+          if (down && d.health.level === 'off') quietlyOff.push(d.name);
+          else this.say(d, 'recovered', d.health.level === 'off' ? `⏻ ${d.name}: no mains now (its DC bus off): not judged until it is powered` : `✅ ${d.name}: healthy again`, d.health.level, s);
         }
       }
+      if (down && !wasDown) {
+        const off = this.drives.filter((d) => d.health?.level === 'off').length;
+        const why = signal === false ? `its mains signal ${this.mains.name} off` : `${offNow} of its ${withDc.length} drives without mains`;
+        this.say({ name: 'Drives' }, 'recovered', `⏻ Machine powered down (${why}): ${off} drive${off === 1 ? '' : 's'} not judged until it is powered`, 'off', s, { resolves: quietlyOff });
+      } else if (quietlyOff.length) this.say({ name: 'Drives' }, 'recovered', `⏻ Powered down too: ${quietlyOff.join(', ')}`, 'off', s, { resolves: quietlyOff });
+      if (!down && wasDown) this.say({ name: 'Drives' }, 'drive', `⚡ Machine powered again: its ${this.drives.length} drives judged again`, 'ok', s, { quiet: true });
     }
 
-    say(d, event, text, level, s) {
-      const e = { event: event === 'error' ? 'drive' : event, level, rule: 'Drive health', ruleId: 'drives', plc: this.plc.id, plcName: this.plc.name, machine: d.name, state: level, text: `${this.plc.name}: ${text}`, at: new Date().toISOString() };
+    say(d, event, text, level, s, extra = {}) {
+      const e = { event: event === 'error' ? 'drive' : event, level, rule: 'Drive health', ruleId: 'drives', plc: this.plc.id, plcName: this.plc.name, machine: d.name, state: level, text: `${this.plc.name}: ${text}`, at: new Date().toISOString(), ...extra };
       log(`drives: ${this.plc.id}: ${text}`);
       onEvent?.(e);
       if (s.webhook) void postWebhook?.(s.webhook, s.format, e, log);
@@ -588,7 +640,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     /** As the board shows it */
     view() {
       return {
-        id: this.plc.id, name: this.plc.name, state: this.state, message: this.message, lastRound: this.lastRound,
+        id: this.plc.id, name: this.plc.name, state: this.state, message: this.message, lastRound: this.lastRound, power: this.power ?? null,
         drives: this.drives.map((d) => ({
           path: d.path, name: d.name, box: d.box, device: d.device, netId: d.netId, address: d.address, serial: d.serial ?? null, profile: d.profile.id, vendor: d.vendor, product: d.product, firmware: d.firmware,
           latest: Object.fromEntries(Object.entries(d.latest).map(([k, x]) => [k, { v: x.v, ...(x.error ? { error: x.error } : {}) }])),

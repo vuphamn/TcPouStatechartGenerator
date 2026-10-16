@@ -38,7 +38,11 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     }
     lines.push({ t, m: M, v: 0 });
   }
-  let t = Date.now() - 40 * 60000;
+  // (today: the last 40 minutes, from midnight at the earliest: just after midnight, today's checks skipped)
+  const midnight0 = new Date(new Date().toDateString()).getTime();
+  const earlyDay = Date.now() - midnight0 < 13 * 60000;
+  const today = (c, w) => (earlyDay ? console.log(`skip (just after midnight: today not long enough yet) ${w}`) : expect(c, w));
+  let t = Math.max(Date.now() - 40 * 60000, midnight0 + 1000);
   for (let i = 0; i < 5; i++) {
     lines.push({ t, m: M, v: 0 });
     t += 60000;
@@ -88,7 +92,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   // 1. Timing
   const timing = await ask({ type: 'engTiming', id: 'r1', machine: M }, 'engTimingResult');
   const en = timing?.rows?.find((r) => r.state === 'DOOR_DASHER_ENABLING');
-  expect(en?.flag === true && Math.abs(en.change - 1) < 0.05 && en.normalMs === 30000 && en.days === 14, `timing: ENABLING today ${en?.todayMs / 1000} s, normal ${en?.normalMs / 1000} s (${en?.days} days), ${Math.round((en?.change ?? 0) * 100)} %`);
+  today(en?.flag === true && Math.abs(en.change - 1) < 0.05 && en.normalMs === 30000 && en.days === 14, `timing: ENABLING today ${en?.todayMs / 1000} s, normal ${en?.normalMs / 1000} s (${en?.days} days), ${Math.round((en?.change ?? 0) * 100)} %`);
   // 2. Transitions
   const tr = await ask({ type: 'engTransitions', id: 'r1', machine: M, hours: 24 }, 'engTransitionsResult');
   const intoErr = tr?.rows?.find((r) => r.from === 'DOOR_DASHER_ENABLING' && r.to === 'DOOR_DASHER_ERROR');
@@ -100,7 +104,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   const cmp = await ask({ type: 'engCompare', a: { id: 'r1', machine: M, from: midnight - 86400000, to: midnight }, b: { id: 'r1', machine: M, from: midnight, to: Date.now() } }, 'engCompareResult');
   const ya = cmp?.a?.states?.find((s) => s.state === 'DOOR_DASHER_ENABLING');
   const tb = cmp?.b?.states?.find((s) => s.state === 'DOOR_DASHER_ENABLING');
-  expect(ya?.count === 20 && Math.abs(ya.avgMs - 30000) < 1 && tb?.count >= 5 && Math.abs(tb.avgMs - 60000) < 2000, `compare: yesterday ENABLING ${ya?.count}× ${ya?.avgMs / 1000} s, today ${tb?.count}× ${Math.round(tb?.avgMs / 1000)} s`);
+  today(ya?.count === 20 && Math.abs(ya.avgMs - 30000) < 1 && tb?.count >= 5 && Math.abs(tb.avgMs - 60000) < 2000, `compare: yesterday ENABLING ${ya?.count}× ${ya?.avgMs / 1000} s, today ${tb?.count}× ${Math.round(tb?.avgMs / 1000)} s`);
   // 4. What changed
   const vs = await ask({ type: 'engVersions', plc: 'line' }, 'engVersionsResult');
   const diff = await ask({ type: 'engDiff', plc: 'line', a: vs?.versions?.[1]?.id ?? 'x', b: 'current' }, 'engDiffResult');
@@ -126,7 +130,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     await p.waitForSelector('.eng-file', { timeout: 10000 });
     await p.click('.eng-file');
     const rows = await h.until(() => p.$$eval('#eng-diff .eng-diff-row[data-type="add"]', (x) => x.map((e) => e.textContent)).then((x) => (x.length ? x : null)), 8000);
-    expect(flagged?.includes('DOOR_DASHER_ENABLING') && fresh >= 1 && rows?.some((r) => /nTimeout := 5/.test(r ?? '')), `the Engineering page: flagged ${flagged?.join(', ')}; ${fresh} new transition(s); the diff's added line`);
+    today(flagged?.includes('DOOR_DASHER_ENABLING') && fresh >= 1 && rows?.some((r) => /nTimeout := 5/.test(r ?? '')), `the Engineering page: flagged ${flagged?.join(', ')}; ${fresh} new transition(s); the diff's added line`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

@@ -44,8 +44,10 @@ function createAlertLog({ file, log, rules, onNew }) {
       if (event.muted || event.quiet) e.resolvedAt = event.at;
       if (event.event === 'recovered') {
         e.resolvedAt = event.at;
+        // (one line for several: a machine powered down resolves its drives' alerts, resolves: [machines])
+        const machines = Array.isArray(event.resolves) ? [event.machine, ...event.resolves] : [event.machine];
         for (const old of events) {
-          if (old.plc === event.plc && old.machine === event.machine && !old.resolvedAt && old.event !== 'recovered') {
+          if (old.plc === event.plc && machines.includes(old.machine) && !old.resolvedAt && old.event !== 'recovered') {
             old.resolvedAt = event.at;
             publish(old);
           }

@@ -31,6 +31,8 @@ interface DrivePlc {
   state: string;
   message: string;
   lastRound: number | null;
+  /** Its machine powered down: its mains signal off, or most of its drives without mains */
+  power?: { down: boolean; off: number; total: number; signal: string | null; on: boolean | null; signalError?: string | null; since: number | null } | null;
   drives: DriveView[];
 }
 interface ParamInfo {
@@ -159,6 +161,8 @@ export const DrivesBoard: React.FC<{
     }
   };
   const [problemsOnly, setProblemsOnly] = useState(false);
+  // (the PLCs whose drives without mains are shown, their machine powered down)
+  const [showOff, setShowOff] = useState<string[]>([]);
   const [open, setOpen] = useState<{ plc: string; path: string } | null>(null);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
@@ -260,8 +264,23 @@ export const DrivesBoard: React.FC<{
               {p.lastRound && <span className="text-xs text-slate-500">read {new Date(p.lastRound).toLocaleTimeString()}</span>}
               {(p.state !== 'watching' || p.message) && <span className={`text-sm ${p.state === 'error' ? 'text-rose-400' : 'text-sky-400'}`}>{p.message || p.state}</span>}
             </h2>
+            {p.power?.down && (
+              <div className="drives-power-down mb-2 flex flex-wrap items-center gap-2 rounded border border-slate-600 bg-slate-800/70 px-3 py-2 text-sm text-slate-200" data-plc={p.id}>
+                <span className="font-semibold">⏻ Machine powered down</span>
+                <span className="text-slate-400">
+                  {p.power.on === false ? `its mains signal ${p.power.signal} off` : `${p.power.off} of its drives without mains`}
+                  {p.power.since ? ` · since ${new Date(p.power.since).toLocaleTimeString()}` : ''} · not judged until it is powered
+                </span>
+                {p.drives.some((d) => d.health?.level === 'off') && (
+                  <button type="button" className="drives-power-show ml-auto px-2 py-0.5 rounded border border-slate-600 text-xs text-slate-300 hover:bg-slate-700" onClick={() => setShowOff((v) => (v.includes(p.id) ? v.filter((x) => x !== p.id) : [...v, p.id]))}>
+                    {showOff.includes(p.id) ? 'Hide them' : `Show its ${p.drives.filter((d) => d.health?.level === 'off').length} drives`}
+                  </button>
+                )}
+              </div>
+            )}
+            {p.power?.signalError && <div className="mb-2 text-xs text-amber-300">Its mains signal {p.power.signal}: {p.power.signalError}</div>}
             <div className={`grid ${narrow ? 'gap-2 [grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))]' : 'gap-3 [grid-template-columns:repeat(auto-fill,minmax(20rem,1fr))]'}`}>
-              {p.drives.map((d) => {
+              {p.drives.filter((d) => !p.power?.down || showOff.includes(p.id) || d.health?.level !== 'off').map((d) => {
                 const lv = d.notAnswering ? 'unknown' : d.health?.level ?? 'unknown';
                 const L = LEVEL[lv];
                 const hs = d.latest.heatsink?.v;

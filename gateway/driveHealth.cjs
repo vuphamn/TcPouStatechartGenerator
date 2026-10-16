@@ -73,7 +73,7 @@ const fmt = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d).toString();
  * today), counters7d: { key: value 7 days ago }, peers: [{ today }] (its siblings), profile, limits } ->
  * { level, score, findings: [{ level, key, text }], baseline: { key: median } }
  */
-function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers = [], profile, limits = {} }) {
+function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers = [], profile, limits = {}, mains = null, mainsName = '', powerDown = false }) {
   const L = { ...DEFAULTS, ...limits };
   const findings = [];
   const add = (level, key, text) => findings.push({ level, key, text });
@@ -85,14 +85,24 @@ function evaluate({ latest = {}, today = {}, past = {}, counters7d = {}, peers =
   }
   // No mains (a DC bus near 0 V: the drive on its 24 V only): not judged; an error of the voltages inside the drive
   // (0x32xx, as without mains) not a fault, any other one still is
+  // (mains: the PLC's mains signal, when one is set: true on, false off; powerDown: most of the PLC's drives without
+  // mains, its machine powered down: a drive with a supply error then powering down with it, not in fault)
   const dc = v('dcBus');
-  if (dc !== null && dc < L.noMainsV) {
-    const err = v('error');
-    const supply = !!err && err >= 0x3200 && err <= 0x32ff;
+  const lowDc = dc !== null && dc < L.noMainsV;
+  const err = v('error');
+  const supplyErr = !!err && err >= 0x3200 && err <= 0x32ff;
+  if (lowDc && mains === true) {
+    const f = [{ level: 'warn', key: 'dcBus', text: `No DC bus (${fmt(dc, 0)} V) while the mains is on (${mainsName || 'its mains signal'}): its fuse, its mains contactor, its supply` }];
+    return { level: 'warn', score: null, findings: f, baseline: {} };
+  }
+  if (lowDc || mains === false || (powerDown && supplyErr)) {
+    const supply = supplyErr;
     const f = [];
     const named = err ? errorOf(profile, err) : null;
-    if (err && !supply) f.push({ level: named?.warning ? 'warn' : 'alarm', key: 'error', text: errorText(err, named) });
-    f.push({ level: 'off', key: 'dcBus', text: `No mains: DC bus ${fmt(dc, 0)} V${supply ? ` (error 0x${hex4(err)}${named ? ` "${named.text}"` : ': a voltage inside the drive'}, as without mains)` : ''}; not judged until it is powered` });
+    if (err && !supply && mains !== false) f.push({ level: named?.warning ? 'warn' : 'alarm', key: 'error', text: errorText(err, named) });
+    const why = mains === false ? `Powered down (${mainsName || 'its mains signal'} off)` : lowDc ? 'No mains' : 'Powering down with its machine';
+    const shownErr = err && (supply || mains === false) ? ` (error 0x${hex4(err)}${named ? ` "${named.text}"` : supply ? ': a voltage inside the drive' : ''}, as without mains)` : '';
+    f.push({ level: 'off', key: 'dcBus', text: `${why}${dc !== null ? `: DC bus ${fmt(dc, 0)} V` : ''}${shownErr}; not judged until it is powered` });
     return { level: f[0].level, score: null, findings: f, baseline: {} };
   }
   // In fault (or a warning, as its maker names its code)

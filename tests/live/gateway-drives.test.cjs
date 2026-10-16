@@ -82,6 +82,11 @@ const apiPost = (p, body) =>
     '2d84:1': s16(heatsink), '2d84:2': s16(800), '2d4f:0': u16(30), '2d40:4': u16(40), '603f:0': u16(error),
     '2d81:1': u32(1234 * 3600), '2d81:2': u32(2000 * 3600), '2d81:4': u32(77), '2d81:6': u16(0), '2d81:7': u16(0),
   });
+  // (the test's changes while it runs: the drives without mains, a mains signal off)
+  const controlFile = h.out('fake-ams2-drives-control.json');
+  fs.rmSync(controlFile, { force: true });
+  c.controlFile = controlFile;
+  c.symbols['MAIN.bMainsOn'] = { type: 'BOOL', dataType: 33, size: 1, value: 1 };
   c.coe = {
     [`${MASTER}|1004`]: lenze(420, 0, 1111),
     [`${MASTER}|1005`]: id(0x114, 0x1234),
@@ -182,6 +187,39 @@ const apiPost = (p, body) =>
   const at = (a) => scanned?.scan?.find((x) => x.address === a);
   const bAt = await apiPost('drivecheck', { plc: 'line', path: `${DEV}^Drive B (Inverter i550 Cabinet)`, address: 1008 });
   expect(at(1004)?.same === true && at(1005)?.vendorId === 0x114 && at(1005).same === false && /Drive B/.test(at(1005).box) && at(1008)?.vendorId === 0x3b && at(1008).same === false && /EX260/.test(at(1008).box ?? '') && !at(1003) && bAt?.box?.address === 1008 && bAt.reads[0].as?.u32 === 0x3b, `the bus scanned: ${scanned?.scan?.map((x) => `${x.address} #x${x.vendorId?.toString(16)} ${x.same ? 'own' : 'not own'}`).join(', ')}; Drive B read at 1008: vendor #x${bAt?.reads?.[0]?.as?.u32?.toString(16)}`);
+  // 6. The machine powered down (its three i550s without mains, no mains signal): one line; their alerts resolved
+  const lenzeAt = [1004, 1008, 1009];
+  const dcAll = (v, error) => fs.writeFileSync(controlFile, JSON.stringify({ coe: Object.fromEntries(lenzeAt.map((a) => [`${MASTER}|${a}`, { '2d87:0': u16(v), '603f:0': u16(error ?? (a === 1009 ? 0x2250 : 0)) }])) }));
+  dcAll(0, 0x3222);
+  const lastState = () => [...got].reverse().find((m) => m.type === 'drivesState')?.plcs?.[0];
+  const downState = await h.until(() => (lastState()?.power?.down ? lastState() : null), 30000);
+  const offCount = (downState?.drives ?? []).filter((d) => d.health?.level === 'off').length;
+  got.length = 0;
+  ws.send(JSON.stringify({ type: 'alertsList' }));
+  const alerts2 = (await h.until(() => got.find((m) => m.type === 'alertsList')?.events, 5000)) ?? [];
+  const downLine = alerts2.find((e) => /Machine powered down/.test(e.text));
+  const openDrive = alerts2.filter((e) => e.event === 'drive' && /Drive [BC]:/.test(e.text) && !e.resolvedAt);
+  expect(downState?.power?.off === 3 && offCount === 3 && /Machine powered down \(3 of its 3 drives without mains\): 3 drives not judged/.test(downLine?.text ?? '') && !openDrive.length && !alerts2.some((e) => /no mains now/.test(e.text)), `powered down: ${downState?.power?.off} of ${downState?.power?.total} off; "${downLine?.text}"; open drive alerts: ${openDrive.map((e) => e.text).join(' | ') || 'none'}`);
+  // (powered again: one line, quiet)
+  dcAll(560);
+  await h.until(() => (lastState() && !lastState().power?.down ? true : null), 30000);
+  ws.send(JSON.stringify({ type: 'alertsList' }));
+  const upLine = await h.until(() => [...got].reverse().find((m) => m.type === 'alertsList')?.events?.find((e) => /Machine powered again/.test(e.text)), 8000);
+  expect(!!upLine && !!upLine.resolvedAt, `powered again: "${upLine?.text}"`);
+  // (a mains signal, set on the setup page: off: its drives powered down, their DC bus still up; on, one without DC bus: its fuse)
+  const mon = await api('GET', 'monitoring');
+  const saved = await apiPost('monitoring', { ...mon, drives: { ...mon.drives, mains: { line: 'MAIN.bMainsOn' } } });
+  const cfgNow = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  fs.writeFileSync(controlFile, JSON.stringify({ set: { 'MAIN.bMainsOn': 0 } }));
+  const sigState = await h.until(() => (lastState()?.power?.down && lastState().power.on === false ? lastState() : null), 30000);
+  const cOff = sigState?.drives?.find((d) => d.name === 'Drive C')?.health;
+  expect(saved?.ok && cfgNow.drives?.mains?.line === 'MAIN.bMainsOn' && sigState?.power?.signal === 'MAIN.bMainsOn' && cOff?.level === 'off' && /^Powered down \(MAIN.bMainsOn off\): DC bus 560 V/.test(cOff.findings?.[0]?.text ?? ''), `the mains signal off: ${sigState?.power?.signal} ${sigState?.power?.on}; Drive C: ${cOff?.level} "${cOff?.findings?.[0]?.text}"`);
+  fs.writeFileSync(controlFile, JSON.stringify({ set: { 'MAIN.bMainsOn': 1 }, coe: { [`${MASTER}|1004`]: { '2d87:0': u16(0) } } }));
+  const fuseState = await h.until(() => (lastState()?.drives?.find((d) => d.name === 'Drive A')?.health?.level === 'warn' && !lastState().power?.down ? lastState() : null), 30000);
+  const aFuse = fuseState?.drives?.find((d) => d.name === 'Drive A')?.health?.findings?.[0]?.text;
+  expect(/No DC bus \(0 V\) while the mains is on \(MAIN.bMainsOn\): its fuse/.test(aFuse ?? ''), `the mains on, Drive A without DC bus: "${aFuse}"`);
+  fs.writeFileSync(controlFile, JSON.stringify({ coe: { [`${MASTER}|1004`]: { '2d87:0': u16(560) } } }));
+  await h.until(() => (lastState()?.drives?.find((d) => d.name === 'Drive A')?.health?.level === 'ok' && lastState()?.drives?.find((d) => d.name === 'Drive C')?.health?.level === 'alarm' ? true : null), 30000);
   ws.close();
 
   const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('drives-filter'));
@@ -226,6 +264,13 @@ const apiPost = (p, body) =>
     expect(detail?.charts >= 5 && detail.values === 16 && /baseline 42/.test(detail.text), `a drive's detail: ${detail?.charts} charts, ${detail?.values} values, its baseline shown`);
     await p.keyboard.press('Escape');
     await p.click('#drive-detail button[title^="Close"]').catch(() => {});
+    // (the machine powered down: one line, its drives folded behind it (the spindle too: the signal is its machine))
+    fs.writeFileSync(controlFile, JSON.stringify({ set: { 'MAIN.bMainsOn': 0 } }));
+    const folded = await h.until(() => p.evaluate(() => ({ line: document.querySelector('.drives-power-down')?.textContent ?? null, cards: document.querySelectorAll('.drive-card').length })).then((x) => (x.line && x.cards === 0 ? x : null)), 30000);
+    await p.click('.drives-power-show').catch(() => {});
+    const unfolded = await p.$$eval('.drive-card[data-level="off"]', (cs) => cs.length);
+    expect(/Machine powered down/.test(folded?.line ?? '') && /MAIN\.bMainsOn off/.test(folded.line) && /Show its 4 drives/.test(folded.line) && unfolded === 4, `the board powered down: "${folded?.line}", ${folded?.cards} card(s); shown: ${unfolded} without mains`);
+    fs.writeFileSync(controlFile, JSON.stringify({ set: { 'MAIN.bMainsOn': 1 } }));
     // The I/O page: a box's properties (as on the I/O tab)
     await p.click('#board-page-io');
     await p.waitForSelector('.io-board-props-btn', { timeout: 15000 });

@@ -69,6 +69,17 @@ function checkMonitoring(body, plcIds, current) {
   const b = body ?? {};
   const d = b.drives ?? {};
   const drives = { ...(current.drives ?? {}), enabled: d.enabled !== false, everySeconds: num(d.everySeconds, 5, 3600, 30), slowEveryMinutes: num(d.slowEveryMinutes, 1, 1440, 10), keepDays: num(d.keepDays, 2, 3650, 90), plcs: plcList(d.plcs), webhook: url(d.webhook, 'The drives\' webhook'), format: fmt(d.format) };
+  // (each PLC's mains signal: a BOOL symbol, TRUE its mains on; NOT x: TRUE off)
+  if (d.mains !== undefined) {
+    const out = {};
+    for (const [id, x] of Object.entries(d.mains && typeof d.mains === 'object' ? d.mains : {})) {
+      const v = text(x, 200);
+      if (!v) continue;
+      if (!sym(v.replace(/^NOT +/i, ''))) throw new Error(`The mains signal of ${id}: a PLC symbol (MAIN.bMainsOn, NOT GVL.bEStop)`);
+      out[String(id)] = v;
+    }
+    drives.mains = Object.keys(out).length ? out : undefined;
+  }
   const L = d.limits ?? {};
   drives.limits = {
     heatsinkRise: { watch: num(L.heatsinkRise?.watch, 1, 50, 5), warn: num(L.heatsinkRise?.warn, 1, 50, 8) },
@@ -1315,6 +1326,12 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
       el('div', { class: 'row' }, 'Read every ', numIn(d, 'everySeconds', { min: 5, placeholder: '30' }), ' s; hours and counters every ', numIn(d, 'slowEveryMinutes', { min: 1, placeholder: '10' }), ' min; kept ', numIn(d, 'keepDays', { min: 2, placeholder: '90' }), ' days'),
       el('div', { class: 'row' }, 'Warmer than its past: watch ', numIn(d.limits.heatsinkRise, 'watch', { placeholder: '5' }), ' °C, warning ', numIn(d.limits.heatsinkRise, 'warn', { placeholder: '8' }), ' °C; more current at the same speed: watch ', numIn(d.limits.currentRise, 'watch', { placeholder: '10' }), ' %, warning ', numIn(d.limits.currentRise, 'warn', { placeholder: '20' }), ' %'),
       el('div', { class: 'row' }, 'i²t / ixt: warning ', numIn(d.limits.utilisation, 'warn', { placeholder: '80' }), ' %, alarm ', numIn(d.limits.utilisation, 'alarm', { placeholder: '95' }), ' %; hotter than its siblings: watch ', numIn(d.limits.peerHotter, 'watch', { placeholder: '6' }), ' °C, warning ', numIn(d.limits.peerHotter, 'warn', { placeholder: '10' }), ' °C'),
+      (() => {
+        // (each PLC's mains signal: its drives without mains then its machine powered down, one line)
+        if (typeof d.mains === 'string') d.mains = Object.fromEntries(m.plcs.map((p) => [p.id, d.mains]));
+        d.mains = d.mains || {};
+        return el('div', { class: 'row', id: 'admin-drives-mains' }, 'Mains signal (a BOOL, TRUE: on; NOT x: TRUE off; empty: from its drives) ', ...m.plcs.map((p) => el('label', {}, p.name, ' ', txtIn(d.mains, p.id, { class: 'mono', placeholder: 'MAIN.bMainsOn', 'data-mains-plc': p.id }))));
+      })(),
       el('div', { class: 'row' }, 'Its alerts also to ', txtIn(d, 'webhook', { class: 'mono grow', placeholder: 'https://… (empty: the boards only)' }), (() => { const s = el('select', { on: { change: (e) => { d.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); s.value = d.format || 'teams'; return s; })()));
     // Fault records
     const f = m.faults;

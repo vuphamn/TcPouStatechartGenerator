@@ -85,6 +85,13 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const fan = evaluate({ latest: latest({ heatsink: 42, dcBus: 560, error: 0x4281 }), today: day(42), past, peers: [], profile: lenze });
   const off = evaluate({ latest: latest({ heatsink: 0, dcBus: 0, error: 0x3222 }), today: {}, past, peers: [], profile: lenze });
   expect(named.level === 'alarm' && named.findings[0].text === 'In fault: error 0x2250 "CiA: Continuous over current (internal)"' && fan.level === 'warn' && fan.findings[0].text === 'Warning: error 0x4281 "Heat sink fan warning"' && /0x3222 "DC-bus voltage to low for power up", as without mains/.test(off.findings[0].text), `Lenze's names: "${named.findings[0]?.text}"; "${fan.findings[0]?.text}"; "${off.findings[0]?.text}"`);
+  // (the machine powered down: its mains signal off: off whatever its DC bus; on, yet no DC bus: its fuse; most
+  // drives without mains: one still charged with an undervoltage error powering down with them, a fault still one)
+  const sigOff = evaluate({ latest: latest({ heatsink: 42, dcBus: 400, error: 0x3220 }), today: day(42), past, peers: [], profile: lenze, mains: false, mainsName: 'MAIN.bMainsOn' });
+  const fuse = evaluate({ latest: latest({ heatsink: 30, dcBus: 2 }), today: {}, past, peers: [], profile: lenze, mains: true, mainsName: 'MAIN.bMainsOn' });
+  const decaying = evaluate({ latest: latest({ heatsink: 42, dcBus: 300, error: 0x3220 }), today: day(42), past, peers: [], profile: lenze, powerDown: true });
+  const stillFault = evaluate({ latest: latest({ heatsink: 42, dcBus: 560, error: 0x2250 }), today: day(42), past, peers: [], profile: lenze, powerDown: true });
+  expect(sigOff.level === 'off' && /^Powered down \(MAIN.bMainsOn off\): DC bus 400 V \(error 0x3220 "DC bus undervoltage", as without mains\)/.test(sigOff.findings[0].text) && fuse.level === 'warn' && /No DC bus \(2 V\) while the mains is on \(MAIN.bMainsOn\): its fuse/.test(fuse.findings[0].text) && decaying.level === 'off' && /^Powering down with its machine: DC bus 300 V/.test(decaying.findings[0].text) && stillFault.level === 'alarm', `powered down: ${sigOff.level} "${sigOff.findings[0]?.text}"; mains on, no DC bus: ${fuse.level} "${fuse.findings[0]?.text}"; decaying: ${decaying.level} "${decaying.findings[0]?.text}"; a fault: ${stillFault.level}`);
   const unread = evaluate({ latest: { heatsink: { v: null, error: 'timeout' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(unread.level === 'unknown' && /Not read: timeout/.test(unread.findings[0]?.text ?? ''), 'nothing read: unknown, with why');
 

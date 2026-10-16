@@ -78,6 +78,30 @@ function sendNotification(id) {
   n.sock.write(frame(n.client.netId, n.client.port, n.plc.netId, n.plc.port, 8, 0x0004, 0, data));
 }
 
+// config.controlFile: a test's changes while it runs: { set: { symbol: value }, coe: { "netId|port": { "idx:sub":
+// { size, value } } } } written to it, applied (merged), the file removed
+if (config.controlFile) {
+  setInterval(() => {
+    let c;
+    try {
+      c = JSON.parse(fs.readFileSync(config.controlFile, 'utf8'));
+      fs.rmSync(config.controlFile, { force: true });
+    } catch {
+      return;
+    }
+    for (const [name, v] of Object.entries(c.set || {})) {
+      const s = symbols.get(name.toLowerCase());
+      if (s) s.value = v;
+      log('control: set', name, '=', v);
+    }
+    for (const [at, objects] of Object.entries(c.coe || {})) {
+      config.coe = config.coe || {};
+      config.coe[at] = { ...(config.coe[at] || {}), ...objects };
+      log('control: coe', at, Object.keys(objects).join(' '));
+    }
+  }, 200);
+}
+
 async function runScript() {
   if (scriptStarted) return;
   scriptStarted = true;

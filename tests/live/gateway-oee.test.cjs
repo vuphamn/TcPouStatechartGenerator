@@ -120,8 +120,9 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     expect(!!why && gone && saved.some((e) => e.note === 'door sensor' && e.reason === 'Electrical fault'), `Why? on the tile: given (${saved.at(-1)?.reason}, ${saved.at(-1)?.note}), the button gone`);
     // 4. The OEE page
     await p.click('#board-page-oee');
-    await p.click('.oee-window[data-window="today"]');
-    const page = await h.until(() => p.evaluate(() => ({ kpis: document.querySelectorAll('.oee-kpi').length, machines: document.querySelectorAll('.oee-machine').length, quality: document.querySelector('.oee-quality')?.textContent, jam: [...document.querySelectorAll('.oee-pareto')].some((e) => /Jam/.test(e.textContent ?? '')) })).then((x) => (x.machines ? x : null)), 30000);
+    // (the last 7 days: its stop 2 hours ago in it, whatever the time of day)
+    await p.click('.oee-window[data-window="week"]');
+    const page = await h.until(() => p.evaluate(() => ({ kpis: document.querySelectorAll('.oee-kpi').length, machines: document.querySelectorAll('.oee-machine').length, quality: document.querySelector('.oee-quality')?.textContent, jam: [...document.querySelectorAll('.oee-pareto')].some((e) => /Jam/.test(e.textContent ?? '')) })).then((x) => (x.machines && x.jam ? x : null)), 30000);
     expect(page?.kpis === 5 && page.machines >= 1 && page.jam && /^\d+ %$/.test(page.quality ?? ''), `the OEE page: ${JSON.stringify(page)}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
