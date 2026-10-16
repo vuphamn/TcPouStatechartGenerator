@@ -75,17 +75,18 @@ const apiPost = (p, body) =>
   const s16 = (value) => ({ size: 2, value, signed: true });
   const u32 = (value) => ({ size: 4, value });
   const id = (vendor, product) => ({ '1018:1': u32(vendor), '1018:2': u32(product) });
-  const lenze = (heatsink, error) => ({
+  const lenze = (heatsink, error, serial = 0) => ({
+    '1018:4': u32(serial),
     ...id(0x3b, 0x69055000),
     '2ddd:0': s16(500), '2d88:0': u16(52), '6078:0': s16(400), '6077:0': s16(300), '2d87:0': u16(560), '2d89:0': u16(400),
     '2d84:1': s16(heatsink), '2d84:2': s16(800), '2d4f:0': u16(30), '2d40:4': u16(40), '603f:0': u16(error),
     '2d81:1': u32(1234 * 3600), '2d81:2': u32(2000 * 3600), '2d81:4': u32(77), '2d81:6': u16(0), '2d81:7': u16(0),
   });
   c.coe = {
-    [`${MASTER}|1004`]: lenze(420, 0),
+    [`${MASTER}|1004`]: lenze(420, 0, 1111),
     [`${MASTER}|1005`]: id(0x114, 0x1234),
-    [`${MASTER}|1008`]: lenze(560, 0),
-    [`${MASTER}|1009`]: lenze(430, 0x2250),
+    [`${MASTER}|1008`]: lenze(560, 0, 2222),
+    [`${MASTER}|1009`]: lenze(430, 0x2250, 3333),
     [`${MASTER}|1007`]: { ...id(0x129, 0x4b), '6ff0:1': { size: 1, value: 5 }, '6ff1:1': u16(1200), '6ff1:2': u16(12000), '6010:1': u16(0x10), '6010:2': u16(35), '6010:3': u16(0) },
   };
   fs.writeFileSync(cfg, JSON.stringify(c));
@@ -95,7 +96,8 @@ const apiPost = (p, body) =>
   const dir = h.out('gw-drives');
   fs.rmSync(dir, { recursive: true, force: true });
   // (five days before today: each drive's heatsink 42 °C running, its current per Hz 0.104)
-  const summary = { days: {} };
+  // (Drive A pinned to an older serial: its drive replaced since)
+  const summary = { days: {}, serials: { [`${DEV}^Drive A (Inverter i550 Cabinet)`]: { serial: 9999, since: Date.now() - 10 * 86400000 } } };
   for (let k = 5; k >= 1; k--) {
     const day = dayOf(Date.now() - k * 86400000);
     summary.days[day] = {};
@@ -146,6 +148,9 @@ const apiPost = (p, body) =>
   ws.send(JSON.stringify({ type: 'alertsList' }));
   const alerts = await h.until(() => got.find((m) => m.type === 'alertsList')?.events, 5000);
   const driveAlerts = (alerts ?? []).filter((e) => e.event === 'drive');
+  // (Drive A: another serial than its pin: replaced; pinned anew; the others pinned the first time)
+  const pinsNow = JSON.parse(fs.readFileSync(path.join(dir, "drives", "line", "summary.json"), "utf8")).serials ?? {};
+  expect(driveAlerts.some((e) => /Drive A: replaced\? Its serial 1111, was 9999/.test(e.text)) && pinsNow[`${DEV}^Drive A (Inverter i550 Cabinet)`]?.serial === 1111 && pinsNow[`${DEV}^Drive B (Inverter i550 Cabinet)`]?.serial === 2222 && by("Drive A")?.serial === 1111, `serials: Drive A replaced (${driveAlerts.find((e) => /replaced/.test(e.text))?.text}); pinned ${Object.values(pinsNow).map((p) => p.serial).join(", ")}`);
   expect(driveAlerts.some((e) => /Drive C: In fault/.test(e.text)) && driveAlerts.some((e) => /Drive B: Running 14 °C warmer/.test(e.text)), `alerts: ${driveAlerts.map((e) => e.text).join(' | ')}`);
   ws.send(JSON.stringify({ type: 'driveHistory', requestId: 3, plc: 'line', path: `${DEV}^Drive B (Inverter i550 Cabinet)`, keys: ['heatsink', 'current'], from: Date.now() - 3600_000, to: Date.now() }));
   const hist = await h.until(() => got.find((m) => m.type === 'driveHistoryResult' && m.requestId === 3), 5000);

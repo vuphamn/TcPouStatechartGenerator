@@ -20,6 +20,8 @@ export interface DriveView {
   today: Record<string, { median: number; p90?: number; max?: number; n: number }> | null;
   spark: Record<string, { t: number; v: number }[]>;
   notAnswering: boolean;
+  /** Its serial number (CoE 0x1018:4) */
+  serial?: number | null;
   /** Its identity at its address: checked, found at another address, not found, unverified */
   identity?: string | null;
 }
@@ -275,7 +277,7 @@ export const DrivesBoard: React.FC<{
                       </span>
                     </div>
                     <div className="text-[11px] text-slate-500 truncate">
-                      {d.vendor} {d.firmware} · {d.device.replace(/\s*\(EtherCAT\)$/, '')} {d.address}
+                      {d.vendor} {d.firmware} · {d.device.replace(/\s*\(EtherCAT\)$/, '')} {d.address}{typeof d.serial === 'number' ? ` · SN ${d.serial}` : ''}
                       {d.identity && /^found/.test(d.identity) && <span className="drive-moved text-sky-300" title="Its identity (CoE 0x1018: vendor, product code) answered at this address, not at the one its project gives"> ({d.identity})</span>}
                     </div>
                     <div className="mt-1.5 grid grid-cols-3 gap-x-2 gap-y-1 text-xs">

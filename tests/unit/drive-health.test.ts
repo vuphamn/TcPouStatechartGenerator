@@ -6,7 +6,7 @@
 // whoever wants it, released by the last one
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { profilesOf, profileFor, decodeValue } = require('../../gateway/driveProfiles.cjs');
-const { locateDrives } = require('../../gateway/drives.cjs');
+const { locateDrives, reconcileSerials } = require('../../gateway/drives.cjs');
 const { evaluate, dayStats, baselineOf } = require('../../gateway/driveHealth.cjs');
 const { SharedVars } = require('../../gateway/sharedVars.cjs');
 
@@ -71,6 +71,15 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   await locateDrives({ list: gone, slaves: null, maxAddress: 1050, read });
   const where = (l: { identity?: string; address: number }[]) => l.map((d) => `${d.address}:${d.identity}`).join(' | ');
   expect(where(scanned) === '1105:found at 1105, not 1021 (by order: alike ones) | 1106:found at 1106, not 1087 | 1030:checked' && where(listed) === '1106:found at 1106, not 1021 | 1030:checked' && /at none of the addresses 1001 to 1082 \(the master gives no addresses\); at its address 1099: Port not connected/.test((gone[0] as { notFound?: string }).notFound ?? ''), `the drives' addresses: a scan ${where(scanned)}; by their place on the bus ${where(listed)}; not found: ${(gone[0] as { notFound?: string }).notFound}`);
+  // (serials: pinned the first time; three alike that traded places follow theirs; one replaced, said)
+  const sd = (path: string, address: number, serial: number) => ({ path, name: path, address, serial } as { path: string; name: string; address: number; serial: number; identity?: string });
+  const pins: Record<string, { serial: number; since: number }> = {};
+  const first = [sd('A', 1001, 11), sd('B', 1002, 22), sd('C', 1003, 33), sd('D', 1004, 44)];
+  reconcileSerials(first, pins, 1000);
+  const rotated = [sd('A', 1001, 22), sd('B', 1002, 33), sd('C', 1003, 11), sd('D', 1004, 55)];
+  const replaced = reconcileSerials(rotated, pins, 2000);
+  const placed = (l: { path: string; address: number }[]) => l.map((d) => `${d.path}@${d.address}`).join(' ');
+  expect(Object.keys(pins).length === 4 && placed(rotated) === 'A@1003 B@1001 C@1002 D@1004' && /by its serial 11/.test(rotated[0].identity ?? '') && replaced.length === 1 && replaced[0].was === 44 && replaced[0].now === 55 && pins.D.serial === 55 && pins.D.since === 2000 && pins.A.since === null, `serials: ${placed(rotated)}; replaced ${replaced.map((r) => `${r.d.path} ${r.was} > ${r.now}`)}`);
   const unread = evaluate({ latest: { heatsink: { v: null, error: 'timeout' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(unread.level === 'unknown' && /Not read: timeout/.test(unread.findings[0]?.text ?? ''), 'nothing read: unknown, with why');
 

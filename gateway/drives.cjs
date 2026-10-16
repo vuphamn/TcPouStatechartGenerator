@@ -120,6 +120,39 @@ async function locateDrives({ list, slaves, maxAddress = 1000, read, errorText =
   }
 }
 
+/**
+ * Each drive pinned to its serial number (CoE 0x1018:4, read at its address: d.serial): its first one kept
+ * (pins: { drive path: { serial, since } }); drives alike that traded places follow their serials (their addresses
+ * swapped); a new serial where a drive was, not another drive's: replaced (its pin and its baseline start again).
+ * Gives the drives replaced: [{ d, was, now }]
+ */
+function reconcileSerials(list, pins, now = Date.now()) {
+  const replaced = [];
+  const at = new Map(list.filter((d) => typeof d.serial === 'number').map((d) => [d.serial, { address: d.address, d }]));
+  const moves = [];
+  for (const d of list) {
+    const pin = pins[d.path];
+    if (typeof d.serial !== 'number') continue;
+    if (!pin) {
+      // (pinned the first time: its past still its own)
+      pins[d.path] = { serial: d.serial, since: null };
+      continue;
+    }
+    if (pin.serial === d.serial) continue;
+    const there = at.get(pin.serial);
+    if (there && there.d !== d) moves.push({ d, address: there.address, serial: pin.serial });
+    else replaced.push({ d, was: pin.serial, now: d.serial });
+  }
+  // (all moves at once: one's address taken from where its serial was read, before any changed)
+  for (const m of moves) {
+    m.d.identity = `found at ${m.address}, not ${m.d.address} (by its serial ${m.serial})`;
+    m.d.address = m.address;
+    m.d.serial = m.serial;
+  }
+  for (const r of replaced) pins[r.d.path] = { serial: r.now, since: now };
+  return replaced;
+}
+
 function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, ads, log, onEvent, postWebhook }) {
   const { readIoTree } = require(`${sharedDir}/tcIoTree.cjs`);
   const { readBootFile } = require(`${sharedDir}/tcSources.cjs`);
@@ -319,6 +352,22 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         }
       }
       await locateDrives({ list, slaves, maxAddress, read, errorText: (e) => ads.adsErrorText(e), log: (t) => log(`drives: ${this.plc.id}: ${t}`) });
+      // (each one's serial: drives alike that traded places follow theirs; one replaced, said, its baseline anew)
+      for (const d of list) {
+        d.serial = null;
+        if (d.notFound || d.vendorId === null) continue;
+        try {
+          d.serial = (await client.readRaw(COE_SDO, (0x1018 << 16) | 4, 4, { amsNetId: d.netId, adsPort: d.address })).readUInt32LE(0);
+        } catch {
+          d.serial = null;
+        }
+      }
+      const pins = (this.summary.serials ??= {});
+      for (const r of reconcileSerials(list, pins)) {
+        log(`drives: ${this.plc.id}: ${r.d.name}: serial ${r.now}, was ${r.was}: replaced`);
+        this.say(r.d, 'drive', `🔧 ${r.d.name}: replaced? Its serial ${r.now}, was ${r.was}: its baseline starts again`, 'watch', settings());
+      }
+      this.saveSummary();
     }
 
     /** Today's samples back from its file (the gateway restarted) */
@@ -501,7 +550,9 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       const weekAgo = days.filter((x) => x <= dayOf(Date.now() - 7 * 86400000)).pop() ?? days[0];
       for (const d of this.drives) {
         const past = {};
-        for (const day of pastDays) if (this.summary.days[day]?.[d.path]) past[day] = this.summary.days[day][d.path];
+        // (its past since its serial was pinned: a drive replaced is not judged against the one before)
+        const since = this.summary.serials?.[d.path]?.since;
+        for (const day of pastDays) if (this.summary.days[day]?.[d.path] && (!since || day >= dayOf(since))) past[day] = this.summary.days[day][d.path];
         const peers = this.drives.filter((x) => x !== d && x.profile.id === d.profile.id).map((x) => ({ today: todayStats.get(x.path) }));
         const before = d.health;
         d.health = evaluate({ latest: d.latest, today: todayStats.get(d.path), past, counters7d: weekAgo ? this.summary.days[weekAgo]?.[d.path]?.counters ?? {} : {}, peers, profile: d.profile, limits: s.limits });
@@ -539,7 +590,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       return {
         id: this.plc.id, name: this.plc.name, state: this.state, message: this.message, lastRound: this.lastRound,
         drives: this.drives.map((d) => ({
-          path: d.path, name: d.name, box: d.box, device: d.device, netId: d.netId, address: d.address, profile: d.profile.id, vendor: d.vendor, product: d.product, firmware: d.firmware,
+          path: d.path, name: d.name, box: d.box, device: d.device, netId: d.netId, address: d.address, serial: d.serial ?? null, profile: d.profile.id, vendor: d.vendor, product: d.product, firmware: d.firmware,
           latest: Object.fromEntries(Object.entries(d.latest).map(([k, x]) => [k, { v: x.v, ...(x.error ? { error: x.error } : {}) }])),
           health: d.health, today: d.todayStats ?? null,
           spark: Object.fromEntries(Object.entries(d.spark).map(([k, list]) => [k, list.map((b) => ({ t: b.t, v: Math.round((b.sum / b.n) * 10) / 10 }))])),
@@ -725,6 +776,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         wanted = [
           { key: 'vendorId', label: `Identity: vendor (expected #x${(b.vendorId ?? 0).toString(16)})`, index: 0x1018, sub: 1, size: 4, signed: false, scale: 1, unit: '', format: 'hex' },
           { key: 'productCode', label: `Identity: product code (expected ${b.productCode || '?'})`, index: 0x1018, sub: 2, size: 4, signed: false, scale: 1, unit: '', format: 'hex' },
+          { key: 'serial', label: 'Identity: serial number (the board pins the drive to it)', index: 0x1018, sub: 4, size: 4, signed: false, scale: 1, unit: '' },
           ...b.profile.params,
         ];
       }
@@ -782,4 +834,4 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
   };
 }
 
-module.exports = { createDrives, locateDrives };
+module.exports = { createDrives, locateDrives, reconcileSerials };
