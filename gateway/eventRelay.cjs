@@ -59,10 +59,13 @@ function createEventRelay({ getConfig, plcList, connectionFor, ads, eventLog, on
     for (const e of list) {
       if (e.kind !== 'raised' && e.kind !== 'cleared') continue;
       if (e.kind === 'raised' && !['Error', 'Critical'].includes(e.severity)) continue;
-      const machine = e.source || r.path;
+      // (each alarm on its own: its source (the EventLogger names the program it is in, "MAIN") and its text, so
+      // one cleared resolves that one only)
+      const label = e.text || `event ${e.eventId}`;
+      const machine = `${e.source || r.path}: ${label}`;
       onEvent?.(e.kind === 'raised'
-        ? { event: 'plcEvent', level: e.severity === 'Critical' ? 'alarm' : 'warn', rule: 'TwinCAT events', ruleId: 'eventlog', plc: plc.id, plcName: plc.name, machine, state: e.text || `event ${e.eventId}`, text: `${plc.name}: 🔔 ${machine}: ${e.text || `event ${e.eventId}`} (${e.severity})`, at: new Date(e.t).toISOString() }
-        : { event: 'recovered', rule: 'TwinCAT events', ruleId: 'eventlog', plc: plc.id, plcName: plc.name, machine, state: 'cleared', text: `${plc.name}: ✅ ${machine}: ${e.text || `event ${e.eventId}`} cleared`, at: new Date(e.t).toISOString() });
+        ? { event: 'plcEvent', level: e.severity === 'Critical' ? 'alarm' : 'warn', rule: 'TwinCAT events', ruleId: 'eventlog', plc: plc.id, plcName: plc.name, machine, state: label, text: `${plc.name}: 🔔 ${machine} (${e.severity})`, at: new Date(e.t).toISOString() }
+        : { event: 'recovered', rule: 'TwinCAT events', ruleId: 'eventlog', plc: plc.id, plcName: plc.name, machine, state: 'cleared', text: `${plc.name}: ✅ ${machine}: cleared`, at: new Date(e.t).toISOString() });
     }
   };
   async function poll(plc, path) {

@@ -14,7 +14,8 @@
 //        fbEventRelay.Execute();
 //   5. The gateway's setup page, Logged events: its instance (MAIN.fbEventRelay) for that PLC.
 //
-// Built and checked with TwinCAT XAE (Build: no errors). Its layout (ST_KvalEvent packed, 355 bytes; 64 of them) is
+// Built with TwinCAT XAE (no errors) and run on a TwinCAT runtime: a message and an alarm (raised, cleared) of the
+// ADS event class read live by the gateway (tests/plc/real-eventrelay.test.cjs). Its layout (ST_KvalEvent packed, 355 bytes; 64 of them) is
 // what the gateway reads: keep it as it is.
 
 // ===== DUT: ST_KvalEvent =====

@@ -99,7 +99,7 @@ const SIZE = 355;
     return (await h.until(() => got.find((m) => m.type === 'alertsList')?.events, 5000)) ?? [];
   };
   const raised = (await history()).find((e) => e.event === 'plcEvent');
-  expect(before === 2 && third?.severity === 'Error' && raised?.machine === 'MAIN.fbCell.fbDoor' && /Line 6: 🔔 MAIN.fbCell.fbDoor: Door 2 sensor lost \(Error\)/.test(raised.text) && !raised.resolvedAt && !(await history()).some((e) => e.event === 'plcEvent' && /Air pressure/.test(e.text)), `an error alarm: waited for its text (${before} kept meanwhile), then "${raised?.text}"; a warning one no alert`);
+  expect(before === 2 && third?.severity === 'Error' && raised?.machine === 'MAIN.fbCell.fbDoor: Door 2 sensor lost' && raised.text === 'Line 6: 🔔 MAIN.fbCell.fbDoor: Door 2 sensor lost (Error)' && !raised.resolvedAt && !(await history()).some((e) => e.event === 'plcEvent' && /Air pressure/.test(e.text)), `an error alarm: waited for its text (${before} kept meanwhile), then "${raised?.text}"; a warning one no alert`);
   // 3. Cleared: its alert resolved
   put(4, Date.now(), 3, 3, 9, 'MAIN.fbCell.fbDoor', 'Door 2 sensor lost');
   setRing(4);
