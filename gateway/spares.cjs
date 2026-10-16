@@ -53,6 +53,8 @@ function createSpares({ baseDir, log, audit, notify }) {
 
   return {
     /** The parts (low ones flagged) and the latest changes of stock */
+    /** Every move kept (the KPIs: parts per machine) */
+    moves: () => state.moves,
     view: () => ({ parts: state.parts.map((p) => ({ ...p, low: low(p) })), moves: state.moves.slice(-200).reverse() }),
     /** A part written (new, or changed: its stock set here is a change of stock too) */
     save(p0, user) {

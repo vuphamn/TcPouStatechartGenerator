@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Package, Plus, Repeat, X } from 'lucide-react';
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, HeartPulse, Package, Plus, Repeat, X } from 'lucide-react';
+import { WorkKpis } from './WorkKpis.tsx';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { WorkParts, type SpareMove, type SparePart } from './WorkParts.tsx';
 import { WorkPm, type PmPlan } from './WorkPm.tsx';
@@ -94,7 +95,7 @@ export const WorkBoard: React.FC<{
   /** The PLCs (a preventive maintenance plan's) */
   plcs?: { id: string; name: string }[];
 }> = ({ conn, connected, subscribe, user, canWork, canAssign, root, draft, onDraftDone, narrow, onFault, plcs = [] }) => {
-  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability' | 'parts' | 'pm'>('orders');
+  const [tab, setTab] = useState<'orders' | 'calendar' | 'reliability' | 'kpis' | 'parts' | 'pm'>('orders');
   const [pmPlans, setPmPlans] = useState<PmPlan[]>([]);
   const [spares, setSpares] = useState<{ parts: SparePart[]; moves: SpareMove[] }>({ parts: [], moves: [] });
   const [orders, setOrders] = useState<WorkOrder[]>([]);
@@ -177,6 +178,7 @@ export const WorkBoard: React.FC<{
               ['orders', 'Work orders', ClipboardList],
               ['calendar', 'Calendar', CalendarDays],
               ['reliability', 'Reliability', HeartPulse],
+              ['kpis', 'KPIs', BarChart3],
               ['pm', `Preventive${pmPlans.some((p) => p.due.state === 'due') ? ` (${pmPlans.filter((p) => p.due.state === 'due').length} due)` : ''}`, Repeat],
               ['parts', `Parts${spares.parts.some((p) => p.low) ? ` (${spares.parts.filter((p) => p.low).length} low)` : ''}`, Package],
             ] as const
@@ -234,6 +236,7 @@ export const WorkBoard: React.FC<{
         )}
         {tab === 'calendar' && <WorkCalendar conn={conn} connected={connected} orders={orders} onOpen={setOpenId} />}
         {tab === 'reliability' && <WorkReliability conn={conn} connected={connected} root={root} />}
+        {tab === 'kpis' && <WorkKpis conn={conn} connected={connected} root={root} onOpen={(oid) => { setShow('all'); setTab('orders'); setOpenId(oid); }} />}
         {tab === 'pm' && <WorkPm conn={conn} plans={pmPlans} plcs={plcs} orderNumber={(oid) => orders.find((o) => o.id === oid)?.number ?? null} canWork={canWork} canEdit={canAssign} onOpenOrder={(oid) => { setShow('all'); setTab('orders'); setOpenId(oid); }} />}
         {tab === 'parts' && <WorkParts conn={conn} parts={spares.parts} moves={spares.moves} canWork={canWork} canEdit={canAssign} />}
       </div>

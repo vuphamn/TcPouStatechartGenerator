@@ -65,6 +65,7 @@ const { zipOf } = require('./support.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createAttachments } = require('./attachments.cjs');
 const { lastTime } = require('./lastTime.cjs');
+const { maintenanceKpis } = require('./kpis.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -1582,6 +1583,12 @@ function start() {
         } catch (err) {
           return send({ type: 'workResult', requestId, ok: false, error: err.message });
         }
+      }
+      // The maintenance KPIs (the Work page's KPIs tab)
+      if (m.type === 'maintenanceKpis') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const days = [7, 30, 90, 365].includes(Number(m.days)) ? Number(m.days) : 30;
+        return send({ type: 'maintenanceKpisResult', requestId, ...maintenanceKpis({ orders: workOrders.list(), moves: spares.moves(), alerts: alertLog.all(), days, weeks: days >= 90 ? 13 : 8 }) });
       }
       if (m.type === 'reliability') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;

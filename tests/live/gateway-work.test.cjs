@@ -120,6 +120,11 @@ const M = `${R}.aDoors[2]`;
   // (last time this happened: aDoors[2] in its error state: 3 times before, the work order done on it, its root cause)
   const last = await sup.ask({ type: 'lastTime', plc: 'line', machine: M, state: 'DOOR_DASHER_ERROR' }, 'lastTimeResult');
   expect(last?.ok && last.before.count === 3 && last.before.recoverMs === 10 * 60000 && last.orders[0]?.rootCause === 'Sensor cable cut at the hinge' && last.orders[0].number === o?.number, `last time: ${last?.before?.count}× in ${last?.before?.days} days, recovered in ${last?.before?.recoverMs / 60000} min; #${last?.orders?.[0]?.number} ${last?.orders?.[0]?.rootCause}`);
+  // (the KPIs: the backlog (the call's work order open), the parts used on aDoors[2], this week's MTTR: the one taken
+  // (the checklist's, done without being taken, has no start))
+  const kp = await sup.ask({ type: 'maintenanceKpis', days: 30 }, 'maintenanceKpisResult');
+  const kParts = kp?.parts?.find((x) => x.machine === M);
+  expect(kp?.backlog?.open === 1 && kp.backlog.oldest?.number === fromCall?.number && kParts?.qty === 2 && kParts.parts[0].number === 'S12-SENS' && kp.trend.at(-1).orders === 1 && kp.planned.other === 2 && kp.pm.due === 0 && kp.pm.compliance === null, `KPIs: ${kp?.backlog?.open} open (oldest #${kp?.backlog?.oldest?.number}); parts on aDoors[2]: ${kParts?.qty}; this week ${kp?.trend?.at(-1)?.orders} done`);
   sup.ws.close();
   expect(fs.existsSync(path.join(dir, 'workorders.json')), 'kept in workorders.json');
 
@@ -156,6 +161,10 @@ const M = `${R}.aDoors[2]`;
     await p.click('#work-tab-parts');
     const lowRow = await h.until(() => p.$eval('.spare-part[data-low="true"] .spare-qty', (e) => e.textContent).catch(() => null), 8000);
     const tabText = await p.$eval('#work-tab-parts', (e) => e.textContent);
+    await p.click('#work-tab-kpis');
+    const kpiText = await h.until(() => p.$eval('#work-kpis', (e) => e.textContent).catch(() => null), 10000);
+    const weeks = (await p.$$('.work-kpi-week')).length;
+    expect(/Backlog: open work orders1/.test(kpiText ?? '') && /2 × S12-SENS/.test(kpiText ?? '') && weeks === 8, `the KPIs tab (${weeks} weeks): ${(kpiText ?? '').slice(0, 160)}`);
     expect(/1/.test(lowRow ?? '') && /1 low/.test(tabText ?? ''), `the Parts tab: S12-SENS ${lowRow} (low), the tab "${tabText}"`);
     expect(orders >= 2 && /Sensor cable cut at the hinge/.test(detail ?? '') && /Line 9/.test(win ?? '') && /10\.0 days/.test(rel2 ?? ''), `the Work page: ${orders} orders, the done one's root cause, the calendar's window, reliability "${rel2}"`);
     // (an alert's Last time on the board)
