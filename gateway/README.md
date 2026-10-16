@@ -301,7 +301,8 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **Check a drive** (the setup page): to compare a drive with its keypad or its maker's software.
     - **List its drives:** a PLC's boxes of other makers, and which profile knows each one.
     - **Read its profile:** its identity (vendor, product code, against what its project expects), then every value it reads, as bytes, as each integer and float, and as the board reads it (with its scaling). A drive the board follows is read at the address it found it at.
-    - **Read this object:** any one object (an index in hex, a subindex, a size).
+    - **Read this object:** any one object (an index in hex, a subindex, a size). **At address**: its profile or an object read at another EtherCAT address.
+    - **Scan the bus:** each EtherCAT address answering, the identity there (vendor, product code), and the project's box with that address (its own, or not: what was expected). A drive not at its project's address shows at its real one.
     - Read only, and it works with the drives monitor off. A value that is off: correct its profile in `drives.profiles`.
   - **Servo axes** (under the drives): every NC axis of the PLCs' programs (each `AXIS_REF`, AX5000, AX8000 or another), read from its `NcToPlc` every 10 seconds (Tc2_MC2: its error code, set and actual velocity, following error `PosDiff`, torque `ActTorque`).
     - **While it moves:** its following error and its torque kept; their 95th percentile a day (`axes/<plc>/summary.json`).

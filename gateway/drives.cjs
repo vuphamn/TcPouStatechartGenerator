@@ -603,7 +603,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
    * a box's profile read, each value raw and as the board reads it; or one object (index hex, sub, size)
    */
   const checkBoxes = new Map(); // PLC id -> { at, boxes }: its I/O read once a minute at most (a zip over ADS)
-  async function check({ plc: plcId, path: boxPath, index, sub, size } = {}) {
+  async function check({ plc: plcId, path: boxPath, index, sub, size, address: atAddress, scan } = {}) {
     const plc = plcList().find((p) => p.id === plcId);
     if (!plc) throw new Error(`No PLC "${plcId ?? ''}"`);
     let conn = monitors.get(plcId)?.conn ?? null;
@@ -623,6 +623,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       const tree = boxes.length ? { devices: [] } : await readIoTree((rel) => readBootFile(client, rel)).catch((err) => ({ error: ads.adsErrorText(err) }));
       if (tree.error) throw new Error(`Its I/O not read: ${tree.error}`);
       const profiles = settings().profiles;
+      const every = []; // (every box: its project address, its master; a scan's)
       for (const d of tree.devices ?? []) {
         if (d.disabled || !d.netId) continue;
         let slaves = null;
@@ -633,6 +634,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         }
         const walk = (list) => {
           for (const b of list ?? []) {
+            if (!b.disabled) every.push({ name: b.name, netId: d.netId, device: d.name, address: b.address ?? null, vendorId: b.info?.vendorId ?? null, productCode: b.info?.productCode ?? '' });
             const profile = b.disabled ? null : profileFor(b, profiles);
             if (!b.disabled && (profile || (b.info?.vendorId !== undefined && b.info.vendorId !== 2))) {
               const known = slaves?.some((s) => s.address === b.address);
@@ -647,6 +649,35 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       }
       if (!cached || boxes !== cached.boxes) checkBoxes.set(plcId, { at: Date.now(), boxes });
       const view = (b) => ({ path: b.path, name: b.name, device: b.device, netId: b.netId, address: b.address, projectAddress: b.projectAddress, onBus: b.onBus, listed: b.listed, vendorId: b.vendorId, type: b.type, profile: b.profile ? { id: b.profile.id, name: b.profile.name } : null });
+      // (a scan of the bus: each address answering, its identity; the project's box with that address)
+      if (scan) {
+        const masters = [...new Set(every.map((x) => x.netId))];
+        const rows = [];
+        for (const netId of masters) {
+          const mine = every.filter((x) => x.netId === netId);
+          const top = Math.min(1600, Math.max(1000, ...mine.map((x) => x.address ?? 1000)) + 32);
+          for (let at = 1001; at <= top; at++) {
+            let id = null;
+            try {
+              const v = await client.readRaw(COE_SDO, (0x1018 << 16) | 1, 4, { amsNetId: netId, adsPort: at });
+              const p = await client.readRaw(COE_SDO, (0x1018 << 16) | 2, 4, { amsNetId: netId, adsPort: at });
+              id = { vendorId: v.readUInt32LE(0), productCode: p.readUInt32LE(0) };
+            } catch (err) {
+              // (no slave there: Port not connected; a slave without CoE: said so)
+              const t = ads.adsErrorText(err);
+              if (/not connected|0xd\b|\[0xd\]|target port/i.test(t)) continue;
+              rows.push({ device: mine[0]?.device ?? netId, address: at, error: t, box: mine.find((x) => x.address === at)?.name ?? null });
+              continue;
+            }
+            const box = mine.find((x) => x.address === at);
+            const expected = box && box.vendorId !== null ? `#x${box.vendorId.toString(16)}${box.productCode ? ` ${box.productCode}` : ''}` : null;
+            const same = !!box && box.vendorId === id.vendorId && (!box.productCode || parseInt(String(box.productCode).replace(/^#x/i, ''), 16) === id.productCode);
+            rows.push({ device: mine[0]?.device ?? netId, address: at, vendorId: id.vendorId, productCode: id.productCode, box: box?.name ?? null, expected, same });
+          }
+        }
+        log(`drives: ${plcId}: the bus scanned: ${rows.length} address(es) answering`);
+        return { scan: rows };
+      }
       if (!boxPath) return { boxes: boxes.map(view) };
       const b = boxes.find((x) => x.path === boxPath);
       if (!b) throw new Error(`No box "${boxPath}" of another maker in its I/O`);
@@ -666,11 +697,12 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           ...b.profile.params,
         ];
       }
+      const at = Number(atAddress) >= 1 && Number(atAddress) <= 65535 ? Number(atAddress) : b.address;
       const reads = [];
       for (const p of wanted) {
         const base = { key: p.key, label: p.label, index: p.index, sub: p.sub, size: p.size, unit: p.unit, scale: p.scale, verified: p.asked ? null : p.verified !== false };
         try {
-          const buf = await client.readRaw(COE_SDO, ((p.index & 0xffff) << 16) | (p.sub & 0xff), p.size ?? 4, { amsNetId: b.netId, adsPort: b.address });
+          const buf = await client.readRaw(COE_SDO, ((p.index & 0xffff) << 16) | (p.sub & 0xff), p.size ?? 4, { amsNetId: b.netId, adsPort: at });
           const dec = p.asked ? null : decodeValue(buf, p);
           reads.push({ ...base, hex: [...buf].map((x) => x.toString(16).padStart(2, '0')).join(' '), as: viewsOf(buf), value: dec?.value ?? null });
         } catch (err) {
@@ -678,7 +710,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         }
       }
       log(`drives: ${plcId}: checked ${b.name} (${reads.length} object(s), ${reads.filter((r) => r.error).length} not answered)`);
-      return { box: view(b), reads };
+      return { box: { ...view(b), address: at }, reads };
     } finally {
       if (borrowed) {
         conn.viewers.delete(viewer);

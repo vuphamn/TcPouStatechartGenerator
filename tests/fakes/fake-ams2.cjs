@@ -137,6 +137,8 @@ function handle(sock, f) {
     else obj.signed ? b.writeInt8(obj.value) : b.writeUInt8(obj.value & 0xff);
     return result(0, withLength(b));
   }
+  // (a CoE request to an EtherCAT address no slave has: the master's "Port not connected", 0xD, as TwinCAT answers)
+  if (target.port !== 0xffff && cmd === 2 && d.length >= 4 && d.readUInt32LE(0) === 0xf302 && (config.ecat || []).some((x) => x.netId === [...target.netId].join('.'))) return result(0xd);
   if (target.port === 0xffff) {
     const at = [...target.netId].join('.');
     const m = (config.ecat || []).find((x) => x.netId === at);

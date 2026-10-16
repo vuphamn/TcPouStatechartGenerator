@@ -168,6 +168,11 @@ const apiPost = (p, body) =>
   const one = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '0x6010', sub: '2', size: 2 });
   const none = await apiPost('drivecheck', { plc: 'line', path: sp?.path, index: '2d84', sub: 1, size: 2 });
   expect(one?.reads?.[0]?.as?.u16 === 35 && /\S/.test(none?.reads?.[0]?.error ?? ''), `one object: 0x6010:2 = ${one?.reads?.[0]?.as?.u16}; one it has not: ${none?.reads?.[0]?.error}`);
+  // (the bus scanned: each address answering, its identity, the project's box at it; a profile read at an address chosen)
+  const scanned = await apiPost('drivecheck', { plc: 'line', scan: true });
+  const at = (a) => scanned?.scan?.find((x) => x.address === a);
+  const bAt = await apiPost('drivecheck', { plc: 'line', path: `${DEV}^Drive B (Inverter i550 Cabinet)`, address: 1008 });
+  expect(at(1004)?.same === true && at(1005)?.vendorId === 0x114 && at(1005).same === false && /Drive B/.test(at(1005).box) && at(1008)?.vendorId === 0x3b && at(1008).same === false && /EX260/.test(at(1008).box ?? '') && !at(1003) && bAt?.box?.address === 1008 && bAt.reads[0].as?.u32 === 0x3b, `the bus scanned: ${scanned?.scan?.map((x) => `${x.address} #x${x.vendorId?.toString(16)} ${x.same ? 'own' : 'not own'}`).join(', ')}; Drive B read at 1008: vendor #x${bAt?.reads?.[0]?.as?.u32?.toString(16)}`);
   ws.close();
 
   const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('drives-filter'));

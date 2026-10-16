@@ -744,7 +744,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <h2>Check a drive</h2>
   <p class="hint flush">A drive read straight from its PLC (its own CoE objects, through the EtherCAT master), to compare with its keypad or its maker's software: its profile, each value raw and as the board reads it, or any one object. Read only: nothing is written to the drive. A value marked unverified has a scaling its maker does not give: check it here once, and correct its profile (drives.profiles) when it is off.</p>
   <div class="row"><select id="admin-drive-plc"></select><button id="admin-drive-list">List its drives</button><select id="admin-drive-box" class="grow"></select><button id="admin-drive-read">Read its profile</button></div>
-  <div class="row"><input id="admin-drive-index" class="mono" placeholder="index, e.g. 6ff1" size="12"><input id="admin-drive-sub" class="mono" placeholder="sub" size="4"><select id="admin-drive-size"><option value="1">1 byte</option><option value="2">2 bytes</option><option value="4" selected>4 bytes</option><option value="8">8 bytes</option></select><button id="admin-drive-one">Read this object</button></div>
+  <div class="row"><input id="admin-drive-index" class="mono" placeholder="index, e.g. 6ff1" size="12"><input id="admin-drive-sub" class="mono" placeholder="sub" size="4"><select id="admin-drive-size"><option value="1">1 byte</option><option value="2">2 bytes</option><option value="4" selected>4 bytes</option><option value="8">8 bytes</option></select><input id="admin-drive-at" class="mono" size="7" placeholder="at address"><button id="admin-drive-one">Read this object</button><button id="admin-drive-scan">Scan the bus</button></div>
   <div class="msg" id="admin-drive-msg"></div>
   <div id="admin-drive-out"></div>
 </section>
@@ -1587,6 +1587,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     const body = { plc: $('admin-drive-plc').value, path: $('admin-drive-box').value };
     if (!body.path) { say('admin-drive-msg', 'List its drives, and choose one', false); return; }
     if (one) Object.assign(body, { index: $('admin-drive-index').value.trim(), sub: $('admin-drive-sub').value.trim() || '0', size: Number($('admin-drive-size').value) });
+    if ($('admin-drive-at').value.trim()) body.address = Number($('admin-drive-at').value.trim());
     say('admin-drive-msg', 'Reading ...');
     try {
       const r = await call('drivecheck', body);
@@ -1596,6 +1597,20 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-drive-msg', err.message, false); }
   };
   $('admin-drive-read').addEventListener('click', () => readDrive(false));
+  $('admin-drive-scan').addEventListener('click', async () => {
+    say('admin-drive-msg', 'Scanning the bus (each address, its identity) ...');
+    try {
+      const r = await call('drivecheck', { plc: $('admin-drive-plc').value, scan: true });
+      const hx = (n) => '#x' + Number(n).toString(16);
+      const rows = r.scan.map((x) => el('tr', { 'data-scan-address': String(x.address) },
+        el('td', { class: 'mono' }, String(x.address)),
+        el('td', { class: 'mono' }, x.error ? x.error : hx(x.vendorId) + ' ' + hx(x.productCode)),
+        el('td', {}, x.box ? x.box : '(no box of the project at this address)'),
+        el('td', { class: x.box && !x.same && !x.error ? 'bad' : '' }, x.box ? (x.error ? '' : x.same ? 'its own' : 'not its own: expected ' + x.expected) : '')));
+      $('admin-drive-out').replaceChildren(el('div', { class: 'scroll' }, el('table', {}, el('tbody', {}, el('tr', {}, ...['Address', 'Identity there (vendor, product)', 'The project box at it', ''].map((t) => el('th', {}, t))), ...rows))));
+      say('admin-drive-msg', r.scan.length + ' address(es) answering. A drive of the project not at its own: its identity at another address above (Read its profile with that address)', true);
+    } catch (err) { say('admin-drive-msg', err.message, false); }
+  });
   $('admin-drive-one').addEventListener('click', () => readDrive(true));
   call('monitoring').then((d) => $('admin-drive-plc').replaceChildren(...(d.plcs || []).map((p) => el('option', { value: p.id }, p.name || p.id)))).catch(() => {});
 
