@@ -454,7 +454,9 @@ function start() {
     config.shifts = next.shifts ?? [];
     config.reports = next.reports ?? {};
     config.recordings = next.recordings ?? [];
-    recorders?.apply(withCounters(config.recordings, config.oee));
+    // (with the new settings' part counters, product variables, energy meters)
+    config.energy = next.energy;
+    recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
     config.boardEditors = next.boardEditors;
     config.drives = next.drives;
@@ -634,7 +636,7 @@ function start() {
       exportsApi?.state(rule.plc, m.path, m.stateNames?.[String(v)] ?? v, t);
     } });
   anomalies = createAnomalies({ recorders, getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
-  recorders.apply(withCounters(config.recordings ?? [], config.oee));
+  recorders.apply(withCounters(config.recordings ?? [], config.oee, config.energy));
   // Shift reports (config.shifts, config.reports.webhook): posted when a shift ends; the board downloads them
   const maintenanceOfAll = (from, to) => [...plcs.keys()].flatMap((id) => maintenance.windowsBetween(id, from, to).map((w) => ({ plc: id, from: new Date(w.from).toISOString(), until: new Date(w.until).toISOString() })));
   // (the notes written live through this gateway in a report's window: the audit log's live.event "note")
@@ -866,6 +868,7 @@ function start() {
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which), emailNow: (which) => reports.emailNow(which) },
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
+    findMeters: (plcId) => drives.findMeters(plcId),
     certs,
     backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit }),
     restart: async () => {

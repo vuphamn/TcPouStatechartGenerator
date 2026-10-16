@@ -390,7 +390,8 @@ function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () =
           } else truncated = true;
         }
       }
-      for (const [p, b] of before) series[p].unshift({ t: from, v: b.v });
+      // (the value before the window as its value at its start, unless one was recorded right at its start)
+      for (const [p, b] of before) if (!series[p].some((x) => x.t === from)) series[p].unshift({ t: from, v: b.v });
       for (const p of Object.keys(series)) series[p].sort((a, b) => a.t - b.t);
       return { series, truncated };
     },

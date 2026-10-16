@@ -52,7 +52,10 @@ interface OeeReport {
   pareto: Record<'reason' | 'machine' | 'state', { key: string; ms: number; count: number }[]>;
   windows: (Line & { label: string; from: number; to: number })[];
   /** By product (a PLC's product variable, config.oee.products): its runs, its time, its OEE */
-  products?: (Line & { plc: string; plcName: string; product: string; idealCycleSec: number | null; runs: number; ms: number; cycles: number | null })[];
+  products?: (Line & { plc: string; plcName: string; product: string; idealCycleSec: number | null; runs: number; ms: number; cycles: number | null; kwh?: number | null; parts?: number; kwhPerPart?: number | null })[];
+  /** Its energy meters (config.energy): each one's kWh, the parts its machines made, kWh a part, its cost */
+  energy?: { plc: string; plcName: string; name: string; var: string; recorded: boolean; kwh: number | null; parts: number; kwhPerPart: number | null; cost: number | null }[];
+  energyTotal?: { kwh: number | null; cost: number | null; price: number | null; currency: string };
   recorded: number;
   error?: string;
 }
@@ -64,6 +67,7 @@ const WINDOWS = [
   { id: 'month', label: 'Last 30 days' },
 ];
 const pct = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)} %`);
+const kwh = (x: number | null | undefined) => (x === null || x === undefined ? '—' : x >= 100 ? `${Math.round(x)} kWh` : x >= 1 ? `${x.toFixed(1)} kWh` : `${(x * 1000).toFixed(0)} Wh`);
 const dur = (ms: number) => (ms < 60000 ? `${Math.round(ms / 1000)} s` : ms < 3600000 ? `${Math.round(ms / 60000)} min` : `${(ms / 3600000).toFixed(1)} h`);
 const short = (p: string, root: string) => (p.toLowerCase().startsWith(root.toLowerCase() + '.') ? p.slice(root.length + 1) : p);
 const windowOf = (id: string) => {
@@ -239,6 +243,7 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                     <th className="text-right">Made for</th>
                     <th className="text-right">Cycles</th>
                     <th className="text-right">Down</th>
+                    {r.products!.some((p) => p.kwhPerPart !== null && p.kwhPerPart !== undefined) && <th className="text-right">Energy a part</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -254,6 +259,33 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                       <td className="text-right font-mono">{dur(p.ms)}</td>
                       <td className="text-right font-mono">{p.cycles ?? ''}</td>
                       <td className="text-right font-mono">{dur(p.downMs)}</td>
+                      {r.products!.some((x) => x.kwhPerPart !== null && x.kwhPerPart !== undefined) && <td className="text-right font-mono" title={`${kwh(p.kwh)} for ${p.parts ?? 0} parts`}>{kwh(p.kwhPerPart)}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {(r.energy?.length ?? 0) > 0 && (
+              <table id="oee-energy" className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500">
+                    <th className="py-1">Energy meter</th>
+                    <th className="text-right">Used</th>
+                    <th className="text-right">Parts</th>
+                    <th className="text-right">A part</th>
+                    {r.energyTotal?.price ? <th className="text-right">Cost</th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.energy!.map((e) => (
+                    <tr key={`${e.plc}|${e.var}`} className="oee-meter border-t border-slate-800" data-meter={e.name}>
+                      <td className="py-1">
+                        {e.name} <span className="text-xs text-slate-500">{e.plcName}{e.recorded ? '' : ' · not recorded yet (its PLC needs a recording)'}</span>
+                      </td>
+                      <td className="text-right font-mono">{kwh(e.kwh)}</td>
+                      <td className="text-right font-mono">{e.parts || ''}</td>
+                      <td className="oee-kwh-part text-right font-mono">{kwh(e.kwhPerPart)}</td>
+                      {r.energyTotal?.price ? <td className="text-right font-mono">{e.cost === null ? '—' : `${e.cost.toFixed(2)} ${r.energyTotal.currency}`}</td> : null}
                     </tr>
                   ))}
                 </tbody>

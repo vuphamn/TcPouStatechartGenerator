@@ -152,7 +152,29 @@ function checkMonitoring(body, plcIds, current) {
   const workorders = { ...(current.workorders ?? {}), fromCalls: b.workorders?.fromCalls !== false, signOff: b.workorders?.signOff === true || undefined, checklists: checklists.length ? checklists : undefined };
   delete workorders.checklistLines;
   const clean = (x) => JSON.parse(JSON.stringify(x));
-  return { drives: clean(drives), faults: clean(faults), fleet: clean(fleet), projectSync: clean(projectSync), oee: clean(oee), andon: clean(andon), workorders: clean(workorders) };
+  // (energy meters: per PLC, one a line: its name, =, its variable, its unit, and for which machines (by commas))
+  const e = b.energy ?? {};
+  let energy = current.energy;
+  if (b.energy !== undefined) {
+    let meters = (current.energy?.meters ?? []).filter((m) => plcIds.includes(m.plc));
+    if (e.meterLines && typeof e.meterLines === 'object') {
+      meters = [];
+      for (const [id, ls] of Object.entries(e.meterLines)) {
+        if (!plcIds.includes(id)) continue;
+        for (const l of lines(ls, 50, 400)) {
+          const at = l.indexOf('=');
+          const words = l.slice(at + 1).trim().split(' ').filter(Boolean);
+          const [v, unit, kw, ...rest] = words;
+          if (at < 1 || !sym(v) || !['wh', 'kwh', 'mwh', 'w', 'kw', 'mw'].includes(String(unit).toLowerCase())) throw new Error(`A meter: its name, =, its variable, its unit (Wh, kWh, MWh, W, kW) (${l.slice(0, 50)})`);
+          const machines = String(kw).toLowerCase() === 'for' ? rest.join(' ').split(',').map((x) => x.trim()).filter(Boolean) : [];
+          meters.push({ plc: id, name: text(l.slice(0, at), 80), var: v, unit, ...(machines.length ? { machines } : {}) });
+        }
+      }
+    }
+    const price = e.price === '' || e.price == null ? undefined : num(e.price, 0, 1000, undefined);
+    energy = meters.length || price ? { meters, ...(price ? { price } : {}), ...(text(e.currency, 8) ? { currency: text(e.currency, 8) } : {}) } : undefined;
+  }
+  return { drives: clean(drives), faults: clean(faults), fleet: clean(fleet), projectSync: clean(projectSync), oee: clean(oee), andon: clean(andon), workorders: clean(workorders), energy: energy && clean(energy) };
 }
 
 /** A saved operator board, checked */
@@ -168,7 +190,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -330,6 +352,11 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     },
     // Monitoring: which monitors on which PLCs, and their settings (one Save)
     // Check a drive (drives.cjs, read only): a PLC's boxes of other makers; a box's profile read raw; one object
+    // (the energy meters: a PLC's EL34xx boxes and the variables linked to them)
+    'POST energy/find': async (body) => {
+      if (!findMeters) throw new Error('Not on this gateway');
+      return findMeters(String(body?.plc ?? ''));
+    },
     'POST drivecheck': async (body) => {
       if (!driveCheck) throw new Error('Not on this gateway');
       const r = await driveCheck(body ?? {});
@@ -461,7 +488,7 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
     'POST cert/pfx': async (body) => certs.installPfx({ pfx: body?.pfx, passphrase: body?.passphrase }),
     'GET monitoring': async () => {
       const c = getConfig();
-      return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
+      return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, energy: c.energy ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
     },
     'POST monitoring': async (body) => {
       const c = getConfig();
@@ -1406,6 +1433,25 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         return wrap;
       })(),
       el('div', { class: 'row' }, 'Weekly summary on ', txtIn(o.weekly, 'day', { placeholder: 'Mon', size: 4 }), ' at ', txtIn(o.weekly, 'at', { placeholder: '07:00', size: 5 }), ' to ', txtIn(o.weekly, 'webhook', { class: 'mono grow', placeholder: 'https://… (empty: none)' }), ' its link ', txtIn(o.weekly, 'link', { class: 'mono', placeholder: 'https://gateway:8443/?board&page=oee&window=week' })));
+    // Energy meters: per PLC, one a line (Main feed = GVL.fEnergy kWh for MAIN.a, MAIN.b); its EL34xx boxes found
+    m.energy = m.energy || {};
+    const en = m.energy;
+    if (!en.meterLines) { en.meterLines = {}; for (const p of m.plcs) en.meterLines[p.id] = (en.meters || []).filter((x) => x.plc === p.id).map((x) => x.name + " = " + x.var + " " + (x.unit || "kWh") + (x.machines && x.machines.length ? " for " + x.machines.join(", ") : "")); }
+    const energyBox = el('div', { id: 'admin-energy' });
+    for (const p of m.plcs) {
+      const found = el('div', { class: 'hint flush' });
+      const lineArea = area((en.meterLines[p.id] || []).join(NL), (v) => { en.meterLines[p.id] = v.split(NL); }, { class: 'grow mono', rows: 2, 'data-energy-plc': p.id, placeholder: 'Main feed = GVL.fEnergy kWh for MAIN.fbCell.smTable1' });
+      const findBtn = el('button', { 'data-energy-find': p.id, on: { click: async () => {
+        found.textContent = 'Reading its I/O ...';
+        try {
+          const r = await call('energy/find', { plc: p.id });
+          found.replaceChildren(...(r.boxes.length ? r.boxes.map((b) => el('div', { class: 'energy-found' }, b.box + ' (' + (b.product || 'EL34xx') + '): ', ...(b.links.length ? b.links.map((l) => el('a', { href: '#', 'data-energy-var': l.variable, on: { click: (ev) => { ev.preventDefault(); lineArea.value = (lineArea.value ? lineArea.value + NL : '') + b.box + ' = ' + l.variable + ' kWh'; en.meterLines[p.id] = lineArea.value.split(NL); } } }, l.entry + ' → ' + l.variable + ' ')) : ['no PLC variable linked to it: link its energy to one in the PLC']))) : [el('span', {}, 'No EL34xx box in its I/O')]));
+        } catch (err) { found.textContent = err.message; }
+      } } }, 'Find its EL34xx');
+      energyBox.append(el('div', { class: 'row' }, el('span', { class: 'label' }, p.name), lineArea, findBtn), found);
+    }
+    box.append(el('h3', {}, 'Energy per part'), el('p', { class: 'hint flush' }, 'Each meter a PLC variable: its energy (Wh, kWh, MWh: a counter) or its power (W, kW). Its energy over the parts its machines made (all of its PLC, or those after for) on the OEE page. A pick below adds a line: set its unit.'), energyBox,
+      el('div', { class: 'row' }, 'Price ', numIn(en, 'price', { placeholder: '0.18', step: 'any' }), ' a kWh, in ', txtIn(en, 'currency', { placeholder: 'USD', size: 5 })));
     // Andon and work orders
     const a = m.andon;
     box.append(el('h3', {}, 'Andon and calls'),

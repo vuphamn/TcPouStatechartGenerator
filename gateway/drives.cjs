@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const { findMeters } = require('./energy.cjs');
 const { profilesOf, profileFor, decodeValue } = require('./driveProfiles.cjs');
 const { evaluate, dayStats } = require('./driveHealth.cjs');
 
@@ -899,9 +900,35 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     }
   }
 
+  /** A PLC's client for a moment (its monitor's, else one borrowed and given back), for fn(client) */
+  async function withClient(plcId, fn) {
+    const plc = plcList().find((p) => p.id === plcId);
+    if (!plc) throw new Error(`No PLC "${plcId ?? ''}"`);
+    let conn = monitors.get(plcId)?.conn ?? null;
+    const viewer = { send: () => {}, push: () => {}, lost: () => {} };
+    let borrowed = false;
+    if (!conn?.client) {
+      conn = connectionFor(plc);
+      await conn.connect();
+      conn.viewers.add(viewer);
+      clearTimeout(conn.idleTimer);
+      borrowed = true;
+    }
+    try {
+      return await fn(conn.client);
+    } finally {
+      if (borrowed) {
+        conn.viewers.delete(viewer);
+        if (conn.viewers.size === 0) void conn.unwatch({}).catch(() => {});
+      }
+    }
+  }
+
   return {
     apply,
     check,
+    /** A PLC's EL34xx boxes and the variables linked to them (energy meters to choose from) */
+    findMeters: (plcId) => withClient(plcId, (client) => findMeters({ client, readIoTree, readBootFile })),
     start: () => apply(),
     stop() {
       for (const m of monitors.values()) m.stop();

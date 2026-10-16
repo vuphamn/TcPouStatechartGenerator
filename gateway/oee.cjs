@@ -21,6 +21,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { DEFAULT_ERROR } = require('./alerts.cjs');
+const { meterOf, kwhOf } = require('./energy.cjs');
 
 const REASONS = ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -45,10 +46,10 @@ function qualityOf(good, bad, cycles) {
   return null;
 }
 /** The recordings as the recorder takes them: each one with its PLC's OEE part counters among its variables */
-function withCounters(recordings, oee) {
+function withCounters(recordings, oee, energy) {
   const machines = Array.isArray(oee?.machines) ? oee.machines : [];
   return (recordings ?? []).map((r) => {
-    const add = [...machines.filter((m) => m.plc === r.plc).flatMap((m) => [m.goodVar, m.badVar]), oee?.products?.[r.plc]?.var].filter(Boolean).map(String);
+    const add = [...machines.filter((m) => m.plc === r.plc).flatMap((m) => [m.goodVar, m.badVar]), oee?.products?.[r.plc]?.var, ...(Array.isArray(energy?.meters) ? energy.meters.filter((m) => m?.plc === r.plc).map((m) => m.var) : [])].filter(Boolean).map(String);
     if (!add.length) return r;
     const vars = [...(r.vars ?? [])];
     for (const v of add) if (!vars.some((x) => x.toLowerCase() === v.toLowerCase())) vars.push(v);
@@ -196,6 +197,20 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
       windows = windows.slice(-62).map((w) => ({ ...w, ...line(machinesOf(w.from, w.to)) }));
     }
     // By product: each PLC's product variable split into its runs; each run's machines with that product's ideal cycle
+    // (energy: each meter of these PLCs, recorded with one of its recordings; its kWh over [f, t])
+    const meters = (Array.isArray(getConfig().energy?.meters) ? getConfig().energy.meters : []).map(meterOf).filter((m) => m && (!plcIds.length || plcIds.includes(m.plc)));
+    const meterSrc = (m) => recs.find((r) => r.plc === m.plc && (r.vars ?? []).some((v) => String(v).toLowerCase() === m.var.toLowerCase()));
+    const kwhIn = (m, f, t) => {
+      const src = meterSrc(m);
+      return src ? kwhOf(m, recorders.queryVars(src.id, [m.var], f, Math.min(t, Date.now())).series?.[m.var] ?? [], f, Math.min(t, Date.now())) : null;
+    };
+    const partsOf = (m, list) => list.filter((x) => x.plc === m.plc && (!m.machines.length || m.machines.some((p) => p.toLowerCase() === x.machine.toLowerCase()))).reduce((a, x) => a + (x.partsCounted ?? 0), 0);
+    const price = Number(getConfig().energy?.price) > 0 ? Number(getConfig().energy.price) : null;
+    const energy = meters.map((m) => {
+      const kwh = kwhIn(m, from, to);
+      const parts = partsOf(m, machines);
+      return { plc: m.plc, plcName: recs.find((r) => r.plc === m.plc)?.plcName ?? m.plc, name: m.name, var: m.var, recorded: !!meterSrc(m), kwh, parts, kwhPerPart: kwh !== null && parts > 0 ? kwh / parts : null, cost: kwh !== null && price ? kwh * price : null };
+    });
     const products = [];
     const byProduct = new Map();
     for (const [plcId, p] of Object.entries(settings().products)) {
@@ -226,17 +241,24 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
             list.push(machineWindow(rec, m, run.from, run.to, ideal));
           }
         }
+        // (the energy of its PLC's meters in this run)
+        const runKwh = meters.filter((m) => m.plc === plcId).map((m) => kwhIn(m, run.from, run.to)).filter((x) => x !== null);
         const k = `${plcId}|${run.product}`;
-        const x = byProduct.get(k) ?? { plc: plcId, plcName: src.plcName, product: run.product, idealCycleSec: ideal, runs: 0, ms: 0, machines: [] };
+        const x = byProduct.get(k) ?? { plc: plcId, plcName: src.plcName, product: run.product, idealCycleSec: ideal, runs: 0, ms: 0, machines: [], kwh: null };
         x.runs++;
         x.ms += run.to - run.from;
         x.machines.push(...list);
+        if (runKwh.length) x.kwh = (x.kwh ?? 0) + runKwh.reduce((a, v) => a + v, 0);
         byProduct.set(k, x);
       }
     }
-    for (const x of byProduct.values()) products.push({ plc: x.plc, plcName: x.plcName, product: x.product, idealCycleSec: x.idealCycleSec, runs: x.runs, ms: x.ms, cycles: x.machines.some((m) => m.cycles !== null) ? x.machines.reduce((a, m) => a + (m.cycles ?? 0), 0) : null, ...line(x.machines) });
+    for (const x of byProduct.values()) {
+      const parts = x.machines.reduce((a, m) => a + (m.partsCounted ?? 0), 0);
+      products.push({ plc: x.plc, plcName: x.plcName, product: x.product, idealCycleSec: x.idealCycleSec, runs: x.runs, ms: x.ms, cycles: x.machines.some((m) => m.cycles !== null) ? x.machines.reduce((a, m) => a + (m.cycles ?? 0), 0) : null, ...line(x.machines), kwh: x.kwh, parts, kwhPerPart: x.kwh !== null && parts > 0 ? x.kwh / parts : null });
+    }
     products.sort((a, b) => b.ms - a.ms);
-    return { from, to, by, line: line(machines), products, machines: machines.map(({ stops: s, ...m }) => ({ ...m, stops: s.length })), stops: stops.slice(0, 500), pareto: { reason: pareto((s) => s.reason ?? '(no reason given)'), machine: pareto((s) => s.machine), state: pareto((s) => s.state) }, windows, reasons: settings().reasons, recorded: recs.length };
+    const kwhAll = energy.some((e) => e.kwh !== null) ? energy.reduce((a, e) => a + (e.kwh ?? 0), 0) : null;
+    return { from, to, by, line: line(machines), products, energy, energyTotal: { kwh: kwhAll, cost: kwhAll !== null && price ? kwhAll * price : null, price, currency: String(getConfig().energy?.currency ?? '').slice(0, 8) }, machines: machines.map(({ stops: s, ...m }) => ({ ...m, stops: s.length })), stops: stops.slice(0, 500), pareto: { reason: pareto((s) => s.reason ?? '(no reason given)'), machine: pareto((s) => s.machine), state: pareto((s) => s.state) }, windows, reasons: settings().reasons, recorded: recs.length };
   }
 
   // The weekly summary (once, at its day and time)
