@@ -6,6 +6,7 @@
 // whoever wants it, released by the last one
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { profilesOf, profileFor, decodeValue } = require('../../gateway/driveProfiles.cjs');
+const { locateDrives } = require('../../gateway/drives.cjs');
 const { evaluate, dayStats, baselineOf } = require('../../gateway/driveHealth.cjs');
 const { SharedVars } = require('../../gateway/sharedVars.cjs');
 
@@ -54,6 +55,22 @@ const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} 
   const noMainsFault = evaluate({ latest: latest({ heatsink: 0, dcBus: 2, error: 0x2250 }), today: {}, past, peers: [], profile: lenze });
   const partly = evaluate({ latest: { ...latest({ error: 0, opHours: 10 }), heatsink: { v: null, error: 'Invalid index offset' }, current: { v: null, error: 'Invalid index offset' }, dcBus: { v: null, error: 'Invalid index offset' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(noMains.level === 'off' && /No mains: DC bus 0 V \(error 0x3222/.test(noMains.findings[0]?.text) && noMains.findings.length === 1 && noMainsFault.level === 'alarm' && /0x2250/.test(noMainsFault.findings[0].text) && partly.level === 'watch' && /Only 1 of its 10 values answer/.test(partly.findings[0]?.text), `no mains: ${noMains.level} "${noMains.findings[0]?.text}"; with another fault: ${noMainsFault.level}; most not answering: ${partly.level} "${partly.findings[0]?.text}"`);
+  // (the drives at their addresses: the master listing its slaves' addresses, or not: a scan; alike ones in order)
+  const I550 = { vendorId: 0x3b, productCode: 0x69055000 };
+  const bus: Record<number, { vendorId: number; productCode: number }> = { 1021: { vendorId: 2, productCode: 0x44c2c52 }, 1105: I550, 1106: I550, 1030: I550 };
+  const read = async (_n: string, a: number) => {
+    if (!bus[a]) throw new Error('Port not connected');
+    return bus[a];
+  };
+  const drive = (name: string, address: number, slave: number) => ({ name, netId: 'm', address, slave, ...I550 });
+  const scanned = [drive('Hinge 1 Router', 1021, 3), drive('Hinge 2 Router', 1087, 4), drive('Feed', 1030, 5)];
+  await locateDrives({ list: scanned, slaves: null, maxAddress: 1110, read });
+  const listed = [drive('Hinge 1 Router', 1021, 1), drive('Feed', 1030, 2)];
+  await locateDrives({ list: listed, slaves: [{ address: 1001 }, { address: 1106 }, { address: 1030 }], maxAddress: 1110, read });
+  const gone = [{ ...drive('Gone', 1099, 0), productCode: 0x1234 }];
+  await locateDrives({ list: gone, slaves: null, maxAddress: 1050, read });
+  const where = (l: { identity?: string; address: number }[]) => l.map((d) => `${d.address}:${d.identity}`).join(' | ');
+  expect(where(scanned) === '1105:found at 1105, not 1021 (by order: alike ones) | 1106:found at 1106, not 1087 | 1030:checked' && where(listed) === '1106:found at 1106, not 1021 | 1030:checked' && /at none of the addresses 1001 to 1082 \(the master gives no addresses\); at its address 1099: Port not connected/.test((gone[0] as { notFound?: string }).notFound ?? ''), `the drives' addresses: a scan ${where(scanned)}; by their place on the bus ${where(listed)}; not found: ${(gone[0] as { notFound?: string }).notFound}`);
   const unread = evaluate({ latest: { heatsink: { v: null, error: 'timeout' } }, today: {}, past: {}, peers: [], profile: lenze });
   expect(unread.level === 'unknown' && /Not read: timeout/.test(unread.findings[0]?.text ?? ''), 'nothing read: unknown, with why');
 

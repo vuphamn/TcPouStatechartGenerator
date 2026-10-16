@@ -1579,7 +1579,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     say('admin-drive-msg', 'Reading its I/O ...');
     try {
       const r = await call('drivecheck', { plc: $('admin-drive-plc').value });
-      $('admin-drive-box').replaceChildren(...r.boxes.map((b) => el('option', { value: b.path }, b.name + (b.profile ? ' (' + b.profile.name + ')' : ' (no profile)') + ' · EtherCAT ' + b.address)));
+      $('admin-drive-box').replaceChildren(...r.boxes.map((b) => el('option', { value: b.path }, b.name + (b.profile ? ' (' + b.profile.name + ')' : ' (no profile)') + ' · EtherCAT ' + b.address + (b.projectAddress && b.projectAddress !== b.address ? ' (its project: ' + b.projectAddress + ')' : '') + (b.listed ? (b.onBus !== null && b.onBus !== b.address ? ' (its place on the bus: ' + b.onBus + ')' : '') : ' (the master gives no addresses)'))));
       say('admin-drive-msg', r.boxes.length + ' box(es) of other makers than Beckhoff, ' + r.boxes.filter((b) => b.profile).length + ' a profile knows', true);
     } catch (err) { say('admin-drive-msg', err.message, false); }
   });

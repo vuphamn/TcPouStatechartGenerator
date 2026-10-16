@@ -29,6 +29,87 @@ const dayOf = (t) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
+/**
+ * The drives at their EtherCAT addresses, by their identity (CoE 0x1018: vendor, product code; read(netId, address)): each
+ * at its own address; else the address the master gives its place on the bus; else among the master's slaves, or (the
+ * master gives no addresses) a scan of the addresses its project uses; several alike found: in order, said so
+ */
+async function locateDrives({ list, slaves, maxAddress = 1000, read, errorText = (e) => e.message, log = () => {} }) {
+  const ids = new Map();
+  const identity = async (netId, address) => {
+    if (ids.has(address)) return ids.get(address);
+    let r;
+    try {
+      r = await read(netId, address);
+    } catch (err) {
+      r = { error: errorText(err) };
+    }
+    ids.set(address, r);
+    return r;
+  };
+  const hex = (n) => `#x${Number(n).toString(16)}`;
+  const what = (id) => (id.error ? id.error : `vendor ${hex(id.vendorId)}, product ${hex(id.productCode)}`);
+  const matches = (id, d) => !id.error && id.vendorId === d.vendorId && (d.productCode === null || id.productCode === d.productCode);
+  const claimed = new Set();
+  const take = (d, at, how, before) => {
+    log(`${d.name}: at EtherCAT address ${at}, not ${d.address} (${how}; there: ${what(before)})`);
+    d.identity = `found at ${at}, not ${d.address}${how === 'by order' ? ' (by order: alike ones)' : ''}`;
+    d.address = at;
+    claimed.add(at);
+  };
+  // 1. Each at its own address
+  let lost = [];
+  for (const d of list) {
+    if (d.vendorId === null) {
+      d.identity = 'unknown';
+      continue;
+    }
+    const id = await identity(d.netId, d.address);
+    if (matches(id, d)) {
+      d.identity = 'checked';
+      claimed.add(d.address);
+    } else lost.push({ d, id });
+  }
+  if (!lost.length) return;
+  // 2. At the address the master gives its place on the bus
+  const listed = (slaves ?? []).some((x) => typeof x.address === 'number');
+  for (const l of [...lost]) {
+    const at = listed && l.d.slave !== null ? slaves[l.d.slave]?.address : null;
+    if (typeof at !== 'number' || claimed.has(at) || at === l.d.address) continue;
+    if (matches(await identity(l.d.netId, at), l.d)) {
+      take(l.d, at, 'its place on the bus', l.id);
+      lost = lost.filter((x) => x !== l);
+    }
+  }
+  // 3. Among the master's slaves, or (no addresses from the master) a scan of the addresses the project uses
+  const candidates = listed ? slaves.map((x) => x.address).filter((x) => typeof x === 'number') : Array.from({ length: Math.min(512, maxAddress - 1000 + 32) }, (_, i) => 1001 + i);
+  const free = [];
+  for (const at of candidates) {
+    if (claimed.has(at) || !lost.length) continue;
+    const id = await identity(lost[0].d.netId, at);
+    if (!id.error) free.push({ at, id });
+  }
+  for (const l of [...lost]) {
+    const alike = free.filter((x) => !claimed.has(x.at) && matches(x.id, l.d));
+    if (!alike.length) continue;
+    // (more than one alike left, and more than one drive alike lost: in order, said so)
+    const others = lost.filter((x) => x !== l && x.d.vendorId === l.d.vendorId && x.d.productCode === l.d.productCode);
+    take(l.d, alike[0].at, alike.length > 1 && others.length ? 'by order' : listed ? 'among the master\'s slaves' : 'a scan', l.id);
+    lost = lost.filter((x) => x !== l);
+  }
+  // 4. Not found: why
+  const anyIdentity = [...ids.values()].some((x) => !x.error);
+  for (const { d, id } of lost) {
+    if (!anyIdentity) {
+      d.identity = 'unverified';
+      continue;
+    }
+    d.identity = 'not found';
+    const where = listed ? 'none of the master\'s slaves' : `none of the addresses 1001 to ${candidates.at(-1)} (the master gives no addresses)`;
+    d.notFound = `not found on the EtherCAT bus: its identity (${what({ vendorId: d.vendorId, productCode: d.productCode ?? 0 })}) at ${where}; at its address ${d.address}: ${what(id)}`;
+  }
+}
+
 function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, ads, log, onEvent, postWebhook }) {
   const { readIoTree } = require(`${sharedDir}/tcIoTree.cjs`);
   const { readBootFile } = require(`${sharedDir}/tcSources.cjs`);
@@ -173,13 +254,22 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
             if (profile) {
               const known = slaves?.some((s) => s.address === b.address);
               const address = known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address;
-              found.push({ path: b.path, name: b.name.replace(/\s*\([^()]*\)\s*$/, '') || b.name, box: b.name, device: d.name, netId: d.netId, address, profile, notFound: null, identity: null, vendorId: b.info?.vendorId ?? null, productCode: /^#x[0-9a-f]+$/i.test(b.info?.productCode ?? '') ? parseInt(b.info.productCode.slice(2), 16) : null, product: b.info?.desc ?? '', firmware: b.info?.type ?? '', vendor: b.info?.supplier || (b.info?.vendorId !== undefined ? `vendor #x${b.info.vendorId.toString(16)}` : '') });
+              found.push({ path: b.path, name: b.name.replace(/\s*\([^()]*\)\s*$/, '') || b.name, box: b.name, device: d.name, netId: d.netId, address, profile, notFound: null, identity: null, slave: b.slave ?? null, vendorId: b.info?.vendorId ?? null, productCode: /^#x[0-9a-f]+$/i.test(b.info?.productCode ?? '') ? parseInt(b.info.productCode.slice(2), 16) : null, product: b.info?.desc ?? '', firmware: b.info?.type ?? '', vendor: b.info?.supplier || (b.info?.vendorId !== undefined ? `vendor #x${b.info.vendorId.toString(16)}` : '') });
             }
             walk(b.boxes);
           }
         };
         walk(d.boxes);
-        await this.verifyAddresses(client, found.filter((f) => f.netId === d.netId), slaves);
+        // (the highest address the project gives a box of this master: a scan's end)
+        let maxAddress = 1000;
+        const all = (boxes) => {
+          for (const b of boxes ?? []) {
+            if (typeof b.address === 'number') maxAddress = Math.max(maxAddress, b.address);
+            all(b.boxes);
+          }
+        };
+        all(d.boxes);
+        await this.verifyAddresses(client, found.filter((f) => f.netId === d.netId), slaves, maxAddress);
       }
       const old = new Map(this.drives.map((x) => [x.path, x]));
       this.drives = found.map((f) => ({ ...(old.get(f.path) ?? { latest: {}, slowAt: 0, failing: 0, stored: {}, today: [], spark: {}, health: null, sent: {} }), ...f }));
@@ -191,58 +281,13 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
      * it may be another slave's. One not there (another's identity, or no slave at it): looked for among the master's
      * slaves, in their order (each one taken once). Its identity not readable anywhere: kept where it was.
      */
-    async verifyAddresses(client, list, slaves) {
-      const ids = new Map();
-      const identity = async (netId, address) => {
-        if (ids.has(address)) return ids.get(address);
-        let r;
-        try {
-          const v = await client.readRaw(COE_SDO, (0x1018 << 16) | 1, 4, { amsNetId: netId, adsPort: address });
-          const p = await client.readRaw(COE_SDO, (0x1018 << 16) | 2, 4, { amsNetId: netId, adsPort: address });
-          r = { vendorId: v.readUInt32LE(0), productCode: p.readUInt32LE(0) };
-        } catch (err) {
-          r = { error: ads.adsErrorText(err) };
-        }
-        ids.set(address, r);
-        return r;
+    async verifyAddresses(client, list, slaves, maxAddress = 1000) {
+      const read = async (netId, address) => {
+        const v = await client.readRaw(COE_SDO, (0x1018 << 16) | 1, 4, { amsNetId: netId, adsPort: address });
+        const p = await client.readRaw(COE_SDO, (0x1018 << 16) | 2, 4, { amsNetId: netId, adsPort: address });
+        return { vendorId: v.readUInt32LE(0), productCode: p.readUInt32LE(0) };
       };
-      const matches = (id, f) => !id.error && id.vendorId === f.vendorId && (f.productCode === null || id.productCode === f.productCode);
-      const claimed = new Set();
-      const lost = [];
-      for (const f of list) {
-        if (f.vendorId === null) {
-          f.identity = 'unknown';
-          continue;
-        }
-        const id = await identity(f.netId, f.address);
-        if (matches(id, f)) {
-          f.identity = 'checked';
-          claimed.add(f.address);
-        } else lost.push({ f, id });
-      }
-      let anyIdentity = [...ids.values()].some((x) => !x.error);
-      for (const { f, id } of lost) {
-        let at = null;
-        for (const s of slaves ?? []) {
-          if (typeof s.address !== 'number' || claimed.has(s.address)) continue;
-          const other = await identity(f.netId, s.address);
-          if (!other.error) anyIdentity = true;
-          if (matches(other, f)) {
-            at = s.address;
-            break;
-          }
-        }
-        if (at !== null) {
-          log(`drives: ${this.plc.id}: ${f.name}: at EtherCAT address ${at}, not ${f.address} (${id.error ? id.error : `there: vendor #x${id.vendorId.toString(16)}, product #x${id.productCode.toString(16)}`})`);
-          f.identity = `found at ${at}, not ${f.address}`;
-          f.address = at;
-          claimed.add(at);
-        } else if (anyIdentity) {
-          // (others answer theirs, this one's nowhere: not on the bus)
-          f.identity = 'not found';
-          f.notFound = id.error ? `not on the EtherCAT bus? Its identity at none of the master's slaves (${id.error} at ${f.address})` : `not on the EtherCAT bus? Its identity at none of the master's slaves (another device at ${f.address})`;
-        } else f.identity = 'unverified';
-      }
+      await locateDrives({ list, slaves, maxAddress, read, errorText: (e) => ads.adsErrorText(e), log: (t) => log(`drives: ${this.plc.id}: ${t}`) });
     }
 
     /** Today's samples back from its file (the gateway restarted) */
@@ -592,7 +637,8 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
             if (!b.disabled && (profile || (b.info?.vendorId !== undefined && b.info.vendorId !== 2))) {
               const known = slaves?.some((s) => s.address === b.address);
               const followed = monitors.get(plcId)?.drives.find((x) => x.path === b.path && x.identity && x.identity !== 'not found');
-              boxes.push({ path: b.path, name: b.name, device: d.name, netId: d.netId, address: followed?.address ?? (known || !slaves ? b.address : slaves[b.slave ?? -1]?.address ?? b.address), vendorId: b.info?.vendorId ?? null, productCode: b.info?.productCode ?? '', type: b.info?.type ?? '', profile });
+              const onBus = typeof slaves?.[b.slave ?? -1]?.address === 'number' ? slaves[b.slave].address : null;
+              boxes.push({ path: b.path, name: b.name, device: d.name, netId: d.netId, address: followed?.address ?? (known || !slaves ? b.address : onBus ?? b.address), projectAddress: b.address ?? null, onBus, listed: !!slaves?.some((x) => typeof x.address === 'number'), vendorId: b.info?.vendorId ?? null, productCode: b.info?.productCode ?? '', type: b.info?.type ?? '', profile });
             }
             walk(b.boxes);
           }
@@ -600,7 +646,7 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         walk(d.boxes);
       }
       if (!cached || boxes !== cached.boxes) checkBoxes.set(plcId, { at: Date.now(), boxes });
-      const view = (b) => ({ path: b.path, name: b.name, device: b.device, netId: b.netId, address: b.address, vendorId: b.vendorId, type: b.type, profile: b.profile ? { id: b.profile.id, name: b.profile.name } : null });
+      const view = (b) => ({ path: b.path, name: b.name, device: b.device, netId: b.netId, address: b.address, projectAddress: b.projectAddress, onBus: b.onBus, listed: b.listed, vendorId: b.vendorId, type: b.type, profile: b.profile ? { id: b.profile.id, name: b.profile.name } : null });
       if (!boxPath) return { boxes: boxes.map(view) };
       const b = boxes.find((x) => x.path === boxPath);
       if (!b) throw new Error(`No box "${boxPath}" of another maker in its I/O`);
@@ -673,4 +719,4 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
   };
 }
 
-module.exports = { createDrives };
+module.exports = { createDrives, locateDrives };
