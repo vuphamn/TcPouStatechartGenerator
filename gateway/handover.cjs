@@ -100,12 +100,12 @@ function createHandover({ baseDir, shiftWindowsOf, alertLog, workOrders, oee, dr
       return { shift, summary: summary(shift.from, Date.now(), plcIds) };
     },
     /** The shift handed over: its summary (made now), the note */
-    handOver({ note, plcIds = [] }, user) {
+    handOver({ note, plcIds = [], attachments = [] }, user) {
       const shift = shiftNow();
       const now = Date.now();
       const text = String(note ?? '').trim().slice(0, 4000);
       const ids = (Array.isArray(plcIds) ? plcIds : []).map(String).slice(0, 100);
-      const e = { id: crypto.randomBytes(6).toString('hex'), shift: shift.name, from: shift.from, to: Math.min(shift.to, now), at: now, by: user, note: text, plcs: ids, summary: summary(shift.from, now, ids), reads: [] };
+      const e = { id: crypto.randomBytes(6).toString('hex'), shift: shift.name, from: shift.from, to: Math.min(shift.to, now), at: now, by: user, note: text, plcs: ids, summary: summary(shift.from, now, ids), reads: [], attachments: Array.isArray(attachments) ? attachments.slice(0, 10) : [] };
       list.push(e);
       if (list.length > 500) list = list.slice(-500);
       save();

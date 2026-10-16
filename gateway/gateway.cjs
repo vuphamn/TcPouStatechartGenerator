@@ -63,6 +63,7 @@ const { createBackup } = require('./backup.cjs');
 const { createCerts } = require('./certs.cjs');
 const { zipOf } = require('./support.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
+const { createAttachments } = require('./attachments.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -702,6 +703,8 @@ function start() {
   const CALL_REASONS = ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'];
   // Work orders (workorders.cjs): kept in workorders.json, told to the roles that want them
   const workOrders = createWorkOrders({ file: path.join(baseDir, 'workorders.json'), getConfig: () => config, log, audit, notify: notifyAll });
+  // (photos and PDFs on work orders, calls, handovers: attachments/ beside config.json)
+  const attachments = createAttachments({ baseDir, log, audit });
   // Variables read once (the recovery guides' checks): through the PLC's connection (borrowed: held by none, let go)
   const readVarsOnce = async (plcId, vars) => {
     const plc = plcs.get(plcId);
@@ -908,7 +911,8 @@ function start() {
   let viewerCount = 0;
 
   // liveWatch carries the guard variables with their candidate paths
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+  // (1 MB: a photo of a work order, at most 512 KB, as base64)
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, 'https://gateway');
     const origin = req.headers.origin;
@@ -1312,10 +1316,11 @@ function start() {
         const reason = String(m.reason ?? '').trim().slice(0, 60);
         if (!plc || !reason) return send({ type: 'callMaintenanceResult', requestId, ok: false, error: 'A PLC of the gateway and a reason' });
         const note = String(m.note ?? '').trim().slice(0, 200);
-        const e = alertLog.add({ event: 'call', rule: 'Call maintenance', ruleId: 'call', plc: plc.id, plcName: plc.name, machine: machine ?? '(the line)', state: reason, by: user, note, text: `${plc.name}: 📣 ${user} calls maintenance${machine ? ` for ${machine}` : ''}: ${reason}${note ? ` · ${note}` : ''}`, at: new Date().toISOString() });
+        const photos = attachments.metas(m.attachments);
+        const e = alertLog.add({ event: 'call', ...(photos.length ? { attachments: photos } : {}), rule: 'Call maintenance', ruleId: 'call', plc: plc.id, plcName: plc.name, machine: machine ?? '(the line)', state: reason, by: user, note, text: `${plc.name}: 📣 ${user} calls maintenance${machine ? ` for ${machine}` : ''}: ${reason}${note ? ` · ${note}` : ''}`, at: new Date().toISOString() });
         audit.add(user, 'call', { plc: plc.id, machine, reason, note });
         // (a work order by itself: config.workorders.fromCalls, on unless false)
-        if (config.workorders?.fromCalls !== false) workOrders.create({ title: `${reason}${machine ? ` at ${machine.split('.').slice(-1)[0]}` : ''}${note ? `: ${note}` : ''}`, plc: plc.id, plcName: plc.name, machine, priority: 'high', source: { kind: 'call', id: e.id, text: e.text } }, user);
+        if (config.workorders?.fromCalls !== false) workOrders.create({ title: `${reason}${machine ? ` at ${machine.split('.').slice(-1)[0]}` : ''}${note ? `: ${note}` : ''}`, plc: plc.id, plcName: plc.name, machine, priority: 'high', source: { kind: 'call', id: e.id, text: e.text }, attachments: photos }, user);
         log(`call: ${user} calls maintenance on ${plc.id}${machine ? ` (${machine})` : ''}: ${reason}`);
         return send({ type: 'callMaintenanceResult', requestId, ok: true, id: e.id });
       }
@@ -1406,8 +1411,8 @@ function start() {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (viewOnly) return send({ type: 'handoverResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
         try {
-          const e = m.type === 'handoverSave' ? handover.handOver({ note: m.note, plcIds: Array.isArray(m.plcs) ? m.plcs : [] }, user) : handover.read(String(m.id ?? ''), user);
-          return send({ type: 'handoverResult', requestId, ok: true, id: e.id });
+          const e = m.type === 'handoverSave' ? handover.handOver({ note: m.note, plcIds: Array.isArray(m.plcs) ? m.plcs : [], attachments: attachments.metas(m.attachments) }, user) : handover.read(String(m.id ?? ''), user);
+          return send({ type: 'handoverResult', requestId, ok: true, id: e.id, attachments: e.attachments ?? [] });
         } catch (err) {
           return send({ type: 'handoverResult', requestId, ok: false, error: err.message });
         }
@@ -1512,8 +1517,23 @@ function start() {
           return send({ type: 'spareResult', requestId, ok: false, error: err.message });
         }
       }
+      // Attachments: a photo (or a PDF) kept, its meta back (then on a work order, a call, a handover); one read back
+      if (m.type === 'attachmentAdd' || m.type === 'attachmentGet') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const reply = `${m.type}Result`;
+        if (viewOnly) return send({ type: reply, requestId, ok: false, error: 'A display: the board only' });
+        try {
+          // (added by those who call maintenance, work on a work order or write a handover)
+          if (m.type === 'attachmentAdd' && roles.enabled() && !may('call') && !may('workorder') && !may('note')) throw new Error(`${user}'s role may not add photos`);
+          if (m.type === 'attachmentAdd') return send({ type: reply, requestId, ok: true, attachment: attachments.add(m.file ?? {}, user, 'the board') });
+          const a = attachments.get(String(m.id ?? ''));
+          return send({ type: reply, requestId, ...(a ? { ok: true, contentType: a.type, data: a.data } : { ok: false, error: 'No such attachment' }) });
+        } catch (err) {
+          return send({ type: reply, requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'workWatch') {
-        const sendWork = () => send({ type: 'workOrders', orders: workOrders.list(), people: peopleOf() });
+        const sendWork = () => send({ type: 'workOrders', orders: workOrders.list(), people: peopleOf(), checklists: workOrders.checklists(), signOff: config.workorders?.signOff === true });
         sendWork();
         workOff ??= workOrders.subscribe(sendWork);
         return;
@@ -1528,14 +1548,16 @@ function start() {
         if (viewOnly) return send({ type: 'workResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
         try {
           const o = m.type === 'workCreate'
-            ? workOrders.create({ ...(m.order ?? {}), plcName: plcs.get(m.order?.plc)?.name ?? m.order?.plcName ?? null }, user)
+            ? workOrders.create({ ...(m.order ?? {}), plcName: plcs.get(m.order?.plc)?.name ?? m.order?.plcName ?? null, attachments: attachments.metas(m.order?.attachments) }, user)
             : (() => {
                 // (done with parts from stock: there, enough of each, checked first; taken once it is done)
                 const ch = { ...(m.change ?? {}) };
+                // (its photos: those kept, by their ids)
+                if (ch.attach !== undefined) ch.attach = attachments.metas(ch.attach);
                 const id = String(m.id ?? '');
                 const used = ch.status === 'done' && workOrders.get(id)?.status !== 'done' ? spares.check(ch.partsUsed) : [];
                 if (used.length) ch.parts = [String(ch.parts ?? '').trim(), used.map(({ p, qty }) => `${qty} × ${p.number} ${p.name}`).join('; ')].filter(Boolean).join('; ');
-                const done = workOrders.update(id, ch, user, roles.enabled() ? may('assign') : true);
+                const done = workOrders.update(id, ch, user, roles.enabled() ? may('assign') : true, roles.enabled());
                 spares.take(used, user, done.number);
                 // (a preventive maintenance's work order done: its plan done)
                 if (done.source?.kind === 'pm' && done.status === 'done') pm.done(done.source.id);

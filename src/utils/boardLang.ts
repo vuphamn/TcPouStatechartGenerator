@@ -92,6 +92,9 @@ const ES: Record<string, string> = {
   'Maintenance called: {reason}': 'Mantenimiento llamado: {reason}',
   'Not sent': 'No enviado',
   'What you see (optional)': 'Lo que ve (opcional)',
+  'Photo…': 'Foto…',
+  'Adding…': 'Añadiendo…',
+  'A photo (a phone: its camera) or a PDF': 'Una foto (un teléfono: su cámara) o un PDF',
   // The Andon page
   '{t} ago': 'hace {t}',
   '{who} is on it': '{who} lo está atendiendo',

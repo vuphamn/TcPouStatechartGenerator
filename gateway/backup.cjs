@@ -15,7 +15,7 @@ const KEEP = 10;
 // (what is the gateway's own, beside config.json; never its backups, support bundles, the PLCs' project copies)
 const TOP = /^[\w.-]+\.(json|jsonl|pfx|pem|crt|key)$/i;
 const SUMMARIES = ['drives', 'axes', 'fleet'];
-const FULL = ['eventlog'];
+const FULL = ['eventlog', 'attachments'];
 const OPTIONAL = { recordings: 'recordings', faults: 'faults' };
 
 /** A file encrypted with a passphrase (scrypt, AES-256-GCM) */

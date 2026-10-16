@@ -121,7 +121,16 @@ function checkMonitoring(body, plcIds, current) {
   }
   const andon = { ...(current.andon ?? {}), steps, callReasons: lines(a.callReasons, 20, 60) };
   if (!andon.callReasons.length) delete andon.callReasons;
-  const workorders = { ...(current.workorders ?? {}), fromCalls: b.workorders?.fromCalls !== false };
+  // (checklist templates: one a line, its name, a colon, its steps by semicolons; sign-off counted on the board)
+  const checklists = lines(b.workorders?.checklistLines ?? (current.workorders?.checklists ?? []).map((c) => c.name + ': ' + c.items.join('; ')), 50, 2000).map((l) => {
+    const at = l.indexOf(':');
+    const name = text(at > 0 ? l.slice(0, at) : l, 80);
+    const items = (at > 0 ? l.slice(at + 1) : '').split(';').map((x) => text(x, 200)).filter(Boolean).slice(0, 40);
+    if (!name || !items.length) throw new Error(`A checklist: its name, a colon, its steps by semicolons (${l.slice(0, 40)})`);
+    return { id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'checklist', name, items };
+  });
+  const workorders = { ...(current.workorders ?? {}), fromCalls: b.workorders?.fromCalls !== false, signOff: b.workorders?.signOff === true || undefined, checklists: checklists.length ? checklists : undefined };
+  delete workorders.checklistLines;
   const clean = (x) => JSON.parse(JSON.stringify(x));
   return { drives: clean(drives), faults: clean(faults), fleet: clean(fleet), projectSync: clean(projectSync), oee: clean(oee), andon: clean(andon), workorders: clean(workorders) };
 }
@@ -1372,7 +1381,9 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     box.append(el('h3', {}, 'Andon and calls'),
       el('div', { class: 'row' }, el('span', { class: 'label' }, 'What to do, by state (STATE = text, one a line; Type.STATE for one type)'), area(Object.entries(a.steps || {}).map(([k, v]) => k + ' = ' + v).join(NL), (v) => { a.steps = v.split(NL); }, { class: 'mono grow', rows: 4, id: 'admin-andon-steps', placeholder: 'DOOR_DASHER_ERROR = Check the door sensor S12, then press Reset' })),
       el('div', { class: 'row' }, el('span', { class: 'label' }, 'Reasons to call maintenance (one a line)'), area((a.callReasons && a.callReasons.length ? a.callReasons : mon.defaults.callReasons).join(NL), (v) => { a.callReasons = v.split(NL); }, { class: 'grow', rows: 3 })),
-      el('div', { class: 'row' }, chk(m.workorders, 'fromCalls', 'A call for maintenance makes a work order by itself', true)));
+      el('div', { class: 'row' }, chk(m.workorders, 'fromCalls', 'A call for maintenance makes a work order by itself', true)),
+      el('div', { class: 'row' }, chk(m.workorders, 'signOff', 'Work orders done are signed off by a supervisor or an engineer (the board counts those not yet)', false)),
+      el('div', { class: 'row' }, el('span', { class: 'label' }, 'Checklists for work orders (one a line: its name, a colon, its steps by semicolons)'), area((m.workorders.checklists || []).map((c) => c.name + ': ' + c.items.join('; ')).join(NL), (v) => { m.workorders.checklistLines = v.split(NL); }, { class: 'grow', rows: 3, id: 'admin-checklists', placeholder: 'Motor change: Lock out and tag out; Swap the motor; Check its rotation; Remove the lockout' })));
   };
   const loadMonitoring = async () => {
     mon = await call('monitoring');

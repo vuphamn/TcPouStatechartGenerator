@@ -3,6 +3,7 @@ import { CalendarDays, ChevronLeft, ChevronRight, ClipboardList, Download, Heart
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { WorkParts, type SpareMove, type SparePart } from './WorkParts.tsx';
 import { WorkPm, type PmPlan } from './WorkPm.tsx';
+import { Attachments, uploadAttachments, type AttachmentMeta } from './Attachments.tsx';
 
 export interface WorkOrder {
   id: string;
@@ -23,6 +24,12 @@ export interface WorkOrder {
   rootCause: string;
   parts: string;
   log: { at: string; by: string; text: string; status?: string; assignee?: string }[];
+  /** Its photos (and PDFs) */
+  attachments?: AttachmentMeta[];
+  /** Its checklist: each step ticked, by whom */
+  checklist?: { id: string; name: string; items: { text: string; done: boolean; by: string | null; at: string | null }[] };
+  signedOffBy?: string | null;
+  signedOffAt?: string | null;
 }
 interface Reliability {
   plc: string;
@@ -43,7 +50,7 @@ interface Window {
   note: string;
   planned: boolean;
 }
-type Msg = { type: string; orders?: WorkOrder[]; people?: string[] };
+type Msg = { type: string; orders?: WorkOrder[]; people?: string[]; checklists?: { id: string; name: string; items: number }[]; signOff?: boolean };
 
 const PRIORITY = { urgent: 'bg-rose-700 text-white', high: 'bg-amber-500 text-slate-950', normal: 'bg-slate-700 text-slate-100', low: 'bg-slate-800 text-slate-400' } as const;
 const STATUS = { open: 'text-amber-300', assigned: 'text-sky-300', 'in progress': 'text-violet-300', done: 'text-emerald-300', cancelled: 'text-slate-500' } as const;
@@ -54,6 +61,10 @@ const when = (iso: string) => new Date(iso).toLocaleString([], { month: 'short',
 /** What the board hands a new work order: from an alert, a call, a risk */
 export interface WorkDraft {
   title: string;
+  /** A checklist template's id */
+  checklist?: string;
+  /** Its photos, added before it is created */
+  attachments?: AttachmentMeta[];
   plc?: string | null;
   plcName?: string | null;
   machine?: string | null;
@@ -88,7 +99,9 @@ export const WorkBoard: React.FC<{
   const [spares, setSpares] = useState<{ parts: SparePart[]; moves: SpareMove[] }>({ parts: [], moves: [] });
   const [orders, setOrders] = useState<WorkOrder[]>([]);
   const [people, setPeople] = useState<string[]>([]);
-  const [show, setShow] = useState<'open' | 'mine' | 'all'>('open');
+  const [show, setShow] = useState<'open' | 'mine' | 'signoff' | 'all'>('open');
+  const [checklists, setChecklists] = useState<{ id: string; name: string; items: number }[]>([]);
+  const [signOff, setSignOff] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [form, setForm] = useState<WorkDraft | null>(null);
   const [error, setError] = useState('');
@@ -107,6 +120,8 @@ export const WorkBoard: React.FC<{
         if (m.type !== 'workOrders') return;
         setOrders(m.orders ?? []);
         if (m.people) setPeople(m.people);
+        setChecklists(m.checklists ?? []);
+        setSignOff(!!m.signOff);
       }),
     [subscribe]
   );
@@ -127,13 +142,15 @@ export const WorkBoard: React.FC<{
     }
   }, [draft, onDraftDone]);
   const shown = orders
-    .filter((o) => (show === 'all' ? true : show === 'mine' ? (o.assignee ?? '').toLowerCase() === user.toLowerCase() && o.status !== 'done' && o.status !== 'cancelled' : o.status !== 'done' && o.status !== 'cancelled'))
+    .filter((o) => (show === 'all' ? true : show === 'signoff' ? o.status === 'done' && !o.signedOffBy : show === 'mine' ? (o.assignee ?? '').toLowerCase() === user.toLowerCase() && o.status !== 'done' && o.status !== 'cancelled' : o.status !== 'done' && o.status !== 'cancelled'))
     .sort((a, b) => ['urgent', 'high', 'normal', 'low'].indexOf(a.priority) - ['urgent', 'high', 'normal', 'low'].indexOf(b.priority) || b.createdAt.localeCompare(a.createdAt));
   const opened = orders.find((o) => o.id === openId) ?? null;
+  // (done, not signed off: the last 30 days)
+  const toSignOff = orders.filter((o) => o.status === 'done' && !o.signedOffBy && o.doneAt && Date.parse(o.doneAt) > Date.now() - 30 * 86400000).length;
   const create = async () => {
     if (!form || !conn) return;
     setError('');
-    const r = await conn.request<{ ok: boolean; error?: string; order?: WorkOrder }>({ type: 'workCreate', order: form }, 'workResult').catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    const r = await conn.request<{ ok: boolean; error?: string; order?: WorkOrder }>({ type: 'workCreate', order: { ...form, attachments: (form.attachments ?? []).map((a) => a.id) } }, 'workResult').catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     if (!r.ok) return setError(r.error ?? 'Not created');
     setForm(null);
     if ('order' in r && r.order) setOpenId(r.order.id);
@@ -171,11 +188,17 @@ export const WorkBoard: React.FC<{
         </span>
         {tab === 'orders' && (
           <>
-            <select id="work-show" value={show} onChange={(e) => setShow(e.target.value as 'open' | 'mine' | 'all')} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm">
+            <select id="work-show" value={show} onChange={(e) => setShow(e.target.value as 'open' | 'mine' | 'signoff' | 'all')} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm">
               <option value="open">Open</option>
               <option value="mine">Mine</option>
+              <option value="signoff">To sign off{toSignOff ? ` (${toSignOff})` : ''}</option>
               <option value="all">All</option>
             </select>
+            {signOff && toSignOff > 0 && canAssign && (
+              <button id="work-signoff-count" type="button" onClick={() => setShow('signoff')} className="px-2 py-0.5 rounded-full bg-amber-500 text-slate-950 text-xs font-semibold" title="Done, not signed off yet (the last 30 days)">
+                {toSignOff} to sign off
+              </button>
+            )}
             <span className="text-sm text-slate-400">{shown.length} shown</span>
             {canWork && (
               <button id="work-new" type="button" onClick={() => setForm({ title: '', priority: 'normal' })} className="flex items-center gap-1 px-2 py-1 rounded bg-sky-700 hover:bg-sky-600 text-sm text-white">
@@ -201,6 +224,9 @@ export const WorkBoard: React.FC<{
                   <span className="text-xs text-slate-400">{o.plcName}{o.machine ? ` · ${short(o.machine, root)}` : ''}</span>
                   <span className={`ml-auto text-sm ${STATUS[o.status]}`}>{o.status}{o.assignee ? ` · ${o.assignee}` : ''}</span>
                   {o.due && <span className="text-xs text-slate-400">due {when(o.due)}</span>}
+                  {(o.attachments?.length ?? 0) > 0 && <span className="text-xs text-slate-400" title="Its photos">📎 {o.attachments!.length}</span>}
+                  {o.checklist && <span className="text-xs text-slate-400" title={o.checklist.name}>☑ {o.checklist.items.filter((x) => x.done).length}/{o.checklist.items.length}</span>}
+                  {o.signedOffBy && <span className="work-signed text-xs text-emerald-300" title={`Signed off by ${o.signedOffBy}`}>✔ signed off</span>}
                 </button>
               </li>
             ))}
@@ -226,6 +252,20 @@ export const WorkBoard: React.FC<{
                 ))}
               </select>
             </label>
+            {checklists.length > 0 && (
+              <label className="flex items-center gap-2">
+                Checklist
+                <select id="work-checklist" value={form.checklist ?? ''} onChange={(e) => setForm({ ...form, checklist: e.target.value || undefined })} className="bg-slate-950 border border-slate-700 rounded px-2 py-1">
+                  <option value="">(none)</option>
+                  {checklists.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.items} steps)
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <Attachments conn={conn} items={form.attachments ?? []} canAdd onAdd={async (files) => { const r = await uploadAttachments(conn, files); setForm((f) => (f ? { ...f, attachments: [...(f.attachments ?? []), ...r.metas] } : f)); return r.error; }} />
             {error && <div className="text-rose-300">{error}</div>}
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setForm(null)} className="px-3 py-1 rounded border border-slate-700 hover:bg-slate-800">Cancel</button>
@@ -234,12 +274,12 @@ export const WorkBoard: React.FC<{
           </form>
         </div>
       )}
-      {opened && <WorkDetail order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} onFault={onFault} spareParts={spares.parts} />}
+      {opened && <WorkDetail conn={conn} checklists={checklists} order={opened} user={user} people={people} canWork={canWork} canAssign={canAssign} root={root} onChange={(ch) => change(opened.id, ch)} onClose={() => setOpenId(null)} onFault={onFault} spareParts={spares.parts} />}
     </div>
   );
 };
 
-const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void; onFault?: (id: string) => void; spareParts?: SparePart[] }> = ({ order: o, user, people, canWork, canAssign, root, onChange, onClose, onFault, spareParts = [] }) => {
+const WorkDetail: React.FC<{ conn: GatewayConnection | null; checklists: { id: string; name: string; items: number }[]; order: WorkOrder; user: string; people: string[]; canWork: boolean; canAssign: boolean; root: string; onChange: (ch: Record<string, unknown>) => Promise<string | null>; onClose: () => void; onFault?: (id: string) => void; spareParts?: SparePart[] }> = ({ conn, checklists, order: o, user, people, canWork, canAssign, root, onChange, onClose, onFault, spareParts = [] }) => {
   const [used, setUsed] = useState<{ id: string; qty: number }[]>([]);
   const [pick, setPick] = useState('');
   const [note, setNote] = useState('');
@@ -281,8 +321,44 @@ const WorkDetail: React.FC<{ order: WorkOrder; user: string; people: string[]; c
           <div className="rounded border border-emerald-900 bg-emerald-950/40 px-3 py-2">
             <div><b>Root cause:</b> {o.rootCause}</div>
             {o.parts && <div><b>Parts:</b> {o.parts}</div>}
+            <div id="work-signoff" className="mt-1 flex items-center gap-2">
+              {o.signedOffBy ? (
+                <span className="text-emerald-300">✔ Signed off by {o.signedOffBy}{o.signedOffAt ? ` · ${when(o.signedOffAt)}` : ''}</span>
+              ) : canAssign ? (
+                <button id="work-signoff-btn" type="button" onClick={() => void act({ signOff: true })} className="px-3 py-1 rounded bg-emerald-800 hover:bg-emerald-700 text-white">
+                  Sign it off
+                </button>
+              ) : (
+                <span className="text-slate-400">Not signed off yet (a supervisor or an engineer)</span>
+              )}
+            </div>
           </div>
         )}
+        {o.checklist && (
+          <div id="work-checklist-steps" className="rounded border border-slate-800 px-3 py-2 space-y-1">
+            <div className="text-xs text-slate-400">
+              {o.checklist.name}: {o.checklist.items.filter((x) => x.done).length} of {o.checklist.items.length} done
+            </div>
+            {o.checklist.items.map((it, i) => (
+              <label key={i} className="work-step flex items-start gap-2" data-done={it.done ? 'true' : undefined}>
+                <input type="checkbox" checked={it.done} disabled={!canWork || !live} onChange={(e) => void act({ check: { index: i, done: e.target.checked } })} className="mt-0.5" />
+                <span className={it.done ? 'text-slate-400 line-through' : ''}>{it.text}</span>
+                {it.done && it.by && <span className="ml-auto shrink-0 text-[11px] text-slate-500">{it.by}{it.at ? ` · ${when(it.at)}` : ''}</span>}
+              </label>
+            ))}
+          </div>
+        )}
+        {!o.checklist && canWork && live && checklists.length > 0 && (
+          <select id="work-checklist-take" value="" onChange={(e) => e.target.value && void act({ checklist: e.target.value })} className="bg-slate-950 border border-slate-700 rounded px-2 py-1">
+            <option value="">A checklist for it…</option>
+            {checklists.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.items} steps)
+              </option>
+            ))}
+          </select>
+        )}
+        <Attachments conn={conn} items={o.attachments ?? []} canAdd={canWork} onAdd={async (files) => { const r = await uploadAttachments(conn, files); if (r.metas.length) { const e = await onChange({ attach: r.metas.map((a) => a.id) }); if (e) return e; } return r.error; }} />
         {canWork && live && (
           <div className="flex flex-wrap gap-2">
             {o.status !== 'in progress' && (

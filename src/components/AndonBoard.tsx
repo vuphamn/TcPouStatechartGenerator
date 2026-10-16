@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Megaphone, Timer } from 'lucide-react';
 import { formatDuration } from '../utils/liveView.ts';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { t } from '../utils/boardLang.ts';
+import { Attachments, uploadAttachments, type AttachmentMeta } from './Attachments.tsx';
 
 export interface AndonMachine {
   path: string;
@@ -53,6 +54,8 @@ export const AndonBoard: React.FC<{
   const [info, setInfo] = useState<{ docs: Record<string, Record<string, string>>; steps: Record<string, string>; reasons: string[] }>({ docs: {}, steps: {}, reasons: [] });
   const [callFor, setCallFor] = useState<{ plc: AndonPlc; machine: AndonMachine | null } | null>(null);
   const [note, setNote] = useState('');
+  // (a call's photos, added before its reason is chosen)
+  const [photos, setPhotos] = useState<AttachmentMeta[]>([]);
   const [said, setSaid] = useState('');
   const typesKey = useMemo(() => plcs.map((p) => `${p.id}:${[...new Set(p.machines.map((m) => m.type))].sort().join(',')}`).join('|'), [plcs]);
   useEffect(() => {
@@ -78,8 +81,9 @@ export const AndonBoard: React.FC<{
     if (!callFor || !conn) return;
     const c = callFor;
     setCallFor(null);
+    setPhotos([]);
     try {
-      const r = await conn.request<{ ok: boolean; error?: string }>({ type: 'callMaintenance', plc: c.plc.id, machine: c.machine?.path ?? null, reason, note }, 'callMaintenanceResult');
+      const r = await conn.request<{ ok: boolean; error?: string }>({ type: 'callMaintenance', plc: c.plc.id, machine: c.machine?.path ?? null, reason, note, attachments: photos.map((a) => a.id) }, 'callMaintenanceResult');
       setSaid(r.ok ? t('Maintenance called: {reason}', { reason: t(reason) }) : r.error ?? t('Not sent'));
     } catch (e) {
       setSaid(e instanceof Error ? e.message : String(e));
@@ -179,6 +183,9 @@ export const AndonBoard: React.FC<{
               ))}
             </div>
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t('What you see (optional)')} className="mt-4 w-full bg-slate-950 border border-slate-700 rounded px-3 py-2 text-lg select-text" maxLength={200} />
+            <div className="mt-3">
+              <Attachments conn={conn} items={photos} canAdd label={t('Photo…')} onAdd={async (files) => { const r = await uploadAttachments(conn, files); setPhotos((p) => [...p, ...r.metas]); return r.error; }} />
+            </div>
           </div>
         </div>
       )}

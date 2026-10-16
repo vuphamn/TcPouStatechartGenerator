@@ -3,6 +3,7 @@ import { Handshake, X } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 import { formatDuration } from '../utils/liveView.ts';
 import { t } from '../utils/boardLang.ts';
+import { Attachments, uploadAttachments, type AttachmentMeta } from './Attachments.tsx';
 
 /** A summary of a shift, as the gateway makes it (gateway/handover.cjs) */
 export interface HandoverSummary {
@@ -22,6 +23,8 @@ export interface Handover {
   at: number;
   by: string;
   note: string;
+  /** Its photos */
+  attachments?: AttachmentMeta[];
   summary: HandoverSummary;
   reads: { by: string; at: number }[];
 }
@@ -100,6 +103,7 @@ function SummaryView({ s, root }: { s: HandoverSummary; root: string }) {
 export function HandoverDialog({ conn, list, me, root, plcIds, canWrite, onClose }: { conn: GatewayConnection | null; list: Handover[]; me: string; root: string; plcIds: string[]; canWrite: boolean; onClose: () => void }) {
   const [draft, setDraft] = useState<{ shift: { name: string; from: number; to: number }; summary: HandoverSummary } | null>(null);
   const [note, setNote] = useState('');
+  const [photos, setPhotos] = useState<AttachmentMeta[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [shown, setShown] = useState<string | null>(null);
@@ -123,10 +127,11 @@ export function HandoverDialog({ conn, list, me, root, plcIds, canWrite, onClose
     setBusy(true);
     setMsg(null);
     type R = { ok: boolean; error?: string; message?: string };
-    const r: R | undefined = await conn?.request<R>({ type: 'handoverSave', note, plcs: plcIds }, 'handoverResult', 30000).catch((e: unknown): R => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    const r: R | undefined = await conn?.request<R>({ type: 'handoverSave', note, plcs: plcIds, attachments: photos.map((a) => a.id) }, 'handoverResult', 30000).catch((e: unknown): R => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     setBusy(false);
     if (r?.ok) {
       setNote('');
+      setPhotos([]);
       setMsg({ text: t('Handed over: the next shift sees it on the board'), ok: true });
     } else setMsg({ text: r?.error ?? r?.message ?? t('Not handed over'), ok: false });
   };
@@ -158,6 +163,7 @@ export function HandoverDialog({ conn, list, me, root, plcIds, canWrite, onClose
               )}
             </div>
             {view.note && <div id="handover-note-shown" className="whitespace-pre-wrap rounded bg-slate-950 border border-slate-800 p-2 select-text">{view.note}</div>}
+            {(view.attachments?.length ?? 0) > 0 && <Attachments conn={conn} items={view.attachments ?? []} canAdd={false} />}
             <SummaryView s={view.summary} root={root} />
             <div className="flex items-center gap-2 text-xs text-slate-400">
               {view.reads.length ? t('Read by {who}', { who: view.reads.map((r) => r.by).join(', ') }) : t('Not read yet')}
@@ -179,6 +185,7 @@ export function HandoverDialog({ conn, list, me, root, plcIds, canWrite, onClose
           {canWrite ? (
             <>
               <textarea id="handover-note" value={note} onChange={(e) => setNote(e.target.value)} rows={4} placeholder={t('For the next shift: what is running, what to watch, what is waiting (parts, a call back, a test)…')} className="w-full rounded bg-slate-950 border border-slate-700 p-2 select-text" />
+              <Attachments conn={conn} items={photos} canAdd label={t('Photo…')} onAdd={async (files) => { const r = await uploadAttachments(conn, files); setPhotos((p) => [...p, ...r.metas]); return r.error; }} />
               <div className="flex items-center gap-2">
                 {msg && <span id="handover-msg" className={msg.ok ? 'text-emerald-300' : 'text-rose-300'}>{msg.text}</span>}
                 <button id="handover-save" type="button" disabled={busy} onClick={() => void handOver()} className="ml-auto px-3 py-1.5 rounded bg-sky-700 hover:bg-sky-600 text-white disabled:opacity-50">

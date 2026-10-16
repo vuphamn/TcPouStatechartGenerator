@@ -4,6 +4,9 @@
 // or cancelled. Kept in workorders.json beside config.json; each change in the audit log; a new one and an assignment
 // told to the roles that want "workorder" (roles.notify). From them and the alert history: each machine's MTBF and
 // MTTR (reliability), and the maintenance calendar (the windows, the jobs due).
+// Its photos (attachments.cjs: their metas here), its checklist (one of config.workorders.checklists: each step
+// ticked, by whom; done only when all are), and its sign-off (a supervisor or an engineer, not the one who did it
+// when roles are on; config.workorders.signOff: the board then counts those done, not signed off).
 const fs = require('fs');
 const crypto = require('crypto');
 
@@ -31,12 +34,20 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
     for (const fn of listeners) fn();
   };
   const text = (x, n) => String(x ?? '').trim().slice(0, n);
+  /** The checklist templates: config.workorders.checklists [{ id, name, items }] */
+  const templates = () => (Array.isArray(getConfig?.()?.workorders?.checklists) ? getConfig().workorders.checklists : []).filter((c) => c && typeof c.id === 'string' && Array.isArray(c.items));
+  const checklistOf = (id) => {
+    const c = templates().find((x) => x.id === id);
+    if (!c) throw new Error('No such checklist');
+    return { id: c.id, name: text(c.name, 80) || c.id, items: c.items.slice(0, 40).map((x) => ({ text: text(x, 200), done: false, by: null, at: null })).filter((x) => x.text) };
+  };
   const short = (o) => `#${o.number} ${o.title}${o.machine ? ` (${o.machine})` : ''}`;
 
   return {
     STATUSES,
     PRIORITIES,
     list: () => orders,
+    checklists: () => templates().map((c) => ({ id: c.id, name: text(c.name, 80) || c.id, items: c.items.length })),
     get: (id) => orders.find((o) => o.id === id) ?? null,
     /** A new work order: title, plc, machine (or a drive's or box's path), priority, due, source, note */
     create(w, user) {
@@ -51,6 +62,8 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
         source: w.source && typeof w.source === 'object' ? { kind: text(w.source.kind, 20), id: text(w.source.id, 80), text: text(w.source.text, 300) } : { kind: 'manual' },
         createdBy: user, createdAt: now, startedAt: null, doneAt: null, rootCause: '', parts: '',
         log: [{ at: now, by: user, text: text(w.note, 500) || 'Created', status: 'open' }],
+        attachments: Array.isArray(w.attachments) ? w.attachments.slice(0, 10) : [],
+        ...(w.checklist ? { checklist: checklistOf(String(w.checklist)) } : {}),
       };
       orders.push(o);
       save();
@@ -63,11 +76,40 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
      * A change: status (taking it: in progress; done: its root cause; cancelled), assignee (assigning another: may),
      * priority, due, a note to its log
      */
-    update(id, ch, user, mayAssign) {
+    update(id, ch, user, mayAssign, signOffOthers = false) {
       const o = orders.find((x) => x.id === id);
       if (!o) throw new Error('No such work order');
       const now = new Date().toISOString();
       const entry = { at: now, by: user, text: text(ch.note, 500) };
+      // (its photos: their metas, kept by attachments.cjs)
+      if (Array.isArray(ch.attach) && ch.attach.length) {
+        o.attachments = [...(o.attachments ?? []), ...ch.attach].slice(-30);
+        entry.attached = ch.attach.length;
+      }
+      // (a checklist: taken now, when it has none; a step ticked or not)
+      if (ch.checklist && !o.checklist) {
+        o.checklist = checklistOf(String(ch.checklist));
+        entry.checklist = o.checklist.name;
+      }
+      if (ch.check && o.checklist) {
+        const it = o.checklist.items[Number(ch.check.index)];
+        if (!it) throw new Error('No such step');
+        it.done = ch.check.done !== false;
+        it.by = it.done ? user : null;
+        it.at = it.done ? now : null;
+        entry.check = `${it.done ? '☑' : '☐'} ${it.text}`;
+      }
+      // (signed off: a done one, by a supervisor or an engineer; not the one who did it, when roles are on)
+      if (ch.signOff) {
+        if (o.status !== 'done') throw new Error('Signed off once it is done');
+        if (!mayAssign) throw new Error('A supervisor or an engineer signs it off');
+        const doer = [...o.log].reverse().find((l) => l.status === 'done')?.by ?? o.assignee;
+        if (signOffOthers && doer && doer.toLowerCase() === String(user).toLowerCase()) throw new Error('Signed off by another than the one who did it');
+        if (o.signedOffBy) throw new Error(`Signed off already by ${o.signedOffBy}`);
+        o.signedOffBy = user;
+        o.signedOffAt = now;
+        entry.signedOff = true;
+      }
       if (ch.assignee !== undefined && ch.assignee !== o.assignee) {
         const a = text(ch.assignee, 120) || null;
         if (a && a.toLowerCase() !== String(user).toLowerCase() && !mayAssign) throw new Error('Only a supervisor or an engineer assigns work to others');
@@ -79,6 +121,8 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
       if (ch.status !== undefined && ch.status !== o.status) {
         if (!STATUSES.includes(ch.status)) throw new Error(`A status: ${STATUSES.join(', ')}`);
         if (ch.status === 'done') {
+          const left = (o.checklist?.items ?? []).filter((x) => !x.done).length;
+          if (left) throw new Error(`Its checklist first: ${left} step${left === 1 ? '' : 's'} not ticked`);
           const rc = text(ch.rootCause, 500);
           if (!rc) throw new Error('Done: its root cause (what was wrong)');
           o.rootCause = rc;
@@ -90,6 +134,11 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
           o.assignee ??= user;
         }
         if (ch.status !== 'done') o.doneAt = ch.status === 'cancelled' ? now : null;
+        // (open again: its sign-off with it)
+        if (ch.status !== 'done') {
+          o.signedOffBy = null;
+          o.signedOffAt = null;
+        }
         o.status = ch.status;
         entry.status = ch.status;
       }
@@ -98,8 +147,8 @@ function createWorkOrders({ file, getConfig, log, audit, notify }) {
         entry.priority = ch.priority;
       }
       if (ch.due !== undefined) o.due = ch.due && !Number.isNaN(Date.parse(ch.due)) ? new Date(ch.due).toISOString() : null;
-      if (!entry.text && !entry.status && !entry.assignee && !entry.priority && ch.due === undefined) return o;
-      if (!entry.text) entry.text = [entry.status && `→ ${entry.status}`, entry.assignee && `assigned to ${entry.assignee}`, entry.priority && `priority ${entry.priority}`].filter(Boolean).join(', ') || 'Changed';
+      if (!entry.text && !entry.status && !entry.assignee && !entry.priority && !entry.attached && !entry.checklist && !entry.check && !entry.signedOff && ch.due === undefined) return o;
+      if (!entry.text) entry.text = [entry.status && `→ ${entry.status}`, entry.assignee && `assigned to ${entry.assignee}`, entry.priority && `priority ${entry.priority}`, entry.attached && `📎 ${entry.attached} photo${entry.attached === 1 ? '' : 's'}`, entry.checklist && `checklist: ${entry.checklist}`, entry.check, entry.signedOff && '✔ signed off'].filter(Boolean).join(', ') || 'Changed';
       o.log.push(entry);
       save();
       audit?.add(user, 'workorder.change', { id, number: o.number, status: entry.status, assignee: entry.assignee, priority: entry.priority, note: entry.text });

@@ -76,7 +76,10 @@ const M = `${R}.aDoors[2]`;
   const s = draft?.summary;
   expect(/^(Day|Night)$/.test(draft?.shift?.name ?? '') && s?.alerts?.total === 3 && s.alerts.counts.error === 2 && s.alerts.counts.call === 1 && s.alerts.machines[0]?.count === 3 && s.open.length === 1 && s.open[0].id === 'e2' && order?.ok && s.work.opened.some((o) => o.title === 'Tighten the door 2 sensor') && s.work.open.length === 1, `the shift so far (${draft?.shift?.name}): ${s?.alerts?.total} alerts ${JSON.stringify(s?.alerts?.counts)}, open ${s?.open?.map((x) => x.id)}, work opened ${s?.work?.opened?.length}`);
   // 2. Handed over, told; someone without a role may not
-  const saved = await tim.ask({ type: 'handoverSave', note: 'Door 2 sensor loose: watch it', plcs: ['line'] }, 'handoverResult');
+  // (with a photo, kept first)
+  const pic = await tim.ask({ type: 'attachmentAdd', file: { name: 'door2.png', type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' } }, 'attachmentAddResult');
+  const saved = await tim.ask({ type: 'handoverSave', note: 'Door 2 sensor loose: watch it', plcs: ['line'], attachments: [pic?.attachment?.id, 'ffffffffffffffff'] }, 'handoverResult');
+  expect(pic?.ok && saved?.attachments?.length === 1 && saved.attachments[0].name === 'door2.png', `its photo: ${saved?.attachments?.map((a) => a.name).join(', ') ?? pic?.error} (one not kept left out)`);
   const zed = await session('zed');
   const denied = await zed.ask({ type: 'handoverSave', note: 'x' }, 'handoverResult');
   const told = await h.until(() => posted.find((p) => p.event === 'handover'), 8000);
