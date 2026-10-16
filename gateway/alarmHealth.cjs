@@ -4,7 +4,7 @@
 // chattering ones (raised 3 times or more within a minute), stale ones (open over 24 hours), how long they wait to be
 // acknowledged, and the ones muted (in maintenance). An alarm: an error state, stuck, a PLC stopped, a drive, getting
 // slower (not calls for maintenance, work orders, recoveries).
-const ALARMS = ['error', 'stuck', 'plcStopped', 'drive', 'slower'];
+const ALARMS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent'];
 const TEN = 10 * 60000;
 const DAY = 86400000;
 

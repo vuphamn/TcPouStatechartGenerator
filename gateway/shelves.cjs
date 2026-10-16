@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const H = 3600000;
-const ALARMS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'anomaly'];
+const ALARMS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'anomaly', 'plcEvent'];
 
 function createShelves({ baseDir, getConfig, log, audit, onEvent }) {
   const file = path.join(baseDir, 'shelves.json');

@@ -198,7 +198,7 @@ function expiryOf(x) {
   return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v) ? new Date(v + 'T23:59:59') : new Date(v);
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, plantSend, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, plantSend, eventRelayStatus, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -376,7 +376,21 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       return r;
     },
     // TwinCAT logged events (eventlog.cjs): each PLC's kept; an export of the Logged Events window imported
-    'GET eventlog': async () => ({ plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })), stats: eventLog?.stats() ?? {} }),
+    'GET eventlog': async () => ({ plcs: (getConfig().plcs ?? []).map((p) => ({ id: p.id, name: p.name })), stats: eventLog?.stats() ?? {}, live: getConfig().eventlog?.live ?? {}, relay: eventRelayStatus ? eventRelayStatus() : {} }),
+    // (live: each PLC's FB_KvalEventRelay instance)
+    'POST eventlog/live': async (body) => {
+      const ids = (getConfig().plcs ?? []).map((p) => p.id);
+      const live = {};
+      for (const [id, p] of Object.entries(body?.live && typeof body.live === 'object' ? body.live : {})) {
+        const v = String(p ?? '').trim();
+        if (!v || !ids.includes(id)) continue;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*([.][A-Za-z_][A-Za-z0-9_]*)+$/.test(v)) throw new Error(`The relay of ${id}: its instance (MAIN.fbEventRelay)`);
+        live[id] = v;
+      }
+      update((c) => { c.eventlog = { ...(c.eventlog ?? {}), live: Object.keys(live).length ? live : undefined }; });
+      audit?.add('setup page', 'eventlog.live', { plcs: Object.keys(live) });
+      return { ok: true, live };
+    },
     'POST eventlog': async (body) => {
       if (!eventLog) throw new Error('Not on this gateway');
       if (!(getConfig().plcs ?? []).some((p) => p.id === body?.plc)) throw new Error('Choose its PLC');
@@ -637,6 +651,11 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       });
       return true;
     }
+    // (the PLC's function block for the live events, its source to import)
+    if (url.pathname === '/admin/plc/FB_KvalEventRelay.st' && req.method === 'GET') {
+      send(res, 200, fs.readFileSync(require('path').join(__dirname, 'plc', 'FB_KvalEventRelay.st')), { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="FB_KvalEventRelay.st"' });
+      return true;
+    }
     // A backup's file, downloaded
     const bk = /^\/admin\/backup\/([\w.-]+\.kvalbk)$/.exec(url.pathname);
     if (bk && req.method === 'GET') {
@@ -883,6 +902,11 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div class="row"><select id="admin-eventlog-plc"></select><input type="file" id="admin-eventlog-file" accept=".csv,text/csv,text/plain"><button class="primary" id="admin-eventlog-import">Import</button></div>
   <div class="msg" id="admin-eventlog-msg"></div>
   <p class="hint" id="admin-eventlog-stats"></p>
+  <h3>Live</h3>
+  <p class="hint flush">Its events as they happen, without an export: a small function block in the PLC (<a href="/admin/plc/FB_KvalEventRelay.st" id="admin-eventlog-fb">FB_KvalEventRelay.st</a>: its structure, its function block and its methods, to add to your PLC project with Tc3_EventLogger), its instance called every cycle; here, that instance for each PLC. Its alarms of severity error or critical raised are alerts too; cleared, they recover.</p>
+  <div id="admin-eventlog-live"></div>
+  <div class="row"><span class="grow"></span><button id="admin-eventlog-live-save">Save</button></div>
+  <div class="msg" id="admin-eventlog-live-msg"></div>
 </section>
 <section>
   <h2>Check a drive</h2>
@@ -1359,7 +1383,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'backup', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'backup', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1807,7 +1831,22 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     const parts = (d.plcs || []).map((p) => { const s = (d.stats || {})[p.id]; return (p.name || p.id) + ': ' + (s && s.count ? s.count + ' events, ' + new Date(s.from).toLocaleString() + ' to ' + new Date(s.to).toLocaleString() : 'none yet'); });
     $('admin-eventlog-stats').textContent = parts.join(' · ');
   };
-  call('eventlog').then((d) => { $('admin-eventlog-plc').replaceChildren(...(d.plcs || []).map((p) => el('option', { value: p.id }, p.name || p.id))); showEventStats(d); }).catch(() => {});
+  call('eventlog').then((d) => {
+    $('admin-eventlog-plc').replaceChildren(...(d.plcs || []).map((p) => el('option', { value: p.id }, p.name || p.id)));
+    showEventStats(d);
+    $('admin-eventlog-live').replaceChildren(...(d.plcs || []).map((p) => {
+      const st = (d.relay || {})[p.id];
+      return el('div', { class: 'row', 'data-eventlog-live': p.id }, el('span', { class: 'label' }, p.name || p.id), el('input', { type: 'text', class: 'mono', 'data-live-plc': p.id, value: (d.live || {})[p.id] || '', placeholder: 'MAIN.fbEventRelay (empty: not live)' }), el('span', { class: 'hint flush' + (st && st.error ? ' bad' : '') }, st ? (st.error ? st.error : 'read, its event ' + (st.seq || 0)) : ''));
+    }));
+  }).catch(() => {});
+  $('admin-eventlog-live-save').addEventListener('click', async () => {
+    try {
+      const live = {};
+      for (const i of document.querySelectorAll('[data-live-plc]')) live[i.getAttribute('data-live-plc')] = i.value;
+      const r = await call('eventlog/live', { live });
+      say('admin-eventlog-live-msg', Object.keys(r.live).length ? 'Saved: read every 2 s' : 'Saved (none live)', true);
+    } catch (err) { say('admin-eventlog-live-msg', err.message, false); }
+  });
   $('admin-eventlog-import').addEventListener('click', async () => {
     const f = $('admin-eventlog-file').files[0];
     if (!f) { say('admin-eventlog-msg', 'Choose the CSV the Logged Events window exported', false); return; }

@@ -123,6 +123,19 @@ function createEventLog({ baseDir, log, audit }) {
       log(`eventlog: ${user} imported ${events.length} logged event(s) of ${plc} (${fresh.length} new, ${skipped} not understood)`);
       return { read: events.length, added: fresh.length, skipped, kept: all.length, range };
     },
+    /** Events read live (eventRelay.cjs: the PLC's FB_KvalEventRelay): its new ones kept */
+    addLive(plc, events) {
+      const list = load(plc);
+      const have = new Set(list.slice(-2000).map(keyOf));
+      const fresh = events.filter((e) => !have.has(keyOf(e)));
+      if (!fresh.length) return 0;
+      const all = [...list, ...fresh].sort((a, b) => a.t - b.t).slice(-MAX);
+      fs.mkdirSync(dir, { recursive: true });
+      if (all.length === list.length + fresh.length) fs.appendFileSync(fileOf(plc), fresh.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      else fs.writeFileSync(fileOf(plc), all.map((e) => JSON.stringify(e)).join('\n') + '\n');
+      cache.set(plc, all);
+      return fresh.length;
+    },
     /** A PLC's events between from and to (a fault record's window) */
     between: (plc, from, to, limit = 300) => load(plc).filter((e) => e.t >= from && e.t <= to).slice(0, limit),
     /** Each PLC's events kept: how many, from when to when */

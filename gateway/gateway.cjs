@@ -70,6 +70,7 @@ const { createShelves } = require('./shelves.cjs');
 const { createHealth } = require('./health.cjs');
 const { tokenFor, allowedOf, scopeIn, scopeOut, watchExpiry } = require('./tokens.cjs');
 const { summaryOf, createPlant } = require('./plant.cjs');
+const { createEventRelay } = require('./eventRelay.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -463,6 +464,7 @@ function start() {
     config.plantReport = next.plantReport;
     config.siteName = next.siteName;
     config.alarms = next.alarms;
+    config.eventlog = next.eventlog;
     config.sitesDownAfterMin = next.sitesDownAfterMin;
     recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
@@ -777,6 +779,8 @@ function start() {
   });
   // TwinCAT logged events (eventlog.cjs): imported on the setup page, shown with the fault records
   const eventLog = createEventLog({ baseDir, log, audit });
+  // (the PLC's EventLogger live: its FB_KvalEventRelay read; its error alarms alerts)
+  const eventRelay = createEventRelay({ getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, ads, eventLog, onEvent: (e) => alertLog.add(e), log });
   // Spare parts (spares.cjs): the stock kept for the machines; a work order done takes the parts it used
   const spares = createSpares({ baseDir, log, audit, notify: notifyAll });
   // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
@@ -887,6 +891,7 @@ function start() {
     findMeters: (plcId) => drives.findMeters(plcId),
     health: () => health?.now() ?? null,
     plantSend: (user) => plant.send(user),
+    eventRelayStatus: () => eventRelay.status(),
     certs,
     backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit, getConfig: () => config, onEvent: (e) => alertLog.add(e) }),
     restart: async () => {

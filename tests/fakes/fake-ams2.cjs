@@ -92,7 +92,9 @@ if (config.controlFile) {
     for (const [name, v] of Object.entries(c.set || {})) {
       const s = symbols.get(name.toLowerCase());
       if (s) {
-        s.value = v;
+        // (raw bytes: { bytes: [...] })
+        if (v && typeof v === 'object' && Array.isArray(v.bytes)) s.bytes = v.bytes;
+        else s.value = v;
         for (const [id, n] of subs) if (n.sym === s) sendNotification(id);
       }
       log('control: set', name, '=', v);

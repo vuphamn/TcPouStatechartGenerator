@@ -17,6 +17,8 @@ for (const entry of fs.readdirSync(out)) {
 const modules = fs.readdirSync(path.join(root, 'gateway')).filter((f) => /\.cjs$/i.test(f));
 for (const file of [...modules, 'gateway.cmd', 'package.json', 'package-lock.json', 'README.md']) fs.copyFileSync(path.join(root, 'gateway', file), path.join(out, file));
 fs.cpSync(path.join(root, 'shared'), path.join(out, 'shared'), { recursive: true });
+// (the PLC's function blocks it offers: FB_KvalEventRelay.st)
+fs.cpSync(path.join(root, 'gateway', 'plc'), path.join(out, 'plc'), { recursive: true });
 if (!fs.existsSync(path.join(root, 'dist', 'index.html'))) throw new Error('dist/ is missing: run "npm run build" first');
 fs.cpSync(path.join(root, 'dist'), path.join(out, 'public'), { recursive: true });
 // (its packages, as its package.json names them: the gateway machine needs no npm)
