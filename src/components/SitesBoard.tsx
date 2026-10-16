@@ -13,6 +13,10 @@ export interface Site {
   plcs: { id: string; name: string; plcState: string | null; machines: number; error: number; stuck: number; message: string }[];
   alerts: number;
   at: number | null;
+  /** Its own health (its disk), as it says it */
+  health?: { freePct: number | null; free: number | null; daysLeft: number | null; low: string | null } | null;
+  /** Away since (it stopped answering) */
+  awaySince?: number | null;
 }
 
 /** The board's Sites page: the plant's other gateways, each one's PLCs, machines in error or stuck, open alerts; its board */
@@ -47,7 +51,10 @@ export const SitesBoard: React.FC<{ conn: GatewayConnection | null; connected: b
                 </a>
               </div>
               {!ok ? (
-                <div className="site-message mt-1 text-sm text-amber-300">{s.message || t('Connecting…')}</div>
+                <div className="site-message mt-1 text-sm text-amber-300">
+                  {s.message || t('Connecting…')}
+                  {s.awaySince ? <span className="site-away ml-1 text-slate-400">· {t('away since {time}', { time: new Date(s.awaySince).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</span> : null}
+                </div>
               ) : (
                 <>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
@@ -57,6 +64,11 @@ export const SitesBoard: React.FC<{ conn: GatewayConnection | null; connected: b
                       <span className="flex items-center gap-1 px-2 rounded-full bg-emerald-800 text-emerald-50"><CheckCircle2 className="w-4 h-4" /> {t('Running')}</span>
                     )}
                     <span className="text-slate-400">{t('{n} open', { n: s.alerts })} · {t('Alerts').toLowerCase()}</span>
+                    {s.health?.low ? (
+                      <span className="site-disk ml-auto px-2 rounded-full bg-amber-600 text-slate-950 text-xs font-semibold" title={t('Its setup page: Health')}>💽 {t('disk: {why}', { why: s.health.low })}</span>
+                    ) : s.health?.freePct !== null && s.health?.freePct !== undefined ? (
+                      <span className="site-disk ml-auto text-xs text-slate-500">💽 {t('{n} % free', { n: Math.round(s.health.freePct) })}</span>
+                    ) : null}
                   </div>
                   <ul className="mt-2 space-y-1 text-sm">
                     {s.plcs.map((p) => (

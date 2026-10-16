@@ -3,10 +3,11 @@
 // "insecureTls": false }]), each followed as a display follows its board (its /live, its token: view only, nothing
 // changed there): its PLCs, how many of its machines are in error or stuck, its open alerts, its state (connected or
 // why not). The board's Sites page shows them, each with a link to that gateway's own board. Reconnected every 15 s
-// while it is away.
+// while it is away. One that stops answering for config.sitesDownAfterMin minutes (5) is an alert (event "site"),
+// back again a recovery; its disk (its health, in its welcome) shown too.
 const WebSocket = require('ws');
 
-function createSites({ getConfig, log }) {
+function createSites({ getConfig, log, onEvent }) {
   const sites = new Map(); // id -> { conf, ws, state, message, plcs, alerts, at, timer }
   const listeners = new Set();
   const publish = () => {
@@ -40,6 +41,8 @@ function createSites({ getConfig, log }) {
       if (m.type === 'welcome') {
         s.state = 'connected';
         s.message = '';
+        s.health = m.health ?? null;
+        back(s);
         s.names = Object.fromEntries((m.plcs ?? []).map((p) => [p.id, p.name]));
         ws.send(JSON.stringify({ type: 'boardWatch', plcs: [], root: s.conf.root || 'MAIN.mainStateMachine' }));
         ws.send(JSON.stringify({ type: 'alertsList' }));
@@ -64,6 +67,7 @@ function createSites({ getConfig, log }) {
     });
     ws.on('close', (code, reason) => {
       if (s.stopped) return;
+      if (s.state === 'connected' || !s.lostAt) s.lostAt ??= Date.now();
       s.state = 'error';
       s.message = s.message || (code === 4401 || code === 4403 ? 'Its token was not accepted (a view-only token of that gateway)' : `Not reached (${String(reason || code)})`);
       publish();
@@ -73,6 +77,26 @@ function createSites({ getConfig, log }) {
       s.message = err.message;
     });
   }
+
+  // (one away too long: told once; back: its recovery)
+  const downAfter = () => Math.max(0.05, Math.min(240, Number(getConfig().sitesDownAfterMin) || 5)) * 60000;
+  const nameOf = (s) => s.conf.name || s.conf.id;
+  const back = (s) => {
+    if (s.told) onEvent?.({ event: 'recovered', rule: 'Sites', ruleId: 'sites', plc: '', plcName: '', machine: `gateway ${nameOf(s)}`, state: 'connected', text: `🌐 ${nameOf(s)} answers again (it was away ${Math.ceil((Date.now() - s.lostAt) / 60000)} min)`, at: new Date().toISOString() });
+    s.told = false;
+    s.lostAt = null;
+  };
+  const watchTimer = setInterval(() => {
+    for (const s of sites.values()) {
+      if (s.stopped || s.state === 'connected' || s.told) continue;
+      s.lostAt ??= Date.now();
+      if (Date.now() - s.lostAt < downAfter()) continue;
+      s.told = true;
+      log(`sites: ${nameOf(s)} has not answered for ${Math.ceil((Date.now() - s.lostAt) / 60000)} min: ${s.message}`);
+      onEvent?.({ event: 'site', level: 'warn', rule: 'Sites', ruleId: 'sites', plc: '', plcName: '', machine: `gateway ${nameOf(s)}`, state: 'away', text: `🌐 ${nameOf(s)} has not answered for ${Math.ceil((Date.now() - s.lostAt) / 60000)} min: ${s.message || 'no answer'} (${s.conf.url})`, at: new Date().toISOString() });
+    }
+  }, 3000);
+  watchTimer.unref?.();
 
   const apply = () => {
     const wanted = confOf();
@@ -98,6 +122,7 @@ function createSites({ getConfig, log }) {
     apply,
     start: () => apply(),
     stop() {
+      clearInterval(watchTimer);
       for (const s of sites.values()) {
         s.stopped = true;
         clearTimeout(s.timer);
@@ -106,7 +131,7 @@ function createSites({ getConfig, log }) {
       sites.clear();
     },
     count: () => sites.size,
-    view: () => [...sites.values()].map((s) => ({ id: s.conf.id, name: s.conf.name || s.conf.id, url: String(s.conf.url).replace(/\/+$/, ''), state: s.state, message: s.message, plcs: s.plcs, alerts: s.alerts ?? 0, at: s.at })),
+    view: () => [...sites.values()].map((s) => ({ id: s.conf.id, name: s.conf.name || s.conf.id, url: String(s.conf.url).replace(/\/+$/, ''), state: s.state, message: s.message, plcs: s.plcs, alerts: s.alerts ?? 0, at: s.at, health: s.health ?? null, awaySince: s.state === 'connected' ? null : s.lostAt ?? null })),
     subscribe(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);

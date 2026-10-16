@@ -191,7 +191,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -472,6 +472,8 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       return { ok: true };
     },
     // Backup and restore (backup.cjs): the backups kept; one made; the gateway restarted (after a restore)
+    // (its health: its disk, what it keeps, how fast it grows, its retention planned)
+    'GET health': async () => (health ? health() : null) ?? { error: 'Not on this gateway' },
     'GET backups': async () => ({ backups: backup ? backup.list() : [] }),
     'POST backup': async (body) => {
       if (!backup) throw new Error('Not on this gateway');
@@ -844,6 +846,12 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <p class="hint flush">What the gateway costs this computer and each PLC, measured every few seconds. The PLC's own tasks run in TwinCAT's real time, before any Windows program: its tasks below show whether they keep their cycle (their execution time, the longest seen, every overrun counted). Each variable the boards, alarms, recordings, live diagrams and I/O charts follow is one ADS notification, shared by all of them.</p>
   <p class="hint" id="admin-load-sub"></p>
   <div id="admin-load"></div>
+</section>
+<section>
+  <h2>Health</h2>
+  <p class="hint flush">The disk the gateway keeps its data on, what it keeps there, how fast its recordings grow, and when the disk is full at that. Each recording kept for its days: what it takes at full retention, and how many days to keep when it does not fit. Low (under 10 % or 5 GB free, or full within 14 days): an alert, once a day.</p>
+  <div class="row"><span id="admin-health-sub" class="grow"></span><button id="admin-health-refresh">Again</button></div>
+  <div id="admin-health"></div>
 </section>
 <section>
   <h2>PLC projects</h2>
@@ -1801,6 +1809,23 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Monitors'), el('th', {}, 'Its tasks'))), rows)));
   };
   loadLoad().catch(() => {});
+  // (its health: the disk, what is kept, its growth, its retention planned)
+  const sizeText = (b) => (b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' kB');
+  const loadHealth = async () => {
+    const hl = await call('health');
+    if (hl.error) { $('admin-health-sub').textContent = hl.error; return; }
+    const d = hl.disk;
+    $('admin-health-sub').textContent = (d ? 'Its disk: ' + sizeText(d.free) + ' free of ' + sizeText(d.total) + ' (' + d.freePct.toFixed(1) + ' %)' : 'Its disk: not known') + '; its recordings grow ' + sizeText(hl.growthPerDay) + ' a day' + (hl.daysLeft !== null ? ', full in about ' + Math.round(hl.daysLeft) + ' days at that' : '') + (hl.low ? '. LOW: ' + hl.low : '');
+    $('admin-health-sub').className = 'grow ' + (hl.low ? 'bad' : '');
+    const rows = hl.recordings.map((r) => el('tr', { 'data-health-rec': r.id }, el('td', {}, r.name), el('td', {}, sizeText(r.bytes)), el('td', {}, r.days + ' days'), el('td', {}, sizeText(r.perDay) + ' a day'), el('td', {}, r.keepDays ? 'kept ' + r.keepDays + ' days: ' + sizeText(r.atFull) : 'kept as set')));
+    const sugg = hl.plan.suggestions.map((x) => el('li', { 'data-health-keep': x.id }, x.name + ': keep ' + x.keep + ' days (now ' + x.keepDays + ')'));
+    $('admin-health').replaceChildren(
+      el('div', { class: 'hint flush' }, 'Kept here: ' + hl.folders.map((x) => x.name + ' ' + sizeText(x.bytes)).join(', ')),
+      rows.length ? el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Recording'), el('th', {}, 'Kept now'), el('th', {}, 'Days'), el('th', {}, 'Grows'), el('th', {}, 'At full retention'))), el('tbody', {}, ...rows))) : el('p', { class: 'hint' }, 'No recordings.'),
+      hl.plan.fits ? el('p', { class: 'hint ok', id: 'admin-health-plan' }, 'At full retention they fit (' + sizeText(hl.plan.needed) + ' more).') : el('div', { id: 'admin-health-plan', class: 'bad' }, 'At full retention they need ' + sizeText(hl.plan.needed) + ' more: more than 80 % of what is free. To fit:', el('ul', {}, ...sugg)));
+  };
+  loadHealth().catch(() => {});
+  $('admin-health-refresh').addEventListener('click', () => loadHealth().catch(() => {}));
   window.setInterval(() => { if (!document.hidden) loadLoad().catch(() => {}); }, 3000);
 
   // ---- Shift reports ----

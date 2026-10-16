@@ -67,6 +67,7 @@ const { createAttachments } = require('./attachments.cjs');
 const { lastTime } = require('./lastTime.cjs');
 const { maintenanceKpis } = require('./kpis.cjs');
 const { createShelves } = require('./shelves.cjs');
+const { createHealth } = require('./health.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -508,6 +509,7 @@ function start() {
   let drives = null;
   let axes = null;
   let sites = null;
+  let health = null;
   let faults = null;
   let fleet = null;
   setInterval(() => {
@@ -649,7 +651,9 @@ function start() {
   // The PLCs' projects kept here (PlcProjects/<plc id>/), the PLC's copy the golden one (projectSync.cjs): over the
   // PLC's live connection when there is one (a second one from the same NetId could take its route), else one of its own
   // Several gateways in one view (sites.cjs): the plant's other gateways, followed as displays
-  sites = createSites({ getConfig: () => config, log });
+  sites = createSites({ getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
+  // (its own health: its disk, what it keeps, its growth; low: an alert, once a day)
+  health = createHealth({ baseDir, getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
   sites.start();
   // Change control (changes.cjs): each change of a PLC's program (seen by the project copy), explained, approved
   const changes = createChanges({ baseDir, log, audit, notify: notifyAll, rolesOn: () => roles.enabled() });
@@ -870,6 +874,7 @@ function start() {
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
     findMeters: (plcId) => drives.findMeters(plcId),
+    health: () => health?.now() ?? null,
     certs,
     backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit, getConfig: () => config, onEvent: (e) => alertLog.add(e) }),
     restart: async () => {
@@ -1037,7 +1042,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features(), ...roleInfo(), sites: sites.count() });
+          return send({ type: 'welcome', health: health?.summary() ?? null, user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features(), ...roleInfo(), sites: sites.count() });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -1064,7 +1069,7 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}${viewOnly ? ' (view only)' : ''}`);
         audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}), ...roleInfo(), sites: sites.count() });
+        return send({ type: 'welcome', health: health?.summary() ?? null, user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}), ...roleInfo(), sites: sites.count() });
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)

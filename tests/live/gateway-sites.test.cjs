@@ -33,7 +33,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
   await h.waitForText(line.logFile, /Setup page/);
   // The hub: no PLC of its own; the line's gateway, and one with a wrong token
   const hub = start('hub', {
-    port: HUB, plcs: [], tokens: [{ name: 'mgr', sha256: sha('sites-mgr') }],
+    port: HUB, plcs: [], tokens: [{ name: 'mgr', sha256: sha('sites-mgr') }], sitesDownAfterMin: 0.05,
     sites: [{ id: 'line4', name: 'Line 4 gateway', url: `http://localhost:${LINE}`, token: 'sites-view' }, { id: 'bad', name: 'Wrong token', url: `http://localhost:${LINE}`, token: 'nope' }],
   });
   await h.waitForText(hub.logFile, /Setup page/);
@@ -53,7 +53,7 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
   }, 25000);
   const l4 = st?.find((x) => x.id === 'line4');
   const bad = st?.find((x) => x.id === 'bad');
-  expect(welcome?.sites === 2 && l4?.state === 'connected' && l4.plcs[0].name === 'Line 4' && l4.plcs[0].error >= 1 && l4.url === `http://localhost:${LINE}` && bad?.state === 'error', `the sites: ${l4?.name} ${l4?.state}, ${l4?.plcs?.[0]?.name}: ${l4?.plcs?.[0]?.machines} machines, ${l4?.plcs?.[0]?.error} in error; ${bad?.name}: ${bad?.message}`);
+  expect(typeof l4?.health?.freePct === 'number' && welcome?.sites === 2 && l4?.state === 'connected' && l4.plcs[0].name === 'Line 4' && l4.plcs[0].error >= 1 && l4.url === `http://localhost:${LINE}` && bad?.state === 'error', `the sites: ${l4?.name} ${l4?.state}, ${l4?.plcs?.[0]?.name}: ${l4?.plcs?.[0]?.machines} machines, ${l4?.plcs?.[0]?.error} in error, its disk ${Math.round(l4?.health?.freePct ?? -1)} % free; ${bad?.name}: ${bad?.message}`);
   ws.close();
   // The setup page: its token not shown
   const shown = await new Promise((resolve) => {
@@ -84,8 +84,27 @@ const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }
-  hub.gw.kill();
+  // (one that never answered as it should: told after its minutes; the line's gateway stopped: told; started again: back)
+  const hubAlerts = async () => {
+    const g = [];
+    const w = new WebSocket(`ws://localhost:${HUB}/live`, { headers: { origin: `http://localhost:${HUB}` } });
+    w.on('message', (d) => g.push(JSON.parse(d.toString())));
+    await new Promise((r) => w.on('open', r));
+    w.send(JSON.stringify({ type: 'hello', token: 'sites-mgr' }));
+    await h.until(() => g.find((m) => m.type === 'welcome'), 5000);
+    w.send(JSON.stringify({ type: 'alertsList' }));
+    const ev = await h.until(() => g.find((m) => m.type === 'alertsList')?.events, 5000);
+    w.close();
+    return ev ?? [];
+  };
   line.gw.kill();
+  const away = await h.until(() => hubAlerts().then((ev) => (ev.some((e) => e.event === 'site' && /Line 4 gateway has not answered/.test(e.text)) ? ev : null)), 30000);
+  const line2 = start('line', { port: LINE, plcs: [{ id: 'l4', name: 'Line 4', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48973', port: 851 }], tokens: [{ name: 'hub', sha256: sha('sites-view'), view: true }] });
+  const backEv = await h.until(() => hubAlerts().then((ev) => (ev.some((e) => e.event === 'recovered' && /Line 4 gateway answers again/.test(e.text)) ? ev : null)), 40000);
+  const awayOne = (backEv ?? away ?? []).find((e) => e.event === 'site' && /Line 4/.test(e.text));
+  expect(!!away && (away ?? []).some((e) => e.event === 'site' && /Wrong token has not answered/.test(e.text)) && !!backEv && !!awayOne?.resolvedAt, `a gateway away: "${awayOne?.text}"; back: "${(backEv ?? []).find((e) => e.event === 'recovered')?.text}" (its alert resolved: ${!!awayOne?.resolvedAt})`);
+  hub.gw.kill();
+  line2.gw.kill();
   plc.kill();
   console.log(`${fails} failures`);
   process.exit(fails ? 1 : 0);
