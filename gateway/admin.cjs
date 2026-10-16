@@ -128,7 +128,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels, sitesView, mqttReady }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -403,6 +403,22 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       audit?.add('setup page', 'exports', { api: body?.api?.enabled !== false, mqtt: !!getConfig().mqtt, cmms: !!getConfig().cmms });
       return { ok: true };
     },
+    // Backup and restore (backup.cjs): the backups kept; one made; the gateway restarted (after a restore)
+    'GET backups': async () => ({ backups: backup ? backup.list() : [] }),
+    'POST backup': async (body) => {
+      if (!backup) throw new Error('Not on this gateway');
+      return backup.create({ passphrase: body?.passphrase, recordings: !!body?.recordings, faults: !!body?.faults });
+    },
+    'POST restart': async () => {
+      if (!restart) throw new Error('Not on this gateway');
+      return restart();
+    },
+    // The certificate (certs.cjs): shown; self-signed; a request (CSR); the CA's certificate; a PFX
+    'GET cert': async () => ({ info: certs?.info() ?? null, own: certs?.ownNames() ?? [], pending: certs?.pending() ?? false }),
+    'POST cert/selfsigned': async (body) => certs.selfSigned({ names: body?.names, days: body?.days }),
+    'POST cert/csr': async (body) => certs.csr({ commonName: body?.commonName, names: body?.names, organization: body?.organization }),
+    'POST cert/install': async (body) => certs.install({ pem: body?.pem, key: body?.key }),
+    'POST cert/pfx': async (body) => certs.installPfx({ pfx: body?.pfx, passphrase: body?.passphrase }),
     'GET monitoring': async () => {
       const c = getConfig();
       return { plcs: (c.plcs ?? []).map((p) => ({ id: p.id, name: p.name })), drives: c.drives ?? {}, faults: c.faults ?? {}, fleet: c.fleet ?? {}, projectSync: c.projectSync ?? {}, oee: c.oee ?? {}, andon: c.andon ?? {}, workorders: c.workorders ?? {}, defaults: { reasons: ['Waiting for material', 'Jam', 'Tool change', 'Changeover', 'Electrical fault', 'Mechanical fault', 'Maintenance', 'Operator break', 'Quality check', 'Other'], callReasons: ['Mechanical', 'Electrical', 'Material', 'Quality', 'Safety', 'Other'] } };
@@ -485,6 +501,43 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       send(res, 200, adminPage(nonce), {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Security-Policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+      });
+      return true;
+    }
+    // A backup's file, downloaded
+    const bk = /^\/admin\/backup\/([\w.-]+\.kvalbk)$/.exec(url.pathname);
+    if (bk && req.method === 'GET') {
+      try {
+        send(res, 200, backup.read(bk[1]), { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="${bk[1]}"` });
+      } catch (err) {
+        json(res, 404, { error: err.message });
+      }
+      return true;
+    }
+    // A backup restored: its file as the body, its passphrase in X-Passphrase (from the page itself only)
+    if (url.pathname === '/admin/restore' && req.method === 'POST') {
+      let origin = '';
+      try {
+        origin = new URL(req.headers.origin ?? '').host;
+      } catch {
+        origin = '';
+      }
+      if (origin !== req.headers.host || !/^application\/octet-stream\b/.test(req.headers['content-type'] ?? '')) return json(res, 403, { error: 'Only from the gateway\'s setup page' }), true;
+      const chunks = [];
+      let size = 0;
+      req.on('data', (d) => {
+        size += d.length;
+        if (size > 1024 * 1024 * 1024) req.destroy();
+        else chunks.push(d);
+      });
+      req.on('end', () => {
+        try {
+          const r = backup.restore(Buffer.concat(chunks), decodeURIComponent(String(req.headers['x-passphrase'] ?? '')));
+          applyConfig(r.config);
+          json(res, 200, { ok: true, files: r.files, plcs: r.plcs, before: r.before });
+        } catch (err) {
+          json(res, 400, { error: err.message });
+        }
       });
       return true;
     }
@@ -627,6 +680,25 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div id="admin-monitoring"></div>
   <div class="row mt"><span class="grow"></span><button class="primary" id="admin-monitoring-save">Save monitoring</button></div>
   <div class="msg" id="admin-monitoring-msg"></div>
+</section>
+<section>
+  <h2>Certificate</h2>
+  <p class="hint flush">The certificate the board and this page are served with (https). Browsers warn about a self-signed one: a certificate of your company&#39;s CA (a request made here, the certificate it issues installed here) is trusted by its computers. Taken at once, without a restart; the one before kept (cert-&lt;when&gt;.pem). The roles that want cert are told from 30 days before it expires.</p>
+  <div id="admin-cert-info" class="hint"></div>
+  <div class="row"><input id="admin-cert-names" class="grow mono" placeholder="its names and addresses (gw-line4, gw-line4.acme.com, 10.10.10.5): empty, this computer&#39;s"><input id="admin-cert-org" placeholder="organization (for a request)"></div>
+  <div class="row"><button id="admin-cert-self">Make a self-signed certificate</button><button id="admin-cert-csr">Make a request (CSR) for our CA</button></div>
+  <textarea id="admin-cert-pem" rows="5" class="mono" placeholder="The request (CSR) to send to your CA appears here; paste the certificate it issued here (PEM, its chain after it), then Install it"></textarea>
+  <div class="row"><button id="admin-cert-install">Install the CA&#39;s certificate</button><input type="file" id="admin-cert-pfx" accept=".pfx,.p12"><input type="password" id="admin-cert-pfx-pass" placeholder="its passphrase"><button id="admin-cert-pfx-btn">Install the PFX</button></div>
+  <div class="msg" id="admin-cert-msg"></div>
+</section>
+<section>
+  <h2>Backup</h2>
+  <p class="hint flush">The gateway in one file, to move it to another computer or to go back: its settings, tokens, roles, the alert history, work orders, spare parts, plans, guides, handovers, changes, filters, boards, push devices, certificates, the drives&#39; and axes&#39; statistics, the logged events (with the recordings and fault records when ticked). Encrypted with a passphrase: it holds passwords and tokens; without it, it cannot be restored. A restore keeps the gateway as it was first (before-restore), then the gateway restarted takes it all.</p>
+  <div class="row"><input type="password" id="admin-backup-pass" placeholder="its passphrase (8 characters at least)"><label class="inline"><input type="checkbox" id="admin-backup-recordings"> the recordings</label><label class="inline"><input type="checkbox" id="admin-backup-faults"> the fault records</label><button class="primary" id="admin-backup-make">Make a backup</button></div>
+  <div id="admin-backups"></div>
+  <h3>Restore</h3>
+  <div class="row"><input type="file" id="admin-restore-file" accept=".kvalbk"><input type="password" id="admin-restore-pass" placeholder="its passphrase"><button id="admin-restore">Restore it</button><button id="admin-restart">Restart the gateway</button></div>
+  <div class="msg" id="admin-backup-msg"></div>
 </section>
 <section>
   <h2>Exports</h2>
@@ -1124,7 +1196,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1300,6 +1372,73 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     } catch (err) { say('admin-monitoring-msg', err.message, false); }
   });
   loadMonitoring().catch(() => {});
+
+  // ---- Certificate ----
+  const loadCert = async () => {
+    const d = await call('cert');
+    const i = d.info;
+    $('admin-cert-names').placeholder = 'its names and addresses: empty, this computer: ' + (d.own || []).join(', ');
+    $('admin-cert-info').textContent = !i ? 'No certificate: the gateway runs without TLS (insecure)' : i.error ? i.error : (i.subject + ' · from ' + i.issuer + (i.selfSigned ? ' (self-signed)' : '') + ' · until ' + i.validTo.slice(0, 10) + ' (' + i.daysLeft + ' days) · ' + i.names.join(', ') + (d.pending ? ' · a request waits for its certificate' : ''));
+    $('admin-cert-info').className = 'hint ' + (i && !i.error && i.daysLeft <= 30 ? 'bad' : '');
+  };
+  const certDone = async (p, label) => {
+    try { const r = await p; await loadCert(); say('admin-cert-msg', label + ': ' + r.subject + ' until ' + r.validTo.slice(0, 10) + ', taken at once', true); } catch (err) { say('admin-cert-msg', err.message, false); }
+  };
+  $('admin-cert-self').addEventListener('click', () => {
+    if (!window.confirm('Replace the certificate with a new self-signed one?')) return;
+    void certDone(call('cert/selfsigned', { names: $('admin-cert-names').value }), 'A new self-signed certificate');
+  });
+  $('admin-cert-csr').addEventListener('click', async () => {
+    try {
+      const r = await call('cert/csr', { names: $('admin-cert-names').value, organization: $('admin-cert-org').value });
+      $('admin-cert-pem').value = r.csr;
+      await loadCert();
+      say('admin-cert-msg', 'The request for ' + r.commonName + ' (' + r.names.join(', ') + '): send it to your CA (copied above), then paste the certificate it issues there', true);
+    } catch (err) { say('admin-cert-msg', err.message, false); }
+  });
+  $('admin-cert-install').addEventListener('click', () => void certDone(call('cert/install', { pem: $('admin-cert-pem').value }), 'Installed'));
+  $('admin-cert-pfx-btn').addEventListener('click', async () => {
+    const f = $('admin-cert-pfx').files[0];
+    if (!f) { say('admin-cert-msg', 'Choose its PFX file', false); return; }
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    void certDone(call('cert/pfx', { pfx: btoa(bin), passphrase: $('admin-cert-pfx-pass').value }), 'The PFX installed');
+  });
+  loadCert().catch(() => {});
+
+  // ---- Backup ----
+  const loadBackups = async () => {
+    const d = await call('backups');
+    const rows = (d.backups || []).map((b) => el('tr', {}, el('td', { class: 'mono' }, el('a', { href: '/admin/backup/' + b.name, class: 'admin-backup-link' }, b.name)), el('td', {}, Math.round(b.size / 1024) + ' kB'), el('td', {}, new Date(b.at).toLocaleString())));
+    $('admin-backups').replaceChildren(rows.length ? el('div', { class: 'scroll' }, el('table', {}, el('tbody', {}, ...rows))) : el('p', { class: 'hint' }, 'No backup yet.'));
+  };
+  $('admin-backup-make').addEventListener('click', async () => {
+    say('admin-backup-msg', 'Making it ...');
+    try {
+      const r = await call('backup', { passphrase: $('admin-backup-pass').value, recordings: $('admin-backup-recordings').checked, faults: $('admin-backup-faults').checked });
+      $('admin-backup-pass').value = '';
+      await loadBackups();
+      say('admin-backup-msg', r.name + ': ' + r.files + ' files, ' + Math.round(r.size / 1024) + ' kB (its link above: keep it with its passphrase)', true);
+    } catch (err) { say('admin-backup-msg', err.message, false); }
+  });
+  $('admin-restore').addEventListener('click', async () => {
+    const f = $('admin-restore-file').files[0];
+    if (!f) { say('admin-backup-msg', 'Choose a backup (.kvalbk)', false); return; }
+    if (!window.confirm('Restore ' + f.name + '? The gateway as it is now is kept first (before-restore).')) return;
+    say('admin-backup-msg', 'Restoring ...');
+    try {
+      const r = await fetch('/admin/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Passphrase': encodeURIComponent($('admin-restore-pass').value) }, body: f });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      await loadBackups();
+      say('admin-backup-msg', 'Restored: ' + d.files + ' files, PLCs ' + d.plcs.join(', ') + '. Restart the gateway to take it all (the state before: ' + d.before + ')', true);
+    } catch (err) { say('admin-backup-msg', err.message, false); }
+  });
+  $('admin-restart').addEventListener('click', async () => {
+    try { await call('restart', {}); say('admin-backup-msg', 'Restarting: back within a minute', true); } catch (err) { say('admin-backup-msg', err.message, false); }
+  });
+  loadBackups().catch(() => {});
 
   // ---- Exports ----
   const loadExports = async () => {

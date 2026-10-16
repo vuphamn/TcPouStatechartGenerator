@@ -59,6 +59,9 @@ const { createAxes } = require('./axes.cjs');
 const { createAnomalies } = require('./anomaly.cjs');
 const { createSites } = require('./sites.cjs');
 const { createExports } = require('./exports.cjs');
+const { createBackup } = require('./backup.cjs');
+const { createCerts } = require('./certs.cjs');
+const { zipOf } = require('./support.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -455,6 +458,7 @@ function start() {
     config.axes = next.axes;
     config.anomalies = next.anomalies;
     config.sites = next.sites;
+    config.tls = next.tls;
     config.mqtt = next.mqtt;
     config.cmms = next.cmms;
     config.api = next.api;
@@ -828,6 +832,9 @@ function start() {
   const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween, sendEmail: (x) => sendEmail(config.smtp, x), more: (from, to) => handover.summary(from, to, []), link: () => (config.publicUrl ? `${String(config.publicUrl).replace(/\/+$/, '')}/?board` : '') });
   // Run at startup (Windows): the gateway as a scheduled task
   const service = createService({ configPath, log, audit });
+  // The gateway's certificate (certs.cjs): shown, renewed, a CSR, installed; taken at once
+  let setCertContext = null;
+  const certs = createCerts({ baseDir, getConfig: () => config, update: updateConfig, log, audit, notify: notifyAll, setContext: (o) => setCertContext?.(o) });
   const admin = createAdmin({
     configPath,
     getConfig: () => config,
@@ -849,6 +856,17 @@ function start() {
     reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which), emailNow: (which) => reports.emailNow(which) },
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
+    certs,
+    backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit }),
+    restart: async () => {
+      // (its Windows task restarts it within a minute; else it is started again by hand)
+      const st = await service.status().catch(() => ({ installed: false }));
+      // (the task this gateway's own: it runs this config.json)
+      if (!st.installed || !String(st.runs ?? '').toLowerCase().includes(String(configPath).toLowerCase())) throw new Error('This gateway does not run as its Windows task: start it again by hand');
+      log('gateway: restarting (the setup page): its task starts it again within a minute');
+      setTimeout(() => process.exit(0), 800).unref();
+      return { ok: true };
+    },
     sitesView: () => sites.view(),
     mqttReady: () => exportsApi?.mqtt.ready() ?? false,
     channels: { sendEmail: (smtp, x) => sendEmail(smtp, x), sendSms: (sms, x) => sendSms(sms, x) },
@@ -859,6 +877,11 @@ function start() {
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
   });
   const auth = createAuth({ getConfig: () => config, log, secure: !!(config.tls?.pfx || config.tls?.cert) });
+  // (an https server takes a new certificate at once)
+  setCertContext = (o) => {
+    if (typeof server?.setSecureContext === 'function') server.setSecureContext(o);
+    else log('certs: the gateway runs without TLS ("insecure"): its certificate is taken when it starts with one');
+  };
   const handleRequest = async (req, res) => {
     if (await auth.handle(req, res)) return;
     // (a support bundle's link: /support/<id>.zip?key=…)

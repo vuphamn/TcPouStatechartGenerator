@@ -361,6 +361,17 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
 - **Saving:** one **Save monitoring**, checked; taken at once, without a restart.
 - **Load** shows which monitors run on each PLC.
 
+**Backup** (the setup page): the gateway in one file, to move it to another computer or to go back.
+- **What it holds:** config.json (its PLCs, tokens' hashes, roles, every setting), the alert history, work orders, spare parts, preventive plans, recovery guides, handovers, changes, saved filters and boards, the push keys and devices, its certificates, the drives', axes' and fleet's day statistics, the logged events. The recordings and the fault records when ticked.
+- **Encrypted** with a passphrase (AES-256-GCM, its key from the passphrase by scrypt; 8 characters at least): it holds passwords and tokens. Without its passphrase it cannot be restored. Kept in `backups/` (the last 10), downloaded from the page.
+- **Restore:** its file and its passphrase. It is checked (a gateway's config.json), the gateway as it is now kept first (`backups/before-restore-<when>.kvalbk`, the same passphrase), then its files written back; its settings are taken at once. **Restart the gateway** to take everything (its Windows task starts it again within a minute; otherwise start it again by hand).
+
+**Certificate** (the setup page): the one the board and the setup page are served with (https): its names, its issuer, until when, the days left. The roles that want **cert** are told once a day from 30 days before it expires.
+- **A self-signed one:** for the names given (empty: this computer's name and addresses). Browsers warn about it.
+- **Our CA's:** **Make a request (CSR)** for the names given: send it to your company's CA; its key stays on the gateway (`pending-key.pem`) until the certificate the CA issued is pasted and installed (its chain after it). Its key is checked against it. Computers that trust your CA trust the board then.
+- **A PFX** (its passphrase).
+- **Taken at once,** without a restart; the one before kept (`cert-<when>.pem`).
+
 **Reports by email** (the setup page's Shift reports, **Emailed to**): the shift report emailed each shift, daily (yesterday's) or weekly (the last 7 days) at a time, through the mail server of Email and SMS.
 - **Its body:** the report (alerts by kind, time to acknowledge, the machines with most), then the stops and OEE, the work orders opened, done and open, the drives to watch, the alerts still open, and the board's link.
 - **Attached:** every alert of the report, as CSV. **Email it now** sends the last shift's.

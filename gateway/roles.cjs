@@ -40,7 +40,7 @@ const DEFAULT_PAGES = {
   engineer: PAGES,
   manager: ['andon', 'machines', 'risk', 'oee', 'work', 'sites'],
 };
-const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'recovered', 'escalated'];
+const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'recovered', 'escalated'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 /** "Mon-Fri", "Sat,Sun", "Mon" -> day numbers (0 Sunday); empty: every day */
