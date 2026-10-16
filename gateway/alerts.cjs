@@ -360,7 +360,8 @@ class AlertMonitor {
       state: this.name(m, t.value), value: t.value, since: new Date(t.since).toISOString(), durationMs: now - t.since,
       text: `${plc?.name ?? this.rule.plc}: ${text}`, at: new Date(now).toISOString(),
     };
-    const muted = this.mutedWhy(now);
+    // (its PLC in maintenance, the rule's quiet hours; or this alarm shelved)
+    const muted = this.mutedWhy(now) ?? (kind !== 'recovered' ? this.env.shelvedOf?.(this.rule.plc, m.path, event.state) : null) ?? null;
     if (muted) {
       if (kind !== 'recovered') {
         this.env.log(`alerts: ${kind} ${m.path} muted (${muted})`);

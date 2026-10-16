@@ -66,6 +66,7 @@ const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createAttachments } = require('./attachments.cjs');
 const { lastTime } = require('./lastTime.cjs');
 const { maintenanceKpis } = require('./kpis.cjs');
+const { createShelves } = require('./shelves.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -586,6 +587,10 @@ function start() {
   // Maintenance (set on the board: a PLC's alerts muted until a time)
   // Audit log: who did what (audit-YYYY-MM.jsonl next to config.json)
   const audit = createAudit({ dir: baseDir, log });
+  // Alarm shelving (ISA-18.2): a shelved alarm is logged muted, whoever raises it (rules, drives, axes, anomalies)
+  const shelves = createShelves({ baseDir, getConfig: () => config, log, audit, onEvent: (e) => alertLog.add(e) });
+  const addAlert = alertLog.add;
+  alertLog.add = (e) => addAlert(shelves.apply(e));
   // Push notifications (push.cjs): the board's alerts on devices, the board closed
   push = createPush({ baseDir, getConfig: () => config, log, audit });
   const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf, audit });
@@ -616,7 +621,7 @@ function start() {
     alarms: (config.alerts ?? []).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled !== false, plc: r.plc, root: r.root, machines: Array.isArray(r.machines) ? r.machines : null, stuckAfterMs: r.stuckAfterMs ?? null, onError: r.onError !== false, webhook: !!r.webhook, fromBoard: r.fromBoard ?? null })),
     recordings: (config.recordings ?? []).map((r) => ({ id: r.id, name: r.name, enabled: r.enabled !== false, plc: r.plc, root: r.root, machines: Array.isArray(r.machines) ? r.machines : null, vars: r.vars ?? [], days: r.days, fromBoard: r.fromBoard ?? null })),
   });
-  alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id) });
+  alerts = createAlerts({ connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, onEvent: (e) => alertLog.add(e), maintenanceOf: (id) => maintenance.get(id), shelvedOf: (plc, machine, state) => shelves.why(plc, machine, state) });
   alerts.apply(config.alerts ?? []);
   // Escalation: open alerts not acknowledged in time, posted again
   const muted = mutedFor(maintenance);
@@ -951,6 +956,7 @@ function start() {
     let sparesOff = null;
     let pmOff = null;
     let changesOff = null;
+    let shelvesOff = null;
     let sitesOff = null;
     const boardViewer = {};
     let user = null;
@@ -1067,7 +1073,7 @@ function start() {
 
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', alarmShelve: 'ack', alarmUnshelve: 'ack', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -1075,7 +1081,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', changeExplain: 'changeResult', changeApprove: 'changeResult', callMaintenance: 'callMaintenanceResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', changeExplain: 'changeResult', changeApprove: 'changeResult', callMaintenance: 'callMaintenanceResult', alarmShelve: 'shelfResult', alarmUnshelve: 'shelfResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1246,6 +1252,23 @@ function start() {
       }
       // Last time this happened: a machine in a state, what is known of it (earlier alerts, work orders done and their
       // root causes, its recovery guide, earlier fault records)
+      // Alarm shelving: those shelved now (and the latest ended), an alarm shelved, unshelved (those who acknowledge)
+      if (m.type === 'shelvesWatch') {
+        const sendShelves = () => send({ type: 'shelves', ...shelves.list() });
+        sendShelves();
+        shelvesOff ??= shelves.subscribe(sendShelves);
+        return;
+      }
+      if (m.type === 'alarmShelve' || m.type === 'alarmUnshelve') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'shelfResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          const s = m.type === 'alarmShelve' ? shelves.shelve({ ...(m.shelf ?? {}), plcName: plcs.get(m.shelf?.plc)?.name }, user) : shelves.unshelve(String(m.id ?? ''), user);
+          return send({ type: 'shelfResult', requestId, ok: true, shelf: s });
+        } catch (err) {
+          return send({ type: 'shelfResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'lastTime') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (viewOnly) return send({ type: 'lastTimeResult', requestId, ok: false, error: 'A display: the board only' });
@@ -2074,6 +2097,7 @@ function start() {
       pmOff?.();
       axesOff?.();
       changesOff?.();
+      shelvesOff?.();
       sitesOff?.();
       startSeq++;
       await stopSession();

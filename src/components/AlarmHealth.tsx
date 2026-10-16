@@ -35,7 +35,7 @@ const short = (p: string, root: string) => (root && p.toLowerCase().startsWith(`
  * The Risk page's Alarm health (gateway/alarmHealth.cjs), as ISA-18.2 measures an alarm system: alarms an hour against
  * its targets, the busiest 10 minutes, floods, the bad actors, chattering and stale alarms, time to acknowledge
  */
-export const AlarmHealth: React.FC<{ conn: GatewayConnection | null; connected: boolean; plcIds: string[]; root: string }> = ({ conn, connected, plcIds, root }) => {
+export const AlarmHealth: React.FC<{ conn: GatewayConnection | null; connected: boolean; plcIds: string[]; root: string; onTask?: (a: { plc: string; plcName: string; machine: string; state: string; why: string }) => void }> = ({ conn, connected, plcIds, root, onTask }) => {
   const [days, setDays] = useState(7);
   const [r, setR] = useState<AlarmHealthReport | null>(null);
   const plcKey = plcIds.join();
@@ -102,6 +102,13 @@ export const AlarmHealth: React.FC<{ conn: GatewayConnection | null; connected: 
                       <td className="text-slate-300">{a.state}</td>
                       <td className="text-right font-mono">{a.count}</td>
                       <td className="text-right font-mono text-slate-400">{pct(a.share * 100)}</td>
+                      {onTask && (
+                        <td className="text-right">
+                          <button type="button" className="alarm-task px-1.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => onTask({ plc: a.plc, plcName: a.plcName, machine: a.machine, state: a.state, why: `a bad actor: ${a.count} alarm${a.count === 1 ? '' : 's'}, ${pct(a.share * 100)} of all` })} title="A work order to fix it: its cause, a delay or a deadband">
+                            Task
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -117,6 +124,11 @@ export const AlarmHealth: React.FC<{ conn: GatewayConnection | null; connected: 
                     {r.chattering.map((a) => (
                       <li key={`${a.plc}|${a.machine}|${a.state}`} className="alarm-chatter">
                         {short(a.machine, root)} {a.state}: <b className="text-amber-300">{a.inAMinute}</b> in a minute, {a.count} in all <span className="text-slate-500">(a delay or a deadband on it, in the PLC)</span>
+                        {onTask && (
+                          <button type="button" className="alarm-task ml-1 px-1.5 rounded border border-slate-600 hover:bg-slate-800" onClick={() => onTask({ plc: a.plc, plcName: a.plcName, machine: a.machine, state: a.state, why: `chattering: ${a.inAMinute} in a minute, ${a.count} in all` })}>
+                            Task
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>

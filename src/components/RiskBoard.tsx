@@ -55,7 +55,7 @@ const Spark: React.FC<{ values: number[] }> = ({ values }) => {
  * faulting more than the week before), worst first; and the Inventory: every I/O box by maker, type and firmware
  * (how many, where; a type with several firmware versions marked), CSV.
  */
-export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean; onWork?: (r: RiskItem) => void; root?: string; canExplain?: boolean; canApprove?: boolean }> = ({ conn, connected, subscribe, plcIds, narrow, onWork, root = '', canExplain = false, canApprove = false }) => {
+export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: boolean; subscribe: (fn: (m: Msg) => void) => () => void; plcIds: string[]; narrow: boolean; onWork?: (r: RiskItem) => void; onBadActor?: (a: { plc: string; plcName: string; machine: string; state: string; why: string }) => void; root?: string; canExplain?: boolean; canApprove?: boolean }> = ({ conn, connected, subscribe, plcIds, narrow, onWork, onBadActor, root = '', canExplain = false, canApprove = false }) => {
   const [tab, setTab] = useState<'risk' | 'inventory' | 'alarms' | 'changes'>('risk');
   const [changes, setChanges] = useState<PlcChange[]>([]);
   useEffect(
@@ -165,7 +165,7 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
       )}
       {tab === 'alarms' && (
         <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
-          <AlarmHealth conn={conn} connected={connected} plcIds={plcIds} root={root} />
+          <AlarmHealth conn={conn} connected={connected} plcIds={plcIds} root={root} onTask={onBadActor} />
         </div>
       )}
       <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'} ${tab === 'alarms' || tab === 'changes' ? 'hidden' : ''}`}>

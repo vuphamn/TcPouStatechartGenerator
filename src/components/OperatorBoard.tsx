@@ -17,6 +17,7 @@ import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { HandoverDialog, unreadHandover, type Handover } from './HandoverDialog.tsx';
 import { RecoveryDialog, guideFor, type RecoveryGuide, type RecoveryTarget } from './RecoveryDialog.tsx';
 import { LastTime } from './LastTime.tsx';
+import { ShelvedList, ShelveButton, type ShelvesState } from './Shelves.tsx';
 import { PushDialog } from './PushDialog.tsx';
 import { SitesBoard } from './SitesBoard.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
@@ -284,6 +285,8 @@ export const OperatorBoard: React.FC = () => {
   const [startFilter, setStartFilter] = useState<string | null>(null);
   // The fault records (gateway/faults.cjs): the list beside the alerts, the one opened
   const [faultList, setFaultList] = useState<FaultSummary[]>([]);
+  // (the alarms on the shelf now)
+  const [shelves, setShelves] = useState<ShelvesState | null>(null);
   const [faultOpen, setFaultOpen] = useState<string | null>(null);
   const [aside, setAside] = useState<'alerts' | 'faults'>('alerts');
   // Downtime reasons (gateway/oee.cjs): the ones offered, after how long a stop asks Why?, the stops given one
@@ -439,6 +442,10 @@ export const OperatorBoard: React.FC = () => {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
+      if (msg.type === 'shelves') {
+        setShelves(m as unknown as ShelvesState);
+        return;
+      }
       if (msg.type === 'boardFilters') {
         const x = m as unknown as { filters?: BoardSavedFilter[]; canEdit?: boolean; startFilter?: string | null };
         setSavedFilters(x.filters ?? []);
@@ -503,6 +510,7 @@ export const OperatorBoard: React.FC = () => {
         c.send({ type: 'boardList' });
         c.send({ type: 'alertsList' });
         if (!viewOnly) c.send({ type: 'handoverWatch' });
+        if (!viewOnly) c.send({ type: 'shelvesWatch' });
         c.send({ type: 'recoveryWatch' });
         if (!viewOnly) void c.request<{ faults?: FaultSummary[] }>({ type: 'faultsList' }, 'faultsListResult').then((r) => setFaultList(r.faults ?? [])).catch(() => undefined);
       })
@@ -1223,7 +1231,7 @@ export const OperatorBoard: React.FC = () => {
           )}
           {(!narrow || phoneView === 'machines') && page === 'risk' && (
             <div className="flex-1 min-w-0 flex flex-col">
-              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} root={root} canExplain={may('engineering') && !viewOnly} canApprove={may('assign') && !viewOnly} onWork={may('workorder') ? (r) => toWork({ title: r.reason.split(':')[0].slice(0, 100), plc: r.plc, plcName: r.plcName, machine: r.path, priority: r.level === 'alarm' ? 'urgent' : r.level === 'warn' ? 'high' : 'normal', source: { kind: 'risk', id: r.id, text: `${r.name}: ${r.reason}` } }) : undefined} />
+              <RiskBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo} plcIds={activeFilter?.plcs?.length ? activeFilter.plcs : wanted} narrow={narrow} root={root} canExplain={may('engineering') && !viewOnly} canApprove={may('assign') && !viewOnly} onWork={may('workorder') ? (r) => toWork({ title: r.reason.split(':')[0].slice(0, 100), plc: r.plc, plcName: r.plcName, machine: r.path, priority: r.level === 'alarm' ? 'urgent' : r.level === 'warn' ? 'high' : 'normal', source: { kind: 'risk', id: r.id, text: `${r.name}: ${r.reason}` } }) : undefined} onBadActor={may('workorder') ? (a) => toWork({ title: `Fix the alarm ${a.state} at ${short(a.machine, root)}`.slice(0, 120), plc: a.plc, plcName: a.plcName, machine: a.machine, priority: 'normal', source: { kind: 'bad-actor', text: `${a.plcName}: ${short(a.machine, root)} ${a.state}: ${a.why}` } }) : undefined} />
             </div>
           )}
           {(!narrow || phoneView === 'machines') && page === 'drives' && (
@@ -1447,6 +1455,7 @@ export const OperatorBoard: React.FC = () => {
               <>
               <div className="flex-1 overflow-y-auto p-2 space-y-2">
                 {alerts.length === 0 && <div className="p-3 text-slate-500 text-sm">{t("No alerts. The gateway's alert rules (its setup page) decide what is reported.")}</div>}
+                <ShelvedList conn={conn.current} shelves={shelves} canUnshelve={may('ack') && !viewOnly} root={root} />
                 {alerts.slice(0, 200).map((a) => {
                   const openOne = a.event !== 'recovered' && !a.ack && !a.resolvedAt;
                   return (
@@ -1498,6 +1507,7 @@ export const OperatorBoard: React.FC = () => {
                           </button>
                         ) : null;
                       })()}
+                      {openOne && may('ack') && !viewOnly && ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'anomaly'].includes(a.event) && <ShelveButton conn={conn.current} plc={a.plc} machine={a.machine} state={a.state ?? ''} maxHours={shelves?.maxHours ?? 12} />}
                       {!viewOnly && a.event !== 'recovered' && !a.machine.startsWith('(') && (() => {
                         // (last time: the same machine in the same state; its type for its guide)
                         const p = plcs.find((x) => x.id === a.plc);

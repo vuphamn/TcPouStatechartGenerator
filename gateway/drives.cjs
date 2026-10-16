@@ -668,8 +668,9 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
     say(d, event, text, level, s, extra = {}) {
       const e = { event: event === 'error' ? 'drive' : event, level, rule: 'Drive health', ruleId: 'drives', plc: this.plc.id, plcName: this.plc.name, machine: d.name, state: level, text: `${this.plc.name}: ${text}`, at: new Date().toISOString(), ...extra };
       log(`drives: ${this.plc.id}: ${text}`);
-      onEvent?.(e);
-      if (s.webhook) void postWebhook?.(s.webhook, s.format, e, log);
+      // (logged; its webhook unless it was muted: its alarm shelved)
+      const kept = onEvent?.(e);
+      if (s.webhook && !kept?.muted) void postWebhook?.(s.webhook, s.format, e, log);
     }
 
     /** Each drive's daily heatsink medians while running (the risk list's trends), today's last */

@@ -167,6 +167,16 @@ const M = `${R}.aDoors[2]`;
     expect(/Backlog: open work orders1/.test(kpiText ?? '') && /2 × S12-SENS/.test(kpiText ?? '') && weeks === 8, `the KPIs tab (${weeks} weeks): ${(kpiText ?? '').slice(0, 160)}`);
     expect(/1/.test(lowRow ?? '') && /1 low/.test(tabText ?? ''), `the Parts tab: S12-SENS ${lowRow} (low), the tab "${tabText}"`);
     expect(orders >= 2 && /Sensor cable cut at the hinge/.test(detail ?? '') && /Line 9/.test(win ?? '') && /10\.0 days/.test(rel2 ?? ''), `the Work page: ${orders} orders, the done one's root cause, the calendar's window, reliability "${rel2}"`);
+    // (a bad actor (Alarm health) made a work order: Task)
+    await p.goto(`${BASE}/?board&page=risk`, { waitUntil: 'load' });
+    await h.until(() => p.$('#risk-tab-alarms'), 15000);
+    await p.click('#risk-tab-alarms');
+    const task = await h.until(() => p.$('.alarm-top .alarm-task'), 15000);
+    await task?.click();
+    const title = await h.until(() => p.$eval('#work-title', (e) => e.value).catch(() => null), 8000);
+    const from = await p.$eval('#work-form', (e) => e.textContent).catch(() => '');
+    expect(/Fix the alarm DOOR_DASHER_ERROR at aDoors\[2\]/.test(title ?? '') && /a bad actor: 1 alarm, 100 %/.test(from ?? ''), `a bad actor's task: "${title}" (${(from ?? '').slice(0, 120)})`);
+    await p.keyboard.press('Escape');
     // (an alert's Last time on the board)
     await p.goto(`${BASE}/?board`, { waitUntil: 'load' });
     await h.until(() => p.$('.board-alert[data-alert="f0"] .board-alert-last'), 15000);
