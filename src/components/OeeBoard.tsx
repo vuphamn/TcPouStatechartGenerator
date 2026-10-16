@@ -51,6 +51,8 @@ interface OeeReport {
   stops: OeeStop[];
   pareto: Record<'reason' | 'machine' | 'state', { key: string; ms: number; count: number }[]>;
   windows: (Line & { label: string; from: number; to: number })[];
+  /** By product (a PLC's product variable, config.oee.products): its runs, its time, its OEE */
+  products?: (Line & { plc: string; plcName: string; product: string; idealCycleSec: number | null; runs: number; ms: number; cycles: number | null })[];
   recorded: number;
   error?: string;
 }
@@ -225,6 +227,38 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
               <Pareto title="By machine" rows={r.pareto.machine} label={(k) => short(k, root)} />
               <Pareto title="By state" rows={r.pareto.state} />
             </div>
+            {(r.products?.length ?? 0) > 0 && (
+              <table id="oee-products" className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-slate-500">
+                    <th className="py-1">Product</th>
+                    <th>OEE</th>
+                    <th>Availability</th>
+                    <th>Performance</th>
+                    <th>Quality</th>
+                    <th className="text-right">Made for</th>
+                    <th className="text-right">Cycles</th>
+                    <th className="text-right">Down</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.products!.map((p) => (
+                    <tr key={`${p.plc}|${p.product}`} className="oee-product border-t border-slate-800" data-product={p.product}>
+                      <td className="py-1">
+                        {p.product} <span className="text-xs text-slate-500">{p.plcName}{p.runs > 1 ? ` · ${p.runs} runs` : ''}</span>
+                      </td>
+                      <td><span className="flex items-center gap-2"><Bar value={p.oee} /> {pct(p.oee)}</span></td>
+                      <td>{pct(p.availability)}</td>
+                      <td title={p.idealCycleSec ? `its ideal cycle: ${p.idealCycleSec} s` : "the machines' ideal cycle"}>{pct(p.performance)}</td>
+                      <td>{pct(p.quality)}</td>
+                      <td className="text-right font-mono">{dur(p.ms)}</td>
+                      <td className="text-right font-mono">{p.cycles ?? ''}</td>
+                      <td className="text-right font-mono">{dur(p.downMs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             <table id="oee-machines" className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs text-slate-500">

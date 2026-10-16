@@ -12,7 +12,11 @@
 //                  "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42,
 //                  "goodVar": "MAIN.nGoodParts", "badVar": "MAIN.nBadParts" }],     part counters (each optional), for quality;
 //                                                       recorded with that PLC's recordings by themselves (withCounters)
-//   "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee" } }
+//   "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee" },
+//   "products": { "line202": { "var": "GVL.sRecipe", "idealCycleSec": { "Door 36": 40, "Door 42": 48 } } } }
+//   the product (or recipe) a PLC makes: its variable (a STRING, or a number), recorded with its recordings; each window
+//   split into the runs of each product: OEE per product, its cycles against its own ideal cycle time (else the
+//   machine's).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -44,7 +48,7 @@ function qualityOf(good, bad, cycles) {
 function withCounters(recordings, oee) {
   const machines = Array.isArray(oee?.machines) ? oee.machines : [];
   return (recordings ?? []).map((r) => {
-    const add = machines.filter((m) => m.plc === r.plc).flatMap((m) => [m.goodVar, m.badVar]).filter(Boolean).map(String);
+    const add = [...machines.filter((m) => m.plc === r.plc).flatMap((m) => [m.goodVar, m.badVar]), oee?.products?.[r.plc]?.var].filter(Boolean).map(String);
     if (!add.length) return r;
     const vars = [...(r.vars ?? [])];
     for (const v of add) if (!vars.some((x) => x.toLowerCase() === v.toLowerCase())) vars.push(v);
@@ -67,6 +71,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
       reasonAfterMin: Math.max(0, Math.min(240, Number(c.reasonAfterMin ?? 2))),
       machines: Array.isArray(c.machines) ? c.machines : [],
       weekly: c.weekly && /^https?:\/\//i.test(String(c.weekly.webhook ?? '')) ? c.weekly : null,
+      products: c.products && typeof c.products === 'object' ? c.products : {},
     };
   };
 
@@ -94,7 +99,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
   const cycleOf = (plc, m) => settings().machines.find((x) => x.plc === plc && (x.machine ? String(x.machine).toLowerCase() === m.path.toLowerCase() : x.type && String(m.type).split('.').pop().toLowerCase() === String(x.type).toLowerCase()));
 
   /** One machine of a recording over [from, to]: its time by kind, its stops, its cycles */
-  function machineWindow(rec, m, from, to) {
+  function machineWindow(rec, m, from, to, idealOverride = null) {
     const end = Math.min(to, Date.now());
     const rule = rules().find((r) => r.enabled !== false && r.plc === rec.plc && r.root === rec.root);
     const errorRx = new RegExp(rule?.errorPattern || DEFAULT_ERROR, 'i');
@@ -127,7 +132,9 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     const runMs = av ? av.normalMs : 0;
     const plannedMs = av ? av.totalMs - av.maintenanceMs - av.noDataMs : 0;
     const availability = av && plannedMs > 0 ? av.normalMs / plannedMs : null;
-    const performance = cyc && cyc.idealCycleSec > 0 && runMs > 0 ? Math.min(1, (cycles * cyc.idealCycleSec * 1000) / runMs) : null;
+    // (its product's own ideal cycle time, when it has one)
+    const ideal = cyc ? idealOverride ?? cyc.idealCycleSec : null;
+    const performance = cyc && ideal > 0 && runMs > 0 ? Math.min(1, (cycles * ideal * 1000) / runMs) : null;
     // (quality: the parts counted in the window by its counters)
     let good = null;
     let bad = null;
@@ -139,7 +146,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     const quality = qualityOf(good, bad, cyc ? cycles : null);
     const partsCounted = good !== null && bad !== null ? good + bad : cyc ? cycles : 0;
     const parts = [availability, performance, quality].filter((x) => x !== null);
-    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, availability, performance, quality, good, bad, partsCounted, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: cyc?.idealCycleSec ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
+    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, availability, performance, quality, good, bad, partsCounted, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: ideal ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
   }
 
   /** The window's machines (every recording of these PLCs), their stops, the Pareto, and per shift or day */
@@ -188,7 +195,48 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
       else for (const w of shiftWindowsOf(from, to)) windows.push({ label: `${new Date(w.from).toLocaleDateString([], { weekday: 'short', day: 'numeric' })} ${w.name}`, from: Math.max(w.from, from), to: Math.min(w.to, to) });
       windows = windows.slice(-62).map((w) => ({ ...w, ...line(machinesOf(w.from, w.to)) }));
     }
-    return { from, to, by, line: line(machines), machines: machines.map(({ stops: s, ...m }) => ({ ...m, stops: s.length })), stops: stops.slice(0, 500), pareto: { reason: pareto((s) => s.reason ?? '(no reason given)'), machine: pareto((s) => s.machine), state: pareto((s) => s.state) }, windows, reasons: settings().reasons, recorded: recs.length };
+    // By product: each PLC's product variable split into its runs; each run's machines with that product's ideal cycle
+    const products = [];
+    const byProduct = new Map();
+    for (const [plcId, p] of Object.entries(settings().products)) {
+      if (!p?.var || (plcIds.length && !plcIds.includes(plcId))) continue;
+      const plcRecs = recs.filter((r) => r.plc === plcId);
+      const src = plcRecs.find((r) => (r.vars ?? []).some((v) => String(v).toLowerCase() === String(p.var).toLowerCase()));
+      if (!src) continue;
+      const end = Math.min(to, Date.now());
+      const series = recorders.queryVars(src.id, [p.var], from, end).series?.[p.var] ?? [];
+      const runs = [];
+      for (let i = 0; i < series.length; i++) {
+        const name = series[i].v === null || series[i].v === undefined || series[i].v === '' ? '(none)' : String(series[i].v);
+        const a = Math.max(series[i].t, from);
+        const b = Math.min(series[i + 1]?.t ?? end, end);
+        if (b <= a) continue;
+        const last = runs[runs.length - 1];
+        if (last && last.product === name && last.to === a) last.to = b;
+        else runs.push({ product: name, from: a, to: b });
+      }
+      for (const run of runs.slice(-200)) {
+        const ideal = Number(p.idealCycleSec?.[run.product]) || null;
+        const list = [];
+        const seen = new Set();
+        for (const rec of plcRecs) {
+          for (const m of rec.machines) {
+            if (seen.has(m.path.toLowerCase())) continue;
+            seen.add(m.path.toLowerCase());
+            list.push(machineWindow(rec, m, run.from, run.to, ideal));
+          }
+        }
+        const k = `${plcId}|${run.product}`;
+        const x = byProduct.get(k) ?? { plc: plcId, plcName: src.plcName, product: run.product, idealCycleSec: ideal, runs: 0, ms: 0, machines: [] };
+        x.runs++;
+        x.ms += run.to - run.from;
+        x.machines.push(...list);
+        byProduct.set(k, x);
+      }
+    }
+    for (const x of byProduct.values()) products.push({ plc: x.plc, plcName: x.plcName, product: x.product, idealCycleSec: x.idealCycleSec, runs: x.runs, ms: x.ms, cycles: x.machines.some((m) => m.cycles !== null) ? x.machines.reduce((a, m) => a + (m.cycles ?? 0), 0) : null, ...line(x.machines) });
+    products.sort((a, b) => b.ms - a.ms);
+    return { from, to, by, line: line(machines), products, machines: machines.map(({ stops: s, ...m }) => ({ ...m, stops: s.length })), stops: stops.slice(0, 500), pareto: { reason: pareto((s) => s.reason ?? '(no reason given)'), machine: pareto((s) => s.machine), state: pareto((s) => s.state) }, windows, reasons: settings().reasons, recorded: recs.length };
   }
 
   // The weekly summary (once, at its day and time)

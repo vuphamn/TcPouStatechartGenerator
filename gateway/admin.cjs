@@ -111,7 +111,27 @@ function checkMonitoring(body, plcIds, current) {
   });
   const w = o.weekly ?? {};
   const weekly = url(w.webhook, 'The weekly summary\'s webhook') ? { day: text(w.day, 3) || 'Mon', at: /^[0-2][0-9]:[0-5][0-9]$/.test(w.at) ? w.at : '07:00', webhook: url(w.webhook, ''), format: fmt(w.format), link: url(w.link, 'Its link') } : undefined;
-  const oee = { ...(current.oee ?? {}), reasons: lines(o.reasons, 40, 60), reasonAfterMin: num(o.reasonAfterMin, 0, 240, 2), machines, weekly };
+  // (each PLC's product variable, and each product's ideal cycle: a line "Door 36 = 40")
+  let products = current.oee?.products;
+  if (o.products !== undefined) {
+    products = {};
+    for (const [id, p] of Object.entries(o.products && typeof o.products === 'object' ? o.products : {})) {
+      if (!plcIds.includes(id)) continue;
+      const v = text(p?.var, 200);
+      if (!v) continue;
+      if (!sym(v)) throw new Error(`The product variable of ${id}: a PLC symbol (GVL.sRecipe)`);
+      const ideal = {};
+      for (const l of lines(p.idealLines ?? Object.entries(p.idealCycleSec ?? {}).map(([k, x]) => k + ' = ' + x), 200, 120)) {
+        const at = l.lastIndexOf('=');
+        const n = Number(l.slice(at + 1));
+        if (at < 1 || !(n > 0)) throw new Error(`An ideal cycle: its product, =, its seconds (${l.slice(0, 40)})`);
+        ideal[text(l.slice(0, at), 80)] = n;
+      }
+      products[id] = { var: v, ...(Object.keys(ideal).length ? { idealCycleSec: ideal } : {}) };
+    }
+    if (!Object.keys(products).length) products = undefined;
+  }
+  const oee = { ...(current.oee ?? {}), reasons: lines(o.reasons, 40, 60), reasonAfterMin: num(o.reasonAfterMin, 0, 240, 2), machines, weekly, products };
   if (!oee.reasons.length) delete oee.reasons;
   const a = b.andon ?? {};
   const steps = {};
@@ -1375,6 +1395,16 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
       el('div', { class: 'row' }, el('span', { class: 'label' }, 'The reasons offered (one a line)'), area((o.reasons && o.reasons.length ? o.reasons : mon.defaults.reasons).join(NL), (v) => { o.reasons = v.split(NL); }, { class: 'grow', id: 'admin-oee-reasons' })),
       el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Machine'), el('th', {}, 'or its type'), el('th', {}, 'Cycle state'), el('th', {}, 'Ideal cycle (s)'), el('th', {}, 'Good count'), el('th', {}, 'Bad count'), el('th', {}, ''))), mt)),
       el('button', { id: 'admin-oee-add', on: { click: () => { o.machines.push({ plc: (m.plcs[0] || {}).id, cycleState: '', idealCycleSec: '' }); renderMonitoring(); } } }, 'Add the cycle of a machine'),
+      (() => {
+        // (each PLC's product, or recipe, variable: OEE per product; each product's own ideal cycle)
+        o.products = o.products || {};
+        const wrap = el('div', { id: 'admin-oee-products' }, el('div', { class: 'label' }, 'By product: the variable a PLC holds its product (or recipe) in, and the ideal cycle of each product (one a line: Door 36 = 40)'));
+        for (const p of m.plcs) {
+          const x = (o.products[p.id] = o.products[p.id] || {});
+          wrap.append(el('div', { class: 'row', 'data-products-plc': p.id }, p.name, ' ', txtIn(x, 'var', { class: 'mono', placeholder: 'GVL.sRecipe' }), ' ', area(Object.entries(x.idealCycleSec || {}).map(([k, v]) => k + ' = ' + v).join(NL), (v) => { x.idealLines = v.split(NL); }, { class: 'grow mono', rows: 2, placeholder: 'Door 36 = 40' })));
+        }
+        return wrap;
+      })(),
       el('div', { class: 'row' }, 'Weekly summary on ', txtIn(o.weekly, 'day', { placeholder: 'Mon', size: 4 }), ' at ', txtIn(o.weekly, 'at', { placeholder: '07:00', size: 5 }), ' to ', txtIn(o.weekly, 'webhook', { class: 'mono grow', placeholder: 'https://… (empty: none)' }), ' its link ', txtIn(o.weekly, 'link', { class: 'mono', placeholder: 'https://gateway:8443/?board&page=oee&window=week' })));
     // Andon and work orders
     const a = m.andon;

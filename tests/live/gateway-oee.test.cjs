@@ -47,6 +47,9 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   const BAD = `${R}.fSpeed`;
   [100, 101, 102, 103, 104, 105, 0, 1].forEach((v, i) => lines.push({ t: start + i * 10 * 60000 + 1000, x: G, v }));
   [7, 8, 9].forEach((v, i) => lines.push({ t: stopAt + i * 60000, x: BAD, v }));
+  // (its product: Door 36 for the first 30 minutes, then Door 42 (its own ideal cycle: 60 s))
+  const P = `${R}.sName`;
+  lines.push({ t: start, x: P, v: 'Door 36' }, { t: start + 30 * 60000, x: P, v: 'Door 42' });
   lines.sort((a, b) => a.t - b.t);
   const byDay = new Map();
   for (const l of lines) byDay.set(dayOf(l.t), [...(byDay.get(dayOf(l.t)) ?? []), JSON.stringify(l)]);
@@ -60,7 +63,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     alerts: [{ id: 'a1', name: 'Line 7', enabled: true, plc: 'line', root: R, stateVar: 'machineState', stuckAfterMs: null, stateLimits: {}, onError: true, errorPattern: 'ERROR', notifyRecovery: false, webhook: null, format: 'json' }],
     recordings: [{ id: 'r1', name: 'Doors', enabled: true, plc: 'line', root: R, stateVar: 'machineState', days: 7, machines: [M] }],
     shifts: [{ name: 'Early', from: '06:00', to: '14:00' }, { name: 'Late', from: '14:00', to: '22:00' }, { name: 'Night', from: '22:00', to: '06:00' }],
-    oee: { reasonAfterMin: 0, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30, goodVar: G, badVar: BAD }] },
+    oee: { reasonAfterMin: 0, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30, goodVar: G, badVar: BAD }], products: { line: { var: P, idealCycleSec: { 'Door 42': 60 } } } },
     drives: { enabled: false }, fleet: { enabled: false }, faults: { enabled: false }, projectSync: { enabled: false },
   }, null, 2));
   const logFile = h.out('gw-oee-run.txt');
@@ -95,6 +98,10 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   const stop = r?.stops?.find((s) => s.machine === M && s.kind === 'error');
   expect(stop?.reason === 'Jam' && stop.note === 'infeed' && stop.by === 'mgr' && r.pareto.reason[0]?.key === 'Jam', `its stop: ${stop?.state} ${Math.round((stop?.ms ?? 0) / 60000)} min, ${stop?.reason} (${stop?.note}); Pareto: ${r?.pareto?.reason?.map((x) => x.key).join(', ')}`);
   expect(r?.windows?.length >= 1 && r.windows.every((w) => /Early|Late|Night/.test(w.label)), `by shift: ${r?.windows?.map((w) => w.label).join(', ')}`);
+  // (by product: its two runs, each its cycles; Door 42 against its own ideal cycle)
+  const p36 = r?.products?.find((p) => p.product === 'Door 36');
+  const p42 = r?.products?.find((p) => p.product === 'Door 42');
+  expect(r?.products?.length === 2 && Math.abs(p36.ms - 30 * 60000) < 2000 && p36.cycles === 3 && p36.idealCycleSec === null && p42.cycles === 3 && p42.idealCycleSec === 60 && p42.performance > 0 && p36.performance > 0 && p42.downMs > 0 && p36.downMs === 0, `by product: ${r?.products?.map((p) => `${p.product} ${Math.round(p.ms / 60000)} min, ${p.cycles} cycles, performance ${p.performance?.toFixed(3)}, down ${Math.round(p.downMs / 60000)} min`).join('; ')}`);
   ws.close();
 
   const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('oee-machines'));
@@ -124,6 +131,9 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     await p.click('.oee-window[data-window="week"]');
     const page = await h.until(() => p.evaluate(() => ({ kpis: document.querySelectorAll('.oee-kpi').length, machines: document.querySelectorAll('.oee-machine').length, quality: document.querySelector('.oee-quality')?.textContent, jam: [...document.querySelectorAll('.oee-pareto')].some((e) => /Jam/.test(e.textContent ?? '')) })).then((x) => (x.machines && x.jam ? x : null)), 30000);
     expect(page?.kpis === 5 && page.machines >= 1 && page.jam && /^\d+ %$/.test(page.quality ?? ''), `the OEE page: ${JSON.stringify(page)}`);
+    // (the live PLC since: its own product too)
+    const prows = await p.$$eval('.oee-product', (x) => x.map((e) => e.getAttribute('data-product')));
+    expect(prows.includes('Door 36') && prows.includes('Door 42'), `the OEE page by product: ${prows.join(', ')}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }
