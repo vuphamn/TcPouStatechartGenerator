@@ -134,6 +134,12 @@ const M = `${R}.aDoors[2]`;
   const tested = await api('POST', 'channelsTest', { kind: 'email', to: 'me@acme.com' });
   await h.until(() => mails.find((m) => m.lines.includes('RCPT TO:<me@acme.com>')), 10000);
   expect(shown?.smtp?.pass === undefined && shown.smtp.hasPass === true && shown.sms.authToken === undefined && shown.sms.hasToken === true && after.smtp.pass === 's3cret' && after.sms.authToken === 'tok456' && tested?.ok, `the setup page: secrets not shown (${shown?.smtp?.hasPass}, ${shown?.sms?.hasToken}), kept when saved empty; a test email sent (${tested?.ok})`);
+  // (the shift report by email: saved, emailed now with its CSV attached)
+  const saved = await api('POST', 'reports', { shifts: [], reports: { webhook: '', format: 'teams', email: { to: 'mgr@acme.com, ops@acme.com', when: 'daily', at: '06:30' } } });
+  const emailed = await api('POST', 'reports/email', { which: 'today' });
+  const rep = await h.until(() => mails.find((m) => m.lines.includes('RCPT TO:<mgr@acme.com>')), 10000);
+  const conf2 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  expect(saved?.reports?.email?.to?.length === 2 && conf2.reports.email.when === 'daily' && conf2.reports.email.at === '06:30' && emailed?.ok && /^Subject: MachineScope report: Today/m.test(rep?.data ?? '') && /multipart\/mixed/.test(rep?.data ?? '') && /filename="report-\d{4}-\d\d-\d\d-Today\.csv"/.test(rep?.data ?? '') && /calls maintenance/.test(rep?.data ?? ''), `the report emailed: ${/^Subject: .*/m.exec(rep?.data ?? '')?.[0]}; ${/filename="[^"]+"/.exec(rep?.data ?? '')?.[0]}`);
   const bad = await api('POST', 'channels', { smtp: {}, sms: { provider: 'http', url: 'nope' } });
   expect(/its URL/.test(bad?.error ?? ''), `a bad SMS provider refused: ${bad?.error}`);
   // 3. The support bundle's config: no secrets, no people's addresses

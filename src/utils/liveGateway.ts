@@ -40,7 +40,7 @@ export interface HelperBuild {
 
 type GatewayEvent =
   | LiveMessage
-  | { type: 'welcome'; user: string; plcs: GatewayPlc[]; build?: HelperBuild; features?: string[]; role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null }
+  | { type: 'welcome'; user: string; plcs: GatewayPlc[]; build?: HelperBuild; features?: string[]; role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null; sites?: number }
   | { type: 'denied'; message: string }
   | { type: 'closed'; message: string };
 
@@ -95,7 +95,7 @@ export async function gatewaySignOut(origin: string): Promise<void> {
 
 export class GatewayConnection {
   private ws: WebSocket | null = null;
-  private welcomed: Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild; features: string[]; role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null }> | null = null;
+  private welcomed: Promise<{ user: string; plcs: GatewayPlc[]; build?: HelperBuild; features: string[]; role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null; sites?: number }> | null = null;
   private url = '';
   private sso = false;
   // Requests answered by a message with the same requestId (Link's discover / addRoute)
@@ -138,7 +138,7 @@ export class GatewayConnection {
           settled = true;
           signedIn = true;
           // (the user's role on a gateway: what it may do, gateway/roles.cjs)
-          resolve({ user: m.user, plcs: m.plcs, build: m.build ? { ...m.build, features: m.features ?? [] } : undefined, features: m.features ?? [], role: m.role ?? null, roleLabel: m.roleLabel ?? null, can: m.can, rolesOn: m.rolesOn, pages: m.pages ?? null, lang: m.lang ?? null });
+          resolve({ user: m.user, plcs: m.plcs, build: m.build ? { ...m.build, features: m.features ?? [] } : undefined, features: m.features ?? [], role: m.role ?? null, roleLabel: m.roleLabel ?? null, can: m.can, rolesOn: m.rolesOn, pages: m.pages ?? null, lang: m.lang ?? null, sites: m.sites ?? 0 });
         } else if (m.type === 'denied' && !settled) {
           settled = true;
           reject(new Error(m.message));

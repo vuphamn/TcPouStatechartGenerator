@@ -28,19 +28,19 @@ const CAN = {
 };
 const ALL = [...new Set(Object.values(CAN).flat())];
 /** The board's pages, and those each role sees unless the setup page says otherwise */
-const PAGES = ['andon', 'machines', 'io', 'drives', 'risk', 'oee', 'work', 'eng'];
-const PAGE_LABELS = { andon: 'Andon', machines: 'Machines', io: 'I/O', drives: 'Drives', risk: 'Risk', oee: 'OEE', work: 'Work', eng: 'Engineering' };
+const PAGES = ['andon', 'machines', 'io', 'drives', 'risk', 'oee', 'work', 'eng', 'sites'];
+const PAGE_LABELS = { andon: 'Andon', machines: 'Machines', io: 'I/O', drives: 'Drives', risk: 'Risk', oee: 'OEE', work: 'Work', eng: 'Engineering', sites: 'Sites' };
 /** The board's language each role starts in, unless the setup page says otherwise (a viewer can switch it) */
 const LANGS = ['en', 'es'];
 const DEFAULT_LANGS = { operator: 'es' };
 const DEFAULT_PAGES = {
   operator: ['andon', 'machines'],
   technician: ['andon', 'machines', 'io', 'drives', 'risk', 'work'],
-  supervisor: ['andon', 'machines', 'io', 'drives', 'risk', 'oee', 'work'],
+  supervisor: ['andon', 'machines', 'io', 'drives', 'risk', 'oee', 'work', 'sites'],
   engineer: PAGES,
-  manager: ['andon', 'machines', 'risk', 'oee', 'work'],
+  manager: ['andon', 'machines', 'risk', 'oee', 'work', 'sites'],
 };
-const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'recovered', 'escalated'];
+const EVENTS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'recovered', 'escalated'];
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 /** "Mon-Fri", "Sat,Sun", "Mon" -> day numbers (0 Sunday); empty: every day */

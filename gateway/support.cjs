@@ -84,7 +84,7 @@ function sanitized(config) {
   const walk = (o) => {
     if (!o || typeof o !== 'object') return;
     for (const k of Object.keys(o)) {
-      if (/webhook|secret|password|passphrase|sha256|key$|token|^pass$|^accountSid$/i.test(k) && typeof o[k] === 'string') o[k] = o[k] ? '(set, left out)' : '';
+      if (/webhook|secret|password|passphrase|sha256|key$|token|^pass$|^accountSid$|^headers$/i.test(k) && typeof o[k] === 'string') o[k] = o[k] ? '(set, left out)' : '';
       else if (k === 'contact' && typeof o[k] === 'string') o[k] = '(set, left out)';
       // (an address with its key in it: an SMS provider's)
       else if (k === 'url' && /[?&](key|token|api|auth|pass|secret)/i.test(String(o[k]))) o[k] = '(set, left out)';

@@ -55,6 +55,10 @@ const { createPm } = require('./pm.cjs');
 const { alarmHealth } = require('./alarmHealth.cjs');
 const { sendEmail, sendSms } = require('./channels.cjs');
 const { createChanges } = require('./changes.cjs');
+const { createAxes } = require('./axes.cjs');
+const { createAnomalies } = require('./anomaly.cjs');
+const { createSites } = require('./sites.cjs');
+const { createExports } = require('./exports.cjs');
 const { createWorkOrders, reliability } = require('./workorders.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
@@ -448,6 +452,16 @@ function start() {
     config.boardEditors = next.boardEditors;
     config.drives = next.drives;
     drives?.apply();
+    config.axes = next.axes;
+    config.anomalies = next.anomalies;
+    config.sites = next.sites;
+    config.mqtt = next.mqtt;
+    config.cmms = next.cmms;
+    config.api = next.api;
+    config.publicUrl = next.publicUrl;
+    exportsApi?.apply();
+    sites?.apply();
+    axes?.apply();
     config.roles = next.roles;
     config.faults = next.faults;
     faults?.apply();
@@ -481,6 +495,8 @@ function start() {
   let alerts = null;
   let recorders = null;
   let drives = null;
+  let axes = null;
+  let sites = null;
   let faults = null;
   let fleet = null;
   setInterval(() => {
@@ -553,8 +569,10 @@ function start() {
   const roles = createRoles({ getConfig: () => config, postWebhook, log, sendEmail: (x) => sendEmail(config.smtp, x), sendSms: (x) => sendSms(config.sms, x) });
   // (who is told: the roles' channels, the devices subscribed to push notifications)
   let push = null;
+  let exportsApi = null;
   const notifyAll = (e) => {
     roles.notify(e);
+    exportsApi?.alert(e);
     if (push) void push.notify(e).catch((err) => log(`push: ${err.message}`));
   };
   const alertLog = createAlertLog({ file: path.join(baseDir, 'alerts-history.json'), log, rules: rulesNow, onNew: notifyAll });
@@ -597,7 +615,13 @@ function start() {
   const muted = mutedFor(maintenance);
   setInterval(() => alertLog.escalate(Date.now(), muted), config.escalationCheckMs ?? 30000).unref();
   // Recordings on the gateway (config.recordings)
-  recorders = createRecorders({ dir: path.join(baseDir, 'recordings'), connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, rules: rulesNow, maintenance, onEvent: (e) => alertLog.add(e), audit });
+  // (anomalies, live: each machine's stays and transitions as the recordings take them)
+  let anomalies = null;
+  recorders = createRecorders({ dir: path.join(baseDir, 'recordings'), connectionFor, plcOf, log, retryMs: config.alertRetryMs ?? 30000, rules: rulesNow, maintenance, onEvent: (e) => alertLog.add(e), audit, onStateSample: (rule, m, v, t) => {
+      anomalies?.sample(rule.id, m, v, t);
+      exportsApi?.state(rule.plc, m.path, m.stateNames?.[String(v)] ?? v, t);
+    } });
+  anomalies = createAnomalies({ recorders, getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
   recorders.apply(withCounters(config.recordings ?? [], config.oee));
   // Shift reports (config.shifts, config.reports.webhook): posted when a shift ends; the board downloads them
   const maintenanceOfAll = (from, to) => [...plcs.keys()].flatMap((id) => maintenance.windowsBetween(id, from, to).map((w) => ({ plc: id, from: new Date(w.from).toISOString(), until: new Date(w.until).toISOString() })));
@@ -609,6 +633,9 @@ function start() {
       .map((e) => ({ t: e.at ?? e.t, user: e.user, plc: e.plc, pou: e.pou, text: e.text }));
   // The PLCs' projects kept here (PlcProjects/<plc id>/), the PLC's copy the golden one (projectSync.cjs): over the
   // PLC's live connection when there is one (a second one from the same NetId could take its route), else one of its own
+  // Several gateways in one view (sites.cjs): the plant's other gateways, followed as displays
+  sites = createSites({ getConfig: () => config, log });
+  sites.start();
   // Change control (changes.cjs): each change of a PLC's program (seen by the project copy), explained, approved
   const changes = createChanges({ baseDir, log, audit, notify: notifyAll, rolesOn: () => roles.enabled() });
   const projectSync = createProjectSync({
@@ -633,6 +660,9 @@ function start() {
   // The drives' health (drives.cjs): each PLC's drives read by the gateway itself; the load panel's numbers (load.cjs)
   drives = createDrives({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, sharedDir, ads, log, onEvent: (e) => alertLog.add(e), postWebhook });
   drives.start();
+  // Servo axis health (axes.cjs): each AXIS_REF's following error and torque against its own past, NC errors
+  axes = createAxes({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, ads, log, onEvent: (e) => alertLog.add(e) });
+  axes.start();
   // The fault recorder (faults.cjs): each PLC's last minute kept, a fault's minute before and after saved
   faults = createFaults({ baseDir, getConfig: () => config, plcList: () => [...plcs.values()], connectionFor, log, retryMs: config.alertRetryMs ?? 30000 });
   faults.start();
@@ -719,6 +749,21 @@ function start() {
   const spares = createSpares({ baseDir, log, audit, notify: notifyAll });
   // Shift handover (handover.cjs): the shift's summary and a note, handed to the next shift
   const handover = createHandover({ baseDir, shiftWindowsOf: (f, t) => shiftWindows(shiftsNow(), f, t), alertLog, workOrders, oee, drives, log, audit, notify: notifyAll });
+  // Exports (exports.cjs): the REST/JSON API, MQTT, the CMMS hook
+  exportsApi = createExports({
+    baseDir, getConfig: () => config, log, audit, sha256, workOrders, publicUrl: () => String(config.publicUrl ?? '').replace(/\/+$/, ''),
+    data: {
+      plcs: () => [...plcs.values()].map((p) => ({ id: p.id, name: p.name, connected: !!connections.get(p.id)?.client, plcState: connections.get(p.id)?.plcState ?? null })),
+      alerts: (n) => alertLog.list(n),
+      workOrders: () => workOrders.list(),
+      oee: (q) => oee.report(q),
+      drives: () => drives.view(),
+      axes: () => axes?.view() ?? [],
+      risks: () => fleetState().risks,
+      changes: () => changes.list(500),
+    },
+  });
+  exportsApi.apply();
   // The Engineering page (engineering.cjs): state timing, transitions, compare, what changed in the PLC projects
   const engineering = createEngineering({ recorders, projectsDir: () => path.resolve(baseDir, String(config.projectSync?.folder || 'PlcProjects')), sources: require(`${sharedDir}/tcSources.cjs`) });
   // The support bundle (support.cjs): what support needs, in one zip, by a link that expires
@@ -780,7 +825,7 @@ function start() {
     }
     return r;
   };
-  const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween });
+  const reports = createReports({ file: path.join(baseDir, 'reports.json'), getConfig: () => config, events: () => alertLog.all(), maintenanceOf: maintenanceOfAll, log, audit, notes: notesBetween, sendEmail: (x) => sendEmail(config.smtp, x), more: (from, to) => handover.summary(from, to, []), link: () => (config.publicUrl ? `${String(config.publicUrl).replace(/\/+$/, '')}/?board` : '') });
   // Run at startup (Windows): the gateway as a scheduled task
   const service = createService({ configPath, log, audit });
   const admin = createAdmin({
@@ -801,12 +846,14 @@ function start() {
     log,
     recordings: { list: () => recorders.list(), check: checkRecording, checkSlowerNow: (id) => recorders.checkSlowerNow(id) },
     audit,
-    reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which) },
+    reports: { checkShifts, report: (which) => reports.report(which), send: (which) => reports.send(which), emailNow: (which) => reports.emailNow(which) },
     projects: projectSync,
     driveCheck: (b) => drives.check(b),
+    sitesView: () => sites.view(),
+    mqttReady: () => exportsApi?.mqtt.ready() ?? false,
     channels: { sendEmail: (smtp, x) => sendEmail(smtp, x), sendSms: (sms, x) => sendSms(sms, x) },
     eventLog: { import: (plc, csv, user) => eventLog.import(plc, csv, user), stats: () => eventLog.stats([...plcs.keys()]) },
-    load: () => ({ ...load.snapshot(), drives: drives.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
+    load: () => ({ ...load.snapshot(), drives: drives.stats(), axes: axes.stats(), faults: faults.stats(), fleet: fleet.stats(), projects: (config.projectSync?.enabled === false ? [] : config.projectSync?.plcs?.length ? config.projectSync.plcs : [...plcs.keys()]) }),
     roles: { check: checkRoles, filters: () => boardFilters.list().map((f) => ({ id: f.id, name: f.name, audience: f.audience })), labels: ROLE_LABELS, pages: BOARD_PAGES, pageLabels: PAGE_LABELS, pageDefaults: DEFAULT_PAGES, langDefaults: DEFAULT_LANGS },
     service: { status: () => service.status(), install: () => service.install('setup page'), remove: () => service.remove('setup page'), switchToTask: () => service.switchToTask('setup page', () => shutdown()) },
     alerts: { status: () => alerts.status(), checkRule, test: (webhook, format) => postWebhook(webhook, format, { event: 'test', text: `Kval MachineScope gateway on ${os.hostname()}: a test message from its setup page`, at: new Date().toISOString() }, log) },
@@ -816,6 +863,8 @@ function start() {
     if (await auth.handle(req, res)) return;
     // (a support bundle's link: /support/<id>.zip?key=…)
     if (support.serve(req, res)) return;
+    // (the REST/JSON API: /api/v1/…, a token as its bearer)
+    if (exportsApi?.handle(req, res)) return;
     if (!admin(req, res)) serveStatic(config, req, res);
   };
 
@@ -863,6 +912,7 @@ function start() {
     const ioViewer = {};
     // (its board's Drives page; the faults kept, told as they come)
     let drivesOff = null;
+    let axesOff = null;
     let faultsOff = null;
     let fleetTimer = null;
     let downtimeOff = null;
@@ -872,6 +922,7 @@ function start() {
     let sparesOff = null;
     let pmOff = null;
     let changesOff = null;
+    let sitesOff = null;
     const boardViewer = {};
     let user = null;
     // (a view-only token: a display, the operator board only)
@@ -947,7 +998,7 @@ function start() {
           clearTimeout(helloTimer);
           log(`auth: ${user} connected from ${ip} (signed in)`);
           audit.add(user, 'sign-in', { ip, how: 'company account' });
-          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features(), ...roleInfo() });
+          return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: features(), ...roleInfo(), sites: sites.count() });
         }
         if (!auth.tokensAllowed()) {
           send({ type: 'denied', message: 'This gateway uses sign-in with company accounts: sign in instead of a token' });
@@ -974,11 +1025,11 @@ function start() {
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}${viewOnly ? ' (view only)' : ''}`);
         audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
-        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}), ...roleInfo() });
+        return send({ type: 'welcome', user, plcs: [...plcs.values()].map((p) => ({ id: p.id, name: p.name })), features: viewOnly ? [] : features(), ...(viewOnly ? { viewOnly: true } : {}), ...roleInfo(), sites: sites.count() });
       }
       // A display (view-only token): the board, its saved boards and filters, the alerts, the I/O page and its signals,
       // nothing else (the filters and rules: refused by their own handlers, with their answers)
-      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'fleetWatch', 'fleetStop', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
+      if (viewOnly && !['boardWatch', 'boardList', 'alertsList', 'ioBoardWatch', 'ioBoardStop', 'ioSignals', 'deviceInfo', 'drivesWatch', 'drivesStop', 'driveHistory', 'fleetWatch', 'fleetStop', 'andonInfo', 'axesWatch', 'sitesWatch', 'changesWatch', 'alarmHealth', 'recoveryWatch', 'boardFilterSave', 'boardFilterDelete', 'boardRuleSave', 'boardRuleDelete'].includes(m.type)) {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const message = 'A view-only display token: the operator board only';
         if (m.type === 'liveStart') return send({ type: 'liveStatus', state: 'error', message });
@@ -1362,6 +1413,13 @@ function start() {
       // Preventive maintenance: the plans (again when one or a work order changes); written, removed; a work order now
       // Alarm health (alarmHealth.cjs): the alert history as ISA-18.2 measures it, over 1, 7 or 30 days
       // Change control: the changes (again when one is added, explained, approved); explained; approved
+      // The Sites page: the other gateways (again when one changes)
+      if (m.type === 'sitesWatch') {
+        const sendSites = () => send({ type: 'sitesState', sites: sites.view() });
+        sendSites();
+        sitesOff ??= sites.subscribe(sendSites);
+        return;
+      }
       if (m.type === 'changesWatch') {
         const sendChanges = () => send({ type: 'changes', changes: changes.list(200), open: changes.open() });
         sendChanges();
@@ -1484,6 +1542,17 @@ function start() {
       if (m.type === 'drivesStop') {
         drivesOff?.();
         drivesOff = null;
+        axesOff?.();
+        axesOff = null;
+        return;
+      }
+      // The Drives page's servo axes: these PLCs' (all when none), after each round of reads
+      if (m.type === 'axesWatch') {
+        axesOff?.();
+        const ids = Array.isArray(m.plcs) ? m.plcs.filter((id) => plcs.has(id)) : [];
+        const sendAxes = () => send({ type: 'axesState', plcs: axes.view(ids) });
+        sendAxes();
+        axesOff = axes.subscribe((plcId) => (!ids.length || ids.includes(plcId)) && sendAxes());
         return;
       }
       if (m.type === 'driveHistory') {
@@ -1936,7 +2005,9 @@ function start() {
       recoveryOff?.();
       sparesOff?.();
       pmOff?.();
+      axesOff?.();
       changesOff?.();
+      sitesOff?.();
       startSeq++;
       await stopSession();
       if (user) log(`auth: ${user} disconnected`);

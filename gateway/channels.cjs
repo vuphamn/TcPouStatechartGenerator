@@ -41,8 +41,8 @@ function smtpSession(socket, timeoutMs) {
   return { reply, off: () => socket.off('data', onData) };
 }
 
-/** An email sent: { to: [..], subject, text } with config.smtp */
-async function sendEmail(smtp, { to, subject, text }) {
+/** An email sent: { to: [..], subject, text, attachments?: [{ filename, content, type }] } with config.smtp */
+async function sendEmail(smtp, { to, subject, text, attachments = [] }) {
   if (!smtp?.host) throw new Error('No mail server: the setup page\'s Email and SMS');
   const port = Number(smtp.port) || 587;
   const secure = smtp.secure ?? port === 465;
@@ -106,10 +106,16 @@ async function sendEmail(smtp, { to, subject, text }) {
       return words.map((w) => `=?UTF-8?B?${Buffer.from(w).toString('base64')}?=`).join('\r\n ');
     };
     const body = String(text).replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..');
-    const msg = [
-      `From: ${smtp.from ?? fromAddr}`, `To: ${to.join(', ')}`, `Subject: ${enc(subject)}`, `Date: ${new Date().toUTCString()}`,
-      `Message-ID: <${Date.now()}.${Math.random().toString(36).slice(2)}@${me}>`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', body,
-    ].join('\r\n');
+    const head = [`From: ${smtp.from ?? fromAddr}`, `To: ${to.join(', ')}`, `Subject: ${enc(subject)}`, `Date: ${new Date().toUTCString()}`, `Message-ID: <${Date.now()}.${Math.random().toString(36).slice(2)}@${me}>`, 'MIME-Version: 1.0'];
+    const b64 = (data) => Buffer.from(data).toString('base64').replace(/.{76}/g, '$&\r\n');
+    const boundary = `=_kval_${Math.random().toString(36).slice(2)}`;
+    const msg = attachments.length
+      ? [
+          ...head, `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', body,
+          ...attachments.flatMap((a) => [`--${boundary}`, `Content-Type: ${a.type || 'application/octet-stream'}; name="${a.filename}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${a.filename}"`, '', b64(a.content)]),
+          `--${boundary}--`,
+        ].join('\r\n')
+      : [...head, 'Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit', '', body].join('\r\n');
     await cmd(`${msg}\r\n.`, [250], 'the message');
     socket.write('QUIT\r\n');
   } finally {

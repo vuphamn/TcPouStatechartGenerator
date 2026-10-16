@@ -128,7 +128,7 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
-function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels }) {
+function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, eventLog, channels, sitesView, mqttReady }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
     const onDisk = JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''));
@@ -243,12 +243,22 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       const webhook = String(body.reports?.webhook ?? '').trim() || null;
       if (webhook && !/^https?:\/\/\S+$/i.test(webhook)) throw new Error('The reports webhook is an http(s) URL (or empty)');
       const format = ['teams', 'slack', 'json'].includes(body.reports?.format) ? body.reports.format : 'teams';
+      // (by email: to whom, when)
+      const em = body.reports?.email ?? {};
+      const to = String(Array.isArray(em.to) ? em.to.join(',') : em.to ?? '').split(/[\s,;]+/).filter(Boolean);
+      for (const x of to) if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)) throw new Error(`"${x}": an email address`);
+      if (to.length && !/^\d{1,2}:\d{2}$/.test(String(em.at || '07:00'))) throw new Error('The report email: its time, 07:00');
       update((c) => {
         c.shifts = shifts.map((x) => ({ name: String(x.name ?? '').trim().slice(0, 30), from: String(x.from).trim(), to: String(x.to).trim() }));
-        c.reports = { webhook, format };
+        c.reports = { webhook, format, ...(to.length ? { email: { to, when: ['shift', 'daily', 'weekly'].includes(em.when) ? em.when : 'daily', day: String(em.day || 'mon').slice(0, 3).toLowerCase(), at: String(em.at || '07:00') } } : {}) };
       });
       log(`admin: shifts and reports saved (${shifts.length} shift(s)${webhook ? ', webhook' : ''})`);
       return { shifts: getConfig().shifts ?? [], reports: getConfig().reports ?? {} };
+    },
+    'POST reports/email': async (body) => {
+      if (!reports?.emailNow) throw new Error('Reports are not available');
+      await reports.emailNow(['last', 'today', 'yesterday'].includes(body?.which) ? body.which : 'last');
+      return { ok: true, message: 'Emailed' };
     },
     'POST reports/preview': async (body) => {
       if (!reports) throw new Error('Reports are not available');
@@ -334,6 +344,63 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error('An email address to write to');
         await channels.sendEmail(c.smtp, { to: [to], subject: 'Kval MachineScope: a test', text: 'A test of the gateway\'s email: its alerts will come like this.' });
       }
+      return { ok: true };
+    },
+    // Other gateways (sites.cjs): config.sites; their tokens never sent back (kept when left empty)
+    'GET sites': async () => ({ sites: (getConfig().sites ?? []).map(({ token, ...s }) => ({ ...s, hasToken: !!token })), status: sitesView ? sitesView() : [] }),
+    'POST sites': async (body) => {
+      const list = Array.isArray(body?.sites) ? body.sites : [];
+      const ids = new Set();
+      await update((c) => {
+        const old = c.sites ?? [];
+        c.sites = list.map((s, i) => {
+          const name = String(s?.name ?? '').trim().slice(0, 80);
+          const url = String(s?.url ?? '').trim().replace(/\/+$/, '');
+          if (!name || !/^https?:\/\/[^\s/]+(:\d+)?$/i.test(url)) throw new Error(`Gateway ${i + 1}: its name and its address (https://gw-line4:8443)`);
+          const id = String(s?.id || name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || `site${i + 1}`;
+          if (ids.has(id)) throw new Error(`Gateway ${i + 1}: another one has its name`);
+          ids.add(id);
+          const token = s?.token ? String(s.token).trim() : old.find((o) => o.id === id)?.token ?? '';
+          if (!token) throw new Error(`${name}: a view-only token of that gateway`);
+          return { id, name, url, token, ...(s?.root ? { root: String(s.root).trim() } : {}), ...(s?.insecureTls ? { insecureTls: true } : {}) };
+        });
+        if (!c.sites.length) delete c.sites;
+      });
+      audit?.add('setup page', 'sites', { count: list.length });
+      return { ok: true };
+    },
+    // Exports: the API, MQTT, the CMMS hook (config.api, config.mqtt, config.cmms); the MQTT password never sent back
+    'GET exports': async () => {
+      const c = getConfig();
+      const { password, ...mqtt } = c.mqtt ?? {};
+      return { api: { enabled: c.api?.enabled !== false }, mqtt: { ...mqtt, hasPassword: !!password }, mqttReady: mqttReady ? mqttReady() : false, cmms: c.cmms ?? {}, publicUrl: c.publicUrl ?? '' };
+    },
+    'POST exports': async (body) => {
+      const m = body?.mqtt ?? {};
+      const k = body?.cmms ?? {};
+      const text = (x, n) => String(x ?? '').trim().slice(0, n);
+      await update((c) => {
+        c.api = { enabled: body?.api?.enabled !== false };
+        if (text(m.url, 300)) {
+          if (!/^mqtts?:\/\/[^\s/]+/i.test(text(m.url, 300))) throw new Error('MQTT: its broker (mqtt://broker:1883 or mqtts://broker:8883)');
+          c.mqtt = { url: text(m.url, 300), username: text(m.username, 200), password: m.password ? String(m.password) : c.mqtt?.password ?? '', prefix: text(m.prefix, 120) || 'kval/machinescope', ...(m.insecureTls ? { insecureTls: true } : {}) };
+        } else delete c.mqtt;
+        if (text(k.url, 500)) {
+          if (!/^https?:\/\/\S+$/i.test(text(k.url, 500)) || (text(k.doneUrl, 500) && !/^https?:\/\/\S+$/i.test(text(k.doneUrl, 500)))) throw new Error('The CMMS: its addresses (http or https)');
+          let headers;
+          if (text(k.headers, 2000)) {
+            try {
+              headers = typeof k.headers === 'string' ? JSON.parse(k.headers) : k.headers;
+            } catch {
+              throw new Error('The CMMS: its headers, as JSON ({"Authorization": "Basic …"})');
+            }
+          }
+          c.cmms = { url: text(k.url, 500), method: ['POST', 'PUT'].includes(k.method) ? k.method : 'POST', body: text(k.body, 4000), doneUrl: text(k.doneUrl, 500), doneMethod: ['POST', 'PUT', 'PATCH'].includes(k.doneMethod) ? k.doneMethod : 'POST', doneBody: text(k.doneBody, 4000), idPath: text(k.idPath, 120), ...(headers ? { headers } : {}) };
+        } else delete c.cmms;
+        if (text(body?.publicUrl, 300)) c.publicUrl = text(body.publicUrl, 300);
+        else delete c.publicUrl;
+      });
+      audit?.add('setup page', 'exports', { api: body?.api?.enabled !== false, mqtt: !!getConfig().mqtt, cmms: !!getConfig().cmms });
       return { ok: true };
     },
     'GET monitoring': async () => {
@@ -562,6 +629,28 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div class="msg" id="admin-monitoring-msg"></div>
 </section>
 <section>
+  <h2>Exports</h2>
+  <p class="hint flush">For other systems, read only. The <b>REST/JSON API</b>: GET /api/v1/plcs, alerts, workorders, oee, drives, axes, risks, changes, with a token of the gateway (a view-only one is enough) as its bearer: curl -H "Authorization: Bearer &lt;token&gt;" https://this-gateway:8443/api/v1/alerts. <b>MQTT</b>: each alert to &lt;prefix&gt;/&lt;plc&gt;/alerts, each recorded machine&#39;s state to &lt;prefix&gt;/&lt;plc&gt;/state/&lt;its path&gt; (retained), work orders to &lt;prefix&gt;/workorders, the gateway&#39;s status online / offline. <b>A CMMS</b> (SAP PM, Maximo or another): a work order made posts its body to its address, done its done body; {number} {title} {plc} {machine} {priority} {status} {assignee} {due} {rootCause} {parts} {externalId} {link} filled in.</p>
+  <div class="row"><label class="inline"><input type="checkbox" id="admin-api-on"> The REST/JSON API</label><input id="admin-public-url" class="grow mono" placeholder="this gateway, as others reach it (https://gw-line4:8443): for {link}"></div>
+  <h3>MQTT <span class="hint" id="admin-mqtt-state"></span></h3>
+  <div class="row"><input id="admin-mqtt-url" class="grow mono" placeholder="mqtt://broker:1883 or mqtts://broker:8883"><input id="admin-mqtt-user" placeholder="user"><input id="admin-mqtt-pass" type="password" placeholder="password"><input id="admin-mqtt-prefix" placeholder="kval/machinescope"></div>
+  <h3>CMMS (SAP PM, Maximo …)</h3>
+  <div class="row"><select id="admin-cmms-method"><option>POST</option><option>PUT</option></select><input id="admin-cmms-url" class="grow mono" placeholder="https://cmms/api/workorders (a work order made)"><input id="admin-cmms-id" placeholder="its id in the answer (id)"></div>
+  <textarea id="admin-cmms-body" rows="3" class="mono" placeholder='{"description":"{title}","priority":"{priority}","asset":"{machine}"}'></textarea>
+  <div class="row"><select id="admin-cmms-done-method"><option>POST</option><option>PUT</option><option>PATCH</option></select><input id="admin-cmms-done-url" class="grow mono" placeholder="https://cmms/api/workorders/{externalId}/complete (done)"></div>
+  <textarea id="admin-cmms-done-body" rows="2" class="mono" placeholder='{"status":"COMP","remarks":"{rootCause}"}'></textarea>
+  <textarea id="admin-cmms-headers" rows="2" class="mono" placeholder='{"Content-Type":"application/json","Authorization":"Basic …"}'></textarea>
+  <div class="row mt"><span class="grow"></span><button class="primary" id="admin-exports-save">Save exports</button></div>
+  <div class="msg" id="admin-exports-msg"></div>
+</section>
+<section>
+  <h2>Other gateways</h2>
+  <p class="hint flush">The plant&#39;s other gateways on this board&#39;s Sites page: each one&#39;s PLCs, its machines in error or stuck, its open alerts, a link to its own board. Each is followed as a display follows its board, with a view-only token of that gateway (its setup page, Tokens): nothing is changed there. Self-signed certificates: tick Its certificate not checked.</p>
+  <div id="admin-sites"></div>
+  <div class="row mt"><button id="admin-site-add">Add a gateway</button><span class="grow"></span><button class="primary" id="admin-sites-save">Save other gateways</button></div>
+  <div class="msg" id="admin-sites-msg"></div>
+</section>
+<section>
   <h2>Email and SMS</h2>
   <p class="hint flush">For the roles&#39; alerts by email or text message (Roles, Told of alerts: a channel of email or SMS). Email through your mail server (SMTP: port 587 with STARTTLS, 465 with TLS); SMS through Twilio, or any provider&#39;s web API (its address with {to} and {text}). Passwords and tokens are kept in config.json and never shown again: left empty, the saved one stays.</p>
   <h3>Email (SMTP)</h3>
@@ -607,8 +696,9 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <div class="row mt"><button id="admin-shift-add">Add a shift</button></div>
   <table class="mt"><tbody>
     <tr><th>Reports webhook</th><td><input type="text" class="mono" id="admin-report-webhook" placeholder="https://... (empty: not posted)"></td><th>Format</th><td><select id="admin-report-format"><option value="teams">Teams</option><option value="slack">Slack</option><option value="json">JSON</option></select></td></tr>
+    <tr><th>Emailed to</th><td><input type="text" id="admin-report-email" placeholder="manager@acme.com, maintenance@acme.com (Email and SMS: its mail server)"></td><th>When</th><td><select id="admin-report-when"><option value="shift">each shift</option><option value="daily">daily</option><option value="weekly">weekly</option></select><select id="admin-report-day"><option value="mon">Mon</option><option value="tue">Tue</option><option value="wed">Wed</option><option value="thu">Thu</option><option value="fri">Fri</option><option value="sat">Sat</option><option value="sun">Sun</option></select><input type="text" class="mono" id="admin-report-at" size="5" placeholder="07:00"></td></tr>
   </tbody></table>
-  <div class="row mt"><button id="admin-report-preview">Preview the last shift</button><button id="admin-report-send">Send it now</button><span class="grow"></span><button class="primary" id="admin-reports-save">Save shifts and reports</button></div>
+  <div class="row mt"><button id="admin-report-preview">Preview the last shift</button><button id="admin-report-send">Send it now</button><button id="admin-report-email-now">Email it now</button><span class="grow"></span><button class="primary" id="admin-reports-save">Save shifts and reports</button></div>
   <div class="msg" id="admin-reports-msg"></div>
 </section>
 
@@ -1034,7 +1124,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1211,6 +1301,73 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   });
   loadMonitoring().catch(() => {});
 
+  // ---- Exports ----
+  const loadExports = async () => {
+    const d = await call('exports');
+    $('admin-api-on').checked = d.api.enabled;
+    $('admin-public-url').value = d.publicUrl || '';
+    $('admin-mqtt-url').value = d.mqtt.url || '';
+    $('admin-mqtt-user').value = d.mqtt.username || '';
+    $('admin-mqtt-pass').placeholder = d.mqtt.hasPassword ? '(saved: unchanged)' : 'password';
+    $('admin-mqtt-prefix').value = d.mqtt.prefix || '';
+    $('admin-mqtt-state').textContent = d.mqtt.url ? (d.mqttReady ? 'connected' : 'not connected') : '';
+    const k = d.cmms || {};
+    $('admin-cmms-method').value = k.method || 'POST';
+    $('admin-cmms-url').value = k.url || '';
+    $('admin-cmms-id').value = k.idPath || '';
+    $('admin-cmms-body').value = k.body || '';
+    $('admin-cmms-done-method').value = k.doneMethod || 'POST';
+    $('admin-cmms-done-url').value = k.doneUrl || '';
+    $('admin-cmms-done-body').value = k.doneBody || '';
+    $('admin-cmms-headers').value = k.headers ? JSON.stringify(k.headers) : '';
+  };
+  $('admin-exports-save').addEventListener('click', async () => {
+    try {
+      await call('exports', {
+        api: { enabled: $('admin-api-on').checked },
+        publicUrl: $('admin-public-url').value,
+        mqtt: { url: $('admin-mqtt-url').value, username: $('admin-mqtt-user').value, password: $('admin-mqtt-pass').value, prefix: $('admin-mqtt-prefix').value },
+        cmms: { method: $('admin-cmms-method').value, url: $('admin-cmms-url').value, idPath: $('admin-cmms-id').value, body: $('admin-cmms-body').value, doneMethod: $('admin-cmms-done-method').value, doneUrl: $('admin-cmms-done-url').value, doneBody: $('admin-cmms-done-body').value, headers: $('admin-cmms-headers').value },
+      });
+      $('admin-mqtt-pass').value = '';
+      await loadExports();
+      say('admin-exports-msg', 'Saved: taken at once', true);
+    } catch (err) { say('admin-exports-msg', err.message, false); }
+  });
+  loadExports().catch(() => {});
+
+  // ---- Other gateways ----
+  let sitesRows = [];
+  const renderSites = (status) => {
+    const box = $('admin-sites');
+    const rows = sitesRows.map((s, i) => {
+      const st = (status || []).find((x) => x.id === s.id);
+      const inp = (k, ph, extra) => el('input', Object.assign({ placeholder: ph, value: s[k] || '', on: { input: (e) => { s[k] = e.target.value; } } }, extra || {}));
+      return el('tr', { 'data-site-row': String(i) },
+        el('td', {}, inp('name', 'Line 4')),
+        el('td', {}, inp('url', 'https://gw-line4:8443', { class: 'mono' })),
+        el('td', {}, inp('token', s.hasToken ? '(saved: unchanged)' : 'a view-only token of it', { type: 'password' })),
+        el('td', {}, el('label', { class: 'inline' }, el('input', { type: 'checkbox', checked: !!s.insecureTls, on: { change: (e) => { s.insecureTls = e.target.checked; } } }), ' its certificate not checked')),
+        el('td', { class: 'hint' }, st ? (st.state === 'connected' ? 'Connected: ' + st.plcs.length + ' PLC(s)' : (st.message || st.state)) : ''),
+        el('td', {}, el('button', { on: { click: () => { sitesRows.splice(i, 1); renderSites(status); } } }, 'Remove')));
+    });
+    box.replaceChildren(el('div', { class: 'scroll' }, el('table', {}, el('tbody', {}, el('tr', {}, ...['Name', 'Address', 'Token', '', 'Now', ''].map((x) => el('th', {}, x))), ...rows))));
+  };
+  const loadSites = async () => {
+    const d = await call('sites');
+    sitesRows = d.sites || [];
+    renderSites(d.status);
+  };
+  $('admin-site-add').addEventListener('click', () => { sitesRows.push({ name: '', url: '', token: '' }); renderSites(); });
+  $('admin-sites-save').addEventListener('click', async () => {
+    try {
+      await call('sites', { sites: sitesRows });
+      await loadSites();
+      say('admin-sites-msg', 'Saved: followed at once', true);
+    } catch (err) { say('admin-sites-msg', err.message, false); }
+  });
+  loadSites().catch(() => {});
+
   // ---- Email and SMS ----
   const loadChannels = async () => {
     const d = await call('channels');
@@ -1347,18 +1504,28 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     shiftList = (r.shifts || []).map((x) => ({ ...x }));
     $('admin-report-webhook').value = (r.reports && r.reports.webhook) || '';
     $('admin-report-format').value = (r.reports && r.reports.format) || 'teams';
+    const em = (r.reports && r.reports.email) || {};
+    $('admin-report-email').value = (em.to || []).join(', ');
+    $('admin-report-when').value = em.when || 'daily';
+    $('admin-report-day').value = em.day || 'mon';
+    $('admin-report-at').value = em.at || '07:00';
     renderShifts();
   };
   $('admin-shift-add').addEventListener('click', () => { shiftList.push({ name: '', from: '', to: '' }); renderShifts(); });
   $('admin-reports-save').addEventListener('click', async () => {
     try {
-      await call('reports', { shifts: shiftList, reports: { webhook: $('admin-report-webhook').value.trim(), format: $('admin-report-format').value } });
+      await call('reports', { shifts: shiftList, reports: { webhook: $('admin-report-webhook').value.trim(), format: $('admin-report-format').value, email: { to: $('admin-report-email').value, when: $('admin-report-when').value, day: $('admin-report-day').value, at: $('admin-report-at').value.trim() } } });
       await loadReports();
       say('admin-reports-msg', 'Saved.', true);
     } catch (err) { say('admin-reports-msg', err.message, false); }
   });
   $('admin-report-preview').addEventListener('click', async () => {
     try { const r = await call('reports/preview', { which: 'last' }); say('admin-reports-msg', r.summary.text, true); }
+    catch (err) { say('admin-reports-msg', err.message, false); }
+  });
+  $('admin-report-email-now').addEventListener('click', async () => {
+    say('admin-reports-msg', 'Emailing ...');
+    try { const r = await call('reports/email', { which: 'last' }); say('admin-reports-msg', r.message, true); }
     catch (err) { say('admin-reports-msg', err.message, false); }
   });
   $('admin-report-send').addEventListener('click', async () => {

@@ -59,7 +59,7 @@ function trendChange(series) {
   return b > 0 ? (avg(vals.slice(-3)) - b) / b : null;
 }
 
-function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () => [], maintenance = null, onEvent = null, audit = null }) {
+function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () => [], maintenance = null, onEvent = null, audit = null, onStateSample = null }) {
   let recorders = new Map(); // id -> { rule, monitor, buffer, timer }
   let key = '';
   const folder = (id) => path.join(dir, id);
@@ -248,7 +248,10 @@ function createRecorders({ dir, connectionFor, plcOf, log, retryMs, rules = () =
         const r = { rule, buffer: [], timer: null, monitor: null, slowerDay: null };
         r.monitor = new AlertMonitor(
           { id: `rec:${rule.id}`, name: `recording ${rule.id}`, plc: rule.plc, root: rule.root, stateVar: rule.stateVar, stuckAfterMs: null, stateLimits: {}, onError: false, notifyRecovery: false, webhook: null, extraVars: rule.vars ?? [], ...(Array.isArray(rule.machines) ? { machines: rule.machines } : {}) },
-          { connectionFor, plcOf, log, retryMs, onSample: (m, v, t) => r.buffer.push({ t, m: m.path, v }), onVar: (p, v, t) => r.buffer.push({ t, x: p, v }) }
+          { connectionFor, plcOf, log, retryMs, onSample: (m, v, t) => {
+            r.buffer.push({ t, m: m.path, v });
+            onStateSample?.(rule, m, v, t);
+          }, onVar: (p, v, t) => r.buffer.push({ t, x: p, v }) }
         );
         r.timer = setInterval(() => flush(r), FLUSH_MS);
         prune(r);

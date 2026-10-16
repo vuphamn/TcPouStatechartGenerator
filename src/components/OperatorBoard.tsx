@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BarChart3, Handshake, ListChecks, ClipboardList, Code2, LifeBuoy, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AlertTriangle, BarChart3, Globe, Handshake, ListChecks, ClipboardList, Code2, LifeBuoy, Megaphone, Bell, BellOff, BellRing, Check, CheckSquare, CircleDot, Cpu, Gauge, History, ShieldAlert, LayoutGrid, ListTree, Maximize2, Radio, Search, Square, Timer, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { BoardTree } from './BoardTree.tsx';
 import { BoardFiltersMenu, type BoardSavedFilter, type FilterDraft } from './BoardFiltersMenu.tsx';
 import { BoardRuleDialog, type BoardRule, type BoardRules, type RuleDraft, type RuleGroup } from './BoardRuleDialog.tsx';
@@ -17,6 +17,7 @@ import { FaultViewer, type FaultSummary } from './FaultViewer.tsx';
 import { HandoverDialog, unreadHandover, type Handover } from './HandoverDialog.tsx';
 import { RecoveryDialog, guideFor, type RecoveryGuide, type RecoveryTarget } from './RecoveryDialog.tsx';
 import { PushDialog } from './PushDialog.tsx';
+import { SitesBoard } from './SitesBoard.tsx';
 import { covers, machineKey, machineTree, type Health } from '../utils/boardTree.ts';
 import { PLAYBACK_WINDOWS, stateAt, type PlaybackMachine, type RecordedValue } from '../utils/boardPlayback.ts';
 import { canPlay, playAlert, unlockSound } from '../utils/boardSound.ts';
@@ -27,7 +28,7 @@ import { formatLimit, limitFor, useDefaultLimit, useLimitsOfTypes } from '../uti
 import { useStoredSecret } from '../hooks/useStoredSecret.ts';
 import { pickBoardLang, setBoardLang, t, type BoardLang } from '../utils/boardLang.ts';
 
-type BoardPage = 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng';
+type BoardPage = 'machines' | 'io' | 'drives' | 'risk' | 'oee' | 'andon' | 'work' | 'eng' | 'sites';
 
 /**
  * Operator board (the web app at ?board, served by a gateway): a full-screen, read-only view for a screen by the
@@ -213,7 +214,7 @@ export const OperatorBoard: React.FC = () => {
     const f = /^([db]):/.exec(params.get('focus') ?? '');
     if (f) return f[1] === 'd' ? 'drives' : 'io';
     const p = params.get('page') || store.get('kss.board.page');
-    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' || p === 'eng' ? p : 'machines';
+    return p === 'io' || p === 'drives' || p === 'risk' || p === 'oee' || p === 'andon' || p === 'work' || p === 'eng' || p === 'sites' ? p : 'machines';
   });
   const setPage = (p: BoardPage) => {
     setPageState(p);
@@ -276,6 +277,8 @@ export const OperatorBoard: React.FC = () => {
   const [ruleDialog, setRuleDialog] = useState<{ kind: 'alarm' | 'recording'; groups: RuleGroup[] } | null>(null);
   // The user's role on the gateway (roles.cjs): what it may do; roles off: everything
   const [perm, setPerm] = useState<{ role: string | null; label: string | null; can: string[]; on: boolean; pages: string[] | null }>({ role: null, label: null, can: [], on: false, pages: null });
+  // (the plant's other gateways this one follows: the Sites page, when there are)
+  const [sitesCount, setSitesCount] = useState(0);
   const may = (cap: string) => !viewOnly && (!perm.on || perm.can.includes(cap));
   const [startFilter, setStartFilter] = useState<string | null>(null);
   // The fault records (gateway/faults.cjs): the list beside the alerts, the one opened
@@ -359,6 +362,7 @@ export const OperatorBoard: React.FC = () => {
     { id: 'work', icon: ClipboardList, label: 'Work', title: "Work orders, the maintenance calendar, each machine's reliability (MTBF, MTTR)", ok: may('workorder') || may('reports') },
     { id: 'eng', icon: Code2, label: 'Engineering', title: 'For engineers: state timing against normal, new and rare transitions, compare windows or machines, what changed in the PLC projects', ok: may('engineering') },
     { id: 'risk', icon: ShieldAlert, label: 'Risk', title: 'What to look at first across every PLC (drives, I/O boxes, machines), and the inventory of every box', ok: true },
+    { id: 'sites', icon: Globe, label: 'Sites', title: "The plant's other gateways: their PLCs, machines in error or stuck, open alerts", ok: sitesCount > 0 },
   ] as { id: BoardPage; icon: typeof Megaphone; label: string; title: string; ok: boolean }[]).filter((d) => d.ok && (!perm.pages || perm.pages.includes(d.id))).map((d) => ({ ...d, label: t(d.label), title: t(d.title) }));
   // (on a page its role does not see, e.g. from a link or the last visit: the first of its own)
   const pageIds = pageDefs.map((d) => d.id).join();
@@ -417,7 +421,7 @@ export const OperatorBoard: React.FC = () => {
     conn.current?.close();
     const c = new GatewayConnection((m) => {
       const msg = m as unknown as { type: string; now?: number; plcs?: BoardPlc[]; events?: AlertEvent[]; event?: AlertEvent; message?: string; boards?: SavedBoard[] };
-      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares' || msg.type === 'pmPlans' || msg.type === 'changes') {
+      if (msg.type.startsWith('io') || msg.type === 'drivesState' || msg.type === 'fleetState' || msg.type === 'workOrders' || msg.type === 'spares' || msg.type === 'pmPlans' || msg.type === 'changes' || msg.type === 'axesState' || msg.type === 'sitesState') {
         for (const fn of ioListeners.current) fn(msg);
         return;
       }
@@ -476,7 +480,8 @@ export const OperatorBoard: React.FC = () => {
       .then((w) => {
         const { user } = w;
         setMe(user);
-        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null };
+        const r = w as unknown as { role?: string | null; roleLabel?: string | null; can?: string[]; rolesOn?: boolean; pages?: string[] | null; lang?: string | null; sites?: number };
+        setSitesCount(r.sites ?? 0);
         // (the role's language, unless the address or the viewer chose one)
         if (!params.get('lang') && !store.get('kss.board.lang') && r.lang) setLangState(pickBoardLang(null, null, r.lang, navigator.language));
         setPerm({ role: r.role ?? null, label: r.roleLabel ?? null, can: r.can ?? [], on: !!r.rolesOn, pages: r.pages ?? null });
@@ -1181,6 +1186,7 @@ export const OperatorBoard: React.FC = () => {
           </nav>
         )}
         <div className="flex-1 min-h-0 flex">
+          {(!narrow || phoneView === 'machines') && page === 'sites' && <SitesBoard conn={conn.current} connected={status.state === 'connected'} subscribe={subscribeIo as unknown as (fn: (m: { type: string }) => void) => () => void} narrow={narrow} />}
           {(!narrow || phoneView === 'machines') && page === 'eng' && (
             <div className="flex-1 min-w-0 flex flex-col">
               <EngBoard conn={conn.current} connected={status.state === 'connected'} root={root} plcs={plcs.map((p) => ({ id: p.id, name: p.name }))} narrow={narrow} />

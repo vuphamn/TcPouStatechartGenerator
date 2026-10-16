@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Download, Gauge, HeartPulse, Search, Thermometer, X, Zap } from 'lucide-react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
+import { AxesList, type AxesPlc } from './AxesList.tsx';
 
 /** The gateway's drive monitor as the board gets it (gateway/drives.cjs view()) */
 export interface DriveView {
@@ -165,9 +166,14 @@ export const DrivesBoard: React.FC<{
       setFocused(true);
     }
   }, [focusPath, focused, plcs]);
+  const [axesPlcs, setAxesPlcs] = useState<AxesPlc[]>([]);
   useEffect(
     () =>
       subscribe((m) => {
+        if (m.type === 'axesState') {
+          setAxesPlcs((m as unknown as { plcs?: AxesPlc[] }).plcs ?? []);
+          return;
+        }
         if (m.type !== 'drivesState') return;
         setPlcs(m.plcs ?? []);
         if (m.params) setParams(m.params);
@@ -178,6 +184,7 @@ export const DrivesBoard: React.FC<{
   useEffect(() => {
     if (!connected || !conn) return;
     conn.send({ type: 'drivesWatch', plcs: plcIds });
+    conn.send({ type: 'axesWatch', plcs: plcIds });
     return () => {
       conn.send({ type: 'drivesStop' });
     };
@@ -310,6 +317,7 @@ export const DrivesBoard: React.FC<{
             </div>
           </section>
         ))}
+        <AxesList plcs={axesPlcs} filter={words} problemsOnly={problemsOnly} narrow={narrow} />
       </div>
       {detail && open && <DriveDetail conn={conn} plc={open.plc} plcName={plcs.find((p) => p.id === open.plc)?.name ?? open.plc} drive={detail} params={params[detail.profile]?.params ?? []} onClose={() => setOpen(null)} />}
     </div>

@@ -92,17 +92,88 @@ function reportCsv({ summary, alerts, notes = [] }) {
   return rows.join('\r\n') + '\r\n';
 }
 
-/** Posts each shift's report when it ends (reports.webhook); the last one sent is kept in reports.json */
-function createReports({ file, getConfig, events, maintenanceOf, log, audit, notes = () => [] }) {
+const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+/**
+ * The window a scheduled email report is due for now (reports.email: { when: 'daily' | 'weekly', day, at }), or null:
+ * daily, yesterday (its time passed today, not sent today); weekly, the last 7 days (its day, its time passed)
+ */
+function emailWindow(email, now, lastKey) {
+  if (!email || !['daily', 'weekly'].includes(email.when)) return null;
+  const [hh, mm] = String(email.at || '07:00').split(':').map(Number);
+  const d = new Date(now);
+  const at = new Date(d);
+  at.setHours(hh || 0, mm || 0, 0, 0);
+  if (now < at.getTime()) return null;
+  if (email.when === 'weekly' && d.getDay() !== Math.max(0, DAYS.indexOf(String(email.day || 'mon').slice(0, 3).toLowerCase()))) return null;
+  const midnight = new Date(d);
+  midnight.setHours(0, 0, 0, 0);
+  const key = `${email.when}|${midnight.toDateString()}`;
+  if (key === lastKey) return null;
+  const days = email.when === 'weekly' ? 7 : 1;
+  return { key, name: email.when === 'weekly' ? 'The last 7 days' : 'Yesterday', from: midnight.getTime() - days * 86400000, to: midnight.getTime() };
+}
+
+/** The rest of a report, for its email: stops and OEE, work orders, drives to watch, alerts still open (handover.cjs' summary) */
+function moreText(s) {
+  if (!s) return '';
+  const pct = (x) => (x === null || x === undefined ? '—' : `${Math.round(x * 100)} %`);
+  const lines = [];
+  if (s.stops) lines.push(`Stops: ${s.stops.count}, ${mins(s.stops.downMs)} down; availability ${pct(s.stops.availability)}, OEE ${pct(s.stops.oee)}${s.stops.reasons.length ? `; most: ${s.stops.reasons.map((r) => `${r.reason} ${mins(r.ms)}`).join(', ')}` : ''}${s.stops.noReason ? ` (${s.stops.noReason} without a reason)` : ''}`);
+  lines.push(`Work orders: ${s.work.opened.length} opened, ${s.work.done.length} done, ${s.work.open.length} open`);
+  for (const o of s.work.open.slice(0, 10)) lines.push(`  #${o.number} ${o.title} (${o.priority}${o.assignee ? `, ${o.assignee}` : ''})`);
+  if (s.drives.length) lines.push('Drives to watch:', ...s.drives.map((d) => `  ${d.name} (${d.plcName}): ${d.text}`));
+  if (s.open.length) lines.push('Alerts still open:', ...s.open.slice(0, 15).map((a) => `  ${a.text}${a.ack ? '' : ' (not acknowledged)'}`));
+  return lines.join('\n');
+}
+
+/**
+ * Posts each shift's report when it ends (reports.webhook); emails it (reports.email: each shift, or daily or weekly at
+ * a time) with its CSV; the last ones sent kept in reports.json
+ */
+function createReports({ file, getConfig, events, maintenanceOf, log, audit, notes = () => [], sendEmail = null, more = () => null, link = () => '' }) {
   let last = 0;
+  let lastEmail = '';
   try {
-    last = JSON.parse(fs.readFileSync(file, 'utf8')).lastEnd ?? 0;
+    const kept = JSON.parse(fs.readFileSync(file, 'utf8'));
+    last = kept.lastEnd ?? 0;
+    lastEmail = kept.lastEmail ?? '';
   } catch {
     last = 0;
   }
+  const keep = () => {
+    try {
+      fs.writeFileSync(file, JSON.stringify({ lastEnd: last, lastEmail }));
+    } catch {
+      // sent again after a restart, at worst
+    }
+  };
+  /** A report emailed: its summary, the rest (stops, work, drives, open), its CSV attached */
+  const email = async (w) => {
+    const e = getConfig().reports?.email;
+    if (!e?.to?.length || !sendEmail) throw new Error('No one to email the report to: the setup page, Shift reports');
+    const r = buildReport(w, events(), maintenanceOf(w.from, w.to), notes(w.from, w.to));
+    const rest = moreText(more(w.from, w.to));
+    const day = new Date(w.from).toISOString().slice(0, 10);
+    await sendEmail({
+      to: e.to,
+      subject: `MachineScope report: ${w.name} (${r.summary.alerts} alert${r.summary.alerts === 1 ? '' : 's'})`,
+      text: `${r.summary.text}${rest ? `\n\n${rest}` : ''}${link() ? `\n\nThe board: ${link()}` : ''}\n\n(Kval MachineScope gateway; every alert of the report in the CSV attached)`,
+      attachments: [{ filename: `report-${day}-${String(w.name).replace(/[^\w-]+/g, '_')}.csv`, content: reportCsv(r), type: 'text/csv' }],
+    });
+    log(`reports: ${w.name} report emailed to ${e.to.join(', ')}`);
+    audit?.add('gateway', 'report.emailed', { name: w.name, from: new Date(w.from).toISOString(), to: e.to.length });
+  };
   const tick = () => {
     const cfg = getConfig();
-    if (!cfg.reports?.webhook) return;
+    // (by email, daily or weekly)
+    const ew = emailWindow(cfg.reports?.email, Date.now(), lastEmail);
+    if (ew) {
+      lastEmail = ew.key;
+      keep();
+      void email(ew).catch((err) => log(`reports: not emailed: ${err.message}`));
+    }
+    const byEmail = cfg.reports?.email?.when === 'shift' && cfg.reports.email.to?.length;
+    if (!cfg.reports?.webhook && !byEmail) return;
     let shifts;
     try {
       shifts = checkShifts(cfg.shifts);
@@ -115,11 +186,9 @@ function createReports({ file, getConfig, events, maintenanceOf, log, audit, not
     const w = ended[ended.length - 1];
     if (!w) return;
     last = w.to;
-    try {
-      fs.writeFileSync(file, JSON.stringify({ lastEnd: last }));
-    } catch {
-      // sent again after a restart, at worst
-    }
+    keep();
+    if (byEmail) void email(w).catch((err) => log(`reports: not emailed: ${err.message}`));
+    if (!cfg.reports?.webhook) return;
     const r = buildReport(w, events(), maintenanceOf(w.from, w.to), notes(w.from, w.to));
     log(`reports: ${w.name} report posted (${r.summary.alerts} alerts)`);
     audit?.add('gateway', 'report.posted', { shift: w.name, from: new Date(w.from).toISOString(), alerts: r.summary.alerts });
@@ -129,6 +198,11 @@ function createReports({ file, getConfig, events, maintenanceOf, log, audit, not
   timer.unref();
   return {
     tick,
+    /** A report emailed now: "last" (the last shift that ended), "today", "yesterday" */
+    async emailNow(which) {
+      const r = this.report(which);
+      await email({ name: r.summary.name ?? which, from: r.summary.from ?? Date.now() - 86400000, to: r.summary.to ?? Date.now() });
+    },
     /** "last" (the last shift that ended), "today", "yesterday", or { from, to } */
     report(which) {
       const shifts = checkShifts(getConfig().shifts);
@@ -163,4 +237,4 @@ function createReports({ file, getConfig, events, maintenanceOf, log, audit, not
   };
 }
 
-module.exports = { createReports, checkShifts, shiftWindows, buildReport, reportCsv };
+module.exports = { createReports, checkShifts, shiftWindows, buildReport, reportCsv, emailWindow, moreText };

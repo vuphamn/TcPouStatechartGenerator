@@ -145,7 +145,7 @@ const device = () => {
     await p.click('#board-push');
     const dlg = await h.until(() => p.evaluate(() => ({ on: !!document.querySelector('#push-on'), kinds: document.querySelectorAll('.push-kind').length, sw: !!navigator.serviceWorker?.controller || null })).then((x) => (x.on ? x : null)), 10000);
     const reg = await p.evaluate(() => navigator.serviceWorker.getRegistration('/').then((r) => r?.active?.scriptURL ?? r?.installing?.scriptURL ?? r?.waiting?.scriptURL ?? null));
-    expect(dlg?.kinds === 11 && /\/sw\.js$/.test(reg ?? ''), `the dialog (${dlg?.kinds} kinds), the service worker registered: ${reg}`);
+    expect(dlg?.kinds === 12 && /\/sw\.js$/.test(reg ?? ''), `the dialog (${dlg?.kinds} kinds), the service worker registered: ${reg}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

@@ -14,6 +14,7 @@ const KINDS: [string, string][] = [
   ['handover', 'Shift handover'],
   ['parts', 'Spare parts low'],
   ['change', 'PLC program changes'],
+  ['anomaly', 'Anomalies (unusual stays, new transitions)'],
   ['recovered', 'Recovered'],
 ];
 const keyOf = (b64: string) => {

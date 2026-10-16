@@ -9,7 +9,7 @@ import { boardLangKeys, pickBoardLang, setBoardLang, t } from '../../src/utils/b
 let fails = 0;
 const expect = (c: boolean, w: string) => { console.log(`${c ? 'ok  ' : 'FAIL'} ${w}`); if (!c) fails++; };
 
-const FILES = ['OperatorBoard.tsx', 'BoardFiltersMenu.tsx', 'AndonBoard.tsx', 'FocusView.tsx', 'RecoveryDialog.tsx', 'HandoverDialog.tsx', 'PushDialog.tsx'];
+const FILES = ['OperatorBoard.tsx', 'BoardFiltersMenu.tsx', 'AndonBoard.tsx', 'FocusView.tsx', 'RecoveryDialog.tsx', 'HandoverDialog.tsx', 'PushDialog.tsx', 'SitesBoard.tsx'];
 const es = new Set(boardLangKeys('es'));
 const missing: string[] = [];
 let used = 0;
@@ -27,7 +27,7 @@ const others = ['Andon', 'Machines', 'I/O', 'Drives', 'Risk', 'OEE', 'Work', 'En
 expect(others.every((k) => es.has(k)), `the pages, the reasons, the summary's kinds: ${others.filter((k) => !es.has(k)).join(', ') || 'all there'}`);
 const board = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'OperatorBoard.tsx'), 'utf8');
 const titles = [...board.matchAll(/\{ id: '\w+', icon: \w+, label: '([^']+)', title: (?:'((?:[^'\\]|\\.)*)'|"([^"]*)")/g)].map((m) => [m[1], (m[2] ?? m[3]).replace(/\\'/g, "'")]).flat();
-expect(titles.length === 16 && titles.every((k) => es.has(k)), `the pages' labels and titles (${titles.length / 2} pages)${titles.filter((k) => !es.has(k)).map((k) => `; missing: ${k}`).join('')}`);
+expect(titles.length === 18 && titles.every((k) => es.has(k)), `the pages' labels and titles (${titles.length / 2} pages)${titles.filter((k) => !es.has(k)).map((k) => `; missing: ${k}`).join('')}`);
 
 setBoardLang('es');
 const a = t('{a} of {n} machines', { a: 3, n: 12 });

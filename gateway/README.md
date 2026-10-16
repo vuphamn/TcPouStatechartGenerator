@@ -209,6 +209,11 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **Hand over:** a note for the next shift (what is running, what to watch, what is waiting), with the summary as it was then. For those who may write notes. Told to the roles that want **handover** (Roles: Told of alerts).
   - **Read it:** the next shift sees the last handover and marks it read. Who read it is kept. Earlier ones can be chosen.
   - **Kept:** `handover.json` beside `config.json` (the last 500), each one in the audit log.
+- **Anomalies** (in the alert history, 🔍): live, from the recordings, what is unusual for a machine before it is a fault.
+  - **A stay far from its usual:** each stay in a state, as it ends, against that state's stays of the last 14 days (their median and spread). Far longer (6 spreads, twice the median and 5 s more), or far shorter (a third of the median: a step skipped?).
+  - **A new transition:** one not seen in those 14 days ("ENABLING → ERROR: a transition not seen in its last 14 days").
+  - **Quiet:** kept in the alert history, never open, no chime; told to the roles and devices that want **anomaly**. One a machine and kind an hour at most.
+  - **Settings:** `"anomalies": { "enabled": true, "days": 14, "minStays": 20, "spreads": 6 }`.
 - **Guided recovery** (**Guide** on a stopped machine's tile; **Recovery steps** on the Andon page): the steps to bring a machine back from an error state, one at a time.
   - **A guide** is for a state, of a type of machine, of one machine, or of every machine in that state. The most particular one is offered.
   - **Its steps:** a step can be checked by the PLC itself, a variable at a value (`Close the guard | MAIN.bGuardClosed = TRUE`; numbers also `> 2`, `<= 40`). The checks are read from the PLC every 2 seconds while the guide is open: ✓ or ✗ with the value.
@@ -240,6 +245,9 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **Why?** A machine in an error state, or stuck, longer than `reasonAfterMin` (2 by default) gets **Why?** on its tile. An operator picks a reason (`reasons`, with a note). Kept in `downtime.jsonl`; each stop of the report shows its reason, who gave it, and the note.
   - **Weekly summary:** `weekly` posts the last 7 days (OEE, availability, stops, the top reasons) to a webhook at a day and time.
   - **Settings:** `"oee": { "reasons": ["Waiting for material", "Jam", "Tool change", …], "reasonAfterMin": 2, "machines": [{ "plc": "line202", "machine": "MAIN.mainStateMachine.smTable1" (or "type": "SM_TableManager"), "cycleState": "TABLEMANAGER_DONE", "idealCycleSec": 42, "goodVar": "MAIN.nGoodParts", "badVar": "MAIN.nBadParts" }], "weekly": { "day": "Mon", "at": "07:00", "webhook": "https://…", "format": "teams", "link": "https://gateway:8443/?board&page=oee&window=week" } }`.
+- **The Sites page** (**Sites** in the header, when this gateway follows others): the plant's other gateways, each one's PLCs, its machines in error or stuck, its open alerts, and a link to its own board. Worst first; one not reached says why.
+  - **Following them:** the setup page's **Other gateways**: each one's name, address and a view-only token of it (its setup page, Tokens). It is followed as a display follows its board: nothing is changed there. **Its certificate not checked** for a self-signed one.
+  - **Settings:** `"sites": [{ "id": "line4", "name": "Line 4", "url": "https://gw-line4:8443", "token": "…", "insecureTls": false }]`. Supervisors, engineers and managers see the page by default.
 - **The Risk page** (**Risk** in the header; `&page=risk`), for a maintenance supervisor: across every PLC, what to look at first, worst first.
   - **Drives:** their health findings, and their heatsink's daily medians (while running) rising, carried forward to the warning threshold: "near its warning threshold in about 19 days" (within 90 days; a warning within 14).
   - **I/O boxes:** one out of OP now (alarm); one out of OP on 2 or more of the last 7 days (warning: its supply, cable, connectors); its CRC errors over 7 days (5: watch, 50: warning: its cable or connectors).
@@ -295,6 +303,10 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
     - **Read its profile:** its identity (vendor, product code, against what its project expects), then every value it reads, as bytes, as each integer and float, and as the board reads it (with its scaling). A drive the board follows is read at the address it found it at.
     - **Read this object:** any one object (an index in hex, a subindex, a size).
     - Read only, and it works with the drives monitor off. A value that is off: correct its profile in `drives.profiles`.
+  - **Servo axes** (under the drives): every NC axis of the PLCs' programs (each `AXIS_REF`, AX5000, AX8000 or another), read from its `NcToPlc` every 10 seconds (Tc2_MC2: its error code, set and actual velocity, following error `PosDiff`, torque `ActTorque`).
+    - **While it moves:** its following error and its torque kept; their 95th percentile a day (`axes/<plc>/summary.json`).
+    - **Judged:** an NC error is an *Alarm*. Its following error 30 % (watch) or 60 % (warning) above its own last days, or its torque 15 % or 30 % above: "the mechanics (backlash, a bearing, a coupling), its tuning, the load", "friction, the load, its brake". Alerts as the drives'.
+    - **Settings:** `"axes": { "enabled": true, "everySeconds": 10, "plcs": ["line202"], "limits": { "lagRise": { "watch": 30, "warn": 60 }, "torqueRise": { "watch": 15, "warn": 30 } } }`.
   - **Kept:** `drives/<plc>/<day>.jsonl` beside `config.json` (a value when it changes, else every 10 minutes; past days compressed; 90 days), and each day's statistics in `summary.json` (the baselines).
   - **Settings** in `config.json`: `"drives": { "enabled": true, "everySeconds": 30, "slowEveryMinutes": 10, "keepDays": 90, "plcs": ["line202"], "limits": { "heatsinkRise": { "watch": 5, "warn": 8 } }, "webhook": "https://…", "format": "teams", "profiles": [ … ] }`. A profile of your own, for another maker's drive: `{ "id": "acme", "name": "Acme", "match": { "vendorId": 2457, "type": "AD-?" }, "running": "freq", "params": [{ "key": "heatsink", "label": "Heatsink", "index": "0x2001", "sub": 1, "size": 2, "signed": true, "scale": 0.1, "unit": "°C", "trend": true, "peers": true }] }`. The same id replaces a built-in one, for example to correct a scaling. Off with `"enabled": false`, or `allowBrowse: false`.
 - **Saved boards:** `/?board=<id>` opens a board saved on the setup page (its PLCs, title, root and default limit); the header switches between them. The address options below override a saved board's.
@@ -348,6 +360,19 @@ A scheduled task needs no service wrapper; if you prefer a Windows service, NSSM
 - **The andon's:** its steps by state, the reasons to call maintenance; whether a call makes a work order.
 - **Saving:** one **Save monitoring**, checked; taken at once, without a restart.
 - **Load** shows which monitors run on each PLC.
+
+**Reports by email** (the setup page's Shift reports, **Emailed to**): the shift report emailed each shift, daily (yesterday's) or weekly (the last 7 days) at a time, through the mail server of Email and SMS.
+- **Its body:** the report (alerts by kind, time to acknowledge, the machines with most), then the stops and OEE, the work orders opened, done and open, the drives to watch, the alerts still open, and the board's link.
+- **Attached:** every alert of the report, as CSV. **Email it now** sends the last shift's.
+- `"reports": { "email": { "to": ["manager@acme.com"], "when": "shift" | "daily" | "weekly", "day": "mon", "at": "07:00" } }`.
+
+**Exports** (the setup page): for other systems, read only.
+- **The REST/JSON API:** `GET /api/v1/plcs`, `alerts` (`?since=`, `?limit=`), `workorders` (`?status=`), `oee` (`?from=`, `?to=`, `?by=shift|day`), `drives`, `axes`, `risks`, `changes`, with a token of the gateway (a view-only one is enough) as its bearer: `curl -H "Authorization: Bearer <token>" https://gateway:8443/api/v1/alerts`. `"api": { "enabled": false }` turns it off.
+- **MQTT** (`"mqtt": { "url": "mqtt://broker:1883" or "mqtts://…:8883", "username", "password", "prefix": "kval/machinescope" }`): an MQTT 3.1.1 client of its own (QoS 0). `<prefix>/<plc>/alerts` each alert; `<prefix>/<plc>/state/<machine path>` each recorded machine's state (retained); `<prefix>/workorders` each work order made or changed; `<prefix>/gateway/status` online, or offline (its will, retained).
+- **A CMMS hook** (SAP PM, Maximo or another): a work order made posts its body to the CMMS (its id there kept, `idPath`), done posts its done body to its done address.
+  - `{number} {title} {plc} {plcName} {machine} {priority} {status} {assignee} {due} {rootCause} {parts} {createdBy} {createdAt} {externalId} {link}` are filled in (escaped for JSON in a body, for the URL in an address).
+  - `"cmms": { "url": "https://cmms/api/wo", "body": "{\"description\":\"{title}\"}", "idPath": "data.id", "doneUrl": "https://cmms/api/wo/{externalId}/complete", "doneMethod": "PUT", "doneBody": "{\"remarks\":\"{rootCause}\"}", "headers": { "Authorization": "Basic …" } }`. Its headers and the MQTT password are left out of the support bundle.
+- `"publicUrl": "https://gw-line4:8443"`: this gateway as others reach it (`{link}`, the reports' link).
 
 **Roles** (the setup page's **Roles**, `config.json` `"roles"`): who may do what on the gateway. Without roles, everyone signed in may do everything (`writeUsers` and `boardEditors` still apply), and a view-only token is a display.
 
