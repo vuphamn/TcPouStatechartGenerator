@@ -191,6 +191,13 @@ function checkBoard(b, i, plcIds) {
   return { id, title: String(b?.title ?? '').trim().slice(0, 80) || id, plcs, root, stuck };
 }
 
+/** A token's expiry: a date alone is the end of that day (here); null: none */
+function expiryOf(x) {
+  if (!x) return null;
+  const v = String(x);
+  return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v) ? new Date(v + 'T23:59:59') : new Date(v);
+}
+
 function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, checkPlc, discover, localNetworks, sha256, version, log, alerts, recordings, audit, reports, service, projects, load, roles, driveCheck, findMeters, health, eventLog, channels, sitesView, mqttReady, backup, restart, certs }) {
   // config.json read fresh and written whole (a temporary file renamed over it): other settings are kept as they are
   const update = (change) => {
@@ -214,7 +221,7 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       localNetId: config.localNetId ?? '',
       networks: localNetworks(),
       plcs: (config.plcs ?? []).map((p) => ({ ...p, status: plcStatus(p.id) })),
-      tokens: (config.tokens ?? []).map((t) => ({ name: t.name, created: t.created ?? null, ...(t.view ? { view: true } : {}) })),
+      tokens: (config.tokens ?? []).map((t) => ({ name: t.name, created: t.created ?? null, ...(t.view ? { view: true } : {}), expires: t.expires ?? null, plcs: Array.isArray(t.plcs) ? t.plcs : [], rotatedUntil: t.previous?.until && Date.parse(t.previous.until) > Date.now() ? t.previous.until : null })),
     };
   };
 
@@ -254,11 +261,15 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       const token = crypto.randomBytes(24).toString('base64url');
       // (view only: a display, a TV by the line: the operator board, nothing else; its link carries it)
       const view = body.view === true;
+      const ids = (getConfig().plcs ?? []).map((p) => p.id);
+      const scope = (Array.isArray(body.plcs) ? body.plcs : []).map(String).filter((p) => ids.includes(p));
+      const expires = expiryOf(body.expires);
+      if (expires && (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now())) throw new Error('Its expiry: a date to come');
       update((c) => {
-        c.tokens = [...(c.tokens ?? []), { name, sha256: sha256(token), created: new Date().toISOString(), ...(view ? { view: true } : {}) }];
+        c.tokens = [...(c.tokens ?? []), { name, sha256: sha256(token), created: new Date().toISOString(), ...(view ? { view: true } : {}), ...(expires ? { expires: expires.toISOString() } : {}), ...(scope.length ? { plcs: scope } : {}) }];
       });
       log(`admin: ${view ? 'view-only ' : ''}token "${name}" created`);
-      audit?.add('setup page', 'token.create', { name, view });
+      audit?.add('setup page', 'token.create', { name, view, expires: expires?.toISOString() ?? null, plcs: scope });
       const s = state();
       return { name, token, view, ...(view ? { boardUrl: `${s.scheme}://${s.host}:${s.port}/?board&view=${token}` } : {}), state: s };
     },
@@ -548,6 +559,22 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (!/^https?:\/\/\S+$/i.test(webhook)) throw new Error('The webhook is an http(s) URL');
       return alerts.test(webhook, ['teams', 'slack', 'json'].includes(body.format) ? body.format : 'json');
     },
+    'POST tokens/rotate': async (body) => {
+      const name = String(body.name ?? '');
+      const old = (getConfig().tokens ?? []).find((t) => t.name === name);
+      if (!old) throw new Error(`No token named "${name}"`);
+      const graceDays = Math.max(0, Math.min(90, Number(body.graceDays ?? 7)));
+      const expires = expiryOf(body.expires);
+      if (expires && (Number.isNaN(expires.getTime()) || expires.getTime() <= Date.now())) throw new Error('Its expiry: a date to come');
+      const token = crypto.randomBytes(24).toString('base64url');
+      update((c) => {
+        c.tokens = (c.tokens ?? []).map((t) => (t.name !== name ? t : { ...t, sha256: sha256(token), rotated: new Date().toISOString(), ...(graceDays ? { previous: { sha256: t.sha256, until: new Date(Date.now() + graceDays * 86400000).toISOString() } } : { previous: undefined }), ...(expires ? { expires: expires.toISOString() } : {}) }));
+      });
+      log(`admin: token "${name}" rotated (the old one let in ${graceDays} more day(s))`);
+      audit?.add('setup page', 'token.rotate', { name, graceDays });
+      const st = state();
+      return { name, token, view: !!old.view, ...(old.view ? { boardUrl: `${st.scheme}://${st.host}:${st.port}/?board&view=${token}` } : {}), state: st };
+    },
     'POST tokens/revoke': async (body) => {
       const name = String(body.name ?? '');
       if (!(getConfig().tokens ?? []).some((t) => t.name === name)) throw new Error(`No token named "${name}"`);
@@ -725,8 +752,8 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
 
 <section>
   <h2>Access tokens</h2>
-  <div class="scroll"><table><thead><tr><th>Name</th><th>Created</th><th></th></tr></thead><tbody id="admin-tokens"></tbody></table></div>
-  <div class="row mt"><input type="text" id="admin-token-name" placeholder="Who is it for? (a person or team)" maxlength="60"><label title="A display (a TV by the line): the operator board only, no actions; its link carries the token"><input type="checkbox" id="admin-token-view"> View only (a display)</label><button class="primary" id="admin-token-create">Create token</button></div>
+  <div class="scroll"><table><thead><tr><th>Name</th><th>Created</th><th>Expires</th><th>PLCs</th><th></th></tr></thead><tbody id="admin-tokens"></tbody></table></div>
+  <div class="row mt"><input type="text" id="admin-token-name" placeholder="Who is it for? (a person or team)" maxlength="60"><label title="A display (a TV by the line): the operator board only, no actions; its link carries the token"><input type="checkbox" id="admin-token-view"> View only (a display)</label><label title="After this day it is refused (empty: never)">expires <input type="date" id="admin-token-expires"></label><span id="admin-token-plcs" title="Only these PLCs: their machines, alerts, work orders, drives (none ticked: every PLC)"></span><button class="primary" id="admin-token-create">Create token</button></div>
   <div id="admin-token-new"></div>
   <div class="msg" id="admin-token-msg"></div>
   <p class="hint">Only a token's hash is kept: a new token is shown once. People enter it in the web app's Live tab. A revoked token stops working at once.</p>
@@ -1012,18 +1039,30 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     renderPlcs();
     renderFound();
     renderTokens(state.tokens);
+    $('admin-token-plcs').replaceChildren(...(state.plcs || []).map((p) => el('label', { class: 'inline' }, el('input', { type: 'checkbox', value: p.id }), ' ' + p.name)));
     refreshButtons();
   }
 
   function renderTokens(tokens) {
     const body = $('admin-tokens');
     body.replaceChildren();
-    if (!tokens.length) body.append(el('tr', {}, el('td', { colSpan: 3, class: 'status' }, 'No tokens yet: nobody can go live through this gateway.')));
+    if (!tokens.length) body.append(el('tr', {}, el('td', { colSpan: 5, class: 'status' }, 'No tokens yet: nobody can go live through this gateway.')));
     for (const t of tokens) {
       body.append(el('tr', { 'data-token': t.name },
         el('td', {}, t.name, t.view ? el('span', { class: 'tag admin-token-view-tag', title: 'A display: the operator board only, no actions' }, ' view only') : ''), el('td', {}, t.created ? new Date(t.created).toLocaleString() : ''),
-        el('td', { class: 'right' }, el('button', { class: 'danger admin-revoke', on: { click: () => revoke(t.name) } }, 'Revoke'))));
+        el('td', { class: 'admin-token-expires' + (t.expires && Date.parse(t.expires) - Date.now() < 7 * 86400000 ? ' bad' : '') }, t.expires ? new Date(t.expires).toLocaleDateString() : 'never', t.rotatedUntil ? el('div', { class: 'hint flush' }, 'its old one until ' + new Date(t.rotatedUntil).toLocaleDateString()) : ''),
+        el('td', { class: 'admin-token-plcs' }, t.plcs && t.plcs.length ? t.plcs.join(', ') : 'all'),
+        el('td', { class: 'right' }, el('button', { class: 'admin-rotate', title: 'A new token for the same name; its old one still works 7 days', on: { click: () => rotate(t.name) } }, 'Rotate'), el('button', { class: 'danger admin-revoke', on: { click: () => revoke(t.name) } }, 'Revoke'))));
     }
+  }
+
+  async function rotate(name) {
+    if (!confirm('A new token for "' + name + '"? Its old one still works 7 days, then stops.')) return;
+    try {
+      const r = await call('tokens/rotate', { name, graceDays: 7 });
+      renderTokens(r.state.tokens);
+      $('admin-token-new').replaceChildren(el('div', { class: 'token' }, el('div', { class: 'status' }, 'The new token for "' + r.name + '": shown only now. Its old one works 7 more days.'), el('div', { class: 'row mt6' }, el('span', { class: 'mono', id: 'admin-token-value' }, r.token)), r.boardUrl ? el('a', { class: 'mono', id: 'admin-token-board-url', href: r.boardUrl, target: '_blank' }, r.boardUrl) : ''));
+    } catch (err) { say('admin-token-msg', err.message, false); }
   }
 
   async function revoke(name) {
@@ -1084,7 +1123,8 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     const name = $('admin-token-name').value.trim();
     if (!name) return say('admin-token-msg', 'Enter who the token is for.', false);
     try {
-      const r = await call('tokens', { name, view: $('admin-token-view').checked });
+      const r = await call('tokens', { name, view: $('admin-token-view').checked, expires: $('admin-token-expires').value || undefined, plcs: [...document.querySelectorAll('#admin-token-plcs input:checked')].map((x) => x.value) });
+      $('admin-token-expires').value = '';
       $('admin-token-name').value = '';
       $('admin-token-view').checked = false;
       renderTokens(r.state.tokens);

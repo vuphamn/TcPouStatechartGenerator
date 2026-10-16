@@ -140,6 +140,28 @@ const hello = (token) =>
   await h.sleep(600);
   expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).tokens.length === 0 && !/alice/.test(await p.$eval('#admin-tokens', (e) => e.innerText)), 'revoked: gone from config.json and the list');
   expect((await hello(token))?.type === 'denied', 'the revoked token no longer signs in');
+  // A token of one PLC, with an expiry: it sees that PLC only (the board, the REST API); rotated: the new one signs in,
+  // the old one too until its grace ends; an expiry gone by refused
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const past = await post('/admin/api/tokens', { name: 'bob', expires: '2020-01-01' });
+  const bob = await post('/admin/api/tokens', { name: 'bob', plcs: ['cx-203', 'nope'], expires: tomorrow });
+  const bobWelcome = await hello(bob.json?.token);
+  const rest = await new Promise((resolve) => {
+    http.get({ host: '127.0.0.1', port: PORT, path: '/api/v1/plcs', headers: { host: `localhost:${PORT}`, authorization: `Bearer ${bob.json?.token}` } }, (res) => {
+      let t = '';
+      res.on('data', (d) => (t += d));
+      res.on('end', () => resolve((() => { try { return JSON.parse(t); } catch { return null; } })()));
+    }).on('error', () => resolve(null));
+  });
+  const rotated = await post('/admin/api/tokens/rotate', { name: 'bob', graceDays: 7 });
+  const newOne = await hello(rotated.json?.token);
+  const oldOne = await hello(bob.json?.token);
+  const bobRow = rotated.json?.state?.tokens?.find((t) => t.name === 'bob');
+  expect(past.status >= 400 && /a date to come/.test(past.json?.error ?? '') && bobWelcome?.plcs?.map((x) => x.id).join() === 'cx-203' && Array.isArray(rest) && rest.map((x) => x.id).join() === 'cx-203' && newOne?.type === 'welcome' && oldOne?.type === 'welcome' && bobRow?.plcs?.join() === 'cx-203' && !!bobRow.rotatedUntil && !!bobRow.expires, `a token of cx-203 only: its board ${bobWelcome?.plcs?.map((x) => x.id)}, its REST ${Array.isArray(rest) ? rest.map((x) => x.id) : JSON.stringify(rest)}; rotated: new ${newOne?.type}, old ${oldOne?.type} (until ${bobRow?.rotatedUntil}); an expiry gone by: ${past.json?.error}`);
+  await p.reload({ waitUntil: 'load' });
+  const bobCells = await h.until(() => p.$eval('#admin-tokens tr[data-token="bob"]', (e) => ({ plcs: e.querySelector('.admin-token-plcs')?.textContent, rotate: !!e.querySelector('.admin-rotate'), expires: e.querySelector('.admin-token-expires')?.textContent })).catch(() => null), 8000);
+  const plcBoxes = await p.$$eval('#admin-token-plcs input', (x) => x.map((i) => i.value));
+  expect(bobCells?.plcs === 'cx-203' && bobCells.rotate && /its old one until/.test(bobCells.expires ?? '') && plcBoxes.join() === 'line202,cx-203', `the list: bob ${JSON.stringify(bobCells)}; PLCs to tick: ${plcBoxes.join(', ')}`);
   expect(errors.length === 0, `no errors in the page ${errors.slice(0, 3).join(' | ')}`);
   await browser.close();
 

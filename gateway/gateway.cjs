@@ -68,6 +68,7 @@ const { lastTime } = require('./lastTime.cjs');
 const { maintenanceKpis } = require('./kpis.cjs');
 const { createShelves } = require('./shelves.cjs');
 const { createHealth } = require('./health.cjs');
+const { tokenFor, allowedOf, scopeIn, scopeOut, watchExpiry } = require('./tokens.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -654,6 +655,8 @@ function start() {
   sites = createSites({ getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
   // (its own health: its disk, what it keeps, its growth; low: an alert, once a day)
   health = createHealth({ baseDir, getConfig: () => config, log, onEvent: (e) => alertLog.add(e) });
+  // (tokens near their expiry: told, once a day)
+  watchExpiry({ getConfig: () => config, onEvent: (e) => alertLog.add(e), log });
   sites.start();
   // Change control (changes.cjs): each change of a PLC's program (seen by the project copy), explained, approved
   const changes = createChanges({ baseDir, log, audit, notify: notifyAll, rolesOn: () => roles.enabled() });
@@ -980,7 +983,12 @@ function start() {
     let startSeq = 0;
     let queue = [];
     let flushTimer = null;
-    const send = (m) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
+    // (a token of some PLCs: what it is sent narrowed to them)
+    let allowed = null;
+    const send = (m0) => {
+      const m = scopeOut(m0, allowed);
+      return m !== null && ws.readyState === ws.OPEN && ws.send(JSON.stringify(m));
+    };
     const viewer = {
       send,
       push: (sample) => queue.push(sample),
@@ -1053,11 +1061,13 @@ function start() {
           log(`auth: ${ip} blocked (too many failed attempts)`);
           return ws.close(4429, 'too many attempts');
         }
-        const hash = Buffer.from(sha256(m.token), 'hex');
-        const hit = config.tokens.find((t) => {
-          const stored = Buffer.from(t.sha256, 'hex');
-          return stored.length === hash.length && crypto.timingSafeEqual(stored, hash);
-        });
+        const found = tokenFor(config.tokens, m.token, sha256);
+        if (found?.expired) {
+          log(`auth: an expired token (${found.expired.name}) from ${ip}`);
+          send({ type: 'denied', message: `This token expired on ${new Date(found.expired.expires).toLocaleDateString()}: ask for a new one (the gateway's setup page, Tokens)` });
+          return ws.close(4401, 'expired');
+        }
+        const hit = found?.token ?? null;
         if (!hit) {
           failures.set(ip, [...recent, Date.now()]);
           log(`auth: rejected token from ${ip}`);
@@ -1066,6 +1076,8 @@ function start() {
         }
         user = hit.name;
         viewOnly = hit.view === true;
+        allowed = allowedOf(hit);
+        if (found.old) log(`auth: ${user} with its token rotated out (let in until ${hit.previous.until})`);
         clearTimeout(helloTimer);
         log(`auth: ${user} connected from ${ip}${viewOnly ? ' (view only)' : ''}`);
         audit.add(user, 'sign-in', { ip, how: viewOnly ? 'view-only token' : 'token' });
@@ -1080,6 +1092,11 @@ function start() {
         return send({ type: `${String(m.type).replace(/[^\w]/g, '').slice(0, 40)}Result`, requestId, ok: false, error: message });
       }
 
+      // A token of some PLCs: one of another PLC refused; its lists narrowed to its own
+      if (allowed && scopeIn(m, allowed)) {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        return send({ type: `${String(m.type).replace(/[^\w]/g, '').slice(0, 40)}Result`, requestId, ok: false, error: `Not one of the PLCs of ${user}'s token` });
+      }
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
         const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', alarmShelve: 'ack', alarmUnshelve: 'ack', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };

@@ -15,6 +15,7 @@ const path = require('path');
 const net = require('net');
 const tls = require('tls');
 const crypto = require('crypto');
+const { tokenFor, allowedOf } = require('./tokens.cjs');
 
 // ---- MQTT 3.1.1 (the few packets a publisher needs) ----
 const varLen = (n) => {
@@ -205,11 +206,9 @@ function createExports({ baseDir, getConfig, log, audit, sha256, data, workOrder
   const tokenOk = (req) => {
     const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization ?? '');
     if (!m) return null;
-    const hash = Buffer.from(sha256(m[1]), 'hex');
-    return (getConfig().tokens ?? []).find((t) => {
-      const h = Buffer.from(String(t.sha256 ?? ''), 'hex');
-      return h.length === hash.length && crypto.timingSafeEqual(h, hash);
-    }) ?? null;
+    // (an expired one refused; one rotated out let in until its grace ends)
+    const hit = tokenFor(getConfig().tokens ?? [], m[1], sha256);
+    return hit?.token ?? null;
   };
   const ENDPOINTS = ['plcs', 'alerts', 'workorders', 'oee', 'drives', 'axes', 'risks', 'changes'];
   function handle(req, res) {
@@ -225,6 +224,9 @@ function createExports({ baseDir, getConfig, log, audit, sha256, data, workOrder
     const who = tokenOk(req);
     if (!who) return json(res, 401, { error: 'A token of the gateway: Authorization: Bearer <token>' }), true;
     const what = url.pathname.replace(/^\/api\/v1\/?/, '').replace(/\/$/, '');
+    // (a token of some PLCs: only theirs)
+    const allowed = allowedOf(who);
+    const mine = (x) => !allowed || !x || typeof x !== 'object' || !(x.plc ?? x.id) || allowed.has(String(x.plc ?? x.id));
     const q = (k) => url.searchParams.get(k);
     try {
       let body;
@@ -238,13 +240,13 @@ function createExports({ baseDir, getConfig, log, audit, sha256, data, workOrder
         const to = q('to') ? Date.parse(q('to')) : Date.now();
         const from = q('from') ? Date.parse(q('from')) : to - 86400000;
         if (!(from < to) || to - from > 93 * 86400000) return json(res, 400, { error: 'from < to, at most 93 days' }), true;
-        body = data.oee({ from, to, by: ['shift', 'day'].includes(q('by')) ? q('by') : 'total' });
+        body = data.oee({ from, to, by: ['shift', 'day'].includes(q('by')) ? q('by') : 'total', ...(allowed ? { plcIds: [...allowed] } : {}) });
       } else if (what === 'drives') body = data.drives();
       else if (what === 'axes') body = data.axes();
       else if (what === 'risks') body = data.risks();
       else if (what === 'changes') body = data.changes();
       else return json(res, 404, { error: `Not an endpoint: ${ENDPOINTS.join(', ')}` }), true;
-      json(res, 200, body);
+      json(res, 200, Array.isArray(body) ? body.filter(mine) : body);
     } catch (err) {
       json(res, 500, { error: err.message });
     }
