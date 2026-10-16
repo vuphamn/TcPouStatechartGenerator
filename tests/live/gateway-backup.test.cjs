@@ -86,6 +86,44 @@ const PASS = 'correct horse battery';
   ws2.close();
   const restart = await api('POST', '/admin/api/restart', {});
   expect(w2?.plcs?.[0]?.name === 'Line 5' && restart.status >= 400 && /by hand/.test(restart.json?.error ?? ''), `taken at once: ${w2?.plcs?.[0]?.name}; a restart refused: ${restart.json?.error}`);
+  // 4. Scheduled: not on without its passphrase; with it, made and copied to a folder (a share), its newest 2 kept there;
+  // its passphrase never in a backup, never shown back; a folder it cannot write to: its failure an alert
+  const share = h.out('gw-backup-share');
+  fs.rmSync(share, { recursive: true, force: true });
+  const noPass = await api('POST', '/admin/api/backup/schedule', { schedule: { enabled: true, at: '02:00', share } });
+  const notFull = await api('POST', '/admin/api/backup/schedule', { passphrase: PASS, schedule: { enabled: true, share: 'relative/folder' } });
+  const sched = await api('POST', '/admin/api/backup/schedule', { passphrase: PASS, schedule: { enabled: true, every: 'weekly', day: 'tue', at: '03:30', share, keep: 2 } });
+  const runs = [];
+  for (let i = 0; i < 3; i++) {
+    runs.push((await api('POST', '/admin/api/backup/schedule/run', {})).json);
+    await h.sleep(1100);
+  }
+  const there = fs.existsSync(share) ? fs.readdirSync(share) : [];
+  const shown = await api('GET', '/admin/api/backup/schedule');
+  const conf4 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const lastFile = there.length ? fs.readFileSync(path.join(share, there.sort().at(-1))) : null;
+  const { open } = require(path.join(h.REPO, 'gateway', 'backup.cjs'));
+  const { unzip } = require(path.join(h.REPO, 'shared', 'tcSources.cjs'));
+  const inside = lastFile ? unzip(open(lastFile, PASS), () => true).map((e) => e.path) : [];
+  expect(noPass.status >= 400 && /passphrase first/.test(noPass.json?.error ?? '') && notFull.status >= 400 && /full path/.test(notFull.json?.error ?? '') && sched.json?.passphraseSet && conf4.backup?.schedule?.every === 'weekly' && conf4.backup.schedule.day === 'tue' && !JSON.stringify(conf4).includes(PASS) && runs.every((r) => r?.ok && r.copied) && there.length === 2 && shown.json?.status?.ok && !JSON.stringify(shown.json).includes(PASS) && !inside.some((p) => /secret/.test(p)) && inside.includes('config.json'), `scheduled: weekly on tue at 03:30; 3 made, ${there.length} kept on the share (${there.join(', ')}); its passphrase in no backup, not shown (runs: ${runs.map((r) => r?.error ?? (r?.ok ? "ok" : JSON.stringify(r))).join(", ")}; ${sched.json?.error ?? ""}; refused: ${noPass.json?.error}; ${notFull.json?.error})`);
+  // (a share it cannot write to: a file where its folder should be)
+  const blocked = h.out('gw-backup-blocked');
+  fs.rmSync(blocked, { recursive: true, force: true });
+  fs.writeFileSync(blocked, 'a file');
+  await api('POST', '/admin/api/backup/schedule', { schedule: { enabled: true, at: '03:30', share: blocked } });
+  const failed = (await api('POST', '/admin/api/backup/schedule/run', {})).json;
+  const ws3 = new WebSocket(`ws://localhost:${PORT}/live`, { headers: { origin: BASE } });
+  const got3 = [];
+  ws3.on('message', (d) => got3.push(JSON.parse(d.toString())));
+  await new Promise((r) => ws3.on('open', r));
+  ws3.send(JSON.stringify({ type: 'hello', token: 'bk-sup' }));
+  await h.until(() => got3.find((m) => m.type === 'welcome'), 5000);
+  ws3.send(JSON.stringify({ type: 'alertsList' }));
+  const hist = await h.until(() => got3.find((m) => m.type === 'alertsList')?.events, 5000);
+  ws3.close();
+  const told = (hist ?? []).find((e) => e.event === 'backup');
+  expect(failed?.ok === false && !!failed.name && /The scheduled backup failed \(made backup-/.test(told?.text ?? ''), `a share it cannot write to: ${failed?.error}; told: ${told?.text}`);
+  fs.rmSync(blocked, { force: true });
   gw.kill();
   plc.kill();
   console.log(`${fails} failures`);

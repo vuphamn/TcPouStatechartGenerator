@@ -3,6 +3,7 @@
 // config.admin.allowFrom); "admin": { "enabled": false } turns it off.
 const fs = require('fs');
 const os = require('os');
+const path = require('path');
 const crypto = require('crypto');
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -476,6 +477,24 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (!backup) throw new Error('Not on this gateway');
       return backup.create({ passphrase: body?.passphrase, recordings: !!body?.recordings, faults: !!body?.faults });
     },
+    // (the scheduled backups: their settings, their passphrase (write only), one now)
+    'GET backup/schedule': async () => (backup?.schedule ? backup.schedule() : { schedule: null }),
+    'POST backup/schedule': async (body) => {
+      if (!backup?.schedule) throw new Error('Not on this gateway');
+      const x = body?.schedule ?? {};
+      const share = String(x.share ?? '').trim().slice(0, 300);
+      if (share && !(path.isAbsolute(share) || share.startsWith(String.fromCharCode(92, 92)))) throw new Error('Its folder: a full path, or a network share (two backslashes, the server, the share)');
+      if (body?.passphrase) backup.setPassphrase(body.passphrase);
+      if (x.enabled && !backup.schedule().passphraseSet) throw new Error('Set its passphrase first: the backups are made with it');
+      const schedule = { enabled: x.enabled === true, every: x.every === 'weekly' ? 'weekly' : 'daily', day: String(x.day || 'sun').slice(0, 3).toLowerCase(), at: /^[0-2][0-9]:[0-5][0-9]$/.test(String(x.at)) ? x.at : '02:00', share, keep: Math.max(1, Math.min(365, Number(x.keep) || 14)), recordings: x.recordings === true, faults: x.faults === true };
+      update((c) => { c.backup = { ...(c.backup ?? {}), schedule }; });
+      audit?.add('setup page', 'backup.schedule', { enabled: schedule.enabled, every: schedule.every, at: schedule.at, share: schedule.share });
+      return backup.schedule();
+    },
+    'POST backup/schedule/run': async () => {
+      if (!backup?.runScheduled) throw new Error('Not on this gateway');
+      return backup.runScheduled('setup page');
+    },
     'POST restart': async () => {
       if (!restart) throw new Error('Not on this gateway');
       return restart();
@@ -763,6 +782,11 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   <p class="hint flush">The gateway in one file, to move it to another computer or to go back: its settings, tokens, roles, the alert history, work orders, spare parts, plans, guides, handovers, changes, filters, boards, push devices, certificates, the drives&#39; and axes&#39; statistics, the logged events (with the recordings and fault records when ticked). Encrypted with a passphrase: it holds passwords and tokens; without it, it cannot be restored. A restore keeps the gateway as it was first (before-restore), then the gateway restarted takes it all.</p>
   <div class="row"><input type="password" id="admin-backup-pass" placeholder="its passphrase (8 characters at least)"><label class="inline"><input type="checkbox" id="admin-backup-recordings"> the recordings</label><label class="inline"><input type="checkbox" id="admin-backup-faults"> the fault records</label><button class="primary" id="admin-backup-make">Make a backup</button></div>
   <div id="admin-backups"></div>
+  <h3>Scheduled</h3>
+  <div class="row"><label class="inline"><input type="checkbox" id="admin-bsched-on"> Make one by itself</label><select id="admin-bsched-every"><option value="daily">every day</option><option value="weekly">every week, on</option></select><select id="admin-bsched-day"><option value="sun">Sun</option><option value="mon">Mon</option><option value="tue">Tue</option><option value="wed">Wed</option><option value="thu">Thu</option><option value="fri">Fri</option><option value="sat">Sat</option></select> at <input type="text" class="mono" id="admin-bsched-at" size="5" placeholder="02:00"></div>
+  <div class="row">a copy to <input type="text" class="grow mono" id="admin-bsched-share" placeholder="a folder or a network share (its full path; empty: here only)"> keeping the newest <input type="number" class="num" id="admin-bsched-keep" placeholder="14"> <label class="inline"><input type="checkbox" id="admin-bsched-rec"> the recordings</label><label class="inline"><input type="checkbox" id="admin-bsched-faults"> the fault records</label></div>
+  <div class="row"><input type="password" id="admin-bsched-pass" placeholder="its passphrase (set once; kept here, never shown)"><button id="admin-bsched-save">Save the schedule</button><button id="admin-bsched-run">Make one now</button><span id="admin-bsched-status" class="hint flush"></span></div>
+  <div class="msg" id="admin-bsched-msg"></div>
   <h3>Restore</h3>
   <div class="row"><input type="file" id="admin-restore-file" accept=".kvalbk"><input type="password" id="admin-restore-pass" placeholder="its passphrase"><button id="admin-restore">Restore it</button><button id="admin-restart">Restart the gateway</button></div>
   <div class="msg" id="admin-backup-msg"></div>
@@ -1263,7 +1287,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'backup', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1543,6 +1567,39 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
     try { await call('restart', {}); say('admin-backup-msg', 'Restarting: back within a minute', true); } catch (err) { say('admin-backup-msg', err.message, false); }
   });
   loadBackups().catch(() => {});
+  // (the scheduled backups: their settings, their passphrase set or not, their last run)
+  const showSchedule = (d) => {
+    const sc = d.schedule || {};
+    $('admin-bsched-on').checked = !!sc.enabled;
+    $('admin-bsched-every').value = sc.every || 'daily';
+    $('admin-bsched-day').value = sc.day || 'sun';
+    $('admin-bsched-at').value = sc.at || '';
+    $('admin-bsched-share').value = sc.share || '';
+    $('admin-bsched-keep').value = sc.keep || '';
+    $('admin-bsched-rec').checked = !!sc.recordings;
+    $('admin-bsched-faults').checked = !!sc.faults;
+    $('admin-bsched-pass').placeholder = d.passphraseSet ? 'its passphrase is set (a new one replaces it)' : 'its passphrase (set once; kept here, never shown)';
+    const st = d.status;
+    $('admin-bsched-status').textContent = st ? 'last: ' + new Date(st.at).toLocaleString() + (st.ok ? ' · ' + st.name + (st.copied ? ', copied to ' + st.share : '') : ' · failed: ' + st.error) : 'none made yet';
+  };
+  call('backup/schedule').then(showSchedule).catch(() => {});
+  $('admin-bsched-save').addEventListener('click', async () => {
+    try {
+      const d = await call('backup/schedule', { passphrase: $('admin-bsched-pass').value || undefined, schedule: { enabled: $('admin-bsched-on').checked, every: $('admin-bsched-every').value, day: $('admin-bsched-day').value, at: $('admin-bsched-at').value, share: $('admin-bsched-share').value, keep: $('admin-bsched-keep').value, recordings: $('admin-bsched-rec').checked, faults: $('admin-bsched-faults').checked } });
+      $('admin-bsched-pass').value = '';
+      showSchedule(d);
+      say('admin-bsched-msg', d.schedule.enabled ? 'Saved: ' + (d.schedule.every === 'weekly' ? 'each ' + d.schedule.day : 'each day') + ' at ' + d.schedule.at : 'Saved (not on)', true);
+    } catch (err) { say('admin-bsched-msg', err.message, false); }
+  });
+  $('admin-bsched-run').addEventListener('click', async () => {
+    say('admin-bsched-msg', 'Making it ...');
+    try {
+      const st = await call('backup/schedule/run', {});
+      await loadBackups();
+      call('backup/schedule').then(showSchedule).catch(() => {});
+      say('admin-bsched-msg', st.ok ? st.name + (st.copied ? ', copied to ' + st.share : '') : 'Failed: ' + st.error, !!st.ok);
+    } catch (err) { say('admin-bsched-msg', err.message, false); }
+  });
 
   // ---- Exports ----
   const loadExports = async () => {

@@ -456,6 +456,7 @@ function start() {
     config.recordings = next.recordings ?? [];
     // (with the new settings' part counters, product variables, energy meters)
     config.energy = next.energy;
+    config.backup = next.backup;
     recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
     config.boardEditors = next.boardEditors;
@@ -870,7 +871,7 @@ function start() {
     driveCheck: (b) => drives.check(b),
     findMeters: (plcId) => drives.findMeters(plcId),
     certs,
-    backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit }),
+    backup: createBackup({ baseDir, configPath, zipOf, unzip: require(`${sharedDir}/tcSources.cjs`).unzip, log, audit, getConfig: () => config, onEvent: (e) => alertLog.add(e) }),
     restart: async () => {
       // (its Windows task restarts it within a minute; else it is started again by hand)
       const st = await service.status().catch(() => ({ installed: false }));
