@@ -25,6 +25,11 @@ let nextFile = 1;
 
 function encode(s) {
   const b = Buffer.alloc(s.size);
+  // (raw bytes: a structure, e.g. an AMSADDR)
+  if (Array.isArray(s.bytes)) {
+    Buffer.from(s.bytes).copy(b);
+    return b;
+  }
   const v = s.value;
   switch (s.dataType) {
     case 33: b.writeUInt8(v ? 1 : 0); break;

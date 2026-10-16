@@ -66,6 +66,9 @@ const apiPost = (p, body) =>
   const io = '_Config/IO/Device 1 (EtherCAT).xti';
   const i550 = (id, name) => `<Box Id="${id}" BoxType="9099"><Name>${name} (Inverter i550 Cabinet)</Name><EtherCAT VendorId="#x0000003b" ProductCode="#x69055000" RevisionNo="#x00050002" Type="i550 Inverter FW V05.02.xx" Desc="Inverter i550 Cabinet" PortABoxInfo="#x01000003"><SuName>Lenze</SuName></EtherCAT></Box>`;
   files[io] = files[io].replace('</Box></Device>', `</Box>${i550(4, 'Drive A')}${i550(5, 'Drive B')}${i550(6, 'Drive C')}<Box Id="7" BoxType="9099"><Name>HSD ES951 Spindle (ES95x)</Name><EtherCAT VendorId="#x00000129" ProductCode="#x0000004b" Type="ES95x" PortABoxInfo="#x01000006"></EtherCAT></Box><Box Id="8" BoxType="9099"><Name>Q-A (EX260-SEC1)</Name><EtherCAT VendorId="#x00000114" Type="EX260-SEC1 EtherCAT SI Unit (32DO_PNP) Rev1.2" PortABoxInfo="#x01000007"></EtherCAT></Box><Box Id="9" BoxType="9099"><Name>(HC:SHOOTER.v1) Shooter (EP1111-0000)</Name><EtherCAT VendorId="#x00000002" Type="EP1111-0000" IdentificationAdo="308" IdentificationValue="30" PortABoxInfo="#x01000008"></EtherCAT></Box><Box Id="10" BoxType="9099"><Name>I-S.0 to I-S.7 (EP1098-0001)</Name><EtherCAT VendorId="#x00000002" Type="EP1098-0001" PortABoxInfo="#x01000009"></EtherCAT></Box></Device>`);
+  // (Drive C: its InfoData AdsAddr linked to a PLC variable, which says 1009: not its project's 1006)
+  files['_Config/PLC/Plant Instance.xti'] = '<?xml version="1.0"?><TcSmItem><Mappings><OwnerA Name="InputDst"><OwnerB Name="TIID^Device 1 (EtherCAT)^Drive C (Inverter i550 Cabinet)"><Link VarA="MAIN.fbDriveC.stAdsAddr" TypeA="AMSADDR" VarB="InfoData^AdsAddr"/></OwnerB></OwnerA></Mappings></TcSmItem>';
+  c.symbols['MAIN.fbDriveC.stAdsAddr'] = { type: 'AMSADDR', dataType: 65, size: 8, bytes: [127, 0, 0, 1, 2, 1, 1009 & 255, 1009 >> 8] };
   c.bootFiles['CurrentConfig.tszip'] = writeZip(files).toString('base64');
   c.ecat = [{ netId: MASTER, slaves: [...Array.from({ length: 8 }, () => [8, 0]), [1, 1], [1, 1]], addresses: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009, 1010] }];
   const u16 = (value) => ({ size: 2, value });
@@ -82,7 +85,7 @@ const apiPost = (p, body) =>
     [`${MASTER}|1004`]: lenze(420, 0),
     [`${MASTER}|1005`]: id(0x114, 0x1234),
     [`${MASTER}|1008`]: lenze(560, 0),
-    [`${MASTER}|1006`]: lenze(430, 0x2250),
+    [`${MASTER}|1009`]: lenze(430, 0x2250),
     [`${MASTER}|1007`]: { ...id(0x129, 0x4b), '6ff0:1': { size: 1, value: 5 }, '6ff1:1': u16(1200), '6ff1:2': u16(12000), '6010:1': u16(0x10), '6010:2': u16(35), '6010:3': u16(0) },
   };
   fs.writeFileSync(cfg, JSON.stringify(c));
@@ -135,6 +138,7 @@ const apiPost = (p, body) =>
   expect(by('Drive A')?.health?.level === 'ok' && Math.abs((by('Drive A')?.latest.heatsink?.v ?? 0) - 42) < 0.01 && Math.abs((by('Drive A')?.latest.current?.v ?? 0) - 5.2) < 0.01 && by('Drive A')?.latest.opHours?.v === 1234, `Drive A healthy: ${by('Drive A')?.latest.heatsink?.v} °C, ${by('Drive A')?.latest.current?.v} A, ${by('Drive A')?.latest.opHours?.v} h`);
   const bTexts = (by('Drive B')?.health?.findings ?? []).map((f) => f.text).join(' | ');
   expect(/14 °C warmer than its last 5 days/.test(bTexts) && /hotter than its 2 siblings/.test(bTexts), `Drive B: ${bTexts}`);
+  expect(by('Drive C')?.address === 1009 && by('Drive C')?.identity === 'found at 1009, not 1006 (its PLC link)', `Drive C by its PLC link: ${by('Drive C')?.identity}`);
   expect(by('Drive C')?.health?.level === 'alarm' && /In fault: error 0x2250/.test(by('Drive C')?.health?.findings?.[0]?.text ?? ''), `Drive C: ${by('Drive C')?.health?.findings?.[0]?.text}`);
   const hsd = by('HSD ES951 Spindle');
   expect(hsd?.profile === 'hsd-es951' && hsd.latest.speed?.v === 12000 && hsd.latest.vibration?.v === 35 && hsd.latest.p75?.v === 5 && hsd.health?.level !== 'alarm', `the spindle (HSD ES951): ${hsd?.latest.speed?.v} rpm, vibration ${hsd?.latest.vibration?.v}, P75 ${hsd?.latest.p75?.v}, ${hsd?.health?.level}`);

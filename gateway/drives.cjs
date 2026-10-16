@@ -57,16 +57,26 @@ async function locateDrives({ list, slaves, maxAddress = 1000, read, errorText =
     d.address = at;
     claimed.add(at);
   };
-  // 1. Each at its own address
+  // 1. Each at its own address: the one its PLC link gives (its InfoData AdsAddr, read by the PLC), else its project's
   let lost = [];
   for (const d of list) {
     if (d.vendorId === null) {
       d.identity = 'unknown';
       continue;
     }
+    if (typeof d.linkAddress === 'number' && d.linkAddress !== d.address && !claimed.has(d.linkAddress)) {
+      const byLink = await identity(d.netId, d.linkAddress);
+      if (matches(byLink, d)) {
+        log(`${d.name}: at EtherCAT address ${d.linkAddress}, not ${d.address} (its PLC link, ${d.linkVar})`);
+        d.identity = `found at ${d.linkAddress}, not ${d.address} (its PLC link)`;
+        d.address = d.linkAddress;
+        claimed.add(d.address);
+        continue;
+      }
+    }
     const id = await identity(d.netId, d.address);
     if (matches(id, d)) {
-      d.identity = 'checked';
+      d.identity = typeof d.linkAddress === 'number' ? 'checked (its PLC link)' : 'checked';
       claimed.add(d.address);
     } else lost.push({ d, id });
   }
@@ -269,6 +279,10 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
           }
         };
         all(d.boxes);
+        // (each drive's InfoData AdsAddr linked to a PLC variable: read for its address)
+        const tail = (p) => String(p).split('^').slice(1).join('^').toLowerCase();
+        const adsLinks = new Map((tree.links ?? []).filter((l) => /^InfoData\^AdsAddr$/i.test(l.entry ?? '')).map((l) => [tail(l.box), l.variable]));
+        for (const f of found) if (f.netId === d.netId) f.linkVar = adsLinks.get(tail(f.path)) ?? null;
         await this.verifyAddresses(client, found.filter((f) => f.netId === d.netId), slaves, maxAddress);
       }
       const old = new Map(this.drives.map((x) => [x.path, x]));
@@ -287,6 +301,23 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
         const p = await client.readRaw(COE_SDO, (0x1018 << 16) | 2, 4, { amsNetId: netId, adsPort: address });
         return { vendorId: v.readUInt32LE(0), productCode: p.readUInt32LE(0) };
       };
+      // (a drive whose InfoData AdsAddr the PLC links to a variable, an AMSADDR: its address, exactly)
+      for (const d of list) {
+        if (!d.linkVar) continue;
+        try {
+          const handle = await ads.createHandle(client, d.linkVar);
+          try {
+            // (its bytes as they are: the NetId (6), the port (UINT): the slave's EtherCAT address; 0xF005, by handle)
+            const buf = await client.readRaw(0xf005, handle, 8);
+            const port = buf.readUInt16LE(6);
+            if (port >= 1 && port < 65535) d.linkAddress = port;
+          } finally {
+            await ads.releaseHandle(client, handle).catch(() => {});
+          }
+        } catch {
+          // (not readable: its project's address, then the search)
+        }
+      }
       await locateDrives({ list, slaves, maxAddress, read, errorText: (e) => ads.adsErrorText(e), log: (t) => log(`drives: ${this.plc.id}: ${t}`) });
     }
 
