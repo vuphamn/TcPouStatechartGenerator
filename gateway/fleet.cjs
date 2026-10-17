@@ -111,7 +111,7 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
           for (const d of tree.devices ?? []) {
             const walk = (list) => {
               for (const b of list) {
-                boxes.push({ path: b.path, name: b.name, product: b.product, device: d.name, netId: d.netId, slave: b.slave ?? null, address: b.address ?? null, hotConnect: b.hotConnect ?? null, vendorId: b.info?.vendorId ?? null, vendor: b.info?.supplier || (b.info?.vendorId === 2 ? 'Beckhoff' : b.info?.vendorId != null ? `vendor #x${b.info.vendorId.toString(16)}` : ''), type: b.info?.type ?? b.product ?? '', productCode: b.info?.productCode ?? '', revision: b.info?.revision ?? '', disabled: !!(b.disabled || d.disabled) });
+                boxes.push({ path: b.path, name: b.name, product: b.product, device: d.name, netId: d.netId, boxId: b.id ?? null, portA: b.portA ?? null, slave: b.slave ?? null, address: b.address ?? null, hotConnect: b.hotConnect ?? null, vendorId: b.info?.vendorId ?? null, vendor: b.info?.supplier || (b.info?.vendorId === 2 ? 'Beckhoff' : b.info?.vendorId != null ? `vendor #x${b.info.vendorId.toString(16)}` : ''), type: b.info?.type ?? b.product ?? '', productCode: b.info?.productCode ?? '', revision: b.info?.revision ?? '', disabled: !!(b.disabled || d.disabled) });
                 walk(b.boxes);
               }
             };
@@ -139,12 +139,15 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
           for (const { b, s, ok } of read) {
             const off = !!b.hotConnect && absent.has(b.hotConnect.key);
             const st = (today[b.path] ??= { seen: 0, notOp: 0, crc: 0 });
+            st.crcPorts ??= [0, 0, 0, 0];
             st.seen++;
             if (!ok && !off) st.notOp++;
             const before = this.now.get(b.path);
             const crcSum = Array.isArray(s?.crc) ? s.crc.reduce((a, x) => a + x, 0) : null;
             if (crcSum !== null && before?.crc != null && crcSum > before.crc) st.crc += crcSum - before.crc;
-            this.now.set(b.path, { ok, name: s?.name ?? (s ? 'OP' : 'missing'), crc: crcSum, ...(off ? { absent: b.hotConnect.group } : {}) });
+            // (each port's own: A its incoming cable, B … D those to the boxes after it; a counter reset: from zero)
+            if (Array.isArray(s?.crc) && Array.isArray(before?.crcPorts)) s.crc.forEach((v, k) => { if (v > (before.crcPorts[k] ?? 0)) st.crcPorts[k] += v - (before.crcPorts[k] ?? 0); });
+            this.now.set(b.path, { ok, name: s?.name ?? (s ? 'OP' : 'missing'), crc: crcSum, crcPorts: Array.isArray(s?.crc) ? [...s.crc] : null, ...(off ? { absent: b.hotConnect.group } : {}) });
           }
         }
         const days = Object.keys(this.summary.days).sort();
@@ -164,7 +167,7 @@ function createFleet({ baseDir, getConfig, plcList, connectionFor, sharedDir, ad
         id: this.plc.id, name: this.plc.name, state: this.state, message: this.message,
         boxes: this.boxes.map((b) => {
           const week = days.map((d) => this.summary.days[d]?.[b.path]).filter(Boolean);
-          return { ...b, now: this.now.get(b.path) ?? null, week: { seen: week.reduce((a, x) => a + x.seen, 0), notOp: week.reduce((a, x) => a + x.notOp, 0), crc: week.reduce((a, x) => a + x.crc, 0), daysOut: week.filter((x) => x.notOp > 0).length } };
+          return { ...b, now: this.now.get(b.path) ?? null, week: { seen: week.reduce((a, x) => a + x.seen, 0), notOp: week.reduce((a, x) => a + x.notOp, 0), crc: week.reduce((a, x) => a + x.crc, 0), crcPorts: [0, 1, 2, 3].map((k) => week.reduce((a, x) => a + (x.crcPorts?.[k] ?? 0), 0)), daysOut: week.filter((x) => x.notOp > 0).length } };
         }),
       };
     }

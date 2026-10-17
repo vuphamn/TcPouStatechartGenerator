@@ -9,6 +9,20 @@
 
 const RANK = { alarm: 0, warn: 1, watch: 2 };
 
+/** The cable with most of a box's CRC errors this week: its port, and the box at its other end (null: not known) */
+function cableOf(b, boxes) {
+  const ports = b.week?.crcPorts;
+  if (!Array.isArray(ports) || !ports.some((x) => x > 0)) return null;
+  const k = ports.indexOf(Math.max(...ports));
+  const letter = 'ABCD'[k];
+  if (k === 0) {
+    const from = b.portA?.master ? 'the master' : boxes.find((x) => x.device === b.device && x.boxId != null && x.boxId === b.portA?.box)?.name;
+    return `port A, its incoming cable${from ? ` (from ${from})` : ''}: that cable, its connectors`;
+  }
+  const to = boxes.find((x) => x.device === b.device && x.portA && !x.portA.master && x.portA.box === b.boxId && x.portA.port === k)?.name;
+  return `port ${letter}${to ? `, the cable to ${to}` : ''}: that cable, its connectors`;
+}
+
 /** A straight line through the points ({ x, y }): its slope (y per x), null with too few */
 function slopeOf(points) {
   if (points.length < 5) return null;
@@ -76,8 +90,11 @@ function risks({ drives = [], daily = {}, fleet = [], alerts = [], now = Date.no
       const base = { kind: 'box', plc: p.id, plcName: p.name, name: b.name, path: b.path, where, eta: null };
       if (b.now && !b.now.ok && !b.now.absent) out.push({ ...base, id: `box-now:${p.id}:${b.path}`, level: 'alarm', reason: `Not in OP now (${b.now.name})` });
       if (b.week?.daysOut >= L.daysOutWarn) out.push({ ...base, id: `box-out:${p.id}:${b.path}`, level: 'warn', reason: `Out of OP on ${b.week.daysOut} of the last 7 days: its supply, its cable, its connectors` });
-      if (b.week?.crc >= L.crcWarn) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'warn', reason: `${b.week.crc} CRC errors in 7 days: its cable or connectors` });
-      else if (b.week?.crc >= L.crcWatch) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'watch', reason: `${b.week.crc} CRC errors in 7 days` });
+      // (which cable: the port with most of them; A its incoming one (from the box before it), B … D those to the boxes
+      // cabled there)
+      const cable = cableOf(b, p.boxes ?? []);
+      if (b.week?.crc >= L.crcWarn) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'warn', reason: `${b.week.crc} CRC errors in 7 days${cable ? `, most at ${cable}` : ': its cable or connectors'}` });
+      else if (b.week?.crc >= L.crcWatch) out.push({ ...base, id: `box-crc:${p.id}:${b.path}`, level: 'watch', reason: `${b.week.crc} CRC errors in 7 days${cable ? `, most at ${cable}` : ''}` });
     }
   }
   // Machines faulting more
@@ -115,4 +132,4 @@ function inventory(fleet = []) {
   return [...groups.values()].sort((a, b) => a.vendor.localeCompare(b.vendor) || a.type.localeCompare(b.type) || String(a.revision).localeCompare(String(b.revision)));
 }
 
-module.exports = { risks, inventory, slopeOf };
+module.exports = { risks, inventory, slopeOf, cableOf };
