@@ -67,7 +67,7 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     alerts: [{ id: 'a1', name: 'Line 7', enabled: true, plc: 'line', root: R, stateVar: 'machineState', stuckAfterMs: null, stateLimits: {}, onError: true, errorPattern: 'ERROR', notifyRecovery: false, webhook: null, format: 'json' }],
     recordings: [{ id: 'r1', name: 'Doors', enabled: true, plc: 'line', root: R, stateVar: 'machineState', days: 7, machines: [M] }],
     shifts: [{ name: 'Early', from: '06:00', to: '14:00' }, { name: 'Late', from: '14:00', to: '22:00' }, { name: 'Night', from: '22:00', to: '06:00' }],
-    oee: { reasonAfterMin: 0, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30, goodVar: G, badVar: BAD }], products: { line: { var: P, idealCycleSec: { 'Door 42': 60 } } } },
+    oee: { reasonAfterMin: 0, microStopMaxSec: 900, machines: [{ plc: 'line', machine: M, cycleState: 'DOOR_DASHER_ENABLING', idealCycleSec: 30, goodVar: G, badVar: BAD }], products: { line: { var: P, idealCycleSec: { 'Door 42': 60 } } } },
     energy: { meters: [{ plc: 'line', name: 'Main feed', var: 'GVL.fEnergy', unit: 'kWh' }], price: 0.2, currency: 'USD' },
     drives: { enabled: false }, fleet: { enabled: false }, faults: { enabled: false }, projectSync: { enabled: false },
   }, null, 2));
@@ -100,6 +100,8 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
   expect(m && m.cycles === 6 && m.availability > 0.85 && m.availability < 0.95 && Math.abs(m.downMs - 10 * 60000) < 2000, `aDoors[1]: ${m?.cycles} cycles, availability ${m?.availability?.toFixed(3)}, down ${Math.round((m?.downMs ?? 0) / 60000)} min`);
   expect(m && m.performance > 0 && r.line.oee !== null && r.line.availability !== null, `performance ${m?.performance?.toFixed(3)}, OEE ${r?.line?.oee?.toFixed(3)}`);
   expect(m && m.good === 6 && m.bad === 2 && m.quality === 0.75 && r.line.quality === 0.75 && r.line.good === 6 && Math.abs(r.line.oee - r.line.availability * r.line.performance * 0.75) < 1e-9, `quality: ${m?.good} good, ${m?.bad} bad: ${m?.quality}; the line ${r?.line?.quality}`);
+  // (its micro-stops: 5 gaps of 10 minutes between its cycles, each 570 s over its ideal 30 s; no slow cycle)
+  expect(m?.microStops?.count === 5 && m.microStops.ms === 5 * 570000 && m.slowCycles?.count === 0 && r.line.microStops?.count === 5, `micro-stops: ${m?.microStops?.count} (${Math.round((m?.microStops?.ms ?? 0) / 60000)} min), slow cycles ${m?.slowCycles?.count}; the line ${r?.line?.microStops?.count}`);
   const stop = r?.stops?.find((s) => s.machine === M && s.kind === 'error');
   expect(stop?.reason === 'Jam' && stop.note === 'infeed' && stop.by === 'mgr' && r.pareto.reason[0]?.key === 'Jam', `its stop: ${stop?.state} ${Math.round((stop?.ms ?? 0) / 60000)} min, ${stop?.reason} (${stop?.note}); Pareto: ${r?.pareto?.reason?.map((x) => x.key).join(', ')}`);
   expect(r?.windows?.length >= 1 && r.windows.every((w) => /Early|Late|Night/.test(w.label)), `by shift: ${r?.windows?.map((w) => w.label).join(', ')}`);
@@ -144,6 +146,8 @@ const dayOf = (t) => { const d = new Date(t); const p = (n) => String(n).padStar
     // (the live PLC since: its parts and energy counted too: a part's energy shown)
     expect(/Wh$/.test(kwhCell ?? ''), `the OEE page: Main feed ${kwhCell} a part`);
     const prows = await p.$$eval('.oee-product', (x) => x.map((e) => e.getAttribute('data-product')));
+    const losses = await p.$eval('#oee-losses', (e) => e.textContent).catch(() => '');
+    expect(/\d+ micro-stops/.test(losses) && /slow cycles/.test(losses), `the OEE page's losses: ${losses}`);
     expect(prows.includes('Door 36') && prows.includes('Door 42'), `the OEE page by product: ${prows.join(', ')}`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();

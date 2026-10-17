@@ -19,6 +19,9 @@ interface OeeMachine {
   plannedMs: number;
   downMs: number;
   stops: number;
+  /** Its performance's losses: gaps over twice its ideal cycle, under the Why? threshold; cycles 1.05 to 2 times it */
+  microStops?: { count: number; ms: number } | null;
+  slowCycles?: { count: number; ms: number } | null;
 }
 interface OeeStop {
   plcName: string;
@@ -33,6 +36,8 @@ interface OeeStop {
   by: string | null;
 }
 interface Line {
+  microStops?: { count: number; ms: number } | null;
+  slowCycles?: { count: number; ms: number } | null;
   availability: number | null;
   performance: number | null;
   quality: number | null;
@@ -195,6 +200,11 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                 <div className="text-xs text-slate-400">{r.line.stops} stops</div>
               </div>
             </div>
+            {(r.line.microStops || r.line.slowCycles) && (
+              <div id="oee-losses" className="text-sm text-slate-300">
+                Performance lost to <b>{r.line.microStops?.count ?? 0} micro-stops</b> ({dur(r.line.microStops?.ms ?? 0)}: gaps over twice the ideal cycle, too short for a Why?) and <b>{r.line.slowCycles?.count ?? 0} slow cycles</b> ({dur(r.line.slowCycles?.ms ?? 0)} over the ideal)
+              </div>
+            )}
             {r.windows.length > 0 && (
               <div className="rounded border border-slate-800 bg-slate-900 p-3 overflow-x-auto">
                 <div className="mb-2 font-semibold">{r.by === 'day' ? 'By day' : 'By shift'}</div>
@@ -302,6 +312,8 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                   <th className="text-right">Cycles</th>
                   <th className="text-right">Down</th>
                   <th className="text-right">Stops</th>
+                  <th className="text-right" title="Gaps over twice its ideal cycle, too short for a Why?">Micro-stops</th>
+                  <th className="text-right" title="Cycles from 1.05 to 2 times its ideal cycle: the time over">Slow cycles</th>
                 </tr>
               </thead>
               <tbody>
@@ -317,6 +329,8 @@ export const OeeBoard: React.FC<{ conn: GatewayConnection | null; connected: boo
                     <td className="text-right font-mono">{m.cycles ?? ''}</td>
                     <td className="text-right font-mono">{dur(m.downMs)}</td>
                     <td className="text-right font-mono">{m.stops}</td>
+                    <td className="oee-micro text-right font-mono">{m.microStops ? `${m.microStops.count} · ${dur(m.microStops.ms)}` : ''}</td>
+                    <td className="oee-slow text-right font-mono">{m.slowCycles ? `${m.slowCycles.count} · ${dur(m.slowCycles.ms)}` : ''}</td>
                   </tr>
                 ))}
               </tbody>

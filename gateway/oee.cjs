@@ -70,6 +70,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     return {
       reasons: Array.isArray(c.reasons) && c.reasons.length ? c.reasons.map(String).slice(0, 40) : REASONS,
       reasonAfterMin: Math.max(0, Math.min(240, Number(c.reasonAfterMin ?? 2))),
+      microStopMaxSec: Number(c.microStopMaxSec) > 0 ? Math.min(3600, Number(c.microStopMaxSec)) : null,
       machines: Array.isArray(c.machines) ? c.machines : [],
       weekly: c.weekly && /^https?:\/\//i.test(String(c.weekly.webhook ?? '')) ? c.weekly : null,
       products: c.products && typeof c.products === 'object' ? c.products : {},
@@ -111,11 +112,15 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     const stops = [];
     const cyc = cycleOf(rec.plc, m);
     let cycles = 0;
+    const cycleTimes = [];
     for (let i = 0; i < values.length; i++) {
       const a = values[i];
       const b = Math.min(values[i + 1]?.t ?? end, end);
       const n = name(a.value);
-      if (cyc && n === cyc.cycleState && a.t > from && i > 0) cycles++;
+      if (cyc && n === cyc.cycleState && a.t > from && i > 0) {
+        cycles++;
+        cycleTimes.push(a.t);
+      }
       const limit = rule ? rule.stateLimits?.[n] ?? rule.stuckAfterMs ?? null : null;
       let downFrom = null;
       let kind = null;
@@ -136,6 +141,30 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     // (its product's own ideal cycle time, when it has one)
     const ideal = cyc ? idealOverride ?? cyc.idealCycleSec : null;
     const performance = cyc && ideal > 0 && runMs > 0 ? Math.min(1, (cycles * ideal * 1000) / runMs) : null;
+    // (its performance's losses, from one cycle to the next: a micro-stop, a gap over twice its ideal cycle but under
+    // the Why? threshold (no stop of its own in it); a slow cycle, from 1.05 to 2 times its ideal; each its time over)
+    const microMaxMs = Math.max(10, Number(settings().microStopMaxSec) || Math.max(1, settings().reasonAfterMin) * 60) * 1000;
+    let micro = { count: 0, ms: 0 };
+    let slow = { count: 0, ms: 0 };
+    if (ideal > 0) {
+      const idealMs = ideal * 1000;
+      for (let k = 1; k < cycleTimes.length; k++) {
+        const a0 = cycleTimes[k - 1];
+        const b0 = cycleTimes[k];
+        const dt = b0 - a0;
+        if (stops.some((s0) => s0.to > a0 && s0.from < b0)) continue;
+        if (dt > 2 * idealMs && dt <= microMaxMs) {
+          micro.count++;
+          micro.ms += dt - idealMs;
+        } else if (dt > 1.05 * idealMs && dt <= 2 * idealMs) {
+          slow.count++;
+          slow.ms += dt - idealMs;
+        }
+      }
+    } else {
+      micro = null;
+      slow = null;
+    }
     // (quality: the parts counted in the window by its counters)
     let good = null;
     let bad = null;
@@ -147,7 +176,7 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
     const quality = qualityOf(good, bad, cyc ? cycles : null);
     const partsCounted = good !== null && bad !== null ? good + bad : cyc ? cycles : 0;
     const parts = [availability, performance, quality].filter((x) => x !== null);
-    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, availability, performance, quality, good, bad, partsCounted, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: ideal ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
+    return { plc: rec.plc, plcName: rec.plcName, machine: m.path, type: m.type, microStops: micro, slowCycles: slow, availability, performance, quality, good, bad, partsCounted, oee: parts.length ? parts.reduce((a, x) => a * x, 1) : null, cycles: cyc ? cycles : null, idealCycleSec: ideal ?? null, runMs, plannedMs, downMs: av ? av.errorMs + av.stuckMs : 0, maintenanceMs: av?.maintenanceMs ?? 0, noDataMs: av?.noDataMs ?? 0, stops };
   }
 
   /** The window's machines (every recording of these PLCs), their stops, the Pareto, and per shift or day */
@@ -187,7 +216,8 @@ function createOee({ baseDir, getConfig, recorders, rules, shiftWindowsOf, log, 
       const counted = withQ.reduce((a, m) => a + m.partsCounted, 0);
       const quality = counted > 0 ? withQ.reduce((a, m) => a + m.quality * m.partsCounted, 0) / counted : null;
       const sum = (k) => (list.some((m) => m[k] !== null && m[k] !== undefined) ? list.reduce((a, m) => a + (m[k] ?? 0), 0) : null);
-      return { availability, performance: perf, quality, good: sum('good'), bad: sum('bad'), oee: availability === null ? null : availability * (perf ?? 1) * (quality ?? 1), downMs: list.reduce((a, m) => a + m.downMs, 0), stops: list.reduce((a, m) => a + m.stops.length, 0) };
+      const losses = (k) => (list.some((m) => m[k]) ? list.reduce((a, m) => ({ count: a.count + (m[k]?.count ?? 0), ms: a.ms + (m[k]?.ms ?? 0) }), { count: 0, ms: 0 }) : null);
+      return { microStops: losses('microStops'), slowCycles: losses('slowCycles'), availability, performance: perf, quality, good: sum('good'), bad: sum('bad'), oee: availability === null ? null : availability * (perf ?? 1) * (quality ?? 1), downMs: list.reduce((a, m) => a + m.downMs, 0), stops: list.reduce((a, m) => a + m.stops.length, 0) };
     };
     let windows = [];
     if (by === 'shift' || by === 'day') {
