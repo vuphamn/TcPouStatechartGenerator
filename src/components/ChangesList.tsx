@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { GatewayConnection } from '../utils/liveGateway.ts';
 
 /** A change of a PLC's program (gateway/changes.cjs) */
@@ -21,6 +21,7 @@ export interface PlcChange {
   approvedAt: number | null;
 }
 
+const pctOf = (x: number | null) => (x === null ? '—' : `${Math.round(x * 100)} %`);
 const when = (t: number) => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /**
@@ -32,6 +33,17 @@ export const ChangesList: React.FC<{ conn: GatewayConnection | null; changes: Pl
   const [reason, setReason] = useState('');
   const [order, setOrder] = useState('');
   const [error, setError] = useState('');
+  // (the open change's impact: its PLC's OEE, stops, alarms, the same days before and since)
+  type Side = { oee: number | null; availability: number | null; stops: number; downMs: number; alarmsPerDay: number; recorded: number };
+  const [impact, setImpact] = useState<{ id: string; days?: number; before?: Side; after?: Side; error?: string } | null>(null);
+  useEffect(() => {
+    if (!open || !conn) return;
+    let gone = false;
+    void conn.request<{ days?: number; before?: Side; after?: Side; error?: string }>({ type: 'changeImpact', id: open }, 'changeImpactResult', 60000).then((r) => !gone && setImpact({ id: open, ...r })).catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [open, conn]);
   type R = { ok: boolean; error?: string; message?: string };
   const ask = async (m: Record<string, unknown>) => {
     setError('');
@@ -60,6 +72,20 @@ export const ChangesList: React.FC<{ conn: GatewayConnection | null; changes: Pl
             {open === c.id && (
               <div className="px-3 pb-2 space-y-2">
                 {c.files.length > 0 && <pre className="max-h-40 overflow-auto rounded bg-slate-950 p-2 text-[11px] text-slate-300">{c.files.join('\n')}</pre>}
+                {impact?.id === c.id && (
+                  <div className="change-impact text-xs text-slate-300">
+                    {impact.error ? (
+                      <span className="text-slate-500">Its impact: {impact.error}</span>
+                    ) : impact.before && impact.after ? (
+                      <>
+                        <b>Since it</b> ({(impact.days ?? 0) >= 1 ? `${Math.round(impact.days ?? 0)} days` : `${Math.round((impact.days ?? 0) * 24)} h`}, against as long before):{' '}
+                        {impact.after.recorded ? <>OEE {pctOf(impact.after.oee)} (was {pctOf(impact.before.oee)}), {impact.after.stops} stops (was {impact.before.stops}), </> : null}
+                        alarms {impact.after.alarmsPerDay.toFixed(1)} a day (was {impact.before.alarmsPerDay.toFixed(1)})
+                        {impact.after.alarmsPerDay > impact.before.alarmsPerDay * 1.5 + 1 || (impact.after.oee !== null && impact.before.oee !== null && impact.after.oee < impact.before.oee - 0.05) ? <span className="ml-1 text-amber-300">· worse since</span> : null}
+                      </>
+                    ) : null}
+                  </div>
+                )}
                 {c.explainedBy && (
                   <div className="text-xs text-slate-400">
                     Explained by {c.explainedBy} {c.explainedAt ? when(c.explainedAt) : ''}{c.workOrder ? ` · work order #${c.workOrder}` : ''}

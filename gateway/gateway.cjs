@@ -1558,6 +1558,21 @@ function start() {
         changesOff ??= changes.subscribe(sendChanges);
         return;
       }
+      // A change's impact: its PLC's OEE, stops and alarms a day, the same days before it and since (up to 7)
+      if (m.type === 'changeImpact') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        const ch = typeof m.id === 'string' ? changes.get(m.id) : null;
+        if (!ch) return send({ type: 'changeImpactResult', requestId, error: 'No such change' });
+        const w = Math.min(7 * 86400000, Date.now() - ch.at);
+        if (w < 3600000) return send({ type: 'changeImpactResult', requestId, error: 'Too soon: an hour after it at least' });
+        const ALARM_KINDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent'];
+        const side = (from, to) => {
+          const r = oee.report({ from, to, plcIds: [ch.plc] });
+          const alarms = alertLog.all().filter((e) => e.plc === ch.plc && ALARM_KINDS.includes(e.event) && !e.muted && Date.parse(e.at) >= from && Date.parse(e.at) < to).length;
+          return { oee: r.line.oee, availability: r.line.availability, stops: r.line.stops, downMs: r.line.downMs, alarmsPerDay: (alarms * 86400000) / (to - from), recorded: r.recorded };
+        };
+        return send({ type: 'changeImpactResult', requestId, days: w / 86400000, before: side(ch.at - w, ch.at), after: side(ch.at, ch.at + w) });
+      }
       if (m.type === 'changeExplain' || m.type === 'changeApprove') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         if (viewOnly) return send({ type: 'changeResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });

@@ -32,6 +32,8 @@ const M = `${R}.aDoors[2]`;
   // (a planned maintenance window in two hours)
   const from = new Date(Date.now() + 2 * 3600_000);
   fs.writeFileSync(path.join(dir, 'maintenance.json'), JSON.stringify({ windows: [{ id: 'w1', plc: 'line', from: from.toISOString(), until: new Date(from.getTime() + 3600_000).toISOString(), by: 'sup', note: 'belt', started: false }], history: [] }));
+  // (a download 4 days ago: its alarms since (aDoors[2]'s, 3 days ago) against as long before (none))
+  fs.writeFileSync(path.join(dir, 'changes.json'), JSON.stringify([{ id: 'chg01', at: Date.now() - 4 * DAY, plc: 'line', plcName: 'Line 9', kind: 'download', project: 'Plant', files: ['POUs/MAIN.TcPOU'], fileCount: 1, onlineChanges: null, appTimestamp: null, unit: 'file', reason: '', workOrder: null, explainedBy: null, explainedAt: null, approvedBy: null, approvedAt: null }]));
   const configPath = path.join(dir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({
     port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [], alertRetryMs: 2000,
@@ -118,6 +120,8 @@ const M = `${R}.aDoors[2]`;
   expect(row?.failures === 3 && row.orders === 1 && Math.abs(row.mtbfMs - 10 * DAY) < 60000 && row.mttrMs > 0 && row.causes[0]?.cause === 'Sensor cable cut at the hinge', `reliability: ${row?.failures} failures, MTBF ${(row?.mtbfMs / DAY).toFixed(1)} days, MTTR ${Math.round(row?.mttrMs / 60000)} min, cause ${row?.causes?.[0]?.cause}`);
   expect(cal?.windows?.length === 1 && cal.windows[0].planned && cal.windows[0].plcName === 'Line 9' && cal.windows[0].note === 'belt', `the calendar: ${JSON.stringify(cal?.windows?.[0])}`);
   // (last time this happened: aDoors[2] in its error state: 3 times before, the work order done on it, its root cause)
+  const impact = await sup.ask({ type: 'changeImpact', id: 'chg01' }, 'changeImpactResult');
+  expect(Math.abs(impact?.days - 4) < 0.01 && Math.abs(impact.after.alarmsPerDay - 0.25) < 0.01 && impact.before.alarmsPerDay === 0 && impact.after.recorded === 0, `a change's impact: ${impact?.after?.alarmsPerDay} alarms a day since (was ${impact?.before?.alarmsPerDay}) over ${impact?.days?.toFixed(1)} days`);
   const last = await sup.ask({ type: 'lastTime', plc: 'line', machine: M, state: 'DOOR_DASHER_ERROR' }, 'lastTimeResult');
   expect(last?.ok && last.before.count === 3 && last.before.recoverMs === 10 * 60000 && last.orders[0]?.rootCause === 'Sensor cable cut at the hinge' && last.orders[0].number === o?.number, `last time: ${last?.before?.count}× in ${last?.before?.days} days, recovered in ${last?.before?.recoverMs / 60000} min; #${last?.orders?.[0]?.number} ${last?.orders?.[0]?.rootCause}`);
   // (the KPIs: the backlog (the call's work order open), the parts used on aDoors[2], this week's MTTR: the one taken
@@ -177,6 +181,14 @@ const M = `${R}.aDoors[2]`;
     const from = await p.$eval('#work-form', (e) => e.textContent).catch(() => '');
     expect(/Fix the alarm DOOR_DASHER_ERROR at aDoors\[2\]/.test(title ?? '') && /a bad actor: 1 alarm, 100 %/.test(from ?? ''), `a bad actor's task: "${title}" (${(from ?? '').slice(0, 120)})`);
     await p.keyboard.press('Escape');
+    // (the change's impact, opened on the Risk page's Changes)
+    await p.goto(`${BASE}/?board&page=risk`, { waitUntil: 'load' });
+    await h.until(() => p.$('#risk-tab-changes'), 15000);
+    await p.click('#risk-tab-changes');
+    await h.until(() => p.$('.plc-change button'), 10000);
+    await p.click('.plc-change button');
+    const impactText = await h.until(() => p.$eval('.change-impact', (e) => e.textContent).catch(() => null), 10000);
+    expect(/Since it \(4 days, against as long before\): alarms 0\.2 a day \(was 0\.0\)/.test(impactText ?? ''), `the change's impact on the board: ${impactText}`);
     // (an alert's Last time on the board)
     await p.goto(`${BASE}/?board`, { waitUntil: 'load' });
     await h.until(() => p.$('.board-alert[data-alert="f0"] .board-alert-last'), 15000);

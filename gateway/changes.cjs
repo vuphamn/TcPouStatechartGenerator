@@ -69,6 +69,7 @@ function createChanges({ baseDir, log, audit, notify, rolesOn }) {
       return c;
     },
     list: (limit = 200) => list.slice(-limit).reverse(),
+    get: (id) => list.find((x) => x.id === id) ?? null,
     open: () => list.filter((c) => !c.approvedBy).length,
     subscribe(fn) {
       listeners.add(fn);
