@@ -59,6 +59,8 @@ const apiPost = (p, body) =>
     [`${TI}.LastExecTime`]: { type: 'UDINT', dataType: 19, size: 4, value: 23000 },
     [`${TI}.CycleTimeExceeded`]: { type: 'BOOL', dataType: 33, size: 1, value: 0 },
     [`${TI}.RTViolation`]: { type: 'BOOL', dataType: 33, size: 1, value: 0 },
+    // (its clock: 60 s ahead of the gateway's, as it starts (its DcTaskTime, ns since 2000-01-01, stays put))
+    [`${TI}.DcTaskTime`]: { type: 'LINT', dataType: 20, size: 8, bytes: (() => { const b = Buffer.alloc(8); b.writeBigInt64LE(BigInt(Date.now() + 60000 - Date.UTC(2000, 0, 1)) * 1000000n); return [...b]; })() },
   });
   c.script = [...c.script, { hold: 2000, set: { [`${TI}.CycleTimeExceeded`]: 1 } }, { hold: 500, set: { [`${TI}.CycleTimeExceeded`]: 0 } }];
   // (three i550 drives and an HSD spindle on the master, and an SMC valve terminal: not a drive)
@@ -182,6 +184,11 @@ const apiPost = (p, body) =>
   // 4. The load panel's numbers
   const load = await h.until(() => api('GET', 'load').then((l) => (l?.plcs?.[0]?.tasks?.[0]?.overruns >= 1 ? l : null)), 15000);
   const lp = load?.plcs?.[0];
+  // (its clock ahead: its offset, an alert)
+  const clockNow = await h.until(() => api('GET', 'load').then((l) => (l?.plcs?.[0]?.clock ? l.plcs[0].clock : null)), 10000);
+  ws.send(JSON.stringify({ type: 'alertsList' }));
+  const clockAlert = await h.until(() => [...got].reverse().find((m) => m.type === 'alertsList')?.events?.find((e) => e.event === 'clock'), 8000);
+  expect(clockNow?.offsetMs > 20000 && clockNow.offsetMs < 61000 && /its clock is \d+\.\d s ahead of the gateway/.test(clockAlert?.text ?? ''), `its clock: +${clockNow?.offsetMs} ms; "${clockAlert?.text}"`);
   expect(lp?.shared?.notifications >= 5 && lp.shared.uses > lp.shared.notifications && lp.tasks[0].name === 'Plant_PlcTask' && lp.tasks[0].cycleUs === 10000 && lp.tasks[0].execUs === 2300 && lp.tasks[0].overruns >= 1 && load.drives?.[0]?.drives === 4 && load.machine?.cpuPct >= 0, `load: ${lp?.shared?.notifications} notifications (${lp?.shared?.uses} uses), task ${lp?.tasks?.[0]?.name} ${lp?.tasks?.[0]?.execUs} of ${lp?.tasks?.[0]?.cycleUs} µs, ${lp?.tasks?.[0]?.overruns} overrun(s); drives ${load?.drives?.[0]?.drives}`);
   // 5. Check a drive (the setup page): the boxes of other makers; the spindle's profile read raw; one object; one absent
   const listed = await apiPost('drivecheck', { plc: 'line' });

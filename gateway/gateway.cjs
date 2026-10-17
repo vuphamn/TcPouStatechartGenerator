@@ -465,6 +465,7 @@ function start() {
     config.siteName = next.siteName;
     config.alarms = next.alarms;
     config.eventlog = next.eventlog;
+    config.clock = next.clock;
     config.sitesDownAfterMin = next.sitesDownAfterMin;
     recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
@@ -849,7 +850,7 @@ function start() {
     const d = drives.view(ids);
     return { type: 'fleetState', at: Date.now(), risks: risksOf({ drives: d, daily: drives.daily(), fleet: f, alerts: alertLog.list(1000).filter((a) => !ids?.length || ids.includes(a.plc)), limits: config.fleet?.limits ?? {} }), inventory: inventoryOf(f), plcs: f.map((p) => ({ id: p.id, name: p.name, state: p.state, message: p.message })) };
   };
-  const load = createLoad({ connections: () => [...connections.entries()], plcOf, plcList: () => [...plcs.values()], ads, log });
+  const load = createLoad({ connections: () => [...connections.entries()], plcOf, plcList: () => [...plcs.values()], ads, log, getConfig: () => config, onEvent: (e) => alertLog.add(e) });
   // (From PLC: the copy kept here when it is in step with the PLC, else null: read from the PLC; logged once a minute)
   let keptSaid = 0;
   const keptSources = async (plc, client, key) => {

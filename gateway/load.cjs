@@ -14,7 +14,27 @@ const EVERY_MS = 2000;
 const TASKS = [1, 2, 3, 4];
 const TI = 'TwinCAT_SystemInfoVarList._TaskInfo';
 
-function createLoad({ connections, plcOf, plcList, ads, log }) {
+// - each PLC's clock: its first task's DcTaskTime (ns since 2000-01-01, the PLC's own time) against the gateway's,
+//   once a minute: its offset, its drift a day (the last 24 hours); an offset over config.clock.maxOffsetMs (2 s) an
+//   alert ("clock"), once a day a PLC: its events and the gateway's no longer line up
+const DC_EPOCH_MS = Date.UTC(2000, 0, 1);
+
+/** Its drift (ms a day) from its offsets [{ t, offsetMs }]: their slope (least squares), at least 30 minutes of them */
+function driftOf(samples) {
+  if (samples.length < 3 || samples[samples.length - 1].t - samples[0].t < 30 * 60000) return null;
+  const n = samples.length;
+  const mt = samples.reduce((a, x) => a + x.t, 0) / n;
+  const mo = samples.reduce((a, x) => a + x.offsetMs, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (const x of samples) {
+    num += (x.t - mt) * (x.offsetMs - mo);
+    den += (x.t - mt) ** 2;
+  }
+  return den ? (num / den) * 86400000 : null;
+}
+
+function createLoad({ connections, plcOf, plcList, ads, log, getConfig, onEvent }) {
   const loop = monitorEventLoopDelay({ resolution: 20 });
   loop.enable();
   let prevCpu = process.cpuUsage();
@@ -56,7 +76,7 @@ function createLoad({ connections, plcOf, plcList, ads, log }) {
     let s = perPlc.get(id);
     if (s && s.client === conn.client) return s;
     s?.watcher?.close().catch(() => {});
-    s = { client: conn.client, watcher: null, tasks: new Map(), prevSamples: null, prevAt: Date.now(), samplesPerSec: 0, handles: new Map(), busy: false };
+    s = { client: conn.client, watcher: null, tasks: new Map(), prevSamples: null, prevAt: Date.now(), samplesPerSec: 0, handles: new Map(), busy: false, clock: s?.clock ?? { offsetMs: null, at: 0, samples: [], told: '' } };
     perPlc.set(id, s);
     const shared = conn.sharedVars?.();
     if (shared) {
@@ -113,11 +133,46 @@ function createLoad({ connections, plcOf, plcList, ads, log }) {
           s.handles.delete(p);
         }
       }
+      // (its clock, once a minute)
+      if (Date.now() - s.clock.at >= 60000) await sampleClock(id, s);
     } finally {
       s.busy = false;
     }
     const hour = Date.now() - 3600_000;
     for (const t of s.tasks.values()) while (t.overrunTimes.length && t.overrunTimes[0] < hour) t.overrunTimes.shift();
+  };
+
+  /** Its clock: the first task's DcTaskTime, the gateway's time halfway through the read */
+  const sampleClock = async (id, s) => {
+    s.clock.at = Date.now();
+    const first = [...s.tasks.values()].filter((t) => t.name).sort((a, b) => a.index - b.index)[0];
+    const p = `${TI}[${first?.index ?? 1}].DcTaskTime`;
+    try {
+      let h = s.handles.get(p);
+      if (h === undefined) {
+        h = await ads.createHandle(s.client, p);
+        s.handles.set(p, h);
+      }
+      const t0 = Date.now();
+      const buf = await s.client.readRaw(0xf005, h, 8);
+      const t1 = Date.now();
+      const plcMs = Number(buf.readBigInt64LE(0) / 1000000n) + DC_EPOCH_MS;
+      const offsetMs = plcMs - (t0 + t1) / 2;
+      s.clock.offsetMs = Math.round(offsetMs);
+      s.clock.samples.push({ t: t1, offsetMs });
+      while (s.clock.samples.length && s.clock.samples[0].t < t1 - 86400000) s.clock.samples.shift();
+      const max = Math.max(100, Number(getConfig?.()?.clock?.maxOffsetMs) || 2000);
+      const day = new Date().toDateString();
+      if (Math.abs(offsetMs) > max && s.clock.told !== day) {
+        s.clock.told = day;
+        const plc = plcOf(id);
+        const text = `${plc?.name ?? id}: 🕒 its clock is ${(Math.abs(offsetMs) / 1000).toFixed(1)} s ${offsetMs > 0 ? 'ahead of' : 'behind'} the gateway's: its events and the gateway's no longer line up (TwinCAT's time, or Windows': set both by the same time server)`;
+        log(`load: ${text}`);
+        onEvent?.({ event: 'clock', level: 'warn', rule: 'PLC clocks', ruleId: 'clock', plc: id, plcName: plc?.name ?? id, machine: '(its clock)', state: 'offset', text, at: new Date().toISOString() });
+      }
+    } catch {
+      s.handles.delete(p);
+    }
   };
 
   const tick = async () => {
@@ -154,6 +209,7 @@ function createLoad({ connections, plcOf, plcList, ads, log }) {
           id, name: plc?.name ?? id, connected: !!conn.client, plcState: conn.plcState ?? null,
           shared: st ? { notifications: st.notifications, uses: st.uses, watchers: st.watchers, cycleMs: st.cycleMs, samplesPerSec: Math.round((s?.samplesPerSec ?? 0) * 10) / 10 } : null,
           live: { notifications: conn.symbols?.size ?? 0 },
+          clock: s?.clock?.offsetMs !== null && s?.clock?.offsetMs !== undefined ? { offsetMs: s.clock.offsetMs, driftMsPerDay: driftOf(s.clock.samples) === null ? null : Math.round(driftOf(s.clock.samples)) } : null,
           tasks: s ? [...s.tasks.values()].filter((t) => t.name).sort((a, b) => a.index - b.index).map((t) => ({ name: t.name, cycleUs: t.cycleUs, execUs: t.execUs, maxExecUs: t.maxExecUs, overruns: t.overruns, overrunsLastHour: t.overrunTimes.length, exceeded: t.exceeded, rtViolations: t.rtViolations })) : [],
         });
       }
@@ -173,4 +229,4 @@ function createLoad({ connections, plcOf, plcList, ads, log }) {
   };
 }
 
-module.exports = { createLoad };
+module.exports = { createLoad, driftOf };

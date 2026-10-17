@@ -1383,7 +1383,7 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
   // ---- Roles ----
   let rolesData = null;
   const ROLE_IDS = ['operator', 'technician', 'supervisor', 'engineer', 'manager'];
-  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'backup', 'recovered', 'escalated'];
+  const EVENT_IDS = ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent', 'clock', 'call', 'workorder', 'handover', 'parts', 'change', 'anomaly', 'cert', 'backup', 'recovered', 'escalated'];
   const roleSelect = (value, onChange, none) => {
     const s = el('select', { on: { change: (e) => onChange(e.target.value) } }, el('option', { value: '' }, none || '(the default)'), ...ROLE_IDS.map((r) => el('option', { value: r }, (rolesData.labels[r] || r))));
     s.value = value || '';
@@ -1929,9 +1929,10 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
         el('td', { class: 'admin-load-shared' }, p.shared ? p.shared.notifications + ' (' + p.shared.uses + ' uses, every ' + p.shared.cycleMs + ' ms on change; ' + p.shared.samplesPerSec + ' changes/s)' : ''),
         el('td', {}, p.live.notifications ? String(p.live.notifications) : ''),
         el('td', { class: 'admin-load-monitors' }, [d ? d.drives + ' drives every ' + Math.round(d.everyMs / 1000) + ' s' : '', (a.faults || []).includes(p.id) ? 'fault records' : '', (a.fleet || []).find((x) => x.plc === p.id) ? 'I/O fleet every ' + Math.round((a.fleet || []).find((x) => x.plc === p.id).everyMs / 1000) + ' s' : '', (a.projects || []).includes(p.id) ? 'project copy' : ''].filter(Boolean).join(', ')),
-        el('td', { class: 'admin-load-tasks' }, tasks.join(' · '))));
+        el('td', { class: 'admin-load-tasks' }, tasks.join(' · ')),
+        el('td', { class: 'admin-load-clock' + (p.clock && Math.abs(p.clock.offsetMs) > 2000 ? ' bad' : '') }, p.clock ? (p.clock.offsetMs >= 0 ? '+' : '') + (p.clock.offsetMs / 1000).toFixed(2) + ' s' + (p.clock.driftMsPerDay !== null ? ', drifts ' + (p.clock.driftMsPerDay / 1000).toFixed(2) + ' s a day' : '') : '')));
     }
-    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Monitors'), el('th', {}, 'Its tasks'))), rows)));
+    box.append(el('div', { class: 'scroll' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'PLC'), el('th', {}, 'Connection'), el('th', {}, 'Notifications (shared)'), el('th', {}, 'Live diagrams'), el('th', {}, 'Monitors'), el('th', {}, 'Its tasks'), el('th', { title: 'Its clock against the gateway: its DcTaskTime, once a minute' }, 'Clock'))), rows)));
   };
   loadLoad().catch(() => {});
   // (its health: the disk, what is kept, its growth, its retention planned)
