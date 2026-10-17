@@ -99,6 +99,8 @@ export interface AlertEvent {
   ack: { by: string; at: string; note: string } | null;
   resolvedAt: string | null;
   escalatedAt?: string | null;
+  /** Its rationalization (the master alarm database): its priority (1 urgent … 4 low), consequence, response */
+  alarm?: { priority: number; consequence: string; response: string; respondMin: number | null };
 }
 
 /** The gateway's recordings as the playback needs them (recordingsList) */
@@ -1467,6 +1469,18 @@ export const OperatorBoard: React.FC = () => {
                         <span className="ml-auto text-xs uppercase tracking-wide text-slate-400">{a.event}</span>
                       </div>
                       <div className="mt-0.5">{a.text}</div>
+                      {a.alarm && (
+                        <div className="board-alert-rational mt-1 text-xs" data-priority={a.alarm.priority}>
+                          <span className={`px-1.5 rounded font-bold ${a.alarm.priority === 1 ? 'bg-rose-600 text-white' : a.alarm.priority === 2 ? 'bg-amber-500 text-slate-950' : a.alarm.priority === 3 ? 'bg-sky-700 text-white' : 'bg-slate-700 text-slate-200'}`}>
+                            P{a.alarm.priority} {t(['', 'urgent', 'high', 'medium', 'low'][a.alarm.priority] ?? '')}
+                          </span>
+                          {a.alarm.respondMin ? <span className="ml-1 text-slate-300">{t('respond within {n} min', { n: a.alarm.respondMin })}</span> : null}
+                          <div className="mt-0.5 text-slate-200">
+                            <b>{t('Do')}:</b> {a.alarm.response}
+                          </div>
+                          {a.alarm.consequence && <div className="text-slate-400">{t('Else')}: {a.alarm.consequence}</div>}
+                        </div>
+                      )}
                       {a.ack && (
                         <div className="board-ack mt-1 text-xs text-emerald-300">
                           <Check className="inline w-3 h-3" /> {a.ack.by}, {new Date(a.ack.at).toLocaleTimeString()}

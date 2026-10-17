@@ -165,7 +165,7 @@ export const RiskBoard: React.FC<{ conn: GatewayConnection | null; connected: bo
       )}
       {tab === 'alarms' && (
         <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'}`}>
-          <AlarmHealth conn={conn} connected={connected} plcIds={plcIds} root={root} onTask={onBadActor} />
+          <AlarmHealth conn={conn} connected={connected} plcIds={plcIds} root={root} onTask={onBadActor} canRationalize={canApprove} />
         </div>
       )}
       <div className={`flex-1 min-h-0 overflow-y-auto ${narrow ? 'p-2' : 'p-4'} ${tab === 'alarms' || tab === 'changes' ? 'hidden' : ''}`}>

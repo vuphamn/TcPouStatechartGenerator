@@ -97,6 +97,9 @@ const TOKEN = 'shelve-test-token';
   // 3. Unshelved: its next error posted again; said in the history; in the audit log
   const un = await ask({ type: 'alarmUnshelve', id: shelved?.shelf?.id }, 'shelfResult');
   const again = await ask({ type: 'alarmUnshelve', id: shelved?.shelf?.id }, 'shelfResult');
+  // (the door type's error rationalized (ISA-18.2) before its next one: no response refused)
+  const noResponse = await ask({ type: 'alarmDbSave', entry: { type: 'SM_DoorDasher', state: 'DOOR_DASHER_ERROR', priority: 1, response: '' } }, 'alarmDbResult');
+  const rationalized = await ask({ type: 'alarmDbSave', entry: { type: 'SM_DoorDasher', state: 'DOOR_DASHER_ERROR', priority: 1, consequence: 'Parts jam at the door', response: 'Check sensor S12, then press Reset', respondMin: 5 } }, 'alarmDbResult');
   const before2 = posts.length;
   set({ [`${D1}.machineState`]: 0 });
   await h.sleep(1500);
@@ -106,6 +109,10 @@ const TOKEN = 'shelve-test-token';
   const events2 = (await history()) ?? [];
   const audit = fs.readdirSync(dir).filter((f) => /^audit-.*\.jsonl$/.test(f)).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('');
   expect(un?.ok && un.shelf.ended === 'unshelved' && again?.ok === false && posts.slice(before2).some((p) => p.machine === D1) && events2.some((e) => e.event === 'shelf' && /unshelved by/.test(e.text)) && /alarm\.shelve/.test(audit) && /alarm\.unshelve/.test(audit), `unshelved: its error posted again; "${events2.find((e) => e.event === 'shelf')?.text}"; the audit log`);
+  const rated = events2.find((e) => e.machine === D1 && e.event === 'error' && !e.muted);
+  const health = await ask({ type: 'alarmHealth', days: 1 }, 'alarmHealthResult');
+  const topD1 = health?.top?.find((a) => a.machine === D1);
+  expect(noResponse?.ok === false && /response/.test(noResponse.error) && rationalized?.ok && rated?.alarm?.priority === 1 && rated.alarm.response === 'Check sensor S12, then press Reset' && rated.alarm.respondMin === 5 && topD1?.rationalized?.priority === 1 && health.rationalized?.done >= 1 && health.rationalized.raised >= 1, `rationalized: its alert P${rated?.alarm?.priority} "${rated?.alarm?.response}"; alarm health ${health?.rationalized?.done} of ${health?.rationalized?.raised} raised (no response: ${noResponse?.error})`);
   ws.close();
 
   const built = fs.existsSync(path.join(h.REPO, 'dist', 'assets')) && fs.readdirSync(path.join(h.REPO, 'dist', 'assets')).some((f) => f.endsWith('.js') && fs.readFileSync(path.join(h.REPO, 'dist', 'assets', f), 'utf8').includes('board-alert-shelve'));
@@ -133,6 +140,8 @@ const TOKEN = 'shelve-test-token';
     expect(/1 alarm\(s\) shelved/.test(list ?? '') && rows.some((r) => /checking the hinge/.test(r ?? '')) && /aDoors/.test(which ?? ''), `the board: "${list}"; ${rows.join(' | ')}`);
     await p.click('.board-unshelve');
     const gone = await h.until(() => p.$('#board-shelved').then((x) => (x ? null : true)), 8000);
+    const rational = await p.$eval('.board-alert-rational', (e) => e.textContent).catch(() => '');
+    expect(/P1 urgent/.test(rational) && /respond within 5 min/.test(rational) && /Do: Check sensor S12/.test(rational) && /Else: Parts jam/.test(rational), `the alert's rationalization on the board: ${rational}`);
     expect(!!gone && !errors.length, `unshelved from the board; no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

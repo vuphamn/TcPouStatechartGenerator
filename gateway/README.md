@@ -273,6 +273,7 @@ A full-screen, read-only view for a screen by the line: `https://<gateway>:8443/
   - **Alarm health** (its tab): the alert history over 24 hours, 7 or 30 days, as ISA-18.2 (and EEMUA 191) measure an alarm system.
     - **Alarms an hour:** about 6 (one in 10 minutes) is acceptable, up to 12 manageable, more overloaded. Then the busiest 10 minutes, and the floods (more than 10 in 10 minutes) with their share of the time (under 1 % is the target).
     - **Bad actors:** the 10 alarms raised most, with their share of all. **Task** on one makes a work order to fix it (its cause, a delay, a deadband), with why.
+    - **Rationalize** (ISA-18.2, the master alarm database; supervisors, engineers): an alarm (that machine, or its type, in that state) given its priority (P1 urgent … P4 low), its consequence, the operator's response and the time to respond. Its alerts then carry them: on the board, *P1 urgent · respond within 5 min · Do: Check sensor S12, then press Reset · Else: Parts jam at the door*. Alarm health counts the alarms raised that are rationalized (*12 of the 30 alarms raised rationalized*). Kept in `alarmdb.json`.
     - **Chattering:** an alarm raised 3 times or more within a minute (a delay or a deadband on it, in the PLC). **Task** too.
     - **Stale:** alarms open over 24 hours.
     - **Acknowledged in:** the median and 90 % time to acknowledge, and how many were not.

@@ -72,6 +72,7 @@ const { tokenFor, allowedOf, scopeIn, scopeOut, watchExpiry } = require('./token
 const { summaryOf, createPlant } = require('./plant.cjs');
 const { createEventRelay } = require('./eventRelay.cjs');
 const { correlate } = require('./faultCorrelation.cjs');
+const { createAlarmDb } = require('./alarmDb.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -605,8 +606,10 @@ function start() {
   const audit = createAudit({ dir: baseDir, log });
   // Alarm shelving (ISA-18.2): a shelved alarm is logged muted, whoever raises it (rules, drives, axes, anomalies)
   const shelves = createShelves({ baseDir, getConfig: () => config, log, audit, onEvent: (e) => alertLog.add(e) });
+  // (the master alarm database: an alert of a rationalized alarm with its priority, consequence, response)
+  const alarmDb = createAlarmDb({ baseDir, log, audit });
   const addAlert = alertLog.add;
-  alertLog.add = (e) => addAlert(shelves.apply(e));
+  alertLog.add = (e) => addAlert(alarmDb.apply(shelves.apply(e)));
   // Push notifications (push.cjs): the board's alerts on devices, the board closed
   push = createPush({ baseDir, getConfig: () => config, log, audit });
   const maintenance = createMaintenance({ file: path.join(baseDir, 'maintenance.json'), log, rules: rulesNow, plcOf, audit });
@@ -985,6 +988,7 @@ function start() {
     let pmOff = null;
     let changesOff = null;
     let shelvesOff = null;
+    let alarmDbOff = null;
     let sitesOff = null;
     const boardViewer = {};
     let user = null;
@@ -1115,7 +1119,7 @@ function start() {
       }
       // Roles: an action this user's role may not do, refused (answered as its handler would)
       {
-        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', alarmShelve: 'ack', alarmUnshelve: 'ack', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
+        const NEEDS = { engTiming: 'engineering', engTransitions: 'engineering', engCompare: 'engineering', engVersions: 'engineering', engDiff: 'engineering', workCreate: 'workorder', workUpdate: 'workorder', handoverSave: 'note', recoverySave: 'boardEdit', recoveryDelete: 'boardEdit', recoveryStart: 'ack', recoveryStep: 'ack', recoveryEnd: 'ack', spareSave: 'assign', spareDelete: 'assign', spareMove: 'workorder', pmSave: 'assign', pmDelete: 'assign', pmNow: 'workorder', changeExplain: 'engineering', changeApprove: 'assign', callMaintenance: 'call', alarmShelve: 'ack', alarmUnshelve: 'ack', alarmDbSave: 'assign', alarmDbDelete: 'assign', downtimeReason: 'downtime', oeeReport: 'reports', alertAck: 'ack', maintenanceSet: 'maintenance', report: 'reports', boardFilterSave: 'boardEdit', boardFilterDelete: 'boardEdit', boardRuleSave: 'boardEdit', boardRuleDelete: 'boardEdit', plcStart: 'plcWrite', plcStartAt: 'plcWrite', plcBuild: 'engineering', projectBuild: 'engineering', projectSync: 'engineering', projectPut: 'engineering' };
         let need = NEEDS[m.type];
         if ((m.type === 'plcBuild' || m.type === 'projectBuild') && m.write && may('engineering')) need = 'plcWrite';
         if (need && roles.enabled() && !viewOnly && !may(need)) {
@@ -1123,7 +1127,7 @@ function start() {
           const role = roles.roleOf(user, groups());
           const error = `${user}'s role (${role ? ROLE_LABELS[role] : 'none'}) may not do this on this gateway`;
           audit.add(user, 'refused', { action: m.type, role });
-          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', changeExplain: 'changeResult', changeApprove: 'changeResult', callMaintenance: 'callMaintenanceResult', alarmShelve: 'shelfResult', alarmUnshelve: 'shelfResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
+          const reply = { engTiming: 'engTimingResult', engTransitions: 'engTransitionsResult', engCompare: 'engCompareResult', engVersions: 'engVersionsResult', engDiff: 'engDiffResult', workCreate: 'workResult', workUpdate: 'workResult', handoverSave: 'handoverResult', recoverySave: 'recoveryResult', recoveryDelete: 'recoveryResult', recoveryStart: 'recoveryResult', recoveryStep: 'recoveryResult', recoveryEnd: 'recoveryResult', spareSave: 'spareResult', spareDelete: 'spareResult', spareMove: 'spareResult', pmSave: 'pmResult', pmDelete: 'pmResult', pmNow: 'pmResult', changeExplain: 'changeResult', changeApprove: 'changeResult', callMaintenance: 'callMaintenanceResult', alarmShelve: 'shelfResult', alarmUnshelve: 'shelfResult', alarmDbSave: 'alarmDbResult', alarmDbDelete: 'alarmDbResult', downtimeReason: 'downtimeReasonResult', oeeReport: 'oeeReportResult', alertAck: 'alertAckResult', maintenanceSet: 'maintenanceResult', report: 'reportResult', boardFilterSave: 'boardFilterResult', boardFilterDelete: 'boardFilterResult', boardRuleSave: 'boardRuleResult', boardRuleDelete: 'boardRuleResult', plcStart: 'plcStartResult', plcStartAt: 'plcStartAtResult', plcBuild: 'plcBuildResult', projectBuild: 'plcBuildResult', projectSync: 'projectSyncResult', projectPut: 'projectPutResult' }[m.type];
           return send({ type: reply, requestId, ok: false, error, message: error, fatal: error, items: [], state: null });
         }
       }
@@ -1295,6 +1299,26 @@ function start() {
       // Last time this happened: a machine in a state, what is known of it (earlier alerts, work orders done and their
       // root causes, its recovery guide, earlier fault records)
       // Alarm shelving: those shelved now (and the latest ended), an alarm shelved, unshelved (those who acknowledge)
+      // The master alarm database: followed, an entry written, removed (those who assign work)
+      if (m.type === 'alarmDbWatch') {
+        const sendDb = () => send({ type: 'alarmDb', entries: alarmDb.list() });
+        sendDb();
+        alarmDbOff ??= alarmDb.subscribe(sendDb);
+        return;
+      }
+      if (m.type === 'alarmDbSave' || m.type === 'alarmDbDelete') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'alarmDbResult', requestId, ok: false, error: 'A display: nothing can be changed from it' });
+        try {
+          if (m.type === 'alarmDbDelete') {
+            alarmDb.remove(String(m.id ?? ''), user);
+            return send({ type: 'alarmDbResult', requestId, ok: true });
+          }
+          return send({ type: 'alarmDbResult', requestId, ok: true, entry: alarmDb.save(m.entry ?? {}, user) });
+        } catch (err) {
+          return send({ type: 'alarmDbResult', requestId, ok: false, error: err.message });
+        }
+      }
       if (m.type === 'shelvesWatch') {
         const sendShelves = () => send({ type: 'shelves', ...shelves.list() });
         sendShelves();
@@ -1587,7 +1611,14 @@ function start() {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
         const days = [1, 7, 30].includes(Number(m.days)) ? Number(m.days) : 7;
         const to = Date.now();
-        return send({ type: 'alarmHealthResult', requestId, ...alarmHealth({ events: alertLog.all(), from: to - days * 86400000, to, plcIds: Array.isArray(m.plcs) ? m.plcs.map(String) : [] }) });
+        const ah = alarmHealth({ events: alertLog.all(), from: to - days * 86400000, to, plcIds: Array.isArray(m.plcs) ? m.plcs.map(String) : [] });
+        // (each of its bad actors rationalized or not; how many of the alarms raised are)
+        // (its type, from one of its alerts: an entry may be of its type)
+        const typeOf = (a) => alertLog.all().find((e) => e.plc === a.plc && e.machine === a.machine && e.type)?.type;
+        ah.top = ah.top.map((a) => ({ ...a, rationalized: alarmDb.match({ ...a, type: typeOf(a) }) }));
+        const raised = [...new Map(alertLog.all().filter((e) => ['error', 'stuck', 'plcStopped', 'drive', 'slower', 'plcEvent'].includes(e.event) && Date.parse(e.at) >= to - days * 86400000 && e.state && (!Array.isArray(m.plcs) || !m.plcs.length || m.plcs.includes(e.plc))).map((e) => [`${e.plc}|${String(e.machine).toLowerCase()}|${String(e.state).toLowerCase()}`, e])).values()];
+        ah.rationalized = { raised: raised.length, done: raised.filter((e) => alarmDb.match(e)).length };
+        return send({ type: 'alarmHealthResult', requestId, ...ah });
       }
       if (m.type === 'pmWatch') {
         const sendPm = () => send({ type: 'pmPlans', plans: pm.list() });
@@ -2178,6 +2209,7 @@ function start() {
       axesOff?.();
       changesOff?.();
       shelvesOff?.();
+      alarmDbOff?.();
       sitesOff?.();
       startSeq++;
       await stopSession();
