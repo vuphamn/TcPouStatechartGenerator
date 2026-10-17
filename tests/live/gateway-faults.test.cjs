@@ -39,6 +39,16 @@ const usTime = (t) => { const d = new Date(t); const h = d.getHours() % 12 || 12
   const dir = h.out('gw-faults');
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
+  // (two earlier fault records of aDoors[1] into its error, 2 days ago: nCount changed 2 s before each)
+  const old = new Date(Date.now() - 2 * 86400000);
+  const oldDay = `${old.getFullYear()}-${String(old.getMonth() + 1).padStart(2, '0')}-${String(old.getDate()).padStart(2, '0')}`;
+  fs.mkdirSync(path.join(dir, 'faults', 'line', oldDay), { recursive: true });
+  for (const k of [1, 2]) {
+    const at = old.getTime() + k * 3600000;
+    const id = `${oldDay.replace(/-/g, '')}-seed000${k}`;
+    fs.writeFileSync(path.join(dir, 'faults', 'line', oldDay, `${id}.json`), JSON.stringify({ id, plc: 'line', plcName: 'Line 5', machine: `${R}.aDoors[1]`, type: 'SM_DoorDasher', state: 'DOOR_DASHER_ERROR', at, from: at - 5000, to: at + 5000, stateNames: {}, complete: true,
+      machines: { [`${R}.aDoors[1]`]: [{ t: at - 5000, v: 1 }, { t: at, v: 7 }] }, signals: { [`${R}.nCount`]: [{ t: at - 5000, v: 1 }, { t: at - 2000, v: 2 }], [`${R}.fSpeed`]: [{ t: at - 5000, v: 1.5 }] } }));
+  }
   const configPath = path.join(dir, 'config.json');
   fs.writeFileSync(configPath, JSON.stringify({
     port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [], alertRetryMs: 2000,
@@ -65,13 +75,17 @@ const usTime = (t) => { const d = new Date(t); const h = d.getHours() % 12 || 12
   expect(done?.machine === `${R}.aDoors[1]` && done.state === 'DOOR_DASHER_ERROR' && done.complete, `a fault kept: ${done?.machine} ${done?.state}`);
   ws.send(JSON.stringify({ type: 'faultsList', requestId: 1 }));
   const list = await h.until(() => got.find((m) => m.type === 'faultsListResult' && m.requestId === 1), 5000);
-  expect(list?.faults?.length === 1 && !list.faults.some((f) => /aDoors\[2\]/.test(f.machine)) && list.signals?.line?.length === 2, `one fault only (not the machine in error from the start): ${list?.faults?.map((f) => f.machine).join(', ')}`);
+  expect(list?.faults?.filter((f) => f.at > Date.now() - 3600000).length === 1 && list.faults.length === 3 && !list.faults.some((f) => /aDoors\[2\]/.test(f.machine)) && list.signals?.line?.length === 2, `one fault only (not the machine in error from the start): ${list?.faults?.map((f) => f.machine).join(', ')}`);
   ws.send(JSON.stringify({ type: 'faultGet', requestId: 2, id: done?.id }));
   const rec = (await h.until(() => got.find((m) => m.type === 'faultGetResult' && m.requestId === 2), 5000))?.fault;
   const door = rec?.machines?.[`${R}.aDoors[1]`] ?? [];
   expect(rec && rec.to - rec.from === 10000 && rec.from === rec.at - 5000 && door[0]?.t >= rec.from && door.some((p) => p.v === 7 && p.t === rec.at) && door.some((p) => p.v === 1 && p.t < rec.at), `its record: ${Object.keys(rec?.machines ?? {}).length} machines, aDoors[1] ${door.map((p) => p.v).join(' > ')}, ${rec?.stateNames?.[`${R}.aDoors[1]`]?.['7']}`);
   expect((rec?.signals?.[`${R}.nCount`] ?? []).some((p) => p.v === 99) && (rec?.signals?.[`${R}.fSpeed`] ?? []).length >= 1, `its signals: nCount ${(rec?.signals?.[`${R}.nCount`] ?? []).map((p) => p.v).join(' > ')}`);
   expect(fs.existsSync(path.join(dir, 'faults', 'line')), 'kept in faults/line/<day>/<id>.json');
+  // (what changed before this kind of fault, over its 3 records: nCount, each time; fSpeed not)
+  ws.send(JSON.stringify({ type: 'faultCorrelation', requestId: 3, id: done?.id }));
+  const corr = await h.until(() => got.find((m) => m.type === 'faultCorrelationResult' && m.requestId === 3), 10000);
+  expect(corr?.records === 3 && corr.items?.[0]?.name === `${R}.nCount` && corr.items[0].hits === 3 && !corr.items.some((x) => /fSpeed/.test(x.name)), `before it, most often: ${corr?.items?.map((x) => `${x.name} ${x.hits}/${x.of}`).join(', ') ?? corr?.error} (${corr?.records} records)`);
   // (its TwinCAT logged events: two in its window, one an hour before)
   const csv = ['"Severity","Event Class","Event Id","Source","Time Raised","Text"', `"Error","DoorEvents","3","Door1","${usTime(rec.at - 1500)}","Door 1, sensor S12 lost"`, `"Warning","DoorEvents","5","Door1","${usTime(rec.at + 500)}","Door 1 stopped"`, `"Info","Main","1","Main","${usTime(rec.at - 3600000)}","Shift started"`, '"x","y","z","w","not a time","?"'].join('\r\n');
   const imported = await post('eventlog', { plc: 'line', csv });
@@ -104,11 +118,13 @@ const usTime = (t) => { const d = new Date(t); const h = d.getHours() % 12 || 12
     await p.waitForSelector('#fault-viewer .board-playback-lane', { timeout: 10000 });
     const view = await h.until(() => p.evaluate(() => ({ title: document.querySelector('#fault-viewer-title')?.textContent ?? '', lanes: document.querySelectorAll('#fault-viewer .board-playback-lane').length, marks: document.querySelectorAll('#fault-viewer .board-playback-mark').length, signals: document.querySelectorAll('#fault-viewer .board-trend-lane').length, events: document.querySelectorAll('#fault-events .fault-event').length, orders: document.querySelector('#fault-orders')?.textContent ?? '', work: !!document.querySelector('#fault-work') })).then((x) => (x.signals ? x : null)), 8000);
     expect(/aDoors\[1\] went into DOOR_DASHER_ERROR/.test(view?.title ?? '') && view.lanes >= 1 && view.marks >= 3 && view.signals === 2 && view.events === 2 && /Door 1 sensor/.test(view.orders) && view.work, `the viewer: ${JSON.stringify(view)}`);
+    const corrShown = await h.until(() => p.$$eval('#fault-correlation .fault-corr', (x) => x.map((e) => e.textContent)).then((x) => (x.length ? x : null)), 8000);
+    expect(/nCount.*changed before 3 of 3/.test(corrShown?.[0] ?? ''), `the viewer's Before it, most often: ${corrShown?.join(' | ')}`);
     await p.click('#fault-viewer button[title^="Close"]');
     // 4. The Faults list
     await p.click('#board-aside-faults');
     const listed = await p.$$eval('.board-fault', (fs2) => fs2.length);
-    expect(listed === 1, `the board's Faults list: ${listed}`);
+    expect(listed === 3, `the board's Faults list: ${listed} (with the two seeded ones)`);
     expect(!errors.length, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
     await browser.close();
   }

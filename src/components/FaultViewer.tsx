@@ -57,6 +57,16 @@ export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string;
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [showAll, setShowAll] = useState(false);
+  // (what changes before this kind of fault: its machine's records into the same state)
+  const [corr, setCorr] = useState<{ records: number; items: { name: string; kind: string; hits: number; of: number; rate: number; usualRate: number; before: unknown }[] } | null>(null);
+  useEffect(() => {
+    if (!conn) return;
+    let gone = false;
+    void conn.request<{ records?: number; items?: { name: string; kind: string; hits: number; of: number; rate: number; usualRate: number; before: unknown }[] }>({ type: 'faultCorrelation', id }, 'faultCorrelationResult', 60000).then((r) => !gone && r.items && setCorr({ records: r.records ?? 0, items: r.items })).catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [conn, id]);
   useEffect(() => {
     let gone = false;
     const load = () =>
@@ -126,6 +136,19 @@ export const FaultViewer: React.FC<{ conn: GatewayConnection | null; id: string;
         {rec?.orders && rec.orders.length > 0 && (
           <div id="fault-orders" className="px-4 py-2 border-b border-slate-800 text-xs text-slate-300">
             Work orders: {rec.orders.map((o) => `#${o.number} ${o.title} (${o.status}${o.assignee ? `, ${o.assignee}` : ''})`).join(' · ')}
+          </div>
+        )}
+        {corr && corr.records >= 2 && (
+          <div id="fault-correlation" className="px-4 py-2 border-b border-slate-800 text-xs text-slate-300">
+            <span className="font-semibold">Before it, most often</span> <span className="text-slate-500">(its {corr.records} fault records into this state; the 10 s before each, against any other 10 s):</span>
+            {!corr.items.length && <span className="text-slate-500"> nothing changed before most of them</span>}
+            <ul className="mt-0.5 space-y-0.5">
+              {corr.items.map((x) => (
+                <li key={`${x.kind}|${x.name}`} className="fault-corr" data-name={x.name}>
+                  <span className="font-mono">{x.name}</span> {x.kind === 'machine' ? '(its state)' : ''} changed before <b>{x.hits} of {x.of}</b>, usually in {Math.round(x.usualRate * 100)} % of 10 s{x.before !== null && x.before !== undefined ? `; just before: ${String(x.before)}` : ''}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
         {!rec && !error && <div className="px-4 py-3 text-slate-400">Reading the fault record…</div>}

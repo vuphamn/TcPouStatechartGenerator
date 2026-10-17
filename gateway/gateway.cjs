@@ -71,6 +71,7 @@ const { createHealth } = require('./health.cjs');
 const { tokenFor, allowedOf, scopeIn, scopeOut, watchExpiry } = require('./tokens.cjs');
 const { summaryOf, createPlant } = require('./plant.cjs');
 const { createEventRelay } = require('./eventRelay.cjs');
+const { correlate } = require('./faultCorrelation.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -1342,6 +1343,16 @@ function start() {
         // (with the PLC's logged events of its window, and the work orders made of it)
         const withLinks = fault && { ...fault, events: eventLog.between(fault.plc, fault.from, fault.to), orders: workOrders.list().filter((o) => o.source?.kind === 'fault' && o.source.id === fault.id).map((o) => ({ id: o.id, number: o.number, title: o.title, status: o.status, assignee: o.assignee })) };
         return send({ type: 'faultGetResult', requestId, ...(fault ? { fault: withLinks } : { error: 'No such fault record (kept for config.faults.keepDays days)' }) });
+      }
+      // What changes before this kind of fault: the records of the same machine into the same state (at most 50)
+      if (m.type === 'faultCorrelation') {
+        const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
+        if (viewOnly) return send({ type: 'faultCorrelationResult', requestId, error: 'A display: the board only' });
+        const one = faults && typeof m.id === 'string' ? faults.list({ limit: 100000 }).find((x) => x.id === m.id) : null;
+        if (!one) return send({ type: 'faultCorrelationResult', requestId, error: 'No such fault record' });
+        const same = faults.list({ plc: one.plc, machine: one.machine, limit: 500 }).filter((x) => x.state === one.state).slice(0, 50);
+        const records = same.map((x) => faults.get(x.id)).filter(Boolean);
+        return send({ type: 'faultCorrelationResult', requestId, records: records.length, state: one.state, machine: one.machine, items: correlate(records) });
       }
       if (m.type === 'faultSignalsSet') {
         const requestId = Number.isInteger(m.requestId) ? m.requestId : 0;
