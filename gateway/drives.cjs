@@ -674,10 +674,11 @@ function createDrives({ baseDir, getConfig, plcList, connectionFor, sharedDir, a
       if (s.webhook && !kept?.muted) void postWebhook?.(s.webhook, s.format, e, log);
     }
 
-    /** Each drive's daily heatsink medians while running (the risk list's trends), today's last */
+    /** Each drive's daily values while running (the risk list's trends: heatsink, i²t and ixt at their 90 %, current per Hz), today's last */
     daily() {
       const days = Object.keys(this.summary.days).sort().slice(-21);
-      return Object.fromEntries(this.drives.map((d) => [d.path, [...days.map((day) => ({ day, heatsink: this.summary.days[day]?.[d.path]?.heatsink?.median ?? null })), ...(d.todayStats?.heatsink ? [{ day: new Date().toISOString().slice(0, 10), heatsink: d.todayStats.heatsink.median }] : [])].filter((x, i, all) => all.findIndex((y) => y.day === x.day) === i)]));
+      const of = (s) => ({ heatsink: s?.heatsink?.median ?? null, motorI2t: s?.motorI2t?.p90 ?? null, deviceIxt: s?.deviceIxt?.p90 ?? null, currentPerHz: s?.currentPerHz?.median ?? null });
+      return Object.fromEntries(this.drives.map((d) => [d.path, [...days.map((day) => ({ day, ...of(this.summary.days[day]?.[d.path]) })), ...(d.todayStats ? [{ day: new Date().toISOString().slice(0, 10), ...of(d.todayStats) }] : [])].filter((x, i, all) => all.findIndex((y) => y.day === x.day) === i)]));
     }
 
     /** As the board shows it */

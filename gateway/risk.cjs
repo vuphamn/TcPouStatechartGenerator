@@ -1,6 +1,7 @@
 // The risk list: what to look at first, across every PLC, for a maintenance supervisor. From
-// - the drives (drives.cjs): their health findings, and their heatsink's trend: its daily medians (while running) going
-//   up, carried forward to its warning threshold: "in about 20 days";
+// - the drives (drives.cjs): their health findings, and their trends carried forward (the last 14 days, while running):
+//   the heatsink's daily medians to its warning threshold ("in about 20 days"), the motor's i²t and the device's ixt
+//   (their daily 90 %) to 90 % (near tripping at 95), the current per Hz rising 20 % above where it was (wear, load);
 // - the I/O boxes (fleet.cjs): one out of OP now, one dropping out of OP on several days, its CRC errors (cables,
 //   connectors) rising;
 // - the machines (the alert history): more faults this week than the week before.
@@ -42,7 +43,28 @@ function risks({ drives = [], daily = {}, fleet = [], alerts = [], now = Date.no
       const last = days.at(-1)?.heatsink;
       if (slope !== null && slope >= L.heatsinkSlope && typeof last === 'number' && last < limit) {
         const eta = Math.round((limit - last) / slope);
-        if (eta <= L.etaDays) out.push({ id: `drive-trend:${p.id}:${d.path}`, kind: 'drive', plc: p.id, plcName: p.name, name: d.name, path: d.path, where, level: eta <= L.etaWarnDays ? 'warn' : 'watch', reason: `Heatsink rising ${(Math.round(slope * 100) / 100).toString()} °C a day (${days.length} days): near its warning threshold in about ${eta} days`, eta, trend: days.map((x) => x.heatsink) });
+        if (eta <= L.etaDays) out.push({ id: `drive-trend:${p.id}:${d.path}`, kind: 'drive', plc: p.id, plcName: p.name, name: d.name, path: d.path, where, level: eta <= L.etaWarnDays ? 'warn' : 'watch', reason: `Heatsink rising ${(Math.round(slope * 100) / 100).toString()} °C a day (${days.length} days): near its warning threshold in about ${eta} day${eta === 1 ? '' : 's'}`, eta, trend: days.map((x) => x.heatsink) });
+      }
+      // (its i²t and ixt (their daily 90 %) to 90 %, near tripping; its current per Hz 20 % above its first days)
+      const all = (daily[p.id]?.[d.path] ?? []).slice(-14);
+      for (const [key, what, slopeMin] of [['motorI2t', 'Motor i²t', L.utilSlope ?? 0.5], ['deviceIxt', 'Device ixt', L.utilSlope ?? 0.5]]) {
+        const xs = all.filter((x) => typeof x[key] === 'number');
+        const sl = slopeOf(xs.map((x) => ({ x: dayNumber(x.day), y: x[key] })));
+        const now0 = xs.at(-1)?.[key];
+        if (sl === null || sl < slopeMin || typeof now0 !== 'number' || now0 >= 90) continue;
+        const eta = Math.round((90 - now0) / sl);
+        if (eta <= L.etaDays) out.push({ id: `drive-${key}:${p.id}:${d.path}`, kind: 'drive', plc: p.id, plcName: p.name, name: d.name, path: d.path, where, level: eta <= L.etaWarnDays ? 'warn' : 'watch', reason: `${what} rising ${(Math.round(sl * 10) / 10).toString()} % a day (${xs.length} days, now ${Math.round(now0)} %): near tripping (90 %) in about ${eta} day${eta === 1 ? '' : 's'}`, eta, trend: xs.map((x) => x[key]) });
+      }
+      const cs = all.filter((x) => typeof x.currentPerHz === 'number' && x.currentPerHz > 0);
+      const cSlope = slopeOf(cs.map((x) => ({ x: dayNumber(x.day), y: x.currentPerHz })));
+      if (cSlope !== null && cs.length >= 5) {
+        const base = cs.slice(0, 3).reduce((a, x) => a + x.currentPerHz, 0) / 3;
+        const nowC = cs.at(-1).currentPerHz;
+        const perDayPct = (cSlope / base) * 100;
+        if (perDayPct >= (L.currentSlopePct ?? 0.5) && nowC < base * 1.2) {
+          const eta = Math.round((base * 1.2 - nowC) / cSlope);
+          if (eta <= L.etaDays) out.push({ id: `drive-current:${p.id}:${d.path}`, kind: 'drive', plc: p.id, plcName: p.name, name: d.name, path: d.path, where, level: eta <= L.etaWarnDays ? 'warn' : 'watch', reason: `Current at the same speed rising ${(Math.round(perDayPct * 10) / 10).toString()} % a day (${cs.length} days): 20 % above where it was in about ${eta} day${eta === 1 ? '' : 's'} (the load, bearings, the tool)`, eta, trend: cs.map((x) => x.currentPerHz) });
+        }
       }
     }
   }
