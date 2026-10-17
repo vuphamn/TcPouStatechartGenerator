@@ -591,6 +591,31 @@ function createAdmin({ configPath, getConfig, applyConfig, plcStatus, testPlc, c
       if (!/^https?:\/\/\S+$/i.test(webhook)) throw new Error('The webhook is an http(s) URL');
       return alerts.test(webhook, ['teams', 'slack', 'json'].includes(body.format) ? body.format : 'json');
     },
+    // (on-call rotations: one a line, "Maintenance | week | 2026-10-19 07:00 | Bob +15551234567, Ann ann@acme.com")
+    'GET rotations': async () => {
+      const { scheduleOf } = require('./oncall.cjs');
+      const rotations = getConfig().rotations ?? [];
+      return { rotations, schedule: Object.fromEntries(rotations.map((r) => [r.name, scheduleOf(r, Date.now(), 4)])) };
+    },
+    'POST rotations': async (body) => {
+      const { checkRotation } = require('./oncall.cjs');
+      const lines = (Array.isArray(body?.lines) ? body.lines : []).map((l) => String(l ?? '').trim()).filter(Boolean).slice(0, 20);
+      const rotations = lines.map((l, i) => {
+        const [name, every, start, people] = l.split('|').map((x) => x.trim());
+        const ev = /^(week|weekly)$/i.test(every ?? '') ? 'week' : /^(day|daily)$/i.test(every ?? '') ? 'day' : every;
+        const ps = String(people ?? '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
+          const words = p.split(' ').filter(Boolean);
+          const last = words.at(-1) ?? '';
+          const contact = words.length > 1 && (last.includes('@') || /^[+]?[0-9]{6,}$/.test(last)) ? words.pop() : '';
+          return { name: words.join(' '), contact };
+        });
+        return checkRotation({ name, every: ev, start, people: ps }, i);
+      });
+      update((c) => { c.rotations = rotations.length ? rotations : undefined; });
+      audit?.add('setup page', 'rotations', { count: rotations.length });
+      const { scheduleOf } = require('./oncall.cjs');
+      return { rotations, schedule: Object.fromEntries(rotations.map((r) => [r.name, scheduleOf(r, Date.now(), 4)])) };
+    },
     'POST tokens/rotate': async (body) => {
       const name = String(body.name ?? '');
       const old = (getConfig().tokens ?? []).find((t) => t.name === name);
@@ -1448,9 +1473,18 @@ button.primary { background: #0369a1; border-color: #0284c7; } button.danger:hov
             : el('input', { class: 'mono grow', placeholder: 'https://… (Teams, Slack or JSON webhook)', value: n.webhook || '', on: { input: (e) => { n.webhook = e.target.value.trim(); } } }),
           (n.channel === 'email' || n.channel === 'sms') ? el('span', {}) : (() => { const f = el('select', { on: { change: (e) => { n.format = e.target.value; } } }, ...['teams', 'slack', 'json'].map((x) => el('option', { value: x }, x))); f.value = n.format || 'teams'; return f; })(),
           el('button', { on: { click: () => { r.notify.splice(i, 1); renderRoles(); } } }, 'Remove')),
-        el('div', { class: 'row' }, 'Of: ', events), onCall));
+        el('div', { class: 'row' }, 'Of: ', events), onCall,
+        el('div', { class: 'row' }, 'or the on-call person of the rotation ', el('input', { class: 'admin-notify-rotation', placeholder: 'Maintenance (a rotation below)', value: n.rotation || '', on: { input: (e) => { n.rotation = e.target.value.trim(); } } }))));
     });
     box.append(el('button', { on: { click: () => { r.notify.push({ role: 'technician', webhook: '', format: 'teams', events: ['error', 'stuck', 'plcStopped', 'drive', 'call'], onCall: [] }); renderRoles(); } } }, 'Add a channel'));
+    // (on-call rotations: who takes turns, handing over each day or week; a channel above names one)
+    const rotArea = el('textarea', { id: 'admin-rotations', rows: 3, class: 'grow mono', placeholder: 'One a line: Maintenance | week | 2026-10-19 07:00 | Bob +15551234567, Ann ann@acme.com' });
+    const rotMsg = el('div', { class: 'msg', id: 'admin-rotations-msg' });
+    const rotPlan = el('div', { class: 'hint flush', id: 'admin-rotations-plan' });
+    const showPlan = (d) => { rotArea.value = (d.rotations || []).map((x) => x.name + ' | ' + x.every + ' | ' + String(x.start).replace('T', ' ') + ' | ' + x.people.map((p) => p.name + (p.contact ? ' ' + p.contact : '')).join(', ')).join(NL); rotPlan.replaceChildren(...Object.entries(d.schedule || {}).map(([name, list]) => el('div', { 'data-rotation': name }, name + ': ' + list.map((p) => p.name + ' from ' + new Date(p.from).toLocaleString()).join(', then ')))); };
+    call('rotations').then(showPlan).catch(() => {});
+    box.append(el('h3', {}, 'On-call rotations'), el('p', { class: 'hint flush' }, 'Who takes turns on call, handing over at its time each day or week. A channel above names its rotation: it tells the one on call now, and, escalated, the next one too. Each email or text carries a link that acknowledges the alert (the address its links use: its public address, under Exports).'), el('div', { class: 'row' }, rotArea), rotPlan,
+      el('div', { class: 'row' }, el('span', { class: 'grow' }), el('button', { id: 'admin-rotations-save', on: { click: async () => { try { showPlan(await call('rotations', { lines: rotArea.value.split(NL) })); say('admin-rotations-msg', 'Saved', true); } catch (err) { say('admin-rotations-msg', err.message, false); } } } }, 'Save rotations')), rotMsg);
   };
   const loadRoles = async () => {
     rolesData = await call('roles');

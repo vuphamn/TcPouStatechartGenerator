@@ -124,8 +124,10 @@ function checkRoles(r, filterIds = []) {
       if (contact && channel === 'sms') phonesOf(contact);
       return { name: String(o.name).trim().slice(0, 60), days: String(o.days ?? '').trim(), from: o.from || '00:00', to: o.to || '24:00', ...(contact ? { contact: channel === 'sms' ? phonesOf(contact)[0] : contact } : {}) };
     });
-    if (channel !== 'webhook' && !to.length && !onCall.some((o) => o.contact)) throw new Error(`${where}: who is ${channel === 'email' ? 'emailed' : 'texted'} (its addresses, or contacts in its on-call schedule)`);
-    return channel === 'webhook' ? { role: rl, webhook, format: ['teams', 'slack', 'json'].includes(n?.format) ? n.format : 'teams', events, onCall } : { role: rl, channel, to, events, onCall };
+    // (or a rotation's: its on-call person now (config.rotations))
+    const rotation = String(n?.rotation ?? '').trim().slice(0, 60);
+    if (channel !== 'webhook' && !to.length && !onCall.some((o) => o.contact) && !rotation) throw new Error(`${where}: who is ${channel === 'email' ? 'emailed' : 'texted'} (its addresses, contacts in its on-call schedule, or a rotation)`);
+    return channel === 'webhook' ? { role: rl, webhook, format: ['teams', 'slack', 'json'].includes(n?.format) ? n.format : 'teams', events, onCall, ...(rotation ? { rotation } : {}) } : { role: rl, channel, to, events, onCall, ...(rotation ? { rotation } : {}) };
   });
   return { users, groups, default: role(r.default, 'The default role'), startPages, pages, languages, notify };
 }
@@ -149,7 +151,8 @@ function onCallEntries(onCall, now = new Date()) {
     });
 }
 
-function createRoles({ getConfig, postWebhook, sendEmail, sendSms, log }) {
+function createRoles({ getConfig, postWebhook, sendEmail, sendSms, log, ackLinkOf }) {
+  const { personAt } = require('./oncall.cjs');
   const conf = () => getConfig().roles ?? null;
   /** A user's role (null: roles are off on this gateway, or none for this user) */
   const roleOf = (user, groups = []) => {
@@ -182,22 +185,30 @@ function createRoles({ getConfig, postWebhook, sendEmail, sendSms, log }) {
       const kind = event.escalatedAt && !event.ack ? 'escalated' : event.event;
       for (const n of r.notify) {
         if (!n.events.includes(kind)) continue;
-        const on = onCallEntries(n.onCall);
+        // (its rotation's on-call person now; escalated: the next one too)
+        const rot = n.rotation ? (getConfig().rotations ?? []).find((x) => x.name === n.rotation) : null;
+        const cur = rot ? personAt(rot) : null;
+        const next = cur && kind === 'escalated' ? personAt(rot, cur.until) : null;
+        const on = rot ? [cur, next && next.name !== cur?.name ? next : null].filter(Boolean) : onCallEntries(n.onCall);
         const who = on.map((o) => o.name);
         const text = `${event.text}${who.length ? ` · on call (${LABELS[n.role] ?? n.role}): ${who.join(', ')}` : ''}`;
         if (!n.channel || n.channel === 'webhook') {
-          void postWebhook(n.webhook, n.format, { ...event, role: n.role, onCall: who, text }, log);
+          void postWebhook(n.webhook, n.format, { ...event, role: n.role, onCall: who, text, ...(event.id && kind !== 'recovered' && ackLinkOf?.(event.id, who[0] ?? n.role) ? { ackUrl: ackLinkOf(event.id, who[0] ?? n.role) } : {}) }, log);
           continue;
         }
         // (email, SMS: those on call now with a contact, else the channel's own)
-        const contacts = on.map((o) => o.contact).filter(Boolean);
         // (its "to" as saved, a list; or as written in config.json by hand, "a@b.com, c@d.com")
         const own = Array.isArray(n.to) ? n.to : String(n.to ?? '').split(n.channel === 'email' ? /[\s,;]+/ : /[,;]+/).map((x) => x.trim()).filter(Boolean);
-        const to = contacts.length ? contacts : own;
-        if (!to.length) continue;
         const subject = `${event.plcName ? `${event.plcName}: ` : ''}${kind === 'escalated' ? 'escalated: ' : ''}${String(event.text ?? '').replace(/^[^:]*:\s*/, '').slice(0, 90)}`;
-        const send = n.channel === 'email' ? sendEmail?.({ to, subject, text: `${text}\n\n${event.at ?? ''}\nKval MachineScope gateway` }) : sendSms?.({ to, text: text.slice(0, 300) });
-        void Promise.resolve(send).catch((err) => log(`roles: ${n.channel} to ${to.join(', ')}: ${err.message}`));
+        // (each one on call with a contact: a message of their own, its link acknowledging as them; else the channel's own)
+        const sends = on.filter((o) => o.contact).map((o) => ({ to: [o.contact], who: o.name }));
+        if (!sends.length && own.length) sends.push({ to: own, who: LABELS[n.role] ?? n.role });
+        for (const one of sends) {
+          const link = event.id && kind !== 'recovered' ? ackLinkOf?.(event.id, one.who) : null;
+          const body = `${text}${link ? `${n.channel === 'sms' ? ' · ' : '\n\n'}Acknowledge: ${link}` : ''}`;
+          const send = n.channel === 'email' ? sendEmail?.({ to: one.to, subject, text: `${body}\n\n${event.at ?? ''}\nKval MachineScope gateway` }) : sendSms?.({ to: one.to, text: body.slice(0, 480) });
+          void Promise.resolve(send).catch((err) => log(`roles: ${n.channel} to ${one.to.join(', ')}: ${err.message}`));
+        }
       }
     },
   };

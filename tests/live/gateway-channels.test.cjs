@@ -2,7 +2,9 @@
 // simulated PLC symbols-plc.cjs): a call for maintenance emailed to the supervisors (SMTP: its user and password, its
 // sender, its recipients, its subject) and texted to the technician on call (Twilio: its account, its numbers); the
 // setup page: the settings shown without their secrets, saved keeping them, a test email; the support bundle's config
-// without the password, the token or the people's addresses.
+// without the password, the token or the people's addresses. On call by rotation (gateway/oncall.cjs): the one on call
+// emailed with a link that acknowledges the alert as them (GET asks, POST does; a changed link refused); the setup
+// page's rotations saved with their next handovers, a bad one refused.
 const h = require('../lib/harness.cjs');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -76,10 +78,16 @@ const M = `${R}.aDoors[2]`;
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const configPath = path.join(dir, 'config.json');
+  // (a weekly rotation that began an hour ago: Dee on call now, Eve next)
+  const p2 = (n) => String(n).padStart(2, '0');
+  const ago = new Date(Date.now() - 3600000);
+  const rotStart = `${ago.getFullYear()}-${p2(ago.getMonth() + 1)}-${p2(ago.getDate())}T${p2(ago.getHours())}:${p2(ago.getMinutes())}`;
   fs.writeFileSync(configPath, JSON.stringify({
     port: PORT, insecure: true, appDir: path.join(h.REPO, 'dist'), localNetId: '127.0.0.1.1.1', allowedOrigins: [], alertRetryMs: 2000,
     plcs: [{ id: 'line', name: 'Line 2', netId: '127.0.0.1.1.1', ip: '127.0.0.1:48967', port: 851 }],
     tokens: [{ name: 'ann', sha256: crypto.createHash('sha256').update(TOKEN).digest('hex') }],
+    publicUrl: `http://127.0.0.1:${PORT}/`,
+    rotations: [{ name: 'Maintenance', every: 'week', start: rotStart, people: [{ name: 'Dee', contact: 'dee@acme.com' }, { name: 'Eve', contact: 'eve@acme.com' }] }],
     smtp: { host: '127.0.0.1', port: SMTP, user: 'alerts@acme.com', pass: 's3cret', from: 'MachineScope <alerts@acme.com>' },
     sms: { provider: 'twilio', accountSid: 'AC123', authToken: 'tok456', from: '+15550001111', apiBase: `http://127.0.0.1:${TWILIO}` },
     roles: {
@@ -87,6 +95,7 @@ const M = `${R}.aDoors[2]`;
       notify: [
         { role: 'supervisor', channel: 'email', to: 'sup@acme.com, boss@acme.com', events: ['call'], onCall: [] },
         { role: 'technician', channel: 'sms', to: '+15559990000', events: ['call'], onCall: [{ name: 'Bob', days: '', from: '00:00', to: '24:00', contact: '+15551234567' }] },
+        { role: 'engineer', channel: 'email', to: '', events: ['call'], onCall: [], rotation: 'Maintenance' },
       ],
     },
     workorders: { fromCalls: false },
@@ -104,7 +113,7 @@ const M = `${R}.aDoors[2]`;
   await h.until(() => got.find((m) => m.type === 'welcome'), 5000);
   // 1. A call: emailed, texted
   ws.send(JSON.stringify({ type: 'callMaintenance', requestId: 1, plc: 'line', machine: M, reason: 'Electrical', note: 'S12 dark' }));
-  const mail = await h.until(() => mails[0], 10000);
+  const mail = await h.until(() => mails.find((m) => m.lines.includes('RCPT TO:<sup@acme.com>')), 10000);
   // (its subject: RFC 2047 encoded words, folded, decoded here; each at most 75 characters)
   const subjectLines = /^Subject: .*(\n[ \t].*)*/m.exec(mail?.data ?? '')?.[0] ?? '';
   const words = subjectLines.match(/=\?UTF-8\?B\?[^?]*\?=/g) ?? [];
@@ -116,7 +125,24 @@ const M = `${R}.aDoors[2]`;
   expect(creds[1] === 'alerts@acme.com' && creds[2] === 's3cret' && mail.lines.includes('MAIL FROM:<alerts@acme.com>') && mail.lines.includes('RCPT TO:<sup@acme.com>') && mail.lines.includes('RCPT TO:<boss@acme.com>') && /^Subject: Line 2: .*calls maintenance/m.test(mail.data) && /S12 dark/.test(mail.data), `emailed: ${mail?.lines.filter((l) => /^(MAIL|RCPT)/.test(l)).join(' ')}; ${/^Subject: .*/m.exec(mail?.data ?? '')?.[0]}`);
   const sms = await h.until(() => texts[0], 10000);
   expect(sms?.path === '/2010-04-01/Accounts/AC123/Messages.json' && Buffer.from((sms.auth ?? '').split(' ')[1] ?? '', 'base64').toString() === 'AC123:tok456' && sms.form.To === '+15551234567' && sms.form.From === '+15550001111' && /calls maintenance/.test(sms.form.Body) && /on call.*Bob/.test(sms.form.Body) && texts.length === 1, `texted the one on call: ${sms?.form?.To} "${sms?.form?.Body?.slice(0, 60)}…"`);
+  // (the rotation: Dee, on call now, emailed alone; its link acknowledges as her)
+  const dee = await h.until(() => mails.find((m) => m.lines.includes('RCPT TO:<dee@acme.com>')), 10000);
+  const link = /Acknowledge: (\S+)/.exec(dee?.data ?? '')?.[1] ?? '';
+  expect(!!link && !mails.some((m) => m.lines.includes('RCPT TO:<eve@acme.com>')) && link.startsWith(`http://127.0.0.1:${PORT}/ack/`) && /\/Dee\//.test(link), `the one on call by rotation emailed with its link: ${link.slice(0, 70)}…`);
+  const page = (method, url) =>
+    new Promise((resolve) => {
+      const r = http.request(url, { method }, (res) => { let t = ''; res.on('data', (d) => (t += d)); res.on('end', () => resolve({ status: res.statusCode, text: t })); });
+      r.on('error', () => resolve({ status: 0, text: '' }));
+      r.end();
+    });
+  const asked = await page('GET', link);
+  const forged = await page('GET', link.replace('/Dee/', '/Mallory/'));
+  const done = await page('POST', link);
+  const hist = path.join(dir, 'alerts-history.json');
+  const acked = await h.until(() => { try { return JSON.parse(fs.readFileSync(hist, 'utf8')).find((a) => a.ack); } catch { return null; } }, 10000);
+  expect(asked.status === 200 && /Acknowledge this alert\?/.test(asked.text) && /<form method="post">/.test(asked.text) && forged.status === 403 && done.status === 200 && /Acknowledged/.test(done.text) && /By Dee/.test(done.text), `its link: asks (${asked.status}), a changed one refused (${forged.status}), acknowledges (${done.status} ${/By [^,]*/.exec(done.text)?.[0]})`);
   ws.close();
+  expect(acked?.ack?.by === 'Dee' && acked.ack.note === 'by its link', `kept: acknowledged by ${acked?.ack?.by} (${acked?.ack?.note})`);
   // 2. The setup page: no secrets shown; saved keeping them; a test email
   const api = (method, p, body) =>
     new Promise((resolve) => {
@@ -140,11 +166,16 @@ const M = `${R}.aDoors[2]`;
   const rep = await h.until(() => mails.find((m) => m.lines.includes('RCPT TO:<mgr@acme.com>')), 10000);
   const conf2 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   expect(saved?.reports?.email?.to?.length === 2 && conf2.reports.email.when === 'daily' && conf2.reports.email.at === '06:30' && emailed?.ok && /^Subject: MachineScope report: Today/m.test(rep?.data ?? '') && /multipart\/mixed/.test(rep?.data ?? '') && /filename="report-\d{4}-\d\d-\d\d-Today\.csv"/.test(rep?.data ?? '') && /calls maintenance/.test(rep?.data ?? ''), `the report emailed: ${/^Subject: .*/m.exec(rep?.data ?? '')?.[0]}; ${/filename="[^"]+"/.exec(rep?.data ?? '')?.[0]}`);
+  // (the rotations: saved from their lines with their next handovers; a bad one refused)
+  const rots = await api('POST', 'rotations', { lines: ['Nights | day | 2026-10-19 19:00 | Fay fay@acme.com, Gus +15557654321'] });
+  const badRot = await api('POST', 'rotations', { lines: ['Nights | month | 2026-10-19 19:00 | Fay'] });
+  const conf3 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  expect(rots?.rotations?.[0]?.people?.[1]?.contact === '+15557654321' && rots.schedule?.Nights?.length === 4 && conf3.rotations?.[0]?.every === 'day' && /every day or every week/.test(badRot?.error ?? ''), `rotations saved: ${rots?.schedule?.Nights?.map((p) => p.name).join(', ')}; a bad one refused: ${badRot?.error}`);
   const bad = await api('POST', 'channels', { smtp: {}, sms: { provider: 'http', url: 'nope' } });
   expect(/its URL/.test(bad?.error ?? ''), `a bad SMS provider refused: ${bad?.error}`);
   // 3. The support bundle's config: no secrets, no people's addresses
-  const clean = JSON.stringify(sanitized(after));
-  expect(!/s3cret|tok456|AC123|sup@acme|\+15551234567|\+15559990000/.test(clean) && /14:00|24:00/.test(clean), 'the support bundle: no password, token, account, addresses or numbers (the on-call hours kept)');
+  const clean = JSON.stringify(sanitized({ ...after, rotations: conf3.rotations }));
+  expect(!/s3cret|tok456|AC123|sup@acme|fay@acme|\+15557654321|\+15551234567|\+15559990000/.test(clean) && /14:00|24:00/.test(clean), 'the support bundle: no password, token, account, addresses or numbers (the on-call hours kept)');
   gw.kill();
   plc.kill();
   smtp.close();

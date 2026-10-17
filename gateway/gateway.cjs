@@ -73,6 +73,7 @@ const { summaryOf, createPlant } = require('./plant.cjs');
 const { createEventRelay } = require('./eventRelay.cjs');
 const { correlate } = require('./faultCorrelation.cjs');
 const { createAlarmDb } = require('./alarmDb.cjs');
+const { createAckLinks, checkRotation, scheduleOf } = require('./oncall.cjs');
 const { createEngineering } = require('./engineering.cjs');
 const { createSupport } = require('./support.cjs');
 const { createService } = require('./service.cjs');
@@ -468,6 +469,7 @@ function start() {
     config.alarms = next.alarms;
     config.eventlog = next.eventlog;
     config.clock = next.clock;
+    config.rotations = next.rotations;
     config.sitesDownAfterMin = next.sitesDownAfterMin;
     recorders?.apply(withCounters(config.recordings, next.oee, next.energy));
     config.oidc = next.oidc;
@@ -591,7 +593,9 @@ function start() {
   const plcOf = (id) => plcs.get(id);
   const rulesNow = () => config.alerts ?? [];
   // Roles (roles.cjs): who may do what, their start pages, who is told of what
-  const roles = createRoles({ getConfig: () => config, postWebhook, log, sendEmail: (x) => sendEmail(config.smtp, x), sendSms: (x) => sendSms(config.sms, x) });
+  // (acknowledge links in the emails and texts: signed, 24 hours)
+  const ackLinks = createAckLinks({ baseDir, getConfig: () => config });
+  const roles = createRoles({ getConfig: () => config, postWebhook, log, ackLinkOf: (id, who) => ackLinks.linkOf(id, who), sendEmail: (x) => sendEmail(config.smtp, x), sendSms: (x) => sendSms(config.sms, x) });
   // (who is told: the roles' channels, the devices subscribed to push notifications)
   let push = null;
   let exportsApi = null;
@@ -929,6 +933,26 @@ function start() {
     if (support.serve(req, res)) return;
     // (the REST/JSON API: /api/v1/…, a token as its bearer)
     if (exportsApi?.handle(req, res)) return;
+    // (an alert acknowledged by the link of its email or text: /ack/<id>/<who>/<expires>/<signature>; GET asks, POST does)
+    const ack = /^\/ack\/([^/]+)\/([^/]+)\/(\d+)\/([\w-]+)$/.exec(String(req.url ?? '').split('?')[0]);
+    if (ack) {
+      const [id, who] = [decodeURIComponent(ack[1]), decodeURIComponent(ack[2])];
+      const ok = ackLinks.check(id, who, ack[3], ack[4]);
+      const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+      const page = (status, body) => {
+        res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" });
+        res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Acknowledge</title><style>body{font:16px system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}main{max-width:520px;margin:auto}button{font-size:18px;padding:12px 20px;border-radius:8px;border:0;background:#0284c7;color:#fff}p.t{background:#1e293b;padding:12px;border-radius:8px}</style></head><body><main>${body}</main></body></html>`);
+      };
+      if (!ok) return page(403, '<h2>This link does not acknowledge anything</h2><p>It is wrong, or more than 24 hours old.</p>');
+      const e = alertLog.all().find((x) => x.id === id);
+      if (!e) return page(404, '<h2>No such alert</h2>');
+      if (req.method === 'POST') {
+        const done = e.ack ? e : alertLog.ack(id, who, 'by its link');
+        if (!e.ack) audit.add(who, 'acknowledge', { alert: e.event, machine: e.machine, note: 'by its link' });
+        return page(200, `<h2>Acknowledged</h2><p class="t">${esc(e.text)}</p><p>By ${esc(done?.ack?.by ?? who)}, ${esc(new Date(done?.ack?.at ?? Date.now()).toLocaleString())}.</p>`);
+      }
+      return page(200, `<h2>${e.ack ? 'Acknowledged already' : 'Acknowledge this alert?'}</h2><p class="t">${esc(e.text)}</p><p>${esc(new Date(e.at).toLocaleString())}${e.ack ? ` · by ${esc(e.ack.by)}` : ''}</p>${e.ack ? '' : `<form method="post"><button type="submit">Acknowledge as ${esc(who)}</button></form>`}`);
+    }
     if (!admin(req, res)) serveStatic(config, req, res);
   };
 
